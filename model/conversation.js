@@ -97,7 +97,13 @@ export class ConversationManager {
                         const history = JSON.parse(content)
                         if (!Array.isArray(history)) continue
 
-                        await this.db.saveConversation(userId, history)
+                        // 为每条对话添加目录中的日期
+                        const historyWithDate = history.map(turn => ({
+                            ...turn,
+                            date_str: turn.date_str || dateDir
+                        }))
+
+                        await this.db.saveConversation(userId, historyWithDate)
                         migratedUserIds.add(userId)
                         migratedTurns += history.length
                     } catch (err) {
@@ -112,6 +118,21 @@ export class ConversationManager {
         } catch (error) {
             logger.error('[AI-Plugin] 迁移过程中出错:', error)
         }
+    }
+
+    async fixMigrationDates() {
+        logger.info('[AI-Plugin] 开始修复迁移日期...')
+        
+        // 重置迁移状态
+        await this.db.setMigrationStatus(false)
+        
+        // 清空现有数据（因为日期都是错误的）
+        await this.db.db.run('DELETE FROM conversations')
+        
+        // 重新迁移
+        await this.migrateOldData()
+        
+        logger.info('[AI-Plugin] 修复迁移日期完成！')
     }
 
     cloneHistoryForSaving(history) {
