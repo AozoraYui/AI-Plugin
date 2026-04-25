@@ -138,7 +138,7 @@ export class GeminiClient {
         logger.debug(logMsg)
     }
 
-    buildRequest(type, payload, providerConfig, modelId) {
+    buildRequest(type, payload, providerConfig, modelId, maxTokens = 4096) {
         const url = `${providerConfig.base_url}/chat/completions`
         const options = {
             method: "POST",
@@ -151,7 +151,7 @@ export class GeminiClient {
             body: JSON.stringify({
                 model: modelId,
                 messages: this.convertToOpenAIMessages(payload),
-                max_tokens: 4096,
+                max_tokens: maxTokens,
                 stream: false,
             })
         }
@@ -262,9 +262,9 @@ export class GeminiClient {
         }
     }
 
-    async attemptRequest(type, payload, provider, modelId) {
+    async attemptRequest(type, payload, provider, modelId, maxTokens = 4096) {
         try {
-            const { url, options } = this.buildRequest(type, payload, provider, modelId)
+            const { url, options } = this.buildRequest(type, payload, provider, modelId, maxTokens)
             
             // 检查请求体大小，防止 413 错误
             const bodySize = Buffer.byteLength(options.body, 'utf8')
@@ -309,7 +309,7 @@ export class GeminiClient {
         }
     }
 
-    async makeRequest(type, payload, modelGroupKey = 'default') {
+    async makeRequest(type, payload, modelGroupKey = 'default', maxTokens = 4096) {
         const modelPool = this.activeModelPools[modelGroupKey]?.[type]
         const taskTypeName = type === 'image' ? '绘图' : '对话'
         let lastError = `模型组 [${modelGroupKey}] 中没有可用的 [${taskTypeName}] 模型。`
@@ -318,7 +318,7 @@ export class GeminiClient {
             logger.debug(`[AI-Plugin] 将从 [${modelGroupKey}] 模型组的 [${taskTypeName}] 池中（共 ${modelPool.length} 个模型）依次尝试...`)
             lastError = ''
             for (const { provider, modelId } of modelPool) {
-                const result = await this.attemptRequest(type, payload, provider, modelId)
+                const result = await this.attemptRequest(type, payload, provider, modelId, maxTokens)
                 if (result.success) {
                     return result
                 }
