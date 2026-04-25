@@ -26,14 +26,7 @@ export class ManagementHandler extends plugin {
                 { reg: /^#gemini重载$/i, fnc: 'reloadPlugin', permission: 'master' },
                 { reg: /^#gemini设置白名单$/i, fnc: 'setWhitelist', permission: 'master' },
                 { reg: /^#gemini设置黑名单$/i, fnc: 'setBlacklist', permission: 'master' },
-                { reg: /^#gemini添加白名单用户(.*)$/i, fnc: 'addWhitelistUser', permission: 'master' },
-                { reg: /^#gemini删除白名单用户(.*)$/i, fnc: 'removeWhitelistUser', permission: 'master' },
-                { reg: /^#gemini添加白名单群(.*)$/i, fnc: 'addWhitelistGroup', permission: 'master' },
-                { reg: /^#gemini删除白名单群(.*)$/i, fnc: 'removeWhitelistGroup', permission: 'master' },
-                { reg: /^#gemini添加黑名单用户(.*)$/i, fnc: 'addBlacklistUser', permission: 'master' },
-                { reg: /^#gemini删除黑名单用户(.*)$/i, fnc: 'removeBlacklistUser', permission: 'master' },
-                { reg: /^#gemini添加黑名单群(.*)$/i, fnc: 'addBlacklistGroup', permission: 'master' },
-                { reg: /^#gemini删除黑名单群(.*)$/i, fnc: 'removeBlacklistGroup', permission: 'master' },
+                { reg: /^#gemini权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(\d+)$/i, fnc: 'modifyAccess', permission: 'master' },
                 { reg: /^#gemini查看权限配置$/i, fnc: 'viewAccessConfig', permission: 'master' },
                 { reg: /^#gemini权限列表$/i, fnc: 'listAccessControl', permission: 'master' },
                 { reg: /^#gemini状态$/i, fnc: 'showStatus', permission: 'master' },
@@ -219,6 +212,46 @@ export class ManagementHandler extends plugin {
         msg += config.blacklist_users.length > 0 ? config.blacklist_users.join('\n') : '暂无'
 
         await e.reply(msg)
+    }
+
+    async modifyAccess(e) {
+        const match = e.msg.match(/^#gemini权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(\d+)$/i)
+        if (!match) return
+
+        const action = match[1]
+        const typeKeyword = match[2]
+        const id = match[3]
+
+        let targetListKey
+        let entityType
+
+        switch (typeKeyword) {
+            case '白名单群': targetListKey = 'whitelist_groups'; entityType = '群'; break
+            case '黑名单群': targetListKey = 'blacklist_groups'; entityType = '群'; break
+            case '白名单用户': targetListKey = 'whitelist_users'; entityType = '用户'; break
+            case '黑名单用户': targetListKey = 'blacklist_users'; entityType = '用户'; break
+        }
+
+        const config = getAccessConfig()
+
+        if (action === '添加') {
+            if (!config[targetListKey].includes(id)) {
+                config[targetListKey].push(id)
+                saveAccessConfig(config)
+                await e.reply(`✅ 已将${entityType} ${id} 添加到${typeKeyword}。`)
+            } else {
+                await e.reply(`⚠️ ${entityType} ${id} 已在${typeKeyword}中。`)
+            }
+        } else {
+            const index = config[targetListKey].indexOf(id)
+            if (index !== -1) {
+                config[targetListKey].splice(index, 1)
+                saveAccessConfig(config)
+                await e.reply(`✅ 已将${entityType} ${id} 从${typeKeyword}中删除。`)
+            } else {
+                await e.reply(`⚠️ ${entityType} ${id} 不在${typeKeyword}中。`)
+            }
+        }
     }
 
     async viewAccessConfig(e) {
