@@ -27,6 +27,27 @@ if (!global.segment) {
 global.AIPluginClient = new GeminiClient()
 global.AIPluginConversationManager = new ConversationManager()
 await global.AIPluginConversationManager.waitForMigration()
+
+// 检查是否需要修复迁移日期
+const migrationStatus = await global.AIPluginConversationManager.db.getMigrationStatus()
+if (migrationStatus.json_migrated) {
+    // 检查数据库中是否有日期为今天的数据（说明是错误迁移的）
+    const today = new Date().toISOString().split('T')[0]
+    const todayCount = await new Promise((resolve, reject) => {
+        global.AIPluginConversationManager.db.db.get(
+            'SELECT COUNT(*) as count FROM conversations WHERE date_str = ?',
+            [today],
+            (err, row) => err ? reject(err) : resolve(row.count)
+        )
+    })
+    
+    // 如果今天的数据超过 100 条，说明是错误迁移的（正常一天不会有这么多对话）
+    if (todayCount > 100) {
+        logger.warn('[AI-Plugin] 检测到迁移日期错误，开始修复...')
+        await global.AIPluginConversationManager.fixMigrationDates()
+    }
+}
+
 global.AIPluginScheduler = new AIScheduler(global.AIPluginClient)
 global.AIPluginScheduler.start()
 
