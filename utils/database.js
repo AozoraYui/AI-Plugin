@@ -30,7 +30,7 @@ export class AIDatabase {
         return new Promise((resolve, reject) => {
             this.db.exec(`
                 -- 对话记录表（对应 user_histories/日期/用户.json）
-                CREATE TABLE IF NOT EXISTS conversations (
+                CREATE TABLE IF NOT EXISTS user_histories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id TEXT NOT NULL,
                     role TEXT NOT NULL,
@@ -39,11 +39,11 @@ export class AIDatabase {
                     date_str TEXT NOT NULL
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_conversations_user_date 
-                ON conversations(user_id, date_str);
+                CREATE INDEX IF NOT EXISTS idx_user_histories_user_date 
+                ON user_histories(user_id, date_str);
 
-                CREATE INDEX IF NOT EXISTS idx_conversations_user_id 
-                ON conversations(user_id);
+                CREATE INDEX IF NOT EXISTS idx_user_histories_user_id 
+                ON user_histories(user_id);
 
                 -- 全量锚点表（对应 memory_checkpoints/用户_日期.txt）
                 CREATE TABLE IF NOT EXISTS memory_checkpoints (
@@ -86,10 +86,18 @@ export class AIDatabase {
                     summary_migrated BOOLEAN DEFAULT 0,
                     migration_time DATETIME
                 );
+
+                -- 兼容旧表名：如果存在 conversations 表，重命名为 user_histories
+                ALTER TABLE conversations RENAME TO user_histories;
             `, (err) => {
-                if (err) {
-                    reject(err)
-                    return
+                if (err && !err.message.includes('no such table') && !err.message.includes('duplicate column')) {
+                    // 忽略表不存在或重复的错误
+                    if (err.message.includes('already exists')) {
+                        // 表已存在，正常情况
+                    } else {
+                        reject(err)
+                        return
+                    }
                 }
 
                 this.db.get('SELECT json_migrated FROM migration_status WHERE id = 1', (err, row) => {
@@ -100,7 +108,7 @@ export class AIDatabase {
                         })
                     } else {
                         // 修复旧数据的 created_at，使其跟随 date_str 的日期（使用中午 12 点作为默认时间）
-                        this.db.run("UPDATE conversations SET created_at = date_str || ' 12:00:00' WHERE created_at IS NULL OR strftime('%Y-%m-%d', created_at) != date_str", (err) => {
+                        this.db.run("UPDATE user_histories SET created_at = date_str || ' 12:00:00' WHERE created_at IS NULL OR strftime('%Y-%m-%d', created_at) != date_str", (err) => {
                             if (err) {
                                 // 忽略更新错误
                             }
@@ -115,7 +123,7 @@ export class AIDatabase {
     getConversationHistory(userId) {
         return new Promise((resolve, reject) => {
             const userIdStr = String(userId)
-            this.db.all('SELECT role, parts, date_str FROM conversations WHERE user_id = ? ORDER BY id ASC', [userIdStr], (err, rows) => {
+            this.db.all('SELECT role, parts, date_str FROM user_histories WHERE user_id = ? ORDER BY id ASC', [userIdStr], (err, rows) => {
                 if (err) {
                     reject(err)
                     return
@@ -141,7 +149,7 @@ export class AIDatabase {
             logger.debug(`[AI-Plugin] 保存用户 ${userId} 的 ${history.length} 条对话到 SQLite，日期: ${dateStr}`)
 
             // 先删除该用户该日期的旧数据
-            this.db.run('DELETE FROM conversations WHERE user_id = ? AND date_str = ?', [userIdStr, dateStr], (err) => {
+            this.db.run('DELETE FROM user_histories WHERE user_id = ? AND date_str = ?', [userIdStr, dateStr], (err) => {
                 if (err) {
                     logger.error(`[AI-Plugin] 删除用户 ${userId} 的旧数据失败:`, err)
                     reject(err)
@@ -158,7 +166,7 @@ export class AIDatabase {
                 
                 // 再插入新的完整历史
                 const insert = this.db.prepare(`
-                    INSERT INTO conversations (user_id, role, parts, date_str)
+                    INSERT INTO user_histories (user_id, role, parts, date_str)
                     VALUES (?, ?, ?, ?)
                 `)
                 
@@ -198,7 +206,7 @@ export class AIDatabase {
     saveConversationEntry(userId, role, parts, dateStr) {
         return new Promise((resolve, reject) => {
             this.db.run(`
-                INSERT INTO conversations (user_id, role, parts, date_str)
+                INSERT INTO user_histories (user_id, role, parts, date_str)
                 VALUES (?, ?, ?, ?)
             `, [String(userId), role, JSON.stringify(parts), dateStr], (err) => {
                 if (err) reject(err)
@@ -209,7 +217,7 @@ export class AIDatabase {
 
     clearConversationHistory(userId) {
         return new Promise((resolve, reject) => {
-            this.db.run('DELETE FROM conversations WHERE user_id = ?', [String(userId)], (err) => {
+            this.db.run('DELETE FROM user_histories WHERE user_id = ?', [String(userId)], (err) => {
                 if (err) reject(err)
                 else resolve()
             })
@@ -255,7 +263,7 @@ export class AIDatabase {
 
     getAllUserIds() {
         return new Promise((resolve, reject) => {
-            this.db.all('SELECT DISTINCT user_id FROM conversations', [], (err, rows) => {
+            this.db.all('SELECT DISTINCT user_id FROM user_histories', [], (err, rows) => {
                 if (err) {
                     reject(err)
                     return
@@ -268,7 +276,7 @@ export class AIDatabase {
     getConversationHistoryByDateRange(userId, startDate, endDate) {
         return new Promise((resolve, reject) => {
             const userIdStr = String(userId)
-            let query = 'SELECT role, parts, date_str FROM conversations WHERE user_id = ?'
+            let query = 'SELECT role, parts, date_str FROM user_histories WHERE user_id = ?'
             const params = [userIdStr]
 
             if (startDate) {
@@ -298,7 +306,7 @@ export class AIDatabase {
 
     getConversationHistoryByDate(userId, dateStr) {
         return new Promise((resolve, reject) => {
-            this.db.all('SELECT role, parts FROM conversations WHERE user_id = ? AND date_str = ? ORDER BY id ASC',
+            this.db.all('SELECT role, parts FROM user_histories WHERE user_id = ? AND date_str = ? ORDER BY id ASC',
                 [String(userId), dateStr], (err, rows) => {
                     if (err) {
                         reject(err)
@@ -314,7 +322,7 @@ export class AIDatabase {
 
     getAllUserIdsByDateRange(startDate, endDate) {
         return new Promise((resolve, reject) => {
-            let query = 'SELECT DISTINCT user_id FROM conversations WHERE 1=1'
+            let query = 'SELECT DISTINCT user_id FROM user_histories WHERE 1=1'
             const params = []
 
             if (startDate) {
@@ -338,7 +346,7 @@ export class AIDatabase {
 
     getDistinctDates(userId) {
         return new Promise((resolve, reject) => {
-            this.db.all('SELECT DISTINCT date_str FROM conversations WHERE user_id = ? ORDER BY date_str ASC',
+            this.db.all('SELECT DISTINCT date_str FROM user_histories WHERE user_id = ? ORDER BY date_str ASC',
                 [String(userId)], (err, rows) => {
                     if (err) {
                         reject(err)
