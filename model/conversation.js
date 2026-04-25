@@ -8,6 +8,8 @@ export class ConversationManager {
     constructor() {
         this.db = new AIDatabase()
         this.HISTORY_DIR = HISTORY_DIR
+        this.CHECKPOINT_DIR = CHECKPOINT_DIR
+        this.SUMMARY_CACHE_DIR = SUMMARY_CACHE_DIR
         this.userProfiles = new Map()
         this.loadUserProfiles()
         this.ensureHistoryDirExists()
