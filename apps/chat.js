@@ -1,9 +1,11 @@
 import plugin from '../../../lib/plugins/plugin.js'
+import fs from 'node:fs'
+import path from 'node:path'
 import { Config } from '../utils/config.js'
 import { GeminiClient } from '../client/GeminiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
-import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType } from '../utils/common.js'
+import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, getTodayDateStr } from '../utils/common.js'
 
 export class ChatHandler extends plugin {
     constructor() {
@@ -285,6 +287,9 @@ export class ChatHandler extends plugin {
                 await setMsgEmojiLike(e, 144)
                 const updatedHistory = [...history, { "role": "user", "parts": currentUserTurnParts }, { "role": "model", "parts": [{ "text": finalResponseText }] }]
                 await this.conversationManager.saveUserHistory(userId, updatedHistory)
+
+                // 每 20 条对话自动触发增量锚点总结
+                await this._checkAndCreateAutoCheckpoint(userId, updatedHistory)
             } else {
                 await setMsgEmojiLike(e, 10)
                 await e.reply(`❌ 请求失败\n错误: ${result.error}`, true)
@@ -367,6 +372,32 @@ export class ChatHandler extends plugin {
             await e.reply("✅ 设置成功：已开启思考过程显示 (Raw模式)。")
         } else {
             await e.reply("🚫 设置成功：已关闭思考过程显示 (自动清洗模式)。")
+        }
+    }
+
+    async _checkAndCreateAutoCheckpoint(userId, history) {
+        const CHECKPOINT_THRESHOLD = 20
+        
+        if (history.length < CHECKPOINT_THRESHOLD) {
+            return
+        }
+        
+        // 检查是否已经创建过今天的锚点
+        const today = getTodayDateStr()
+        const checkpointDir = path.join(process.cwd(), 'data', 'ai_assistant', 'memory_checkpoints')
+        const todayCheckpoint = path.join(checkpointDir, `${userId}_${today}.txt`)
+        
+        if (fs.existsSync(todayCheckpoint)) {
+            logger.debug(`[AI-Plugin] 用户 ${userId} 今天已创建自动锚点，跳过`)
+            return
+        }
+        
+        try {
+            logger.info(`[AI-Plugin] 用户 ${userId} 对话达到 ${history.length} 条，自动创建增量锚点...`)
+            await this.conversationManager.createIncrementalCheckpoint(userId, today)
+            logger.info(`[AI-Plugin] 用户 ${userId} 自动增量锚点创建成功`)
+        } catch (err) {
+            logger.error(`[AI-Plugin] 为用户 ${userId} 创建自动增量锚点失败:`, err)
         }
     }
 }
