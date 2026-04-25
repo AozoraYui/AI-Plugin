@@ -19,9 +19,8 @@ export class ManagementHandler extends plugin {
             rule: [
                 { reg: /^#gemini模型列表$/i, fnc: 'listModels', permission: 'master' },
                 { reg: /^#gemini模型测试$/i, fnc: 'testAllModels', permission: 'master' },
-                { reg: /^#gemini模型全部启用$/i, fnc: 'enableAllModels', permission: 'master' },
-                { reg: /^#gemini模型禁用(.*)$/i, fnc: 'disableModel', permission: 'master' },
-                { reg: /^#gemini模型启用(.*)$/i, fnc: 'enableModel', permission: 'master' },
+                { reg: /^#gemini启用全部模型$/i, fnc: 'enableAllModels', permission: 'master' },
+                { reg: /^#gemini(禁用|启用)\s*(.+)$/i, fnc: 'toggleModelDisabledState', permission: 'master' },
                 { reg: /^#gemini权限模式\s*(whitelist|blacklist)$/i, fnc: 'switchAccessMode', permission: 'master' },
                 { reg: /^#gemini权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(\d+)$/i, fnc: 'modifyAccess', permission: 'master' },
                 { reg: /^#gemini权限列表$/i, fnc: 'listAccessControl', permission: 'master' },
@@ -44,17 +43,13 @@ export class ManagementHandler extends plugin {
         await e.reply(result.message)
     }
 
-    async disableModel(e) {
-        const modelId = e.msg.replace(/^#gemini模型禁用/, '').trim()
-        if (!modelId) return e.reply("请提供要禁用的模型ID")
-        const result = this.client.toggleModelDisabled('禁用', modelId)
-        await e.reply(result.message)
-    }
-
-    async enableModel(e) {
-        const modelId = e.msg.replace(/^#gemini模型启用/, '').trim()
-        if (!modelId) return e.reply("请提供要启用的模型ID")
-        const result = this.client.toggleModelDisabled('启用', modelId)
+    async toggleModelDisabledState(e) {
+        const match = e.msg.match(/^#gemini(禁用|启用)\s*(.+)$/i)
+        if (!match) return
+        const action = match[1]
+        const modelId = match[2].trim()
+        if (!modelId) return e.reply(`请提供要${action}的模型ID`)
+        const result = this.client.toggleModelDisabled(action, modelId)
         await e.reply(result.message)
     }
 
