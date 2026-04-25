@@ -244,12 +244,19 @@ export class ConversationManager {
         try {
             const dateStr = getTodayDateStr()
 
-            // 保存完整历史到 SQLite（与 JSON 文件结构一致）
-            const historyToSave = history.map(turn => ({
-                ...turn,
-                date_str: turn.date_str || dateStr
-            }))
-            await this.db.saveConversation(userId, historyToSave)
+            // 只保存当天的对话到 SQLite（与 JSON 文件结构一致）
+            const todayHistory = history.filter(turn => {
+                const turnDate = turn.date_str || dateStr
+                return turnDate === dateStr
+            })
+
+            if (todayHistory.length > 0) {
+                const historyToSave = todayHistory.map(turn => ({
+                    ...turn,
+                    date_str: turn.date_str || dateStr
+                }))
+                await this.db.saveConversation(userId, historyToSave)
+            }
 
             const dateDir = path.join(this.HISTORY_DIR, dateStr)
 
