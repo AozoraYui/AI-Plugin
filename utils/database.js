@@ -34,7 +34,7 @@ export class AIDatabase {
                     user_id TEXT NOT NULL,
                     role TEXT NOT NULL,
                     parts TEXT NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now', '+8 hours')),
                     date_str TEXT NOT NULL
                 );
 
@@ -47,7 +47,7 @@ export class AIDatabase {
                 CREATE TABLE IF NOT EXISTS user_profiles (
                     user_id TEXT PRIMARY KEY,
                     info TEXT NOT NULL,
-                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+                    last_updated DATETIME DEFAULT (datetime('now', '+8 hours'))
                 );
 
                 CREATE TABLE IF NOT EXISTS migration_status (
@@ -68,7 +68,13 @@ export class AIDatabase {
                             else resolve()
                         })
                     } else {
-                        resolve()
+                        // 修复旧数据的 created_at，使其跟随 date_str 的日期（使用中午 12 点作为默认时间）
+                        this.db.run("UPDATE conversations SET created_at = date_str || ' 12:00:00' WHERE created_at IS NULL OR strftime('%Y-%m-%d', created_at) != date_str", (err) => {
+                            if (err) {
+                                // 忽略更新错误
+                            }
+                            resolve()
+                        })
                     }
                 })
             })
