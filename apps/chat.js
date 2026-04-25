@@ -134,9 +134,18 @@ export class ChatHandler extends plugin {
                 logger.debug(`[AI-Plugin] 用户 ${userId} 加载全量锚点记忆`)
             }
 
+            // 防止请求体过大导致 413 错误，限制历史长度
+            const MAX_HISTORY_LENGTH = 30
+            if (history.length > MAX_HISTORY_LENGTH) {
+                history = history.slice(-MAX_HISTORY_LENGTH)
+                logger.debug(`[AI-Plugin] 用户 ${userId} 的历史过长，已截断至最近 ${MAX_HISTORY_LENGTH} 条`)
+            }
+
             const currentUserTurnParts = []
 
+            // 限制图片数量和大小，防止请求体过大
             const MAX_IMAGES = 32
+            const MAX_IMAGE_SIZE_MB = 4 // 单张图片最大 4MB
             if (allImages.length > 0) {
                 const imagesToProcess = allImages.slice(0, MAX_IMAGES)
 
@@ -146,6 +155,17 @@ export class ChatHandler extends plugin {
                         if (!imageBuffer) {
                             logger.warn(`[AI-Plugin] 获取图片失败: ${imageUrl}`)
                             return null
+                        }
+
+                        // 检查图片大小，超过限制则压缩
+                        const sizeMB = imageBuffer.length / (1024 * 1024)
+                        if (sizeMB > MAX_IMAGE_SIZE_MB) {
+                            logger.warn(`[AI-Plugin] 图片过大 (${sizeMB.toFixed(2)}MB)，正在压缩...`)
+                            const sharp = (await import('sharp')).default
+                            imageBuffer = await sharp(imageBuffer)
+                                .resize(1920, 1920, { fit: 'inside', withoutEnlargement: true })
+                                .jpeg({ quality: 80 })
+                                .toBuffer()
                         }
 
                         let mimeType = getImageMimeType(imageBuffer)
@@ -193,7 +213,36 @@ export class ChatHandler extends plugin {
             contents.push({ "role": "user", "parts": currentUserTurnParts })
 
             const payload = { "contents": contents }
-            const result = await this.client.makeRequest('chat', payload, modelGroupKey)
+            
+            // 估算请求体大小，防止 413 错误
+            let currentPayload = { "contents": contents }
+            let currentSizeMB = JSON.stringify(currentPayload).length / (1024 * 1024)
+            
+            if (currentSizeMB > 8) { // 8MB 警告阈值
+                logger.warn(`[AI-Plugin] 请求体过大 (${currentSizeMB.toFixed(2)}MB)，正在裁剪历史...`)
+                // 减少历史条目直到大小合理
+                while (currentSizeMB > 5 && history.length > 5) {
+                    history = history.slice(-Math.max(5, history.length - 5))
+                    contents = [...Config.personaPrimer]
+                    if (memoryData.checkpoint) {
+                        contents.push({
+                            "role": "user",
+                            "parts": [{ "text": `【重要记忆摘要】这是你之前记住的关于这个用户的对话摘要，请基于这些摘要继续对话：\n${memoryData.checkpoint}` }]
+                        })
+                        contents.push({
+                            "role": "model",
+                            "parts": [{ "text": "好的，我已经想起了之前的重要记忆！" }]
+                        })
+                    }
+                    contents.push(...history)
+                    contents.push({ "role": "user", "parts": currentUserTurnParts })
+                    currentPayload = { "contents": contents }
+                    currentSizeMB = JSON.stringify(currentPayload).length / (1024 * 1024)
+                }
+                logger.info(`[AI-Plugin] 请求体已裁剪至 ${currentSizeMB.toFixed(2)}MB`)
+            }
+            
+            const result = await this.client.makeRequest('chat', currentPayload, modelGroupKey)
 
             if (result.success) {
                 let rawResponseText = result.data.trim()

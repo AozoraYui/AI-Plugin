@@ -13,7 +13,11 @@ export class AIDatabase {
         this.db = new sqlite3.Database(DB_FILE)
         this.db.run('PRAGMA journal_mode = WAL')
         this.db.run('PRAGMA foreign_keys = ON')
-        this.initTables()
+        this._initPromise = this.initTables()
+    }
+
+    async waitForReady() {
+        await this._initPromise
     }
 
     ensureDataDir() {

@@ -39,21 +39,6 @@ export class AIScheduler {
             return
         }
 
-        const todayHistory = await this.client.conversationManager.db.getConversationHistoryByDateRange(null, today, today)
-
-        if (todayHistory.length === 0) {
-            logger.info('[AI-Plugin] 今天没有对话记录，跳过增量锚点总结')
-            return
-        }
-
-        const userIdsWithTodayHistory = [...new Set(todayHistory.map(h => {
-            return this.client.conversationManager.db.getAllUserIds().then(ids => {
-                return ids.find(id => todayHistory.some(h => {
-                    return true
-                }))
-            })
-        }))]
-
         for (const userId of userIds) {
             try {
                 const userTodayHistory = await this.client.conversationManager.db.getConversationHistoryByDate(userId, today)
