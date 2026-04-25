@@ -19,6 +19,13 @@ export class ImageHandler extends plugin {
             priority: 1142,
             rule: [
                 { reg: /^#([a-zA-Z0-9]*)bnn([\s\S]*)$/i, fnc: 'generateImage', key: 'bnnCommand' },
+                { reg: /^#画图预设(列表|list)$/i, fnc: 'listPresets' },
+                { reg: /^#画图预设列表(pro|Pro)$/i, fnc: 'listPresetsPro' },
+                { reg: /^#画图预设重载$/i, fnc: 'reloadPresets', permission: 'master' },
+                { reg: /^#画图预设添加\s*(\S+)\s+(.*)$/i, fnc: 'startAddPresetSession', permission: 'master' },
+                { reg: /^#画图预设删除\s*(\S+)$/i, fnc: 'deletePreset', permission: 'master' },
+                { reg: /^#添加预设别名\s*(\S+)$/i, fnc: 'startAddAliasSession', permission: 'master' },
+                { reg: /^#删除预设别名\s*(\S+)$/i, fnc: 'startDeleteAliasSession', permission: 'master' },
                 { reg: /.*/, fnc: 'sessionHandler', priority: 9200, log: false },
             ]
         })
