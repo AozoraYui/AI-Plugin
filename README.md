@@ -138,8 +138,6 @@ pnpm install
 | `#gemini模型禁用 [模型ID]` | 禁用指定模型 |
 | `#gemini模型启用 [模型ID]` | 启用指定模型 |
 | `#gemini状态` | 查看插件运行状态 |
-| `#gemini设置白名单` | 切换到白名单模式 |
-| `#gemini设置黑名单` | 切换到黑名单模式 |
 | `#gemini权限模式 whitelist/blacklist` | 切换权限模式 |
 | `#gemini权限添加/删除 白名单用户 [用户ID]` | 添加/删除白名单用户 |
 | `#gemini权限添加/删除 黑名单用户 [用户ID]` | 添加/删除黑名单用户 |

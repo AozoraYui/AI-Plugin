@@ -103,12 +103,8 @@ export class HelpHandler extends plugin {
 【 权限管理 】
 > #gemini权限列表
   查看当前权限配置详情。
-> #gemini设置白名单
-  切换到白名单模式。
-> #gemini设置黑名单
-  切换到黑名单模式。
 > #gemini权限模式 whitelist/blacklist
-  切换权限模式（同上）。
+  切换权限模式（白名单/黑名单）。
 > #gemini权限添加/删除 白名单用户 [用户ID]
 > #gemini权限添加/删除 黑名单用户 [用户ID]
 > #gemini权限添加/删除 白名单群 [群号]
@@ -174,8 +170,6 @@ export class HelpHandler extends plugin {
   #gemini模型禁用[模型ID] - 禁用指定模型
   #gemini模型启用[模型ID] - 启用指定模型
   #gemini状态 - 查看插件运行状态
-  #gemini设置白名单 - 切换到白名单模式
-  #gemini设置黑名单 - 切换到黑名单模式
   #gemini权限模式 whitelist/blacklist - 切换权限模式
   #gemini权限添加/删除 白名单用户[用户ID]
   #gemini权限添加/删除 黑名单用户[用户ID]
