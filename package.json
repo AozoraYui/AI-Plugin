@@ -11,7 +11,7 @@
     "yaml": "^2.3.4",
     "sharp": "^0.33.2",
     "https-proxy-agent": "^7.0.4",
-    "better-sqlite3": "^11.7.0"
+    "sqlite3": "^5.1.7"
   },
   "keywords": [
     "yunzai",

@@ -47,7 +47,7 @@ export class ConversationManager {
     }
 
     async migrateOldData() {
-        const status = this.db.getMigrationStatus()
+        const status = await this.db.getMigrationStatus()
         if (status.json_migrated) {
             logger.debug('[AI-Plugin] JSON 数据已迁移，跳过。')
             return
@@ -55,7 +55,7 @@ export class ConversationManager {
 
         if (!fs.existsSync(this.HISTORY_DIR)) {
             logger.info('[AI-Plugin] 未找到旧的历史记录目录，无需迁移。')
-            this.db.setMigrationStatus(true)
+            await this.db.setMigrationStatus(true)
             return
         }
 
@@ -86,25 +86,7 @@ export class ConversationManager {
                         const history = JSON.parse(content)
                         if (!Array.isArray(history)) continue
 
-                        const entries = history.map(turn => ({
-                            user_id: userId,
-                            role: turn.role,
-                            parts: JSON.stringify(turn.parts),
-                            date_str: dateDir
-                        }))
-
-                        const insert = this.db.db.prepare(`
-                            INSERT INTO conversations (user_id, role, parts, date_str)
-                            VALUES (?, ?, ?, ?)
-                        `)
-
-                        const insertMany = this.db.db.transaction((items) => {
-                            for (const item of items) {
-                                insert.run(item.user_id, item.role, item.parts, item.date_str)
-                            }
-                        })
-
-                        insertMany.run(entries)
+                        await this.db.saveConversation(userId, history)
                         migratedUsers++
                         migratedTurns += history.length
                     } catch (err) {
@@ -113,7 +95,7 @@ export class ConversationManager {
                 }
             }
 
-            this.db.setMigrationStatus(true)
+            await this.db.setMigrationStatus(true)
             logger.info(`[AI-Plugin] 迁移完成！共迁移 ${migratedUsers} 个用户，${migratedTurns} 条对话。`)
             logger.info('[AI-Plugin] 旧 JSON 文件已保留，不会被删除。')
         } catch (error) {
@@ -147,7 +129,7 @@ export class ConversationManager {
         }
 
         try {
-            const history = this.db.getConversationHistory(userId)
+            const history = await this.db.getConversationHistory(userId)
             if (history.length > 0) {
                 const historyToCache = this.cloneHistoryForSaving(history)
                 await redis.set(redisKey, JSON.stringify(historyToCache), { EX: weekInSeconds })
@@ -169,7 +151,7 @@ export class ConversationManager {
                 if (Array.isArray(historyFromFile)) {
                     const historyToCache = this.cloneHistoryForSaving(historyFromFile)
                     await redis.set(redisKey, JSON.stringify(historyToCache), { EX: weekInSeconds })
-                    this.db.saveConversation(userId, historyFromFile)
+                    await this.db.saveConversation(userId, historyFromFile)
                     logger.info(`[AI-Plugin] 已从今日 JSON 文件恢复并缓存用户 ${userId} 的记忆`)
                     return historyFromFile
                 }
@@ -196,17 +178,7 @@ export class ConversationManager {
             const lastTurn = history[history.length - 1]
             if (lastTurn) {
                 const dateStr = getTodayDateStr()
-                const entry = {
-                    user_id: String(userId),
-                    role: lastTurn.role,
-                    parts: JSON.stringify(lastTurn.parts),
-                    date_str: dateStr
-                }
-
-                this.db.db.prepare(`
-                    INSERT INTO conversations (user_id, role, parts, date_str)
-                    VALUES (?, ?, ?, ?)
-                `).run(entry.user_id, entry.role, entry.parts, entry.date_str)
+                await this.db.saveConversationEntry(userId, lastTurn.role, lastTurn.parts, dateStr)
             }
 
             const dateStr = getTodayDateStr()
@@ -227,7 +199,7 @@ export class ConversationManager {
         try {
             const redisKey = `ai-plugin:history:${userId}`
             await redis.del(redisKey)
-            this.db.clearConversationHistory(userId)
+            await this.db.clearConversationHistory(userId)
             return true
         } catch (error) {
             logger.error(`[AI-Plugin] 重置对话历史失败:`, error)
@@ -235,14 +207,14 @@ export class ConversationManager {
         }
     }
 
-    getUserProfile(userId) {
-        const profile = this.db.getUserProfile(userId)
+    async getUserProfile(userId) {
+        const profile = await this.db.getUserProfile(userId)
         if (profile) return profile
 
         const userProfileId = `private_${userId}`
         const localProfile = this.userProfiles.get(userProfileId)
         if (localProfile) {
-            this.db.saveUserProfile(userId, localProfile.info)
+            await this.db.saveUserProfile(userId, localProfile.info)
             return localProfile
         }
         return null
@@ -252,7 +224,7 @@ export class ConversationManager {
         const userProfileId = `private_${userId}`
         this.userProfiles.set(userProfileId, { info, lastUpdated: new Date().toISOString() })
         this.saveUserProfiles()
-        this.db.saveUserProfile(userId, info)
+        await this.db.saveUserProfile(userId, info)
     }
 
     async deleteUserProfile(userId) {
@@ -265,7 +237,7 @@ export class ConversationManager {
             deleted = true
         }
 
-        if (this.db.deleteUserProfile(userId)) {
+        if (await this.db.deleteUserProfile(userId)) {
             deleted = true
         }
 
@@ -298,15 +270,15 @@ export class ConversationManager {
                     return { success: false, message: "记忆文件损坏，导出失败" }
                 }
             } else {
-                const history = this.db.getConversationHistory(userId)
+                const history = await this.db.getConversationHistory(userId)
                 if (history.length > 0) {
                     exportedData[userId] = history
                 }
             }
         } else {
-            const userIds = this.db.getAllUserIds()
+            const userIds = await this.db.getAllUserIds()
             for (const uid of userIds) {
-                const history = this.db.getConversationHistory(uid)
+                const history = await this.db.getConversationHistory(uid)
                 if (history.length > 0) {
                     exportedData[uid] = history
                 }
