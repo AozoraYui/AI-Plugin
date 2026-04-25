@@ -138,7 +138,7 @@ export class GeminiClient {
         logger.debug(logMsg)
     }
 
-    buildRequest(type, payload, providerConfig, modelId, maxTokens = 4096) {
+    buildRequest(type, payload, providerConfig, modelId, maxTokens = 8192) {
         const url = `${providerConfig.base_url}/chat/completions`
         const options = {
             method: "POST",
@@ -262,7 +262,7 @@ export class GeminiClient {
         }
     }
 
-    async attemptRequest(type, payload, provider, modelId, maxTokens = 4096) {
+    async attemptRequest(type, payload, provider, modelId, maxTokens = 8192) {
         try {
             const { url, options } = this.buildRequest(type, payload, provider, modelId, maxTokens)
             
@@ -309,7 +309,7 @@ export class GeminiClient {
         }
     }
 
-    async makeRequest(type, payload, modelGroupKey = 'default', maxTokens = 4096) {
+    async makeRequest(type, payload, modelGroupKey = 'default', maxTokens = 8192) {
         const modelPool = this.activeModelPools[modelGroupKey]?.[type]
         const taskTypeName = type === 'image' ? '绘图' : '对话'
         let lastError = `模型组 [${modelGroupKey}] 中没有可用的 [${taskTypeName}] 模型。`
