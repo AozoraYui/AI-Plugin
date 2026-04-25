@@ -342,4 +342,12 @@ export class ConversationManager {
             return { success: false, message: "保存记忆文件失败" }
         }
     }
+
+    async createIncrementalCheckpoint(userId, today) {
+        if (!global.AIPluginScheduler) {
+            logger.error('[AI-Plugin] 定时任务未初始化，无法创建增量锚点')
+            return
+        }
+        await global.AIPluginScheduler._createIncrementalCheckpoint(userId, today)
+    }
 }
