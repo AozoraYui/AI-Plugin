@@ -33,6 +33,7 @@ export const MODEL_STATUS_FILE = path.join(DATA_DIR, 'model_status.json')
 export const DISABLED_MODELS_FILE = path.join(DATA_DIR, 'disabled_models.json')
 export const SUMMARY_CACHE_DIR = path.join(DATA_DIR, 'summary_cache')
 export const CHECKPOINT_DIR = path.join(DATA_DIR, 'memory_checkpoints')
+export const HISTORY_DIR = path.join(DATA_DIR, 'user_histories')
 
 function ensureDataDir() {
     if (!fs.existsSync(DATA_DIR)) {

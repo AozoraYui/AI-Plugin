@@ -1,5 +1,5 @@
 import plugin from '../../../lib/plugins/plugin.js'
-import { Config, personaPrimer, SUMMARY_THRESHOLD, HISTORY_TO_KEEP_AFTER_SUMMARY, SUMMARY_PROMPT_TEMPLATE } from '../utils/config.js'
+import { Config } from '../utils/config.js'
 import { GeminiClient } from '../client/GeminiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
@@ -15,13 +15,13 @@ export class ChatHandler extends plugin {
             priority: 1144,
             rule: [
                 { reg: /^#([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleChat' },
-                { reg: '^#结束gemini对话$', fnc: 'resetChatHistory' },
-                { reg: '^#记住我(.*)$', fnc: 'rememberMe' },
-                { reg: '^#忘记我$', fnc: 'forgetMe' },
-                { reg: '^#我(是|叫)谁$', fnc: 'whoAmI' },
-                { reg: '^#导出诺亚记忆$', fnc: 'exportMyMemory' },
-                { reg: '^#导出诺亚全部记忆$', fnc: 'exportAllMemory', permission: 'master' },
-                { reg: '^#gemini思考(开启|关闭)$', fnc: 'switchThinkingMode', permission: 'master' },
+                { reg: /^#结束gemini对话$/i, fnc: 'resetChatHistory' },
+                { reg: /^#记住我(.*)$/i, fnc: 'rememberMe' },
+                { reg: /^#忘记我$/i, fnc: 'forgetMe' },
+                { reg: /^#我(是|叫)谁$/i, fnc: 'whoAmI' },
+                { reg: /^#导出诺亚记忆$/i, fnc: 'exportMyMemory' },
+                { reg: /^#导出诺亚全部记忆$/i, fnc: 'exportAllMemory', permission: 'master' },
+                { reg: /^#gemini思考(开启|关闭)$/i, fnc: 'switchThinkingMode', permission: 'master' },
             ]
         })
         this.client = client
@@ -133,39 +133,6 @@ export class ChatHandler extends plugin {
             const userId = e.user_id
             let history = await this.conversationManager.getUserHistory(userId)
             const profile = this.conversationManager.getUserProfile(userId)
-
-            if (history.length >= SUMMARY_THRESHOLD) {
-                const partsToSummarize = history.slice(0, history.length - HISTORY_TO_KEEP_AFTER_SUMMARY)
-                const recentHistory = history.slice(-HISTORY_TO_KEEP_AFTER_SUMMARY)
-                let conversationText = ""
-                for (const turn of partsToSummarize) {
-                    const role = turn.role === "user" ? "用户" : "AI助手"
-                    const textParts = turn.parts.filter(p => p.text).map(p => p.text).join(" ")
-                    if (textParts) conversationText += `${role}: ${textParts}\n`
-                }
-                if (conversationText.trim()) {
-                    try {
-                        const summaryPrompt = SUMMARY_PROMPT_TEMPLATE + conversationText
-                        const summaryPayload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
-                        const summaryResult = await this.client.makeRequest('chat', summaryPayload, 'default')
-                        if (summaryResult.success) {
-                            const summaryText = summaryResult.data
-                            history = [
-                                { "role": "user", "parts": [{ "text": `我们来总结一下之前的对话：${summaryText}` }] },
-                                { "role": "model", "parts": [{ "text": "嗯嗯，之前的对话摘要我已经了解啦！" }] },
-                                ...recentHistory
-                            ]
-                            await e.reply('诺亚对之前的长对话进行了总结，这样就能记住更多啦！', true)
-                        } else {
-                            history = recentHistory
-                        }
-                    } catch (summaryErr) {
-                        history = recentHistory
-                    }
-                } else {
-                    history = recentHistory
-                }
-            }
 
             let userContextPrimer = []
             if (profile && profile.info) {
