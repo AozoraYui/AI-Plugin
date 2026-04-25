@@ -1,0 +1,23 @@
+{
+  "name": "ai-plugin",
+  "version": "1.0.0",
+  "description": "AI Plugin for Yunzai-Bot with Gemini support",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "yaml": "^2.3.4",
+    "sharp": "^0.33.2",
+    "https-proxy-agent": "^7.0.4"
+  },
+  "keywords": [
+    "yunzai",
+    "bot",
+    "ai",
+    "gemini"
+  ],
+  "author": "",
+  "license": "ISC"
+}
