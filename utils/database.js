@@ -94,27 +94,43 @@ export class AIDatabase {
     saveConversation(userId, history) {
         return new Promise((resolve, reject) => {
             const userIdStr = String(userId)
-            const insert = this.db.prepare(`
-                INSERT INTO conversations (user_id, role, parts, date_str)
-                VALUES (?, ?, ?, ?)
-            `)
-
-            const entries = history.map(turn => ({
-                user_id: userIdStr,
-                role: turn.role,
-                parts: JSON.stringify(turn.parts),
-                date_str: turn.date_str || new Date().toISOString().split('T')[0]
-            }))
+            
+            // 获取日期（从第一条对话中获取，如果没有则使用今天）
+            const dateStr = history.length > 0 && history[0].date_str 
+                ? history[0].date_str 
+                : new Date().toISOString().split('T')[0]
 
             this.db.serialize(() => {
                 this.db.run('BEGIN TRANSACTION')
-                for (const entry of entries) {
-                    insert.run(entry.user_id, entry.role, entry.parts, entry.date_str)
-                }
-                this.db.run('COMMIT', (err) => {
+                
+                // 先删除该用户当天的旧数据
+                this.db.run('DELETE FROM conversations WHERE user_id = ? AND date_str = ?', [userIdStr, dateStr], (err) => {
+                    if (err) {
+                        this.db.run('ROLLBACK')
+                        reject(err)
+                        return
+                    }
+                    
+                    // 再插入新的完整历史
+                    const insert = this.db.prepare(`
+                        INSERT INTO conversations (user_id, role, parts, date_str)
+                        VALUES (?, ?, ?, ?)
+                    `)
+                    
+                    for (const turn of history) {
+                        insert.run(
+                            userIdStr,
+                            turn.role,
+                            JSON.stringify(turn.parts),
+                            turn.date_str || dateStr
+                        )
+                    }
+                    
                     insert.finalize()
-                    if (err) reject(err)
-                    else resolve()
+                    this.db.run('COMMIT', (err) => {
+                        if (err) reject(err)
+                        else resolve()
+                    })
                 })
             })
         })
