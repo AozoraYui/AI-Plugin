@@ -11,7 +11,7 @@ import sharp from 'sharp'
 import { PRESETS_FILE } from '../utils/config.js'
 
 export class ImageHandler extends plugin {
-    constructor(client, conversationManager) {
+    constructor() {
         super({
             name: 'AI作图',
             dsc: '使用AI生成图片',
@@ -19,8 +19,8 @@ export class ImageHandler extends plugin {
             priority: 1145,
             rule: []
         })
-        this.client = client
-        this.conversationManager = conversationManager
+        this.client = global.AIPluginClient
+        this.conversationManager = global.AIPluginConversationManager
         this.updateDynamicRule()
     }
 

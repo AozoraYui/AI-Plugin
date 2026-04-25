@@ -7,7 +7,7 @@ import { sessionManager } from '../utils/session.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, parseModelGroup } from '../utils/common.js'
 
 export class ChatHandler extends plugin {
-    constructor(client, conversationManager) {
+    constructor() {
         super({
             name: 'AI对话',
             dsc: '与AI进行智能对话',
@@ -24,8 +24,8 @@ export class ChatHandler extends plugin {
                 { reg: /^#gemini思考(开启|关闭)$/i, fnc: 'switchThinkingMode', permission: 'master' },
             ]
         })
-        this.client = client
-        this.conversationManager = conversationManager
+        this.client = global.AIPluginClient
+        this.conversationManager = global.AIPluginConversationManager
     }
 
     async handleChat(e) {

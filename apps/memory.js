@@ -11,7 +11,7 @@ import { setMsgEmojiLike, getTodayDateStr } from '../utils/common.js'
 import { SUMMARY_CACHE_DIR, CHECKPOINT_DIR } from '../utils/config.js'
 
 export class MemoryHandler extends plugin {
-    constructor(client, conversationManager) {
+    constructor() {
         super({
             name: 'AI记忆管理',
             dsc: '管理AI的记忆锚点和总结',
@@ -23,8 +23,8 @@ export class MemoryHandler extends plugin {
                 { reg: /^#gemini总结记忆列表$/i, fnc: "listMemorySummaries" },
             ]
         })
-        this.client = client
-        this.conversationManager = conversationManager
+        this.client = global.AIPluginClient
+        this.conversationManager = global.AIPluginConversationManager
     }
 
     async _getOrCreateDailySummary(dateDir, userId, rawJsonPath, modelGroupKey) {

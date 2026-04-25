@@ -8,7 +8,7 @@ export class HelpHandler extends plugin {
             event: 'message',
             priority: 1148,
             rule: [
-                { reg: '^#(gemini|ai)帮助$', fnc: 'showHelp' },
+                { reg: /^#(gemini|ai)帮助$/i, fnc: 'showHelp' },
             ]
         })
     }
