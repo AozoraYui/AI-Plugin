@@ -240,7 +240,7 @@ export class ConversationManager {
         await this.db.setMigrationStatus(false)
         
         // 清空现有数据（因为日期都是错误的）
-        await this.db.db.run('DELETE FROM conversations')
+        await this.db.db.run('DELETE FROM user_histories')
         
         // 重新迁移
         await this.migrateOldData()

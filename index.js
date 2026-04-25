@@ -35,7 +35,7 @@ if (migrationStatus.json_migrated) {
     const today = new Date().toISOString().split('T')[0]
     const todayCount = await new Promise((resolve, reject) => {
         global.AIPluginConversationManager.db.db.get(
-            'SELECT COUNT(*) as count FROM conversations WHERE date_str = ?',
+            'SELECT COUNT(*) as count FROM user_histories WHERE date_str = ?',
             [today],
             (err, row) => err ? reject(err) : resolve(row.count)
         )
