@@ -264,6 +264,15 @@ export class AIDatabase {
         })
     }
 
+    getUserMessageCount(userId) {
+        return new Promise((resolve, reject) => {
+            this.db.get('SELECT COUNT(*) as count FROM user_histories WHERE user_id = ?', [String(userId)], (err, row) => {
+                if (err) reject(err)
+                else resolve(row ? row.count : 0)
+            })
+        })
+    }
+
     getUserProfile(userId) {
         return new Promise((resolve, reject) => {
             this.db.get('SELECT info, last_updated FROM user_profiles WHERE user_id = ?', [String(userId)], (err, row) => {
