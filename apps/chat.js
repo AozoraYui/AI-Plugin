@@ -16,6 +16,7 @@ export class ChatHandler extends plugin {
             priority: 1144,
             rule: [
                 { reg: /^#([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleChat' },
+                { reg: /^#(s|single)([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleSingleChat' },
                 { reg: /^#结束gemini对话$/i, fnc: 'resetChatHistory' },
                 { reg: /^#导出诺亚记忆$/i, fnc: 'exportMyMemory' },
                 { reg: /^#导出诺亚全部记忆$/i, fnc: 'exportAllMemory', permission: 'master' },
@@ -337,6 +338,271 @@ export class ChatHandler extends plugin {
         } catch (err) {
             await setMsgEmojiLike(e, 10)
             logger.error(`[AI-Plugin] 对话处理异常:`, err)
+            await e.reply(`❌ 处理异常: ${err.message}`, true)
+        }
+    }
+
+    async handleSingleChat(e) {
+        if (!await checkAccess(e)) return true
+
+        const match = e.msg.match(/^#(s|single)([a-zA-Z0-9]*)gm([\s\S]*)/i)
+        if (!match) return
+
+        const prefix = match[2].toLowerCase()
+        let userMessage = match[3].trim()
+
+        let modelGroupKey = 'default'
+        if (prefix === 'pro') modelGroupKey = 'pro'
+        else if (prefix === '3') modelGroupKey = 'gemini3'
+
+        const startTime = Date.now()
+        let allImages = []
+
+        try {
+            const sourceMsg = await takeSourceMsg(e)
+
+            if (sourceMsg) {
+                if (sourceMsg.message) {
+                    let replyText = ""
+
+                    let forwardContent = ""
+                    let forwardImages = []
+
+                    for (const m of sourceMsg.message) {
+                        let resid = null
+                        if (m.type === 'forward' && m.id) {
+                            resid = m.id
+                        } else if ((m.type === 'json' || m.type === 'xml') && m.data) {
+                            const residMatch = m.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
+                            if (residMatch) resid = residMatch[1]
+                            if (!resid) {
+                                const templateMatch = m.data.match(/template-id"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
+                                if (templateMatch) resid = templateMatch[1]
+                            }
+                        }
+
+                        if (resid) {
+                            try {
+                                const res = await e.bot.sendApi('get_forward_msg', { message_id: resid })
+                                const details = res?.messages || res?.data?.messages || res
+
+                                if (Array.isArray(details) && details.length > 0) {
+                                    forwardContent += "\n--- [已展开合并转发消息] ---\n"
+                                    for (const subMsg of details.slice(0, 100)) {
+                                        const sender = subMsg.nickname || subMsg.sender?.nickname || "未知用户"
+                                        let subText = ""
+                                        if (subMsg.message) {
+                                            for (const seg of subMsg.message) {
+                                                if (seg.type === 'text') {
+                                                    subText += seg.data?.text || seg.text || ''
+                                                } else if (seg.type === 'image') {
+                                                    forwardImages.push(seg.url)
+                                                }
+                                            }
+                                        }
+                                        if (subText) {
+                                            forwardContent += `[${sender}]: ${subText}\n`
+                                        }
+                                    }
+                                }
+                            } catch (err) {
+                                logger.warn('[AI-Plugin] 展开合并转发失败:', err)
+                            }
+                        }
+
+                        if (m.type === 'text') {
+                            replyText += m.text || ''
+                        } else if (m.type === 'image') {
+                            allImages.push(m.url)
+                        }
+                    }
+
+                    if (forwardContent) {
+                        replyText += forwardContent
+                    }
+
+                    if (forwardImages.length > 0) {
+                        allImages = allImages.concat(forwardImages)
+                    }
+
+                    if (replyText.trim()) {
+                        const separator = "\n=== 引用/转发内容 ===\n"
+                        if (!userMessage) {
+                            userMessage = replyText.trim()
+                        } else {
+                            userMessage = `${userMessage}\n${separator}${replyText.trim()}\n=======================\n`
+                        }
+                    }
+                }
+            }
+
+            const currentImages = e.message.filter(m => m.type === "image").map(m => m.url)
+            if (currentImages.length > 0) allImages = allImages.concat(currentImages)
+
+            if (!userMessage && allImages.length === 0) return e.reply('请输入内容或发送图片呀', true)
+
+            await e.reply(`诺亚思考中 (单次对话模式，使用 ${modelGroupKey} 模型组)…`, true)
+            await setMsgEmojiLike(e, 282)
+
+            const userId = e.user_id
+
+            // 单次对话模式：不加载历史，只使用 personaPrimer
+            let contents = [...Config.personaPrimer]
+
+            const currentUserTurnParts = []
+
+            // 限制图片数量和大小，防止请求体过大
+            const MAX_IMAGES = 32
+            const MAX_IMAGE_SIZE_MB = 4 // 单张图片最大 4MB
+            if (allImages.length > 0) {
+                const imagesToProcess = allImages.slice(0, MAX_IMAGES)
+
+                const imagePromises = imagesToProcess.map(async (imageUrl) => {
+                    try {
+                        let imageBuffer = await urlToBuffer(imageUrl)
+                        if (!imageBuffer) {
+                            logger.warn(`[AI-Plugin] 获取图片失败: ${imageUrl}`)
+                            return null
+                        }
+
+                        // 检查图片大小，超过限制则压缩
+                        const sizeMB = imageBuffer.length / (1024 * 1024)
+                        if (sizeMB > MAX_IMAGE_SIZE_MB) {
+                            logger.warn(`[AI-Plugin] 图片过大 (${sizeMB.toFixed(2)}MB)，正在压缩...`)
+                            const sharp = (await import('sharp')).default
+                            imageBuffer = await sharp(imageBuffer)
+                                .resize(1920, 1920, { fit: 'inside', withoutEnlargement: true })
+                                .jpeg({ quality: 80 })
+                                .toBuffer()
+                        }
+
+                        let mimeType = getImageMimeType(imageBuffer)
+                        let finalBuffer = imageBuffer
+
+                        if (mimeType === 'image/gif') {
+                            finalBuffer = await (await import('sharp')).default(imageBuffer).toFormat('png').toBuffer()
+                            mimeType = 'image/png'
+                        }
+
+                        return {
+                            "inline_data": {
+                                "mime_type": mimeType || 'image/jpeg',
+                                "data": finalBuffer.toString('base64')
+                            }
+                        }
+                    } catch (err) {
+                        logger.warn(`[AI-Plugin] 图片处理异常: ${err.message}`)
+                        return null
+                    }
+                })
+
+                const processedImages = await Promise.all(imagePromises)
+                currentUserTurnParts.push(...processedImages.filter(img => img !== null))
+            }
+
+            if (userMessage) {
+                currentUserTurnParts.push({ "text": userMessage })
+            }
+
+            contents.push({ "role": "user", "parts": currentUserTurnParts })
+
+            const payload = { "contents": contents }
+            
+            // 估算请求体大小，防止 413 错误
+            let currentPayload = { "contents": contents }
+            let currentSizeMB = JSON.stringify(currentPayload).length / (1024 * 1024)
+            
+            if (currentSizeMB > 8) { // 8MB 警告阈值
+                logger.warn(`[AI-Plugin] 单次对话请求体过大 (${currentSizeMB.toFixed(2)}MB)`)
+            }
+            
+            const result = await this.client.makeRequest('chat', currentPayload, modelGroupKey)
+
+            if (result.success) {
+                let rawResponseText = result.data.trim()
+                let finalResponseText = rawResponseText
+                const config = getAccessConfig()
+                if (!config.show_thinking) {
+                    const blocks = rawResponseText.split('\n\n')
+                    let startContentIndex = 0
+                    let foundContent = false
+                    for (let i = 0; i < blocks.length; i++) {
+                        const currentBlock = blocks[i].trim()
+                        const isThinkingBlock = currentBlock.startsWith('*Thinking') || currentBlock.startsWith('>')
+                        if (!isThinkingBlock) {
+                            startContentIndex = i
+                            foundContent = true
+                            break
+                        }
+                    }
+                    if (foundContent) {
+                        finalResponseText = blocks.slice(startContentIndex).join('\n\n').trim()
+                        finalResponseText = finalResponseText.replace(/^>\s*/, '').trim()
+                    }
+                    if (!finalResponseText) {
+                        finalResponseText = rawResponseText
+                    }
+                }
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
+
+                let tokenInfo = ''
+                if (result.usage) {
+                    if (result.usage.prompt_tokens !== undefined && result.usage.completion_tokens !== undefined) {
+                        tokenInfo = ` | 输入Tokens: ${result.usage.prompt_tokens} | 输出Tokens: ${result.usage.completion_tokens}`
+                    } else if (result.usage.total_tokens) {
+                        tokenInfo = ` | 消耗Token: ${result.usage.total_tokens}`
+                    }
+                }
+
+                // 分段处理：如果回复内容过长，使用合并消息发送
+                const MAX_LENGTH = 3500
+                const footerInfo = `⏱️ 耗时: ${elapsed}s${tokenInfo} @${result.platform} (单次对话)`
+
+                if (finalResponseText.length <= MAX_LENGTH) {
+                    await e.reply(`${finalResponseText}\n\n${footerInfo}`, true)
+                } else {
+                    const forwardMsgNodes = []
+                    let content = finalResponseText
+                    let part = 1
+
+                    while (content.length > 0) {
+                        let splitIndex = MAX_LENGTH
+                        if (content.length > MAX_LENGTH) {
+                            const lastNewLine = content.lastIndexOf('\n', MAX_LENGTH)
+                            if (lastNewLine > MAX_LENGTH * 0.8) splitIndex = lastNewLine + 1
+                        }
+                        const chunk = content.slice(0, splitIndex)
+                        content = content.slice(splitIndex)
+
+                        if (content.length === 0) {
+                            forwardMsgNodes.push({
+                                user_id: Bot.uin,
+                                nickname: `诺亚 (Part ${part})`,
+                                message: `${chunk}\n\n${footerInfo}`
+                            })
+                        } else {
+                            forwardMsgNodes.push({
+                                user_id: Bot.uin,
+                                nickname: `诺亚 (Part ${part})`,
+                                message: chunk
+                            })
+                        }
+                        part++
+                    }
+
+                    const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
+                    await e.reply(forwardMsg)
+                }
+
+                await setMsgEmojiLike(e, 144)
+                // 单次对话模式：不保存历史记录
+            } else {
+                await setMsgEmojiLike(e, 10)
+                await e.reply(`❌ 请求失败\n错误: ${result.error}`, true)
+            }
+        } catch (err) {
+            await setMsgEmojiLike(e, 10)
+            logger.error(`[AI-Plugin] 单次对话处理异常:`, err)
             await e.reply(`❌ 处理异常: ${err.message}`, true)
         }
     }
