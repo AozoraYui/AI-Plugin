@@ -329,8 +329,8 @@ export class ChatHandler extends plugin {
                 const updatedHistory = [...history, { "role": "user", "parts": currentUserTurnParts }, { "role": "model", "parts": [{ "text": finalResponseText }] }]
                 await this.conversationManager.saveUserHistory(userId, updatedHistory)
 
-                // 每 20 条对话自动触发增量锚点总结
-                await this._checkAndCreateAutoCheckpoint(userId, updatedHistory.length)
+                // 每次对话自动触发增量锚点总结
+                await this._checkAndCreateAutoCheckpoint(userId)
             } else {
                 await setMsgEmojiLike(e, 10)
                 await e.reply(`❌ 请求失败\n错误: ${result.error}`, true)
@@ -681,37 +681,19 @@ export class ChatHandler extends plugin {
         }
     }
 
-    async _checkAndCreateAutoCheckpoint(userId, historyLength) {
-        const CHECKPOINT_THRESHOLD = 20
+    async _checkAndCreateAutoCheckpoint(userId) {
         const today = getTodayDateStr()
         
-        logger.info(`[AI-Plugin] _checkAndCreateAutoCheckpoint: historyLength = ${historyLength}`)
-        
-        if (historyLength < CHECKPOINT_THRESHOLD) {
-            logger.info(`[AI-Plugin] 历史长度 ${historyLength} < ${CHECKPOINT_THRESHOLD}，跳过`)
-            return
-        }
-        
-        // 获取今天的锚点消息计数
+        // 检查今天是否已经创建过锚点
         const todayCheckpoint = await this.conversationManager.db.getCheckpoint(userId, today)
-        const todayCheckpointMessageCount = todayCheckpoint?.messageCount || 0
-        
-        logger.info(`[AI-Plugin] 今天锚点: messageCount=${todayCheckpointMessageCount}`)
-        
-        // 计算今天自上次锚点以来的新消息数
-        const newMessagesSinceLastCheckpoint = historyLength - todayCheckpointMessageCount
-        
-        logger.info(`[AI-Plugin] 今天新增消息数: ${newMessagesSinceLastCheckpoint} = ${historyLength} - ${todayCheckpointMessageCount}`)
-        
-        if (newMessagesSinceLastCheckpoint < CHECKPOINT_THRESHOLD) {
-            logger.info(`[AI-Plugin] 今天新增消息 ${newMessagesSinceLastCheckpoint} < ${CHECKPOINT_THRESHOLD}，跳过`)
+        if (todayCheckpoint) {
+            logger.debug(`[AI-Plugin] 用户 ${userId} 今天已创建过锚点，跳过`)
             return
         }
         
         try {
-            logger.info(`[AI-Plugin] 用户 ${userId} 今天自上次锚点以来新增 ${newMessagesSinceLastCheckpoint} 条对话，自动创建增量锚点...`)
-            // 保存的是触发时的基准值（上次锚点消息数 + 20），而不是当前总消息数
-            await this.conversationManager.createIncrementalCheckpoint(userId, today, todayCheckpointMessageCount + CHECKPOINT_THRESHOLD)
+            logger.info(`[AI-Plugin] 用户 ${userId} 今天首次对话，自动创建增量锚点...`)
+            await this.conversationManager.createIncrementalCheckpoint(userId, today, 0)
             logger.info(`[AI-Plugin] 用户 ${userId} 自动增量锚点创建成功`)
         } catch (err) {
             logger.error(`[AI-Plugin] 为用户 ${userId} 创建自动增量锚点失败:`, err)
