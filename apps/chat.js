@@ -15,8 +15,8 @@ export class ChatHandler extends plugin {
             event: 'message',
             priority: 1144,
             rule: [
-                { reg: /^#([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleChat' },
                 { reg: /^#(s|single)([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleSingleChat' },
+                { reg: /^#(?!(s|single))([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleChat' },
                 { reg: /^#结束gemini对话$/i, fnc: 'resetChatHistory' },
                 { reg: /^#导出诺亚记忆$/i, fnc: 'exportMyMemory' },
                 { reg: /^#导出诺亚全部记忆$/i, fnc: 'exportAllMemory', permission: 'master' },
