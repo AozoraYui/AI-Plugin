@@ -17,7 +17,9 @@ export class ImageHandler extends plugin {
             dsc: '使用AI生成图片',
             event: 'message',
             priority: 1145,
-            rule: []
+            rule: [
+                { reg: /.*/, fnc: 'sessionHandler', priority: 9200, log: false },
+            ]
         })
         this.client = global.AIPluginClient
         this.conversationManager = global.AIPluginConversationManager
@@ -371,6 +373,109 @@ export class ImageHandler extends plugin {
 
         const aliasList = presetToModify.aliases.map((alias, index) => `${index + 1}. ${alias}`).join('\n')
         await e.reply(`请选择要为 #${targetCommand} 删除的别名，输入【编号】或【别名本身】。\n可以一次删除多个，用空格或逗号隔开。\n\n${aliasList}\n\n发送 #取消 以中止。`)
+        return true
+    }
+
+    async sessionHandler(e) {
+        if (!sessionManager.has(e.user_id)) return false
+        
+        const session = sessionManager.get(e.user_id)
+        if (e.msg.trim() === '#取消') {
+            sessionManager.delete(e.user_id)
+            await e.reply("操作已取消。")
+            return true
+        }
+
+        try {
+            if (session.type === 'addPreset') {
+                const newPrompt = e.msg.trim()
+                if (!newPrompt) throw new Error("提示词内容不能为空。")
+                
+                const newPreset = { ...session.data, prompt: newPrompt }
+                Config.presets.push(newPreset)
+                this._savePresets(Config.presets)
+                Config.reloadPresets()
+                this.updateDynamicRule()
+                
+                await e.reply(`✅ 预设 #${session.data.command} 添加成功！新指令已即时生效！`)
+            
+            } else if (session.type === 'addAlias') {
+                const targetCommand = session.data.command
+                const newAliases = e.msg.trim().split(/[\s,;，；]+/).filter(Boolean)
+
+                if (newAliases.length === 0) throw new Error("别名内容不能为空。")
+
+                const preset = Config.presets.find(p => p.command === targetCommand)
+                if (!preset) throw new Error(`在处理时未找到指令 #${targetCommand}`)
+
+                if (!preset.aliases) preset.aliases = []
+                
+                let addedCount = 0
+                let skippedAliases = []
+                const allExistingCommands = new Set(Config.presets.flatMap(p => [p.command, ...(p.aliases || [])]))
+
+                for (const alias of newAliases) {
+                    if (allExistingCommands.has(alias)) {
+                        skippedAliases.push(alias)
+                    } else {
+                        preset.aliases.push(alias)
+                        addedCount++
+                    }
+                }
+
+                if (addedCount > 0) {
+                    this._savePresets(Config.presets)
+                    Config.reloadPresets()
+                    this.updateDynamicRule()
+                }
+
+                let replyMsg = ''
+                if (addedCount > 0) replyMsg += `✅ 成功为 #${targetCommand} 添加了 ${addedCount} 个新别名！新别名已即时生效！`
+                if (skippedAliases.length > 0) replyMsg += `\n- 跳过了 ${skippedAliases.length} 个已存在或冲突的别名: ${skippedAliases.join(', ')}`
+                
+                await e.reply(replyMsg || '🤔 没有添加任何新的别名。')
+
+            } else if (session.type === 'deleteAlias') {
+                const { command: targetCommand, availableAliases } = session.data
+                const inputs = e.msg.trim().split(/[\s,;，；]+/).filter(Boolean)
+
+                if (inputs.length === 0) throw new Error("输入内容不能为空。")
+
+                const preset = Config.presets.find(p => p.command === targetCommand)
+                if (!preset || !preset.aliases) throw new Error(`在处理时未找到指令 #${targetCommand} 或其别名列表。`)
+
+                let deletedAliases = new Set()
+                
+                for (const input of inputs) {
+                    let aliasToDelete = null
+                    const index = parseInt(input) - 1
+                    if (!isNaN(index) && index >= 0 && index < availableAliases.length) {
+                        aliasToDelete = availableAliases[index]
+                    } else if (availableAliases.includes(input)) {
+                        aliasToDelete = input
+                    }
+
+                    if (aliasToDelete) {
+                        deletedAliases.add(aliasToDelete)
+                    }
+                }
+                
+                if (deletedAliases.size > 0) {
+                    preset.aliases = preset.aliases.filter(alias => !deletedAliases.has(alias))
+                    this._savePresets(Config.presets)
+                    Config.reloadPresets()
+                    this.updateDynamicRule()
+                    await e.reply(`✅ 成功从 #${targetCommand} 中删除了 ${deletedAliases.size} 个别名: ${Array.from(deletedAliases).join(', ')}\n变更已即时生效。`)
+                } else {
+                    await e.reply("🤔 没有找到与你输入匹配的可删除别名。")
+                }
+            }
+
+        } catch (error) {
+            await e.reply(`❌ 操作失败：${error.message}`)
+        } finally {
+            sessionManager.delete(e.user_id)
+        }
         return true
     }
 

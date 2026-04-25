@@ -186,6 +186,90 @@ export class AIDatabase {
         })
     }
 
+    getConversationHistoryByDateRange(userId, startDate, endDate) {
+        return new Promise((resolve, reject) => {
+            const userIdStr = String(userId)
+            let query = 'SELECT role, parts, date_str FROM conversations WHERE user_id = ?'
+            const params = [userIdStr]
+
+            if (startDate) {
+                query += ' AND date_str > ?'
+                params.push(startDate)
+            }
+            if (endDate) {
+                query += ' AND date_str <= ?'
+                params.push(endDate)
+            }
+
+            query += ' ORDER BY id ASC'
+
+            this.db.all(query, params, (err, rows) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(rows.map(row => ({
+                    role: row.role,
+                    parts: JSON.parse(row.parts),
+                    date_str: row.date_str
+                })))
+            })
+        })
+    }
+
+    getConversationHistoryByDate(userId, dateStr) {
+        return new Promise((resolve, reject) => {
+            this.db.all('SELECT role, parts FROM conversations WHERE user_id = ? AND date_str = ? ORDER BY id ASC',
+                [String(userId), dateStr], (err, rows) => {
+                    if (err) {
+                        reject(err)
+                        return
+                    }
+                    resolve(rows.map(row => ({
+                        role: row.role,
+                        parts: JSON.parse(row.parts)
+                    })))
+                })
+        })
+    }
+
+    getAllUserIdsByDateRange(startDate, endDate) {
+        return new Promise((resolve, reject) => {
+            let query = 'SELECT DISTINCT user_id FROM conversations WHERE 1=1'
+            const params = []
+
+            if (startDate) {
+                query += ' AND date_str >= ?'
+                params.push(startDate)
+            }
+            if (endDate) {
+                query += ' AND date_str <= ?'
+                params.push(endDate)
+            }
+
+            this.db.all(query, params, (err, rows) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(rows.map(row => row.user_id))
+            })
+        })
+    }
+
+    getDistinctDates(userId) {
+        return new Promise((resolve, reject) => {
+            this.db.all('SELECT DISTINCT date_str FROM conversations WHERE user_id = ? ORDER BY date_str ASC',
+                [String(userId)], (err, rows) => {
+                    if (err) {
+                        reject(err)
+                        return
+                    }
+                    resolve(rows.map(row => row.date_str))
+                })
+        })
+    }
+
     getMigrationStatus() {
         return new Promise((resolve, reject) => {
             this.db.get('SELECT json_migrated, migration_time FROM migration_status WHERE id = 1', (err, row) => {

@@ -116,6 +116,7 @@ export class ConversationManager {
     async getUserHistory(userId) {
         const redisKey = `ai-plugin:history:${userId}`
         const weekInSeconds = 7 * 24 * 60 * 60
+        const today = getTodayDateStr()
 
         try {
             const historyJson = await redis.get(redisKey)
@@ -141,7 +142,6 @@ export class ConversationManager {
         }
 
         try {
-            const today = getTodayDateStr()
             const todayFile = path.join(this.HISTORY_DIR, today, `${userId}.json`)
             if (fs.existsSync(todayFile)) {
                 const fileContent = fs.readFileSync(todayFile, 'utf8')
@@ -161,6 +161,41 @@ export class ConversationManager {
         }
 
         return []
+    }
+
+    async getUserHistoryWithCheckpoint(userId) {
+        const userIdStr = String(userId)
+        const today = getTodayDateStr()
+
+        const files = fs.readdirSync(CHECKPOINT_DIR)
+            .filter(name => name.startsWith(`${userIdStr}_`) && name.endsWith('.txt'))
+            .sort()
+            .reverse()
+
+        let fullCheckpointDate = null
+        let fullCheckpointContent = ""
+
+        for (const file of files) {
+            const match = file.match(/_(\d{4}-\d{2}-\d{2})\.txt$/)
+            if (match) {
+                const date = match[1]
+                if (date !== today) {
+                    fullCheckpointDate = date
+                    fullCheckpointContent = fs.readFileSync(path.join(CHECKPOINT_DIR, file), 'utf8')
+                    break
+                }
+            }
+        }
+
+        let history = []
+
+        try {
+            history = await this.db.getConversationHistoryByDateRange(userId, fullCheckpointDate, null)
+        } catch (err) {
+            logger.error(`[AI-Plugin] 从 SQLite 读取用户 ${userId} 的历史失败:`, err)
+        }
+
+        return { checkpoint: fullCheckpointContent, history }
     }
 
     async saveUserHistory(userId, history) {
@@ -260,20 +295,9 @@ export class ConversationManager {
         const exportedData = {}
 
         if (scope === 'single') {
-            const redisKey = `ai-plugin:history:${userId}`
-            const value = await redis.get(redisKey)
-            if (value) {
-                try {
-                    exportedData[userId] = JSON.parse(value)
-                } catch (parseErr) {
-                    logger.warn(`[AI-Plugin] 导出用户 ${userId} 的JSON失败。`)
-                    return { success: false, message: "记忆文件损坏，导出失败" }
-                }
-            } else {
-                const history = await this.db.getConversationHistory(userId)
-                if (history.length > 0) {
-                    exportedData[userId] = history
-                }
+            const history = await this.db.getConversationHistory(userId)
+            if (history.length > 0) {
+                exportedData[userId] = history
             }
         } else {
             const userIds = await this.db.getAllUserIds()
@@ -289,8 +313,15 @@ export class ConversationManager {
             return { success: false, message: "没有找到任何记忆数据" }
         }
 
-        const fileName = scope === 'single' ? `noa_memory_${userId}.json` : `noa_all_memory.json`
-        const filePath = path.join(process.cwd(), 'data', 'ai_assistant', fileName)
+        const exportDir = path.join(process.cwd(), 'data', 'ai_assistant')
+        if (!fs.existsSync(exportDir)) {
+            fs.mkdirSync(exportDir, { recursive: true })
+        }
+
+        const timestamp = new Date().toISOString().replace(/:/g, '-').slice(0, 19)
+        const identifier = scope === 'single' ? userId : 'all'
+        const fileName = `noa_memory_export_${identifier}_${timestamp}.json`
+        const filePath = path.join(exportDir, fileName)
 
         try {
             fs.writeFileSync(filePath, JSON.stringify(exportedData, null, 2), 'utf8')

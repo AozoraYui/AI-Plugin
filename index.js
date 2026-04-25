@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import { Config, HISTORY_DIR } from './utils/config.js'
 import { GeminiClient } from './client/GeminiClient.js'
 import { ConversationManager } from './model/conversation.js'
+import { AIScheduler } from './utils/scheduler.js'
 
 logger.info('**************************************')
 logger.info(`
@@ -25,6 +26,8 @@ if (!global.segment) {
 
 global.AIPluginClient = new GeminiClient()
 global.AIPluginConversationManager = new ConversationManager()
+global.AIPluginScheduler = new AIScheduler(global.AIPluginClient)
+global.AIPluginScheduler.start()
 
 const files = fs.readdirSync('./plugins/AI-Plugin/apps').filter(file => file.endsWith('.js'))
 

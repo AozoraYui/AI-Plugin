@@ -11,7 +11,8 @@
     "yaml": "^2.3.4",
     "sharp": "^0.33.2",
     "https-proxy-agent": "^7.0.4",
-    "sqlite3": "^5.1.7"
+    "sqlite3": "^5.1.7",
+    "node-schedule": "^2.1.1"
   },
   "keywords": [
     "yunzai",
