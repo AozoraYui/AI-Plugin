@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import yaml from 'yaml'
 
 export class ManagementHandler extends plugin {
-    constructor(client, conversationManager) {
+    constructor() {
         super({
             name: 'AI管理',
             dsc: 'AI插件管理功能',
@@ -35,8 +35,8 @@ export class ManagementHandler extends plugin {
                 { reg: /^#gemini查看权限配置$/i, fnc: 'viewAccessConfig', permission: 'master' },
             ]
         })
-        this.client = client
-        this.conversationManager = conversationManager
+        this.client = global.AIPluginClient
+        this.conversationManager = global.AIPluginConversationManager
     }
 
     async testAllModels(e) {
