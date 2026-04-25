@@ -138,7 +138,7 @@ export class ChatHandler extends plugin {
             }
 
             // 防止请求体过大导致 413 错误，限制历史长度
-            const MAX_HISTORY_LENGTH = 30
+            const MAX_HISTORY_LENGTH = 32
             if (history.length > MAX_HISTORY_LENGTH) {
                 history = history.slice(-MAX_HISTORY_LENGTH)
                 logger.debug(`[AI-Plugin] 用户 ${userId} 的历史过长，已截断至最近 ${MAX_HISTORY_LENGTH} 条`)
