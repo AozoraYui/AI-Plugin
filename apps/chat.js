@@ -3,8 +3,7 @@ import { Config } from '../utils/config.js'
 import { GeminiClient } from '../client/GeminiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
-import { sessionManager } from '../utils/session.js'
-import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, parseModelGroup } from '../utils/common.js'
+import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType } from '../utils/common.js'
 
 export class ChatHandler extends plugin {
     constructor() {
@@ -16,9 +15,6 @@ export class ChatHandler extends plugin {
             rule: [
                 { reg: /^#([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleChat' },
                 { reg: /^#结束gemini对话$/i, fnc: 'resetChatHistory' },
-                { reg: /^#记住我(.*)$/i, fnc: 'rememberMe' },
-                { reg: /^#忘记我$/i, fnc: 'forgetMe' },
-                { reg: /^#我(是|叫)谁$/i, fnc: 'whoAmI' },
                 { reg: /^#导出诺亚记忆$/i, fnc: 'exportMyMemory' },
                 { reg: /^#导出诺亚全部记忆$/i, fnc: 'exportAllMemory', permission: 'master' },
                 { reg: /^#gemini思考(开启|关闭)$/i, fnc: 'switchThinkingMode', permission: 'master' },
@@ -131,15 +127,11 @@ export class ChatHandler extends plugin {
             await setMsgEmojiLike(e, 282)
 
             const userId = e.user_id
-            let history = await this.conversationManager.getUserHistory(userId)
-            const profile = this.conversationManager.getUserProfile(userId)
+            const memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(userId)
+            let history = memoryData.history
 
-            let userContextPrimer = []
-            if (profile && profile.info) {
-                userContextPrimer.push(
-                    { "role": "user", "parts": [{ "text": `【重要提醒】这是关于我的背景信息，请务必记住：${profile.info}` }] },
-                    { "role": "model", "parts": [{ "text": "好的，诺亚记下了！" }] }
-                )
+            if (memoryData.checkpoint) {
+                logger.debug(`[AI-Plugin] 用户 ${userId} 加载全量锚点记忆`)
             }
 
             const currentUserTurnParts = []
@@ -184,7 +176,23 @@ export class ChatHandler extends plugin {
                 currentUserTurnParts.push({ "text": userMessage })
             }
 
-            const payload = { "contents": [...Config.personaPrimer, ...userContextPrimer, ...history, { "role": "user", "parts": currentUserTurnParts }] }
+            let contents = [...Config.personaPrimer]
+
+            if (memoryData.checkpoint) {
+                contents.push({
+                    "role": "user",
+                    "parts": [{ "text": `【重要记忆摘要】这是你之前记住的关于这个用户的对话摘要，请基于这些摘要继续对话：\n${memoryData.checkpoint}` }]
+                })
+                contents.push({
+                    "role": "model",
+                    "parts": [{ "text": "好的，我已经想起了之前的重要记忆！" }]
+                })
+            }
+
+            contents.push(...history)
+            contents.push({ "role": "user", "parts": currentUserTurnParts })
+
+            const payload = { "contents": contents }
             const result = await this.client.makeRequest('chat', payload, modelGroupKey)
 
             if (result.success) {
@@ -248,66 +256,54 @@ export class ChatHandler extends plugin {
         }
     }
 
-    async rememberMe(e) {
-        const infoToRemember = e.msg.replace(/^#记住我/, '').trim()
-        if (!infoToRemember) {
-            return e.reply('你想让诺亚记住关于你的什么信息呀？', true)
-        }
-
-        const userId = e.user_id
-        const prompt = `请将以下关于用户(QQ:${userId})的描述，提炼成一句简短的、用于自我介绍的第三人称陈述。例如，如果用户说"我叫青空由依，喜欢猫"，你应该提炼出"青空由依，一个喜欢猫咪的人"。请直接输出提炼后的陈述，不要加任何多余的话。用户描述：\n\n${infoToRemember}`
-
+    async exportMyMemory(e) {
+        await e.reply("收到指令，正在打包你的专属记忆… 请稍等片刻喵~ ⏳")
         try {
-            const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] }
-            const result = await this.client.makeRequest('chat', payload)
-
+            const userId = String(e.user_id)
+            const result = await this.conversationManager.exportMemory(e, userId, 'single')
             if (result.success) {
-                const summarizedInfo = result.data.trim()
-                await this.conversationManager.saveUserProfile(userId, summarizedInfo)
-                await e.reply(`好哒！诺亚记住啦！你是：${summarizedInfo}`, true)
+                await this._sendMemoryFile(e, result.filePath, '你的专属记忆')
             } else {
-                throw new Error(result.error || "AI未能提炼信息")
+                await e.reply(`❌ 导出失败: ${result.message}`, true)
             }
         } catch (err) {
-            logger.error(`[AI-Plugin] 记住我功能失败:`, err)
-            await e.reply(`呜... 诺亚在记笔记的时候走神了... 稍后再试一次好不好？`, true)
-        }
-    }
-
-    async forgetMe(e) {
-        const deleted = await this.conversationManager.deleteUserProfile(e.user_id)
-        if (deleted) {
-            await e.reply('呜... 好吧... 诺亚已经把你从【长期记忆】里删除了... 有点舍不得呢...', true)
-        } else {
-            await e.reply('诶？诺亚的长期记忆里本来就没有你哦，所以不用忘记啦~', true)
-        }
-    }
-
-    async whoAmI(e) {
-        const profile = this.conversationManager.getUserProfile(e.user_id)
-        if (profile && profile.info) {
-            await e.reply(`我记得哦！你是${profile.info}！对不对呀？`, true)
-        } else {
-            await e.reply(`唔...诺亚的档案里还没有关于你的记录呢... 你可以试试用 #记住我 [关于你的信息] 来让诺亚记住你哦！`, true)
-        }
-    }
-
-    async exportMyMemory(e) {
-        const result = await this.conversationManager.exportMemory(e, e.user_id, 'single')
-        if (result.success) {
-            await e.reply(`✅ 记忆导出成功！文件已保存至: ${result.fileName}`, true)
-        } else {
-            await e.reply(`❌ 导出失败: ${result.message}`, true)
+            logger.error(`[AI-Plugin] 导出个人记忆失败:`, err)
+            await e.reply(`❌ 导出失败了，呜呜呜…\n错误信息：${err.message}`, true)
         }
     }
 
     async exportAllMemory(e) {
-        await e.reply("收到最高权限指令，开始导出诺亚的全部记忆… 这可能需要一点时间喵~")
-        const result = await this.conversationManager.exportMemory(e, null, 'all')
-        if (result.success) {
-            await e.reply(`✅ 全部记忆导出成功！文件已保存至: ${result.fileName}`, true)
+        await e.reply("收到最高权限指令，开始导出诺亚的全部记忆… 这可能需要一点时间喵~ ⏳")
+        try {
+            const result = await this.conversationManager.exportMemory(e, null, 'all')
+            if (result.success) {
+                await this._sendMemoryFile(e, result.filePath, '全部记忆')
+            } else {
+                await e.reply(`❌ 导出失败: ${result.message}`, true)
+            }
+        } catch (err) {
+            logger.error(`[AI-Plugin] 导出全部记忆失败:`, err)
+            await e.reply(`❌ 导出失败了，呜呜呜…\n错误信息：${err.message}`, true)
+        }
+    }
+
+    async _sendMemoryFile(e, filePath, memoryType) {
+        if (e.isGroup) {
+            try {
+                await e.reply(`✅ 成功导出${memoryType}！正在上传到本群...`, true)
+                await e.group.sendFile(filePath)
+            } catch (uploadErr) {
+                logger.error(`[AI-Plugin] 记忆文件群聊上传失败:`, uploadErr)
+                await e.reply(`呜...文件上传失败了！\n但别担心，文件已经成功保存在服务器上了哦：\n${filePath}`, true)
+            }
         } else {
-            await e.reply(`❌ 导出失败: ${result.message}`, true)
+            try {
+                await e.reply(`✅ 成功导出${memoryType}！正在发送给你...`, true)
+                await e.friend.sendFile(filePath)
+            } catch (uploadErr) {
+                logger.error(`[AI-Plugin] 记忆文件私聊发送失败:`, uploadErr)
+                await e.reply(`呜...文件发送失败了！\n但别担心，文件已经成功保存在服务器上了哦：\n${filePath}`, true)
+            }
         }
     }
 
