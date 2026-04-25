@@ -36,6 +36,7 @@ export class AIDatabase {
                     user_id TEXT NOT NULL,
                     content TEXT NOT NULL,
                     date_str TEXT NOT NULL,
+                    message_count INTEGER DEFAULT 0,
                     created_at DATETIME DEFAULT (datetime('now', '+8 hours')),
                     UNIQUE(user_id, date_str)
                 );
@@ -150,7 +151,10 @@ export class AIDatabase {
                     if (err) {
                         // 忽略更新错误
                     }
-                    resolve()
+                    // 添加 message_count 列（如果不存在）
+                    this.db.run('ALTER TABLE memory_checkpoints ADD COLUMN message_count INTEGER DEFAULT 0', () => {
+                        resolve()
+                    })
                 })
             }
         })
@@ -426,13 +430,13 @@ export class AIDatabase {
 
     // ========== 全量锚点方法（对应 memory_checkpoints/用户_日期.txt） ==========
 
-    saveCheckpoint(userId, content, dateStr) {
+    saveCheckpoint(userId, content, dateStr, messageCount = 0) {
         return new Promise((resolve, reject) => {
             this.db.run(`
-                INSERT INTO memory_checkpoints (user_id, content, date_str)
-                VALUES (?, ?, ?)
-                ON CONFLICT(user_id, date_str) DO UPDATE SET content = ?, created_at = datetime('now', '+8 hours')
-            `, [String(userId), content, dateStr, content], (err) => {
+                INSERT INTO memory_checkpoints (user_id, content, date_str, message_count)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, date_str) DO UPDATE SET content = ?, message_count = ?, created_at = datetime('now', '+8 hours')
+            `, [String(userId), content, dateStr, messageCount, content, messageCount], (err) => {
                 if (err) reject(err)
                 else resolve()
             })
@@ -441,13 +445,13 @@ export class AIDatabase {
 
     getCheckpoint(userId, dateStr) {
         return new Promise((resolve, reject) => {
-            this.db.get('SELECT content, created_at FROM memory_checkpoints WHERE user_id = ? AND date_str = ?',
+            this.db.get('SELECT content, message_count, created_at FROM memory_checkpoints WHERE user_id = ? AND date_str = ?',
                 [String(userId), dateStr], (err, row) => {
                     if (err) {
                         reject(err)
                         return
                     }
-                    resolve(row ? { content: row.content, createdAt: row.created_at } : null)
+                    resolve(row ? { content: row.content, messageCount: row.message_count, createdAt: row.created_at } : null)
                 })
         })
     }

@@ -47,7 +47,7 @@ export class AIScheduler {
         }
     }
 
-    async _createIncrementalCheckpoint(userId, today) {
+    async _createIncrementalCheckpoint(userId, today, messageCount = 0) {
         const userIdStr = String(userId)
 
         // 从数据库获取最新全量锚点
@@ -129,8 +129,8 @@ ${dayContent}`
             return
         }
 
-        // 保存到数据库
-        await global.AIPluginConversationManager.db.saveCheckpoint(userId, finalContext, today)
+        // 保存到数据库，附带消息计数
+        await global.AIPluginConversationManager.db.saveCheckpoint(userId, finalContext, today, messageCount)
         logger.info(`[AI-Plugin] 为用户 ${userId} 创建增量锚点成功: ${today}`)
     }
 
