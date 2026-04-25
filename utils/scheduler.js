@@ -32,7 +32,7 @@ export class AIScheduler {
 
     async _runDailyIncrementalCheckpoint() {
         const today = getTodayDateStr()
-        const userIds = await this.client.conversationManager.db.getAllUserIds()
+        const userIds = await global.AIPluginConversationManager.db.getAllUserIds()
 
         if (userIds.length === 0) {
             logger.info('[AI-Plugin] 没有用户对话记录，跳过增量锚点总结')
@@ -41,7 +41,7 @@ export class AIScheduler {
 
         for (const userId of userIds) {
             try {
-                const userTodayHistory = await this.client.conversationManager.db.getConversationHistoryByDate(userId, today)
+                const userTodayHistory = await global.AIPluginConversationManager.db.getConversationHistoryByDate(userId, today)
                 if (userTodayHistory.length === 0) continue
                 await this._createIncrementalCheckpoint(userId, today)
             } catch (err) {
@@ -86,7 +86,7 @@ export class AIScheduler {
             finalContext += `\n=== 📜 【核心记忆存档 (截止于 ${baseCheckpointDate})】 ===\n${baseCheckpointContent}\n`
         }
 
-        const dateDirs = await this.client.conversationManager.db.getDistinctDates(userId)
+        const dateDirs = await global.AIPluginConversationManager.db.getDistinctDates(userId)
 
         let datesToProcess = dateDirs
         if (baseCheckpointDate) {
@@ -97,7 +97,7 @@ export class AIScheduler {
         }
 
         for (const dateDir of datesToProcess) {
-            const dayHistory = await this.client.conversationManager.db.getConversationHistoryByDate(userId, dateDir)
+            const dayHistory = await global.AIPluginConversationManager.db.getConversationHistoryByDate(userId, dateDir)
             if (dayHistory.length === 0) continue
 
             let dayContent = ""
@@ -152,7 +152,7 @@ ${dayContent}`
 
     async _runWeeklyFullCheckpoint() {
         const today = getTodayDateStr()
-        const userIds = await this.client.conversationManager.db.getAllUserIds()
+        const userIds = await global.AIPluginConversationManager.db.getAllUserIds()
 
         if (userIds.length === 0) {
             logger.info('[AI-Plugin] 没有用户对话记录，跳过全量锚点总结')
@@ -179,10 +179,10 @@ ${dayContent}`
         const userIdStr = String(userId)
         let finalContext = ""
 
-        const dateDirs = await this.client.conversationManager.db.getDistinctDates(userId)
+        const dateDirs = await global.AIPluginConversationManager.db.getDistinctDates(userId)
 
         for (const dateDir of dateDirs) {
-            const dayHistory = await this.client.conversationManager.db.getConversationHistoryByDate(userId, dateDir)
+            const dayHistory = await global.AIPluginConversationManager.db.getConversationHistoryByDate(userId, dateDir)
             if (dayHistory.length === 0) continue
 
             let dayContent = ""
