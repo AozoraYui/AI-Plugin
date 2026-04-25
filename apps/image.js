@@ -18,6 +18,7 @@ export class ImageHandler extends plugin {
             event: 'message',
             priority: 1142,
             rule: [
+                { reg: /^#([a-zA-Z0-9]*)bnn([\s\S]*)$/i, fnc: 'generateImage', key: 'bnnCommand' },
                 { reg: /.*/, fnc: 'sessionHandler', priority: 9200, log: false },
             ]
         })
