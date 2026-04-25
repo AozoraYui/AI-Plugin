@@ -690,10 +690,9 @@ export class ChatHandler extends plugin {
         
         // 检查是否已经创建过今天的锚点
         const today = getTodayDateStr()
-        const checkpointDir = path.join(process.cwd(), 'data', 'ai_assistant', 'memory_checkpoints')
-        const todayCheckpoint = path.join(checkpointDir, `${userId}_${today}.txt`)
+        const todayCheckpoint = await this.conversationManager.db.getCheckpoint(userId, today)
         
-        if (fs.existsSync(todayCheckpoint)) {
+        if (todayCheckpoint) {
             logger.debug(`[AI-Plugin] 用户 ${userId} 今天已创建自动锚点，跳过`)
             return
         }
