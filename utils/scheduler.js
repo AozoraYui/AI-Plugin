@@ -143,7 +143,7 @@ export class AIScheduler {
 ${dayContent}`
 
                     const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
-                    const result = await this.client.makeRequest('chat', payload, 'default', 8192)
+                    const result = await this.client.makeRequest('chat', payload, 'default', 16384)
 
                     if (result.success) {
                         summaryText = result.data.trim()
@@ -239,7 +239,7 @@ ${dayContent}`
 ${dayContent}`
 
                     const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
-                    const result = await this.client.makeRequest('chat', payload, 'default', 8192)
+                    const result = await this.client.makeRequest('chat', payload, 'default', 16384)
 
                     if (result.success) {
                         summaryText = result.data.trim()

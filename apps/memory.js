@@ -62,7 +62,7 @@ export class MemoryHandler extends plugin {
 ${dayContent}`
 
         const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
-        const result = await this.client.makeRequest('chat', payload, modelGroupKey, 8192)
+        const result = await this.client.makeRequest('chat', payload, modelGroupKey, 16384)
 
         if (result.success) {
             const summaryText = result.data.trim()
