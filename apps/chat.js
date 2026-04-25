@@ -282,7 +282,47 @@ export class ChatHandler extends plugin {
                     }
                 }
 
-                await e.reply(`${finalResponseText}\n\n⏱️ 耗时: ${elapsed}s${tokenInfo} @${result.platform}`, true)
+                // 分段处理：如果回复内容过长，使用合并消息发送
+                const MAX_LENGTH = 3500
+                const footerInfo = `⏱️ 耗时: ${elapsed}s${tokenInfo} @${result.platform}`
+
+                if (finalResponseText.length <= MAX_LENGTH) {
+                    await e.reply(`${finalResponseText}\n\n${footerInfo}`, true)
+                } else {
+                    const forwardMsgNodes = []
+                    let content = finalResponseText
+                    let part = 1
+
+                    // 第一段包含回复内容
+                    while (content.length > 0) {
+                        let splitIndex = MAX_LENGTH
+                        if (content.length > MAX_LENGTH) {
+                            const lastNewLine = content.lastIndexOf('\n', MAX_LENGTH)
+                            if (lastNewLine > MAX_LENGTH * 0.8) splitIndex = lastNewLine + 1
+                        }
+                        const chunk = content.slice(0, splitIndex)
+                        content = content.slice(splitIndex)
+
+                        if (content.length === 0) {
+                            // 最后一段，加上耗时信息
+                            forwardMsgNodes.push({
+                                user_id: Bot.uin,
+                                nickname: `诺亚 (Part ${part})`,
+                                message: `${chunk}\n\n${footerInfo}`
+                            })
+                        } else {
+                            forwardMsgNodes.push({
+                                user_id: Bot.uin,
+                                nickname: `诺亚 (Part ${part})`,
+                                message: chunk
+                            })
+                        }
+                        part++
+                    }
+
+                    const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
+                    await e.reply(forwardMsg)
+                }
 
                 await setMsgEmojiLike(e, 144)
                 const updatedHistory = [...history, { "role": "user", "parts": currentUserTurnParts }, { "role": "model", "parts": [{ "text": finalResponseText }] }]
