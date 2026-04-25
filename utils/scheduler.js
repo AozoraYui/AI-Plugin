@@ -58,11 +58,6 @@ export class AIScheduler {
         if (latestCheckpoint) {
             baseCheckpointDate = latestCheckpoint.dateStr
             baseCheckpointContent = latestCheckpoint.content
-
-            if (baseCheckpointDate === today) {
-                logger.debug(`[AI-Plugin] 用户 ${userId} 今天已创建过锚点，跳过`)
-                return
-            }
         }
 
         let finalContext = ""
