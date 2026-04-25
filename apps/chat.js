@@ -713,7 +713,8 @@ export class ChatHandler extends plugin {
         
         try {
             logger.info(`[AI-Plugin] 用户 ${userId} 今天自上次锚点以来新增 ${newMessagesSinceLastCheckpoint} 条对话，自动创建增量锚点...`)
-            await this.conversationManager.createIncrementalCheckpoint(userId, today, todayMessages)
+            // 保存的是触发时的基准值（上次锚点消息数 + 20），而不是当前总消息数
+            await this.conversationManager.createIncrementalCheckpoint(userId, today, todayCheckpointMessageCount + CHECKPOINT_THRESHOLD)
             logger.info(`[AI-Plugin] 用户 ${userId} 自动增量锚点创建成功`)
         } catch (err) {
             logger.error(`[AI-Plugin] 为用户 ${userId} 创建自动增量锚点失败:`, err)
