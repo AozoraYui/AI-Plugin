@@ -330,7 +330,7 @@ export class ChatHandler extends plugin {
                 await this.conversationManager.saveUserHistory(userId, updatedHistory)
 
                 // 每 20 条对话自动触发增量锚点总结
-                await this._checkAndCreateAutoCheckpoint(userId, updatedHistory)
+                await this._checkAndCreateAutoCheckpoint(userId, updatedHistory.length)
             } else {
                 await setMsgEmojiLike(e, 10)
                 await e.reply(`❌ 请求失败\n错误: ${result.error}`, true)
@@ -681,17 +681,14 @@ export class ChatHandler extends plugin {
         }
     }
 
-    async _checkAndCreateAutoCheckpoint(userId, history) {
+    async _checkAndCreateAutoCheckpoint(userId, historyLength) {
         const CHECKPOINT_THRESHOLD = 20
         const today = getTodayDateStr()
         
-        // 获取当天的消息数
-        const todayMessages = await this.conversationManager.db.getTodayMessageCount(userId, today)
+        logger.info(`[AI-Plugin] _checkAndCreateAutoCheckpoint: historyLength = ${historyLength}`)
         
-        logger.info(`[AI-Plugin] _checkAndCreateAutoCheckpoint: todayMessages = ${todayMessages}`)
-        
-        if (todayMessages < CHECKPOINT_THRESHOLD) {
-            logger.info(`[AI-Plugin] 当天消息数 ${todayMessages} < ${CHECKPOINT_THRESHOLD}，跳过`)
+        if (historyLength < CHECKPOINT_THRESHOLD) {
+            logger.info(`[AI-Plugin] 历史长度 ${historyLength} < ${CHECKPOINT_THRESHOLD}，跳过`)
             return
         }
         
@@ -702,9 +699,9 @@ export class ChatHandler extends plugin {
         logger.info(`[AI-Plugin] 今天锚点: messageCount=${todayCheckpointMessageCount}`)
         
         // 计算今天自上次锚点以来的新消息数
-        const newMessagesSinceLastCheckpoint = todayMessages - todayCheckpointMessageCount
+        const newMessagesSinceLastCheckpoint = historyLength - todayCheckpointMessageCount
         
-        logger.info(`[AI-Plugin] 今天新增消息数: ${newMessagesSinceLastCheckpoint} = ${todayMessages} - ${todayCheckpointMessageCount}`)
+        logger.info(`[AI-Plugin] 今天新增消息数: ${newMessagesSinceLastCheckpoint} = ${historyLength} - ${todayCheckpointMessageCount}`)
         
         if (newMessagesSinceLastCheckpoint < CHECKPOINT_THRESHOLD) {
             logger.info(`[AI-Plugin] 今天新增消息 ${newMessagesSinceLastCheckpoint} < ${CHECKPOINT_THRESHOLD}，跳过`)
