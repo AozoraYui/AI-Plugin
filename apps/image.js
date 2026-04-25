@@ -16,7 +16,7 @@ export class ImageHandler extends plugin {
             name: 'AI作图',
             dsc: '使用AI生成图片',
             event: 'message',
-            priority: 1145,
+            priority: 1142,
             rule: [
                 { reg: /.*/, fnc: 'sessionHandler', priority: 9200, log: false },
             ]
