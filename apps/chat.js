@@ -328,9 +328,6 @@ export class ChatHandler extends plugin {
                 await setMsgEmojiLike(e, 144)
                 const updatedHistory = [...history, { "role": "user", "parts": currentUserTurnParts }, { "role": "model", "parts": [{ "text": finalResponseText }] }]
                 await this.conversationManager.saveUserHistory(userId, updatedHistory)
-
-                // 每次对话自动触发增量锚点总结
-                await this._checkAndCreateAutoCheckpoint(userId)
             } else {
                 await setMsgEmojiLike(e, 10)
                 await e.reply(`❌ 请求失败\n错误: ${result.error}`, true)
