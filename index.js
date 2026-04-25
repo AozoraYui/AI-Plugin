@@ -4,6 +4,14 @@ import { GeminiClient } from './client/GeminiClient.js'
 import { ConversationManager } from './model/conversation.js'
 
 logger.info('**************************************')
+logger.info(`
+ _____      _____  _     _    _  _____ _____ _   _ 
+    /\\   |_   _|    |  __ \\| |   | |  | |/ ____|_   _| \\ | | 
+   /  \\    | |______| |__) | |   | |  | | |  __  | | |  \\| | 
+  / /\\ \\   | |______|  ___/| |   | |  | | | |_ | | | | . \` | 
+ / ____ \\ _| |_     | |    | |___| |__| | |__| |_| |_| |\\  | 
+/_/    \\_\\_____|    |_|    |______\\____/ \\_____|_____|_| \\_| 
+`)
 logger.info('AI-Plugin加载中')
 
 if (!global.segment) {
