@@ -22,12 +22,10 @@ export class ManagementHandler extends plugin {
                 { reg: /^#gemini模型全部启用$/i, fnc: 'enableAllModels', permission: 'master' },
                 { reg: /^#gemini模型禁用(.*)$/i, fnc: 'disableModel', permission: 'master' },
                 { reg: /^#gemini模型启用(.*)$/i, fnc: 'enableModel', permission: 'master' },
-                { reg: /^#gemini禁用列表$/i, fnc: 'listDisabledModels', permission: 'master' },
-                { reg: /^#gemini重载$/i, fnc: 'reloadPlugin', permission: 'master' },
                 { reg: /^#gemini设置白名单$/i, fnc: 'setWhitelist', permission: 'master' },
                 { reg: /^#gemini设置黑名单$/i, fnc: 'setBlacklist', permission: 'master' },
+                { reg: /^#gemini权限模式\s*(whitelist|blacklist)$/i, fnc: 'switchAccessMode', permission: 'master' },
                 { reg: /^#gemini权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(\d+)$/i, fnc: 'modifyAccess', permission: 'master' },
-                { reg: /^#gemini查看权限配置$/i, fnc: 'viewAccessConfig', permission: 'master' },
                 { reg: /^#gemini权限列表$/i, fnc: 'listAccessControl', permission: 'master' },
                 { reg: /^#gemini状态$/i, fnc: 'showStatus', permission: 'master' },
             ]
