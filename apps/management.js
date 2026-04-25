@@ -22,8 +22,6 @@ export class ManagementHandler extends plugin {
                 { reg: /^#gemini模型全部启用$/i, fnc: 'enableAllModels', permission: 'master' },
                 { reg: /^#gemini模型禁用(.*)$/i, fnc: 'disableModel', permission: 'master' },
                 { reg: /^#gemini模型启用(.*)$/i, fnc: 'enableModel', permission: 'master' },
-                { reg: /^#gemini设置白名单$/i, fnc: 'setWhitelist', permission: 'master' },
-                { reg: /^#gemini设置黑名单$/i, fnc: 'setBlacklist', permission: 'master' },
                 { reg: /^#gemini权限模式\s*(whitelist|blacklist)$/i, fnc: 'switchAccessMode', permission: 'master' },
                 { reg: /^#gemini权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(\d+)$/i, fnc: 'modifyAccess', permission: 'master' },
                 { reg: /^#gemini权限列表$/i, fnc: 'listAccessControl', permission: 'master' },
@@ -68,20 +66,6 @@ export class ManagementHandler extends plugin {
         } catch (err) {
             await e.reply(`❌ 重载失败: ${err.message}`)
         }
-    }
-
-    async setWhitelist(e) {
-        const config = getAccessConfig()
-        config.mode = 'whitelist'
-        saveAccessConfig(config)
-        await e.reply("✅ 已切换到白名单模式")
-    }
-
-    async setBlacklist(e) {
-        const config = getAccessConfig()
-        config.mode = 'blacklist'
-        saveAccessConfig(config)
-        await e.reply("✅ 已切换到黑名单模式")
     }
 
     async addWhitelistUser(e) {
