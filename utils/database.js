@@ -13,6 +13,7 @@ export class AIDatabase {
         this.db = new sqlite3.Database(DB_FILE)
         this.db.run('PRAGMA journal_mode = WAL')
         this.db.run('PRAGMA foreign_keys = ON')
+        this.db.run('PRAGMA wal_autocheckpoint = 1000')
         this._initPromise = this.initTables()
     }
 
@@ -412,7 +413,13 @@ export class AIDatabase {
                 WHERE id = 1
             `, [migrated ? 1 : 0], (err) => {
                 if (err) reject(err)
-                else resolve()
+                else {
+                    // 强制 WAL checkpoint 确保数据持久化到主数据库文件
+                    this.db.run('PRAGMA wal_checkpoint(TRUNCATE)', (err) => {
+                        if (err) reject(err)
+                        else resolve()
+                    })
+                }
             })
         })
     }
@@ -575,7 +582,13 @@ export class AIDatabase {
                 WHERE id = 1
             `, [migrated ? 1 : 0], (err) => {
                 if (err) reject(err)
-                else resolve()
+                else {
+                    // 强制 WAL checkpoint 确保数据持久化到主数据库文件
+                    this.db.run('PRAGMA wal_checkpoint(TRUNCATE)', (err) => {
+                        if (err) reject(err)
+                        else resolve()
+                    })
+                }
             })
         })
     }
@@ -600,7 +613,13 @@ export class AIDatabase {
                 WHERE id = 1
             `, [migrated ? 1 : 0], (err) => {
                 if (err) reject(err)
-                else resolve()
+                else {
+                    // 强制 WAL checkpoint 确保数据持久化
+                    this.db.run('PRAGMA wal_checkpoint(TRUNCATE)', (err) => {
+                        if (err) reject(err)
+                        else resolve()
+                    })
+                }
             })
         })
     }
