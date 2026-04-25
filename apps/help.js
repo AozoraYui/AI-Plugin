@@ -34,8 +34,8 @@ export class HelpHandler extends plugin {
   > 示例: #gm 你好呀！
   > 示例: #progm 这张图里是什么？ [图片]
 
-> #结束gemini对话
-  清空你和诺亚的短期对话记忆，开始新话题。`
+> #sgm [内容] / #singlegm [内容]
+  单次对话模式，不保存历史记录。`
 
         const msg3_drawing = `
 - - - - - - - - - - - - - - - - -
@@ -143,7 +143,6 @@ export class HelpHandler extends plugin {
   #progm [内容] - 使用Pro模型对话
   #3gm [内容] - 使用Gemini3模型对话
   #sgm [内容] / #singlegm [内容] - 单次对话模式(不保存历史)
-  #结束gemini对话 - 重置对话历史
   #导出诺亚记忆 - 导出你的对话记忆
   #导出诺亚全部记忆 - 导出所有用户记忆(管理员)
 

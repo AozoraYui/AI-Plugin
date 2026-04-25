@@ -17,7 +17,6 @@ export class ChatHandler extends plugin {
             rule: [
                 { reg: /^#(s|single)([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleSingleChat' },
                 { reg: /^#(?!(s|single))([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleChat' },
-                { reg: /^#结束gemini对话$/i, fnc: 'resetChatHistory' },
                 { reg: /^#导出诺亚记忆$/i, fnc: 'exportMyMemory' },
                 { reg: /^#导出诺亚全部记忆$/i, fnc: 'exportAllMemory', permission: 'master' },
                 { reg: /^#gemini思考(开启|关闭)$/i, fnc: 'switchThinkingMode', permission: 'master' },
@@ -601,15 +600,6 @@ export class ChatHandler extends plugin {
             await setMsgEmojiLike(e, 10)
             logger.error(`[AI-Plugin] 单次对话处理异常:`, err)
             await e.reply(`❌ 处理异常: ${err.message}`, true)
-        }
-    }
-
-    async resetChatHistory(e) {
-        const success = await this.conversationManager.resetChatHistory(e.user_id)
-        if (success) {
-            await e.reply('✨ 你和诺亚的对话记忆已重置，可以开始新的话题啦！', true)
-        } else {
-            await e.reply('❌ 重置对话失败', true)
         }
     }
 
