@@ -118,6 +118,109 @@ export class ConversationManager {
         } catch (error) {
             logger.error('[AI-Plugin] 迁移过程中出错:', error)
         }
+
+        // 迁移全量锚点
+        await this.migrateCheckpoints()
+
+        // 迁移增量锚点
+        await this.migrateSummaryCache()
+    }
+
+    async migrateCheckpoints() {
+        const status = await this.db.getCheckpointsMigrationStatus()
+        if (status) {
+            logger.debug('[AI-Plugin] 全量锚点数据已迁移，跳过。')
+            return
+        }
+
+        if (!fs.existsSync(this.CHECKPOINT_DIR)) {
+            logger.info('[AI-Plugin] 未找到全量锚点目录，无需迁移。')
+            await this.db.setCheckpointsMigrationStatus(true)
+            return
+        }
+
+        logger.info('[AI-Plugin] 开始迁移全量锚点数据到 SQLite...')
+        let migratedCount = 0
+
+        try {
+            const files = fs.readdirSync(this.CHECKPOINT_DIR).filter(f => f.endsWith('.txt'))
+
+            for (const file of files) {
+                // 文件名格式：用户ID_日期.txt
+                const match = file.match(/^(\d+)_(\d{4}-\d{2}-\d{2})\.txt$/)
+                if (!match) continue
+
+                const userId = match[1]
+                const dateStr = match[2]
+                const filePath = path.join(this.CHECKPOINT_DIR, file)
+
+                try {
+                    const content = fs.readFileSync(filePath, 'utf8')
+                    if (!content.trim()) continue
+
+                    await this.db.saveCheckpoint(userId, content.trim(), dateStr)
+                    migratedCount++
+                } catch (err) {
+                    logger.warn(`[AI-Plugin] 迁移全量锚点 ${file} 失败: ${err.message}`)
+                }
+            }
+
+            await this.db.setCheckpointsMigrationStatus(true)
+            logger.info(`[AI-Plugin] 全量锚点迁移完成！共迁移 ${migratedCount} 个锚点。`)
+            logger.info('[AI-Plugin] 旧全量锚点文件已保留，不会被删除。')
+        } catch (error) {
+            logger.error('[AI-Plugin] 迁移全量锚点过程中出错:', error)
+        }
+    }
+
+    async migrateSummaryCache() {
+        const status = await this.db.getSummaryMigrationStatus()
+        if (status) {
+            logger.debug('[AI-Plugin] 增量锚点数据已迁移，跳过。')
+            return
+        }
+
+        if (!fs.existsSync(this.SUMMARY_CACHE_DIR)) {
+            logger.info('[AI-Plugin] 未找到增量锚点目录，无需迁移。')
+            await this.db.setSummaryMigrationStatus(true)
+            return
+        }
+
+        logger.info('[AI-Plugin] 开始迁移增量锚点数据到 SQLite...')
+        let migratedCount = 0
+
+        try {
+            const dateDirs = fs.readdirSync(this.SUMMARY_CACHE_DIR).filter(name => {
+                const fullPath = path.join(this.SUMMARY_CACHE_DIR, name)
+                return /^\d{4}-\d{2}-\d{2}$/.test(name) && fs.statSync(fullPath).isDirectory()
+            })
+
+            for (const dateDir of dateDirs) {
+                const dirPath = path.join(this.SUMMARY_CACHE_DIR, dateDir)
+                const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.txt'))
+
+                for (const file of files) {
+                    const userId = file.replace('.txt', '')
+                    const filePath = path.join(dirPath, file)
+
+                    try {
+                        const content = fs.readFileSync(filePath, 'utf8')
+                        if (!content.trim()) continue
+
+                        await this.db.saveSummaryCache(userId, content.trim(), dateDir)
+                        migratedCount++
+                    } catch (err) {
+                        logger.warn(`[AI-Plugin] 迁移增量锚点 ${dateDir}/${file} 失败: ${err.message}`)
+                    }
+                }
+            }
+
+            await this.db.setSummaryMigrationStatus(true)
+            logger.info(`[AI-Plugin] 增量锚点迁移完成！共迁移 ${migratedCount} 个缓存。`)
+            logger.info('[AI-Plugin] 旧增量锚点文件已保留，不会被删除。')
+        } catch (error) {
+            logger.error('[AI-Plugin] 迁移增量锚点过程中出错:', error)
+        }
     }
 
     async fixMigrationDates() {

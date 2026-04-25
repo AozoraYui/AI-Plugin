@@ -29,6 +29,7 @@ export class AIDatabase {
     initTables() {
         return new Promise((resolve, reject) => {
             this.db.exec(`
+                -- 对话记录表（对应 user_histories/日期/用户.json）
                 CREATE TABLE IF NOT EXISTS conversations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id TEXT NOT NULL,
@@ -44,15 +45,45 @@ export class AIDatabase {
                 CREATE INDEX IF NOT EXISTS idx_conversations_user_id 
                 ON conversations(user_id);
 
+                -- 全量锚点表（对应 memory_checkpoints/用户_日期.txt）
+                CREATE TABLE IF NOT EXISTS memory_checkpoints (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    date_str TEXT NOT NULL,
+                    created_at DATETIME DEFAULT (datetime('now', '+8 hours')),
+                    UNIQUE(user_id, date_str)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_checkpoints_user_date 
+                ON memory_checkpoints(user_id, date_str);
+
+                -- 增量锚点表（对应 summary_cache/日期/用户.txt）
+                CREATE TABLE IF NOT EXISTS summary_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    date_str TEXT NOT NULL,
+                    created_at DATETIME DEFAULT (datetime('now', '+8 hours')),
+                    UNIQUE(user_id, date_str)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_summary_user_date 
+                ON summary_cache(user_id, date_str);
+
+                -- 用户档案表
                 CREATE TABLE IF NOT EXISTS user_profiles (
                     user_id TEXT PRIMARY KEY,
                     info TEXT NOT NULL,
                     last_updated DATETIME DEFAULT (datetime('now', '+8 hours'))
                 );
 
+                -- 迁移状态表
                 CREATE TABLE IF NOT EXISTS migration_status (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     json_migrated BOOLEAN DEFAULT 0,
+                    checkpoints_migrated BOOLEAN DEFAULT 0,
+                    summary_migrated BOOLEAN DEFAULT 0,
                     migration_time DATETIME
                 );
             `, (err) => {
@@ -63,7 +94,7 @@ export class AIDatabase {
 
                 this.db.get('SELECT json_migrated FROM migration_status WHERE id = 1', (err, row) => {
                     if (err || !row) {
-                        this.db.run('INSERT INTO migration_status (id, json_migrated) VALUES (1, 0)', (err) => {
+                        this.db.run('INSERT INTO migration_status (id, json_migrated, checkpoints_migrated, summary_migrated) VALUES (1, 0, 0, 0)', (err) => {
                             if (err) reject(err)
                             else resolve()
                         })
@@ -335,6 +366,194 @@ export class AIDatabase {
             this.db.run(`
                 UPDATE migration_status 
                 SET json_migrated = ?, migration_time = CURRENT_TIMESTAMP 
+                WHERE id = 1
+            `, [migrated ? 1 : 0], (err) => {
+                if (err) reject(err)
+                else resolve()
+            })
+        })
+    }
+
+    // ========== 全量锚点方法（对应 memory_checkpoints/用户_日期.txt） ==========
+
+    saveCheckpoint(userId, content, dateStr) {
+        return new Promise((resolve, reject) => {
+            this.db.run(`
+                INSERT INTO memory_checkpoints (user_id, content, date_str)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, date_str) DO UPDATE SET content = ?, created_at = datetime('now', '+8 hours')
+            `, [String(userId), content, dateStr, content], (err) => {
+                if (err) reject(err)
+                else resolve()
+            })
+        })
+    }
+
+    getCheckpoint(userId, dateStr) {
+        return new Promise((resolve, reject) => {
+            this.db.get('SELECT content, created_at FROM memory_checkpoints WHERE user_id = ? AND date_str = ?',
+                [String(userId), dateStr], (err, row) => {
+                    if (err) {
+                        reject(err)
+                        return
+                    }
+                    resolve(row ? { content: row.content, createdAt: row.created_at } : null)
+                })
+        })
+    }
+
+    getLatestCheckpoint(userId) {
+        return new Promise((resolve, reject) => {
+            this.db.get('SELECT content, date_str, created_at FROM memory_checkpoints WHERE user_id = ? ORDER BY date_str DESC LIMIT 1',
+                [String(userId)], (err, row) => {
+                    if (err) {
+                        reject(err)
+                        return
+                    }
+                    resolve(row ? { content: row.content, dateStr: row.date_str, createdAt: row.created_at } : null)
+                })
+        })
+    }
+
+    getAllCheckpoints(userId) {
+        return new Promise((resolve, reject) => {
+            this.db.all('SELECT content, date_str, created_at FROM memory_checkpoints WHERE user_id = ? ORDER BY date_str ASC',
+                [String(userId)], (err, rows) => {
+                    if (err) {
+                        reject(err)
+                        return
+                    }
+                    resolve(rows.map(row => ({
+                        content: row.content,
+                        dateStr: row.date_str,
+                        createdAt: row.created_at
+                    })))
+                })
+        })
+    }
+
+    deleteCheckpoint(userId, dateStr) {
+        return new Promise((resolve, reject) => {
+            this.db.run('DELETE FROM memory_checkpoints WHERE user_id = ? AND date_str = ?',
+                [String(userId), dateStr], (err) => {
+                    if (err) reject(err)
+                    else resolve()
+                })
+        })
+    }
+
+    // ========== 增量锚点方法（对应 summary_cache/日期/用户.txt） ==========
+
+    saveSummaryCache(userId, content, dateStr) {
+        return new Promise((resolve, reject) => {
+            this.db.run(`
+                INSERT INTO summary_cache (user_id, content, date_str)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, date_str) DO UPDATE SET content = ?, created_at = datetime('now', '+8 hours')
+            `, [String(userId), content, dateStr, content], (err) => {
+                if (err) reject(err)
+                else resolve()
+            })
+        })
+    }
+
+    getSummaryCache(userId, dateStr) {
+        return new Promise((resolve, reject) => {
+            this.db.get('SELECT content, created_at FROM summary_cache WHERE user_id = ? AND date_str = ?',
+                [String(userId), dateStr], (err, row) => {
+                    if (err) {
+                        reject(err)
+                        return
+                    }
+                    resolve(row ? { content: row.content, createdAt: row.created_at } : null)
+                })
+        })
+    }
+
+    getLatestSummaryCache(userId) {
+        return new Promise((resolve, reject) => {
+            this.db.get('SELECT content, date_str, created_at FROM summary_cache WHERE user_id = ? ORDER BY date_str DESC LIMIT 1',
+                [String(userId)], (err, row) => {
+                    if (err) {
+                        reject(err)
+                        return
+                    }
+                    resolve(row ? { content: row.content, dateStr: row.date_str, createdAt: row.created_at } : null)
+                })
+        })
+    }
+
+    getAllSummaryCaches(userId) {
+        return new Promise((resolve, reject) => {
+            this.db.all('SELECT content, date_str, created_at FROM summary_cache WHERE user_id = ? ORDER BY date_str ASC',
+                [String(userId)], (err, rows) => {
+                    if (err) {
+                        reject(err)
+                        return
+                    }
+                    resolve(rows.map(row => ({
+                        content: row.content,
+                        dateStr: row.date_str,
+                        createdAt: row.created_at
+                    })))
+                })
+        })
+    }
+
+    deleteSummaryCache(userId, dateStr) {
+        return new Promise((resolve, reject) => {
+            this.db.run('DELETE FROM summary_cache WHERE user_id = ? AND date_str = ?',
+                [String(userId), dateStr], (err) => {
+                    if (err) reject(err)
+                    else resolve()
+                })
+        })
+    }
+
+    // ========== 迁移状态方法 ==========
+
+    getCheckpointsMigrationStatus() {
+        return new Promise((resolve, reject) => {
+            this.db.get('SELECT checkpoints_migrated FROM migration_status WHERE id = 1', (err, row) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(row ? row.checkpoints_migrated : false)
+            })
+        })
+    }
+
+    setCheckpointsMigrationStatus(migrated) {
+        return new Promise((resolve, reject) => {
+            this.db.run(`
+                UPDATE migration_status 
+                SET checkpoints_migrated = ?, migration_time = CURRENT_TIMESTAMP 
+                WHERE id = 1
+            `, [migrated ? 1 : 0], (err) => {
+                if (err) reject(err)
+                else resolve()
+            })
+        })
+    }
+
+    getSummaryMigrationStatus() {
+        return new Promise((resolve, reject) => {
+            this.db.get('SELECT summary_migrated FROM migration_status WHERE id = 1', (err, row) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(row ? row.summary_migrated : false)
+            })
+        })
+    }
+
+    setSummaryMigrationStatus(migrated) {
+        return new Promise((resolve, reject) => {
+            this.db.run(`
+                UPDATE migration_status 
+                SET summary_migrated = ?, migration_time = CURRENT_TIMESTAMP 
                 WHERE id = 1
             `, [migrated ? 1 : 0], (err) => {
                 if (err) reject(err)
