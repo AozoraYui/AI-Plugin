@@ -1,14 +1,17 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { USER_PROFILES_FILE, SUMMARY_CACHE_DIR, CHECKPOINT_DIR } from '../utils/config.js'
+import { USER_PROFILES_FILE, SUMMARY_CACHE_DIR, CHECKPOINT_DIR, HISTORY_DIR } from '../utils/config.js'
+import { AIDatabase } from '../utils/database.js'
 import { getTodayDateStr } from '../utils/common.js'
 
 export class ConversationManager {
-    constructor(HISTORY_DIR) {
+    constructor() {
+        this.db = new AIDatabase()
         this.HISTORY_DIR = HISTORY_DIR
         this.userProfiles = new Map()
         this.loadUserProfiles()
         this.ensureHistoryDirExists()
+        this.migrateOldData()
     }
 
     loadUserProfiles() {
@@ -43,6 +46,81 @@ export class ConversationManager {
         }
     }
 
+    async migrateOldData() {
+        const status = this.db.getMigrationStatus()
+        if (status.json_migrated) {
+            logger.debug('[AI-Plugin] JSON 数据已迁移，跳过。')
+            return
+        }
+
+        if (!fs.existsSync(this.HISTORY_DIR)) {
+            logger.info('[AI-Plugin] 未找到旧的历史记录目录，无需迁移。')
+            this.db.setMigrationStatus(true)
+            return
+        }
+
+        logger.info('[AI-Plugin] 开始迁移旧 JSON 数据到 SQLite...')
+        let migratedUsers = 0
+        let migratedTurns = 0
+
+        try {
+            const entries = fs.readdirSync(this.HISTORY_DIR)
+
+            const dateDirs = entries.filter(name => {
+                const fullPath = path.join(this.HISTORY_DIR, name)
+                return /^\d{4}-\d{2}-\d{2}$/.test(name) && fs.statSync(fullPath).isDirectory()
+            })
+
+            for (const dateDir of dateDirs) {
+                const dirPath = path.join(this.HISTORY_DIR, dateDir)
+                const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.json'))
+
+                for (const file of files) {
+                    const userId = file.replace('.json', '')
+                    const filePath = path.join(dirPath, file)
+
+                    try {
+                        const content = fs.readFileSync(filePath, 'utf8')
+                        if (!content.trim()) continue
+
+                        const history = JSON.parse(content)
+                        if (!Array.isArray(history)) continue
+
+                        const entries = history.map(turn => ({
+                            user_id: userId,
+                            role: turn.role,
+                            parts: JSON.stringify(turn.parts),
+                            date_str: dateDir
+                        }))
+
+                        const insert = this.db.db.prepare(`
+                            INSERT INTO conversations (user_id, role, parts, date_str)
+                            VALUES (?, ?, ?, ?)
+                        `)
+
+                        const insertMany = this.db.db.transaction((items) => {
+                            for (const item of items) {
+                                insert.run(item.user_id, item.role, item.parts, item.date_str)
+                            }
+                        })
+
+                        insertMany.run(entries)
+                        migratedUsers++
+                        migratedTurns += history.length
+                    } catch (err) {
+                        logger.warn(`[AI-Plugin] 迁移用户 ${userId} 的数据失败: ${err.message}`)
+                    }
+                }
+            }
+
+            this.db.setMigrationStatus(true)
+            logger.info(`[AI-Plugin] 迁移完成！共迁移 ${migratedUsers} 个用户，${migratedTurns} 条对话。`)
+            logger.info('[AI-Plugin] 旧 JSON 文件已保留，不会被删除。')
+        } catch (error) {
+            logger.error('[AI-Plugin] 迁移过程中出错:', error)
+        }
+    }
+
     cloneHistoryForSaving(history) {
         const historyCopy = JSON.parse(JSON.stringify(history))
         for (const turn of historyCopy) {
@@ -51,46 +129,6 @@ export class ConversationManager {
             }
         }
         return historyCopy
-    }
-
-    findLatestHistoryFile(userId) {
-        const userIdStr = String(userId)
-
-        const today = getTodayDateStr()
-        const todayFile = path.join(this.HISTORY_DIR, today, `${userIdStr}.json`)
-        if (fs.existsSync(todayFile)) {
-            return todayFile
-        }
-
-        if (fs.existsSync(this.HISTORY_DIR)) {
-            try {
-                const entries = fs.readdirSync(this.HISTORY_DIR)
-
-                const dirs = entries.filter(name => {
-                    const fullPath = path.join(this.HISTORY_DIR, name)
-                    return /^\d{4}-\d{2}-\d{2}$/.test(name) && fs.statSync(fullPath).isDirectory()
-                })
-                    .sort()
-                    .reverse()
-
-                for (const dateDir of dirs) {
-                    const file = path.join(this.HISTORY_DIR, dateDir, `${userIdStr}.json`)
-                    if (fs.existsSync(file)) {
-                        logger.debug(`[AI-Plugin] 在历史目录 ${dateDir} 中找到用户 ${userIdStr} 的记忆。`)
-                        return file
-                    }
-                }
-            } catch (err) {
-                logger.error(`[AI-Plugin] 遍历历史目录时出错: ${err.message}`)
-            }
-        }
-
-        const legacyFile = path.join(this.HISTORY_DIR, `${userIdStr}.json`)
-        if (fs.existsSync(legacyFile)) {
-            return legacyFile
-        }
-
-        return null
     }
 
     async getUserHistory(userId) {
@@ -109,22 +147,30 @@ export class ConversationManager {
         }
 
         try {
-            const historyFilePath = this.findLatestHistoryFile(userId)
+            const history = this.db.getConversationHistory(userId)
+            if (history.length > 0) {
+                const historyToCache = this.cloneHistoryForSaving(history)
+                await redis.set(redisKey, JSON.stringify(historyToCache), { EX: weekInSeconds })
+                logger.debug(`[AI-Plugin] 已从 SQLite 恢复并缓存用户 ${userId} 的记忆`)
+                return history
+            }
+        } catch (dbError) {
+            logger.error(`[AI-Plugin] 从 SQLite 读取用户 ${userId} 的历史失败:`, dbError)
+        }
 
-            if (historyFilePath && fs.existsSync(historyFilePath)) {
-                const fileContent = fs.readFileSync(historyFilePath, 'utf8')
-                if (!fileContent.trim()) {
-                    logger.warn(`[AI-Plugin] 用户 ${userId} 的记忆文件为空，已跳过。`)
-                    return []
-                }
+        try {
+            const today = getTodayDateStr()
+            const todayFile = path.join(this.HISTORY_DIR, today, `${userId}.json`)
+            if (fs.existsSync(todayFile)) {
+                const fileContent = fs.readFileSync(todayFile, 'utf8')
+                if (!fileContent.trim()) return []
 
                 const historyFromFile = JSON.parse(fileContent)
-
                 if (Array.isArray(historyFromFile)) {
                     const historyToCache = this.cloneHistoryForSaving(historyFromFile)
                     await redis.set(redisKey, JSON.stringify(historyToCache), { EX: weekInSeconds })
-
-                    logger.info(`[AI-Plugin] 已从文件恢复并缓存用户 ${userId} 的记忆`)
+                    this.db.saveConversation(userId, historyFromFile)
+                    logger.info(`[AI-Plugin] 已从今日 JSON 文件恢复并缓存用户 ${userId} 的记忆`)
                     return historyFromFile
                 }
             }
@@ -147,6 +193,22 @@ export class ConversationManager {
         }
 
         try {
+            const lastTurn = history[history.length - 1]
+            if (lastTurn) {
+                const dateStr = getTodayDateStr()
+                const entry = {
+                    user_id: String(userId),
+                    role: lastTurn.role,
+                    parts: JSON.stringify(lastTurn.parts),
+                    date_str: dateStr
+                }
+
+                this.db.db.prepare(`
+                    INSERT INTO conversations (user_id, role, parts, date_str)
+                    VALUES (?, ?, ?, ?)
+                `).run(entry.user_id, entry.role, entry.parts, entry.date_str)
+            }
+
             const dateStr = getTodayDateStr()
             const dateDir = path.join(this.HISTORY_DIR, dateStr)
 
@@ -155,7 +217,6 @@ export class ConversationManager {
             }
 
             const historyFilePath = path.join(dateDir, `${userId}.json`)
-
             fs.writeFileSync(historyFilePath, JSON.stringify(history, null, 2), 'utf8')
         } catch (fileError) {
             logger.error(`[AI-Plugin] 持久化保存用户 ${userId} 的历史到文件失败:`, fileError)
@@ -166,6 +227,7 @@ export class ConversationManager {
         try {
             const redisKey = `ai-plugin:history:${userId}`
             await redis.del(redisKey)
+            this.db.clearConversationHistory(userId)
             return true
         } catch (error) {
             logger.error(`[AI-Plugin] 重置对话历史失败:`, error)
@@ -174,24 +236,40 @@ export class ConversationManager {
     }
 
     getUserProfile(userId) {
+        const profile = this.db.getUserProfile(userId)
+        if (profile) return profile
+
         const userProfileId = `private_${userId}`
-        return this.userProfiles.get(userProfileId)
+        const localProfile = this.userProfiles.get(userProfileId)
+        if (localProfile) {
+            this.db.saveUserProfile(userId, localProfile.info)
+            return localProfile
+        }
+        return null
     }
 
     async saveUserProfile(userId, info) {
         const userProfileId = `private_${userId}`
         this.userProfiles.set(userProfileId, { info, lastUpdated: new Date().toISOString() })
         this.saveUserProfiles()
+        this.db.saveUserProfile(userId, info)
     }
 
     async deleteUserProfile(userId) {
         const userProfileId = `private_${userId}`
+        let deleted = false
+
         if (this.userProfiles.has(userProfileId)) {
             this.userProfiles.delete(userProfileId)
             this.saveUserProfiles()
-            return true
+            deleted = true
         }
-        return false
+
+        if (this.db.deleteUserProfile(userId)) {
+            deleted = true
+        }
+
+        return deleted
     }
 
     _ensureSummaryCacheDir() {
@@ -219,18 +297,18 @@ export class ConversationManager {
                     logger.warn(`[AI-Plugin] 导出用户 ${userId} 的JSON失败。`)
                     return { success: false, message: "记忆文件损坏，导出失败" }
                 }
+            } else {
+                const history = this.db.getConversationHistory(userId)
+                if (history.length > 0) {
+                    exportedData[userId] = history
+                }
             }
         } else {
-            const keys = await redis.keys('ai-plugin:history:*')
-            for (const key of keys) {
-                const value = await redis.get(key)
-                const uid = key.replace('ai-plugin:history:', '')
-                if (value) {
-                    try {
-                        exportedData[uid] = JSON.parse(value)
-                    } catch (parseErr) {
-                        logger.warn(`[AI-Plugin] 导出用户 ${uid} 的JSON失败，已跳过。`)
-                    }
+            const userIds = this.db.getAllUserIds()
+            for (const uid of userIds) {
+                const history = this.db.getConversationHistory(uid)
+                if (history.length > 0) {
+                    exportedData[uid] = history
                 }
             }
         }

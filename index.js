@@ -15,7 +15,7 @@ if (!global.segment) {
 }
 
 const client = new GeminiClient()
-const conversationManager = new ConversationManager(HISTORY_DIR)
+const conversationManager = new ConversationManager()
 
 const files = fs.readdirSync('./plugins/AI-Plugin/apps').filter(file => file.endsWith('.js'))
 
