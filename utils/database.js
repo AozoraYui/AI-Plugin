@@ -29,22 +29,6 @@ export class AIDatabase {
     initTables() {
         return new Promise((resolve, reject) => {
             this.db.exec(`
-                -- 对话记录表（对应 user_histories/日期/用户.json）
-                CREATE TABLE IF NOT EXISTS user_histories (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id TEXT NOT NULL,
-                    role TEXT NOT NULL,
-                    parts TEXT NOT NULL,
-                    created_at DATETIME DEFAULT (datetime('now', '+8 hours')),
-                    date_str TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_user_histories_user_date 
-                ON user_histories(user_id, date_str);
-
-                CREATE INDEX IF NOT EXISTS idx_user_histories_user_id 
-                ON user_histories(user_id);
-
                 -- 全量锚点表（对应 memory_checkpoints/用户_日期.txt）
                 CREATE TABLE IF NOT EXISTS memory_checkpoints (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,27 +76,63 @@ export class AIDatabase {
                     return
                 }
 
-                // 兼容旧表名：如果存在 conversations 表，重命名为 user_histories
-                this.db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'", (err, row) => {
+                // 检查表状态并处理
+                this.checkAndCreateUserHistoriesTable(resolve, reject)
+            })
+        })
+    }
+
+    checkAndCreateUserHistoriesTable(resolve, reject) {
+        // 检查 user_histories 和 conversations 表是否存在
+        this.db.all("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('user_histories', 'conversations')", (err, rows) => {
+            if (err) {
+                reject(err)
+                return
+            }
+
+            const tableNames = rows.map(r => r.name)
+            const hasUserHistories = tableNames.includes('user_histories')
+            const hasConversations = tableNames.includes('conversations')
+
+            if (hasUserHistories) {
+                // user_histories 已存在，直接使用
+                this.initMigrationStatus(resolve, reject)
+            } else if (hasConversations) {
+                // 只有 conversations，重命名为 user_histories
+                this.db.run('ALTER TABLE conversations RENAME TO user_histories', (err) => {
+                    if (err) {
+                        logger.error('[AI-Plugin] 重命名旧表失败:', err.message)
+                        reject(err)
+                        return
+                    }
+                    logger.info('[AI-Plugin] 已将 conversations 表重命名为 user_histories')
+                    this.initMigrationStatus(resolve, reject)
+                })
+            } else {
+                // 两个表都不存在，创建 user_histories
+                this.db.exec(`
+                    CREATE TABLE user_histories (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        parts TEXT NOT NULL,
+                        created_at DATETIME DEFAULT (datetime('now', '+8 hours')),
+                        date_str TEXT NOT NULL
+                    );
+
+                    CREATE INDEX idx_user_histories_user_date 
+                    ON user_histories(user_id, date_str);
+
+                    CREATE INDEX idx_user_histories_user_id 
+                    ON user_histories(user_id);
+                `, (err) => {
                     if (err) {
                         reject(err)
                         return
                     }
-
-                    if (row) {
-                        // conversations 表存在，重命名
-                        this.db.run('ALTER TABLE conversations RENAME TO user_histories', (err) => {
-                            if (err && !err.message.includes('already exists')) {
-                                logger.warn('[AI-Plugin] 重命名旧表失败:', err.message)
-                            }
-                            this.initMigrationStatus(resolve, reject)
-                        })
-                    } else {
-                        // conversations 表不存在，直接继续
-                        this.initMigrationStatus(resolve, reject)
-                    }
+                    this.initMigrationStatus(resolve, reject)
                 })
-            })
+            }
         })
     }
 
