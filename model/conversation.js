@@ -138,6 +138,9 @@ export class ConversationManager {
             return
         }
 
+        logger.info(`[AI-Plugin] 检查全量锚点目录: ${this.CHECKPOINT_DIR}`)
+        logger.info(`[AI-Plugin] 目录存在: ${fs.existsSync(this.CHECKPOINT_DIR)}`)
+
         if (!fs.existsSync(this.CHECKPOINT_DIR)) {
             logger.info('[AI-Plugin] 未找到全量锚点目录，无需迁移。')
             await this.db.setCheckpointsMigrationStatus(true)
