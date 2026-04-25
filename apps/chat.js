@@ -684,10 +684,13 @@ export class ChatHandler extends plugin {
     async _checkAndCreateAutoCheckpoint(userId, history) {
         const CHECKPOINT_THRESHOLD = 20
         
-        logger.info(`[AI-Plugin] _checkAndCreateAutoCheckpoint: history.length = ${history.length}`)
+        // 获取数据库中该用户的总消息数
+        const totalMessages = await this.conversationManager.db.getUserMessageCount(userId)
         
-        if (history.length < CHECKPOINT_THRESHOLD) {
-            logger.info(`[AI-Plugin] 历史条数 ${history.length} < ${CHECKPOINT_THRESHOLD}，跳过`)
+        logger.info(`[AI-Plugin] _checkAndCreateAutoCheckpoint: totalMessages = ${totalMessages}`)
+        
+        if (totalMessages < CHECKPOINT_THRESHOLD) {
+            logger.info(`[AI-Plugin] 总消息数 ${totalMessages} < ${CHECKPOINT_THRESHOLD}，跳过`)
             return
         }
         
@@ -698,9 +701,9 @@ export class ChatHandler extends plugin {
         logger.info(`[AI-Plugin] 最近锚点: dateStr=${latestCheckpoint?.dateStr}, messageCount=${lastCheckpointMessageCount}`)
         
         // 计算自上次锚点以来的新消息数
-        const newMessagesSinceLastCheckpoint = history.length - lastCheckpointMessageCount
+        const newMessagesSinceLastCheckpoint = totalMessages - lastCheckpointMessageCount
         
-        logger.info(`[AI-Plugin] 新增消息数: ${newMessagesSinceLastCheckpoint} = ${history.length} - ${lastCheckpointMessageCount}`)
+        logger.info(`[AI-Plugin] 新增消息数: ${newMessagesSinceLastCheckpoint} = ${totalMessages} - ${lastCheckpointMessageCount}`)
         
         if (newMessagesSinceLastCheckpoint < CHECKPOINT_THRESHOLD) {
             logger.info(`[AI-Plugin] 新增消息 ${newMessagesSinceLastCheckpoint} < ${CHECKPOINT_THRESHOLD}，跳过`)
@@ -711,7 +714,7 @@ export class ChatHandler extends plugin {
         
         try {
             logger.info(`[AI-Plugin] 用户 ${userId} 自上次锚点以来新增 ${newMessagesSinceLastCheckpoint} 条对话，自动创建增量锚点...`)
-            await this.conversationManager.createIncrementalCheckpoint(userId, today, history.length)
+            await this.conversationManager.createIncrementalCheckpoint(userId, today, totalMessages)
             logger.info(`[AI-Plugin] 用户 ${userId} 自动增量锚点创建成功`)
         } catch (err) {
             logger.error(`[AI-Plugin] 为用户 ${userId} 创建自动增量锚点失败:`, err)
