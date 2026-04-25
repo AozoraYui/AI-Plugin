@@ -1,8 +1,5 @@
 import schedule from 'node-schedule'
-import { SUMMARY_CACHE_DIR, CHECKPOINT_DIR } from './config.js'
 import { getTodayDateStr } from './common.js'
-import fs from 'node:fs'
-import path from 'node:path'
 
 export class AIScheduler {
     constructor(client) {
@@ -51,16 +48,9 @@ export class AIScheduler {
     }
 
     async _createIncrementalCheckpoint(userId, today) {
-        if (!fs.existsSync(SUMMARY_CACHE_DIR)) {
-            fs.mkdirSync(SUMMARY_CACHE_DIR, { recursive: true })
-        }
-        if (!fs.existsSync(CHECKPOINT_DIR)) {
-            fs.mkdirSync(CHECKPOINT_DIR, { recursive: true })
-        }
-
         const userIdStr = String(userId)
 
-        // 优先从数据库获取最新全量锚点
+        // 从数据库获取最新全量锚点
         let latestCheckpoint = await global.AIPluginConversationManager.db.getLatestCheckpoint(userId)
         let baseCheckpointDate = null
         let baseCheckpointContent = ""
@@ -72,25 +62,6 @@ export class AIScheduler {
             if (baseCheckpointDate === today) {
                 logger.debug(`[AI-Plugin] 用户 ${userId} 今天已创建过锚点，跳过`)
                 return
-            }
-        } else {
-            // 降级：从文件读取
-            const files = fs.readdirSync(CHECKPOINT_DIR)
-                .filter(name => name.startsWith(`${userIdStr}_`) && name.endsWith('.txt'))
-                .sort()
-                .reverse()
-
-            if (files.length > 0) {
-                const latestFile = files[0]
-                const match = latestFile.match(/_(\d{4}-\d{2}-\d{2})\.txt$/)
-                if (match) {
-                    baseCheckpointDate = match[1]
-                    if (baseCheckpointDate === today) {
-                        logger.debug(`[AI-Plugin] 用户 ${userId} 今天已创建过锚点，跳过`)
-                        return
-                    }
-                    baseCheckpointContent = fs.readFileSync(path.join(CHECKPOINT_DIR, latestFile), 'utf8')
-                }
             }
         }
 
@@ -124,38 +95,29 @@ export class AIScheduler {
 
             let summaryText = ""
 
-            // 优先从数据库获取摘要缓存
+            // 从数据库获取摘要缓存
             const dbSummary = await global.AIPluginConversationManager.db.getSummaryCache(userId, dateDir)
             if (dbSummary) {
                 summaryText = dbSummary.content
             } else {
-                // 降级：从文件读取
-                const cacheFile = path.join(SUMMARY_CACHE_DIR, dateDir, `${userIdStr}.txt`)
-                if (fs.existsSync(cacheFile)) {
-                    summaryText = fs.readFileSync(cacheFile, 'utf8')
-                } else {
-                    logger.debug(`[AI-Plugin] 为用户 ${userId} 生成 ${dateDir} 摘要...`)
-                    const summaryPrompt = `
+                logger.debug(`[AI-Plugin] 为用户 ${userId} 生成 ${dateDir} 摘要...`)
+                const summaryPrompt = `
 请将以下这段发生在【${dateDir}】的对话概括为一个简短的摘要（4096字以内）。
 重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
 直接输出摘要内容，不要加"好的"等客套话。
 对话内容：
 ${dayContent}`
 
-                    const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
-                    const result = await this.client.makeRequest('chat', payload, 'default', 16384)
+                const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
+                const result = await this.client.makeRequest('chat', payload, 'default', 16384)
 
-                    if (result.success) {
-                        summaryText = result.data.trim()
-                        // 同时保存到数据库和文件
-                        await global.AIPluginConversationManager.db.saveSummaryCache(userId, summaryText, dateDir)
-                        const cacheDir = path.join(SUMMARY_CACHE_DIR, dateDir)
-                        if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true })
-                        fs.writeFileSync(cacheFile, summaryText, 'utf8')
-                    } else {
-                        logger.warn(`[AI-Plugin] ${dateDir} 摘要生成失败: ${result.error}`)
-                        summaryText = `【${dateDir} 原始片段】: ${dayContent.slice(0, 500)}...`
-                    }
+                if (result.success) {
+                    summaryText = result.data.trim()
+                    // 保存到数据库
+                    await global.AIPluginConversationManager.db.saveSummaryCache(userId, summaryText, dateDir)
+                } else {
+                    logger.warn(`[AI-Plugin] ${dateDir} 摘要生成失败: ${result.error}`)
+                    summaryText = `【${dateDir} 原始片段】: ${dayContent.slice(0, 500)}...`
                 }
             }
 
@@ -167,10 +129,8 @@ ${dayContent}`
             return
         }
 
-        // 同时保存到数据库和文件
+        // 保存到数据库
         await global.AIPluginConversationManager.db.saveCheckpoint(userId, finalContext, today)
-        const newCheckpointFile = path.join(CHECKPOINT_DIR, `${userIdStr}_${today}.txt`)
-        fs.writeFileSync(newCheckpointFile, finalContext, 'utf8')
         logger.info(`[AI-Plugin] 为用户 ${userId} 创建增量锚点成功: ${today}`)
     }
 
@@ -193,13 +153,6 @@ ${dayContent}`
     }
 
     async _createFullCheckpoint(userId, today) {
-        if (!fs.existsSync(SUMMARY_CACHE_DIR)) {
-            fs.mkdirSync(SUMMARY_CACHE_DIR, { recursive: true })
-        }
-        if (!fs.existsSync(CHECKPOINT_DIR)) {
-            fs.mkdirSync(CHECKPOINT_DIR, { recursive: true })
-        }
-
         const userIdStr = String(userId)
         let finalContext = ""
 
@@ -220,38 +173,29 @@ ${dayContent}`
 
             let summaryText = ""
 
-            // 优先从数据库获取摘要缓存
+            // 从数据库获取摘要缓存
             const dbSummary = await global.AIPluginConversationManager.db.getSummaryCache(userId, dateDir)
             if (dbSummary) {
                 summaryText = dbSummary.content
             } else {
-                // 降级：从文件读取
-                const cacheFile = path.join(SUMMARY_CACHE_DIR, dateDir, `${userIdStr}.txt`)
-                if (fs.existsSync(cacheFile)) {
-                    summaryText = fs.readFileSync(cacheFile, 'utf8')
-                } else {
-                    logger.debug(`[AI-Plugin] 为用户 ${userId} 生成 ${dateDir} 摘要...`)
-                    const summaryPrompt = `
+                logger.debug(`[AI-Plugin] 为用户 ${userId} 生成 ${dateDir} 摘要...`)
+                const summaryPrompt = `
 请将以下这段发生在【${dateDir}】的对话概括为一个简短的摘要（4096字以内）。
 重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
 直接输出摘要内容，不要加"好的"等客套话。
 对话内容：
 ${dayContent}`
 
-                    const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
-                    const result = await this.client.makeRequest('chat', payload, 'default', 16384)
+                const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
+                const result = await this.client.makeRequest('chat', payload, 'default', 16384)
 
-                    if (result.success) {
-                        summaryText = result.data.trim()
-                        // 同时保存到数据库和文件
-                        await global.AIPluginConversationManager.db.saveSummaryCache(userId, summaryText, dateDir)
-                        const cacheDir = path.join(SUMMARY_CACHE_DIR, dateDir)
-                        if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true })
-                        fs.writeFileSync(cacheFile, summaryText, 'utf8')
-                    } else {
-                        logger.warn(`[AI-Plugin] ${dateDir} 摘要生成失败: ${result.error}`)
-                        summaryText = `【${dateDir} 原始片段】: ${dayContent.slice(0, 500)}...`
-                    }
+                if (result.success) {
+                    summaryText = result.data.trim()
+                    // 保存到数据库
+                    await global.AIPluginConversationManager.db.saveSummaryCache(userId, summaryText, dateDir)
+                } else {
+                    logger.warn(`[AI-Plugin] ${dateDir} 摘要生成失败: ${result.error}`)
+                    summaryText = `【${dateDir} 原始片段】: ${dayContent.slice(0, 500)}...`
                 }
             }
 
@@ -263,10 +207,8 @@ ${dayContent}`
             return
         }
 
-        // 同时保存到数据库和文件
+        // 保存到数据库
         await global.AIPluginConversationManager.db.saveCheckpoint(userId, finalContext, today)
-        const newCheckpointFile = path.join(CHECKPOINT_DIR, `${userIdStr}_${today}.txt`)
-        fs.writeFileSync(newCheckpointFile, finalContext, 'utf8')
         logger.info(`[AI-Plugin] 为用户 ${userId} 创建全量锚点成功: ${today}`)
     }
 }

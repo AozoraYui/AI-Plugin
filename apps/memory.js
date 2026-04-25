@@ -1,5 +1,4 @@
 import plugin from '../../../lib/plugins/plugin.js'
-import fs from 'node:fs'
 import path from 'node:path'
 import yaml from 'yaml'
 import { Config } from '../utils/config.js'
@@ -8,7 +7,6 @@ import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { sessionManager } from '../utils/session.js'
 import { setMsgEmojiLike, getTodayDateStr } from '../utils/common.js'
-import { SUMMARY_CACHE_DIR, CHECKPOINT_DIR } from '../utils/config.js'
 
 export class MemoryHandler extends plugin {
     constructor() {
@@ -27,28 +25,23 @@ export class MemoryHandler extends plugin {
         this.conversationManager = global.AIPluginConversationManager
     }
 
-    async _getOrCreateDailySummary(dateDir, userId, rawJsonPath, modelGroupKey) {
-        const cacheDir = path.join(SUMMARY_CACHE_DIR, dateDir)
-        const cacheFile = path.join(cacheDir, `${userId}.txt`)
-
-        if (fs.existsSync(cacheFile)) {
+    async _getOrCreateDailySummary(dateDir, userId, modelGroupKey) {
+        // 从数据库获取摘要缓存
+        const dbSummary = await this.conversationManager.db.getSummaryCache(userId, dateDir)
+        if (dbSummary) {
             logger.debug(`[AI-Plugin] 命中摘要缓存: ${dateDir}`)
-            return fs.readFileSync(cacheFile, 'utf8')
+            return dbSummary.content
         }
 
-        if (!fs.existsSync(rawJsonPath)) return ""
-        let dayContent = ""
-        try {
-            const history = JSON.parse(fs.readFileSync(rawJsonPath, 'utf8'))
-            if (!Array.isArray(history)) return ""
+        // 从数据库获取当日对话历史
+        const dayHistory = await this.conversationManager.db.getConversationHistoryByDate(userId, dateDir)
+        if (dayHistory.length === 0) return ""
 
-            for (const turn of history) {
-                const role = turn.role === 'user' ? '用户' : '诺亚'
-                const text = turn.parts.map(p => p.text).join(' ')
-                if (text) dayContent += `${role}: ${text}\n`
-            }
-        } catch (e) {
-            return ""
+        let dayContent = ""
+        for (const turn of dayHistory) {
+            const role = turn.role === 'user' ? '用户' : '诺亚'
+            const text = turn.parts.map(p => p.text).join(' ')
+            if (text) dayContent += `${role}: ${text}\n`
         }
 
         if (!dayContent.trim()) return ""
@@ -66,8 +59,8 @@ ${dayContent}`
 
         if (result.success) {
             const summaryText = result.data.trim()
-            if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true })
-            fs.writeFileSync(cacheFile, summaryText, 'utf8')
+            // 保存到数据库
+            await this.conversationManager.db.saveSummaryCache(userId, summaryText, dateDir)
             return `【${dateDir} 摘要】: ${summaryText}`
         } else {
             logger.warn(`[AI-Plugin] ${dateDir} 摘要生成失败: ${result.error}`)
@@ -77,13 +70,6 @@ ${dayContent}`
 
     async _runCheckpointLogic(e, isFullRebuild) {
         if (!await checkAccess(e)) return true
-
-        if (!fs.existsSync(SUMMARY_CACHE_DIR)) {
-            fs.mkdirSync(SUMMARY_CACHE_DIR, { recursive: true })
-        }
-        if (!fs.existsSync(CHECKPOINT_DIR)) {
-            fs.mkdirSync(CHECKPOINT_DIR, { recursive: true })
-        }
 
         const userIdStr = String(e.user_id)
         const todayStr = getTodayDateStr()
@@ -98,24 +84,17 @@ ${dayContent}`
         if (modelGroupKey === 'pro') modelDisplay = "Pro模型组"
         if (modelGroupKey === 'gemini3') modelDisplay = "Gemini 3模型组"
 
+        // 从数据库获取最新全量锚点
         let baseCheckpointDate = null
         let baseCheckpointContent = ""
 
-        if (!isFullRebuild && fs.existsSync(CHECKPOINT_DIR)) {
-            const files = fs.readdirSync(CHECKPOINT_DIR)
-                .filter(name => name.startsWith(`${userIdStr}_`) && name.endsWith('.txt'))
-                .sort()
-                .reverse()
-
-            if (files.length > 0) {
-                const latestFile = files[0]
-                const match = latestFile.match(/_(\d{4}-\d{2}-\d{2})\.txt$/)
-                if (match) {
-                    baseCheckpointDate = match[1]
-                    if (baseCheckpointDate === todayStr) {
-                        return e.reply("📅 今天已经创建过锚点啦！无需重复创建。\n如果想强制刷新，请使用 #gemini创建全量锚点")
-                    }
-                    baseCheckpointContent = fs.readFileSync(path.join(CHECKPOINT_DIR, latestFile), 'utf8')
+        if (!isFullRebuild) {
+            const latestCheckpoint = await this.conversationManager.db.getLatestCheckpoint(userIdStr)
+            if (latestCheckpoint) {
+                baseCheckpointDate = latestCheckpoint.dateStr
+                baseCheckpointContent = latestCheckpoint.content
+                if (baseCheckpointDate === todayStr) {
+                    return e.reply("📅 今天已经创建过锚点啦！无需重复创建。\n如果想强制刷新，请使用 #gemini创建全量锚点")
                 }
             }
         }
@@ -140,41 +119,33 @@ ${dayContent}`
                 finalContext += `\n=== 📜 【核心记忆存档 (截止于 ${baseCheckpointDate})】 ===\n${baseCheckpointContent}\n`
             }
 
-            const HISTORY_DIR = path.join(process.cwd(), 'data', 'ai_assistant', 'user_histories')
-            if (fs.existsSync(HISTORY_DIR)) {
-                let dateDirs = fs.readdirSync(HISTORY_DIR)
-                    .filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name) && fs.statSync(path.join(HISTORY_DIR, name)).isDirectory())
-                    .sort()
+            // 从数据库获取所有日期
+            let dateDirs = await this.conversationManager.db.getDistinctDates(userIdStr)
+            dateDirs.sort()
 
-                if (baseCheckpointDate) {
-                    dateDirs = dateDirs.filter(date => date > baseCheckpointDate)
-                }
+            if (baseCheckpointDate) {
+                dateDirs = dateDirs.filter(date => date > baseCheckpointDate)
+            }
 
-                for (const dateDir of dateDirs) {
-                    const rawJsonPath = path.join(HISTORY_DIR, dateDir, `${userIdStr}.json`)
-                    if (!fs.existsSync(rawJsonPath)) continue
-
-                    if (dateDir === todayStr) {
-                        try {
-                            const content = fs.readFileSync(rawJsonPath, 'utf8')
-                            const dayHistory = JSON.parse(content)
-                            let todayText = ""
-                            for (const turn of dayHistory) {
-                                const role = turn.role === 'user' ? '用户' : '诺亚'
-                                const text = turn.parts.map(p => p.text).join(' ')
-                                if (text) todayText += `${role}: ${text}\n`
-                            }
-                            if (todayText) {
-                                finalContext += `\n=== 🔥 【今天 (${dateDir}) 的实时对话】 ===\n${todayText}\n`
-                            }
-                        } catch (err) { }
-                    } else {
-                        processedDays++
-                        const summary = await this._getOrCreateDailySummary(dateDir, userIdStr, rawJsonPath, modelGroupKey)
-                        if (summary) {
-                            const cleanSummary = summary.replace(/^【.*?】:\s*/, '')
-                            finalContext += `\n=== ➕ 【增量记忆 (${dateDir})】 ===\n${cleanSummary}\n`
-                        }
+            for (const dateDir of dateDirs) {
+                if (dateDir === todayStr) {
+                    // 今天的对话直接从数据库读取
+                    const dayHistory = await this.conversationManager.db.getConversationHistoryByDate(userIdStr, dateDir)
+                    let todayText = ""
+                    for (const turn of dayHistory) {
+                        const role = turn.role === 'user' ? '用户' : '诺亚'
+                        const text = turn.parts.map(p => p.text).join(' ')
+                        if (text) todayText += `${role}: ${text}\n`
+                    }
+                    if (todayText) {
+                        finalContext += `\n=== 🔥 【今天 (${dateDir}) 的实时对话】 ===\n${todayText}\n`
+                    }
+                } else {
+                    processedDays++
+                    const summary = await this._getOrCreateDailySummary(dateDir, userIdStr, modelGroupKey)
+                    if (summary) {
+                        const cleanSummary = summary.replace(/^【.*?】:\s*/, '')
+                        finalContext += `\n=== ➕ 【增量记忆 (${dateDir})】 ===\n${cleanSummary}\n`
                     }
                 }
             }
@@ -219,10 +190,9 @@ ${dayContent}`
 
                 const modelInfo = result.platform ? `\n🔮 模型: ${result.platform}` : ''
 
-                const newCheckpointFile = path.join(CHECKPOINT_DIR, `${userIdStr}_${todayStr}.txt`)
-                fs.writeFileSync(newCheckpointFile, newSummary, 'utf8')
+                // 保存到数据库
+                await this.conversationManager.db.saveCheckpoint(e.user_id, newSummary, todayStr)
 
-                const HISTORY_DIR = path.join(process.cwd(), 'data', 'ai_assistant', 'user_histories')
                 let currentHistory = await this.conversationManager.getUserHistory(e.user_id)
                 currentHistory.push({
                     "role": "model",
@@ -234,7 +204,7 @@ ${dayContent}`
                     {
                         user_id: Bot.uin,
                         nickname: "诺亚",
-                        message: `✅ 锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s${tokenInfo}\n💾 新文件名: ${userIdStr}_${todayStr}.txt\n🔗 继承自: ${baseCheckpointDate || '无 (重构)'}`
+                        message: `✅ 锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s${tokenInfo}\n🔗 继承自: ${baseCheckpointDate || '无 (重构)'}`
                     }
                 ]
 
@@ -288,15 +258,14 @@ ${dayContent}`
         if (!await checkAccess(e)) return true
 
         const userIdStr = String(e.user_id)
-        const HISTORY_DIR = path.join(process.cwd(), 'data', 'ai_assistant', 'user_histories')
 
-        if (!fs.existsSync(HISTORY_DIR)) {
+        // 从数据库获取所有日期
+        const dateDirs = await this.conversationManager.db.getDistinctDates(userIdStr)
+        if (dateDirs.length === 0) {
             return e.reply("诺亚找遍了柜子，目前还没有任何按日期的历史存档呢。")
         }
 
-        const dateDirs = fs.readdirSync(HISTORY_DIR)
-            .filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name) && fs.statSync(path.join(HISTORY_DIR, name)).isDirectory())
-            .sort()
+        dateDirs.sort()
 
         let listContent = []
         let totalDays = 0
@@ -305,16 +274,15 @@ ${dayContent}`
         const todayStr = getTodayDateStr()
 
         for (const date of dateDirs) {
-            const historyFile = path.join(HISTORY_DIR, date, `${userIdStr}.json`)
-            if (!fs.existsSync(historyFile)) continue
-
             totalDays++
 
-            const summaryFile = path.join(SUMMARY_CACHE_DIR, date, `${userIdStr}.txt`)
-            const hasSummary = fs.existsSync(summaryFile)
+            // 从数据库检查是否有摘要缓存
+            const dbSummary = await this.conversationManager.db.getSummaryCache(userIdStr, date)
+            const hasSummary = !!dbSummary
 
-            const checkpointFile = path.join(CHECKPOINT_DIR, `${userIdStr}_${date}.txt`)
-            const hasCheckpoint = fs.existsSync(checkpointFile)
+            // 从数据库检查是否有锚点
+            const dbCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, date)
+            const hasCheckpoint = !!dbCheckpoint
 
             let statusIcon = ""
             let statusText = ""

@@ -1,18 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { USER_PROFILES_FILE, SUMMARY_CACHE_DIR, CHECKPOINT_DIR, HISTORY_DIR } from '../utils/config.js'
+import { USER_PROFILES_FILE, HISTORY_DIR, CHECKPOINT_DIR, SUMMARY_CACHE_DIR } from '../utils/config.js'
 import { AIDatabase } from '../utils/database.js'
 import { getTodayDateStr } from '../utils/common.js'
 
 export class ConversationManager {
     constructor() {
         this.db = new AIDatabase()
-        this.HISTORY_DIR = HISTORY_DIR
-        this.CHECKPOINT_DIR = CHECKPOINT_DIR
-        this.SUMMARY_CACHE_DIR = SUMMARY_CACHE_DIR
         this.userProfiles = new Map()
         this.loadUserProfiles()
-        this.ensureHistoryDirExists()
         this._initPromise = this._initialize()
     }
 
@@ -48,26 +44,28 @@ export class ConversationManager {
         }
     }
 
-    ensureHistoryDirExists() {
-        try {
-            if (!fs.existsSync(this.HISTORY_DIR)) {
-                fs.mkdirSync(this.HISTORY_DIR, { recursive: true })
-                logger.info(`[AI-Plugin] 用户历史记录目录已创建于: ${this.HISTORY_DIR}`)
-            }
-        } catch (error) {
-            logger.error(`[AI-Plugin] 创建用户历史记录目录失败:`, error)
-        }
-    }
-
     async migrateAllData() {
-        // 迁移 JSON 数据
-        await this.migrateOldData()
-        
-        // 迁移全量锚点（独立执行，不受 JSON 迁移状态影响）
-        await this.migrateCheckpoints()
-        
-        // 迁移增量锚点（独立执行，不受 JSON 迁移状态影响）
-        await this.migrateSummaryCache()
+        const migrationStatus = await this.db.getMigrationStatus()
+        const checkpointsStatus = await this.db.getCheckpointsMigrationStatus()
+        const summaryStatus = await this.db.getSummaryMigrationStatus()
+
+        // 只有在需要迁移时才执行
+        if (!migrationStatus.json_migrated || !checkpointsStatus || !summaryStatus) {
+            // 迁移 JSON 数据
+            if (!migrationStatus.json_migrated) {
+                await this.migrateOldData()
+            }
+            
+            // 迁移全量锚点
+            if (!checkpointsStatus) {
+                await this.migrateCheckpoints()
+            }
+            
+            // 迁移增量锚点
+            if (!summaryStatus) {
+                await this.migrateSummaryCache()
+            }
+        }
     }
 
     async migrateOldData() {
@@ -77,7 +75,7 @@ export class ConversationManager {
             return
         }
 
-        if (!fs.existsSync(this.HISTORY_DIR)) {
+        if (!fs.existsSync(HISTORY_DIR)) {
             logger.info('[AI-Plugin] 未找到旧的历史记录目录，无需迁移。')
             await this.db.setMigrationStatus(true)
             return
@@ -88,15 +86,15 @@ export class ConversationManager {
         let migratedTurns = 0
 
         try {
-            const entries = fs.readdirSync(this.HISTORY_DIR)
+            const entries = fs.readdirSync(HISTORY_DIR)
 
             const dateDirs = entries.filter(name => {
-                const fullPath = path.join(this.HISTORY_DIR, name)
+                const fullPath = path.join(HISTORY_DIR, name)
                 return /^\d{4}-\d{2}-\d{2}$/.test(name) && fs.statSync(fullPath).isDirectory()
             })
 
             for (const dateDir of dateDirs) {
-                const dirPath = path.join(this.HISTORY_DIR, dateDir)
+                const dirPath = path.join(HISTORY_DIR, dateDir)
                 const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.json'))
 
                 for (const file of files) {
@@ -140,10 +138,10 @@ export class ConversationManager {
             return
         }
 
-        logger.info(`[AI-Plugin] 检查全量锚点目录: ${this.CHECKPOINT_DIR}`)
-        logger.info(`[AI-Plugin] 目录存在: ${fs.existsSync(this.CHECKPOINT_DIR)}`)
+        logger.info(`[AI-Plugin] 检查全量锚点目录: ${CHECKPOINT_DIR}`)
+        logger.info(`[AI-Plugin] 目录存在: ${fs.existsSync(CHECKPOINT_DIR)}`)
 
-        if (!fs.existsSync(this.CHECKPOINT_DIR)) {
+        if (!fs.existsSync(CHECKPOINT_DIR)) {
             logger.info('[AI-Plugin] 未找到全量锚点目录，无需迁移。')
             await this.db.setCheckpointsMigrationStatus(true)
             return
@@ -153,7 +151,7 @@ export class ConversationManager {
         let migratedCount = 0
 
         try {
-            const files = fs.readdirSync(this.CHECKPOINT_DIR).filter(f => f.endsWith('.txt'))
+            const files = fs.readdirSync(CHECKPOINT_DIR).filter(f => f.endsWith('.txt'))
 
             for (const file of files) {
                 // 文件名格式：用户ID_日期.txt
@@ -162,7 +160,7 @@ export class ConversationManager {
 
                 const userId = match[1]
                 const dateStr = match[2]
-                const filePath = path.join(this.CHECKPOINT_DIR, file)
+                const filePath = path.join(CHECKPOINT_DIR, file)
 
                 try {
                     const content = fs.readFileSync(filePath, 'utf8')
@@ -261,7 +259,6 @@ export class ConversationManager {
     async getUserHistory(userId) {
         const redisKey = `ai-plugin:history:${userId}`
         const weekInSeconds = 7 * 24 * 60 * 60
-        const today = getTodayDateStr()
 
         try {
             const historyJson = await redis.get(redisKey)
@@ -286,25 +283,6 @@ export class ConversationManager {
             logger.error(`[AI-Plugin] 从 SQLite 读取用户 ${userId} 的历史失败:`, dbError)
         }
 
-        try {
-            const todayFile = path.join(this.HISTORY_DIR, today, `${userId}.json`)
-            if (fs.existsSync(todayFile)) {
-                const fileContent = fs.readFileSync(todayFile, 'utf8')
-                if (!fileContent.trim()) return []
-
-                const historyFromFile = JSON.parse(fileContent)
-                if (Array.isArray(historyFromFile)) {
-                    const historyToCache = this.cloneHistoryForSaving(historyFromFile)
-                    await redis.set(redisKey, JSON.stringify(historyToCache), { EX: weekInSeconds })
-                    await this.db.saveConversation(userId, historyFromFile)
-                    logger.info(`[AI-Plugin] 已从今日 JSON 文件恢复并缓存用户 ${userId} 的记忆`)
-                    return historyFromFile
-                }
-            }
-        } catch (fileError) {
-            logger.error(`[AI-Plugin] 从文件恢复用户 ${userId} 的历史失败:`, fileError)
-        }
-
         return []
     }
 
@@ -312,24 +290,15 @@ export class ConversationManager {
         const userIdStr = String(userId)
         const today = getTodayDateStr()
 
-        const files = fs.readdirSync(CHECKPOINT_DIR)
-            .filter(name => name.startsWith(`${userIdStr}_`) && name.endsWith('.txt'))
-            .sort()
-            .reverse()
+        // 从 SQLite 读取全量锚点
+        const latestCheckpoint = await this.db.getLatestCheckpoint(userIdStr)
 
         let fullCheckpointDate = null
         let fullCheckpointContent = ""
 
-        for (const file of files) {
-            const match = file.match(/_(\d{4}-\d{2}-\d{2})\.txt$/)
-            if (match) {
-                const date = match[1]
-                if (date !== today) {
-                    fullCheckpointDate = date
-                    fullCheckpointContent = fs.readFileSync(path.join(CHECKPOINT_DIR, file), 'utf8')
-                    break
-                }
-            }
+        if (latestCheckpoint && latestCheckpoint.dateStr !== today) {
+            fullCheckpointDate = latestCheckpoint.dateStr
+            fullCheckpointContent = latestCheckpoint.content
         }
 
         let history = []
@@ -357,7 +326,7 @@ export class ConversationManager {
         try {
             const dateStr = getTodayDateStr()
 
-            // 按日期分组保存完整历史到 SQLite（与 JSON 文件结构一致）
+            // 按日期分组保存完整历史到 SQLite
             // 对于从 Redis 加载的历史（没有 date_str），统一标记为今天
             // 对于从迁移加载的历史（有 date_str），保留原有日期
             const historyWithDate = history.map(turn => ({
@@ -379,17 +348,8 @@ export class ConversationManager {
             for (const [date, dayHistory] of Object.entries(groupedByDate)) {
                 await this.db.saveConversation(userId, dayHistory)
             }
-
-            const dateDir = path.join(this.HISTORY_DIR, dateStr)
-
-            if (!fs.existsSync(dateDir)) {
-                fs.mkdirSync(dateDir, { recursive: true })
-            }
-
-            const historyFilePath = path.join(dateDir, `${userId}.json`)
-            fs.writeFileSync(historyFilePath, JSON.stringify(history, null, 2), 'utf8')
-        } catch (fileError) {
-            logger.error(`[AI-Plugin] 持久化保存用户 ${userId} 的历史到文件失败:`, fileError)
+        } catch (dbError) {
+            logger.error(`[AI-Plugin] 持久化保存用户 ${userId} 的历史到SQLite失败:`, dbError)
         }
     }
 
