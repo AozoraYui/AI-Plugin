@@ -88,31 +88,39 @@ export class HelpHandler extends plugin {
 - - - - - - - - - - - - - - - - -
 🔑 主人专用指令
 - - - - - - - - - - - - - - - - -
-【 模型与权限 (主人专用) 】
+【 模型管理 】
+> #gemini模型列表
+  查看当前所有模型配置及状态。
 > #gemini模型测试
   测试所有模型的连通性和响应时间。
 > #gemini模型全部启用
-  启用所有模型
+  启用配置文件中的所有模型。
 > #gemini模型禁用 [模型ID]
-  禁用指定模型
+  禁用指定模型。
 > #gemini模型启用 [模型ID]
-  启用指定模型
-> #gemini重载
-  重载插件配置
+  启用已禁用的模型。
+
+【 权限管理 】
+> #gemini权限列表
+  查看当前权限配置详情。
 > #gemini设置白名单
-  切换到白名单模式
+  切换到白名单模式。
 > #gemini设置黑名单
-  切换到黑名单模式
-> #gemini添加/删除白名单用户 [用户ID]
-> #gemini添加/删除白名单群 [群号]
-> #gemini添加/删除黑名单用户 [用户ID]
-> #gemini添加/删除黑名单群 [群号]
-> #gemini查看权限配置
-  查看当前权限配置
+  切换到黑名单模式。
+> #gemini权限模式 whitelist/blacklist
+  切换权限模式（同上）。
+> #gemini权限添加/删除 白名单用户 [用户ID]
+> #gemini权限添加/删除 黑名单用户 [用户ID]
+> #gemini权限添加/删除 白名单群 [群号]
+> #gemini权限添加/删除 黑名单群 [群号]
+
+【 其他 】
+> #gemini状态
+  查看插件运行状态。
 > #gemini思考开启/关闭
-  切换是否显示AI的思考过程
+  切换是否显示AI的思考过程。
 > #导出诺亚全部记忆
-  导出所有用户的对话记忆`
+  导出所有用户的对话记忆。`
 
         const forwardMsgArr = [
             msg1_header,
@@ -138,6 +146,7 @@ export class HelpHandler extends plugin {
   #gm [内容] - 与诺亚对话
   #progm [内容] - 使用Pro模型对话
   #3gm [内容] - 使用Gemini3模型对话
+  #sgm [内容] / #singlegm [内容] - 单次对话模式(不保存历史)
   #结束gemini对话 - 重置对话历史
   #导出诺亚记忆 - 导出你的对话记忆
   #导出诺亚全部记忆 - 导出所有用户记忆(管理员)
@@ -164,16 +173,15 @@ export class HelpHandler extends plugin {
   #gemini模型全部启用 - 启用所有模型
   #gemini模型禁用[模型ID] - 禁用指定模型
   #gemini模型启用[模型ID] - 启用指定模型
-  #gemini禁用列表 - 查看已禁用的模型
   #gemini状态 - 查看插件运行状态
-  #gemini重载 - 重载插件配置
   #gemini设置白名单 - 切换到白名单模式
   #gemini设置黑名单 - 切换到黑名单模式
-  #gemini添加/删除白名单用户[用户ID]
-  #gemini添加/删除白名单群[群号]
-  #gemini添加/删除黑名单用户[用户ID]
-  #gemini添加/删除黑名单群[群号]
-  #gemini查看权限配置 - 查看当前权限配置
+  #gemini权限模式 whitelist/blacklist - 切换权限模式
+  #gemini权限添加/删除 白名单用户[用户ID]
+  #gemini权限添加/删除 黑名单用户[用户ID]
+  #gemini权限添加/删除 白名单群[群号]
+  #gemini权限添加/删除 黑名单群[群号]
+  #gemini权限列表 - 查看权限配置
   #gemini思考开启/关闭 - 开启/关闭思考过程显示
 
 💡 提示:
