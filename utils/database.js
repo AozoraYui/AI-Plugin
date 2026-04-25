@@ -86,37 +86,52 @@ export class AIDatabase {
                     summary_migrated BOOLEAN DEFAULT 0,
                     migration_time DATETIME
                 );
-
-                -- 兼容旧表名：如果存在 conversations 表，重命名为 user_histories
-                ALTER TABLE conversations RENAME TO user_histories;
             `, (err) => {
-                if (err && !err.message.includes('no such table') && !err.message.includes('duplicate column')) {
-                    // 忽略表不存在或重复的错误
-                    if (err.message.includes('already exists')) {
-                        // 表已存在，正常情况
-                    } else {
+                if (err) {
+                    reject(err)
+                    return
+                }
+
+                // 兼容旧表名：如果存在 conversations 表，重命名为 user_histories
+                this.db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'", (err, row) => {
+                    if (err) {
                         reject(err)
                         return
                     }
-                }
 
-                this.db.get('SELECT json_migrated FROM migration_status WHERE id = 1', (err, row) => {
-                    if (err || !row) {
-                        this.db.run('INSERT INTO migration_status (id, json_migrated, checkpoints_migrated, summary_migrated) VALUES (1, 0, 0, 0)', (err) => {
-                            if (err) reject(err)
-                            else resolve()
+                    if (row) {
+                        // conversations 表存在，重命名
+                        this.db.run('ALTER TABLE conversations RENAME TO user_histories', (err) => {
+                            if (err && !err.message.includes('already exists')) {
+                                logger.warn('[AI-Plugin] 重命名旧表失败:', err.message)
+                            }
+                            this.initMigrationStatus(resolve, reject)
                         })
                     } else {
-                        // 修复旧数据的 created_at，使其跟随 date_str 的日期（使用中午 12 点作为默认时间）
-                        this.db.run("UPDATE user_histories SET created_at = date_str || ' 12:00:00' WHERE created_at IS NULL OR strftime('%Y-%m-%d', created_at) != date_str", (err) => {
-                            if (err) {
-                                // 忽略更新错误
-                            }
-                            resolve()
-                        })
+                        // conversations 表不存在，直接继续
+                        this.initMigrationStatus(resolve, reject)
                     }
                 })
             })
+        })
+    }
+
+    initMigrationStatus(resolve, reject) {
+        this.db.get('SELECT json_migrated FROM migration_status WHERE id = 1', (err, row) => {
+            if (err || !row) {
+                this.db.run('INSERT INTO migration_status (id, json_migrated, checkpoints_migrated, summary_migrated) VALUES (1, 0, 0, 0)', (err) => {
+                    if (err) reject(err)
+                    else resolve()
+                })
+            } else {
+                // 修复旧数据的 created_at，使其跟随 date_str 的日期（使用中午 12 点作为默认时间）
+                this.db.run("UPDATE user_histories SET created_at = date_str || ' 12:00:00' WHERE created_at IS NULL OR strftime('%Y-%m-%d', created_at) != date_str", (err) => {
+                    if (err) {
+                        // 忽略更新错误
+                    }
+                    resolve()
+                })
+            }
         })
     }
 
