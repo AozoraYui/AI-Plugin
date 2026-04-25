@@ -16,7 +16,7 @@ export class ConversationManager {
 
     async _initialize() {
         await this.db.waitForReady()
-        await this.migrateOldData()
+        await this.migrateAllData()
     }
 
     async waitForMigration() {
@@ -55,6 +55,17 @@ export class ConversationManager {
         } catch (error) {
             logger.error(`[AI-Plugin] 创建用户历史记录目录失败:`, error)
         }
+    }
+
+    async migrateAllData() {
+        // 迁移 JSON 数据
+        await this.migrateOldData()
+        
+        // 迁移全量锚点（独立执行，不受 JSON 迁移状态影响）
+        await this.migrateCheckpoints()
+        
+        // 迁移增量锚点（独立执行，不受 JSON 迁移状态影响）
+        await this.migrateSummaryCache()
     }
 
     async migrateOldData() {
@@ -118,12 +129,6 @@ export class ConversationManager {
         } catch (error) {
             logger.error('[AI-Plugin] 迁移过程中出错:', error)
         }
-
-        // 迁移全量锚点
-        await this.migrateCheckpoints()
-
-        // 迁移增量锚点
-        await this.migrateSummaryCache()
     }
 
     async migrateCheckpoints() {
