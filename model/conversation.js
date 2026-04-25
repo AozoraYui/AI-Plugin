@@ -455,11 +455,11 @@ export class ConversationManager {
         }
     }
 
-    async createIncrementalCheckpoint(userId, today) {
+    async createIncrementalCheckpoint(userId, today, messageCount = 0) {
         if (!global.AIPluginScheduler) {
             logger.error('[AI-Plugin] 定时任务未初始化，无法创建增量锚点')
             return
         }
-        await global.AIPluginScheduler._createIncrementalCheckpoint(userId, today)
+        await global.AIPluginScheduler._createIncrementalCheckpoint(userId, today, messageCount)
     }
 }
