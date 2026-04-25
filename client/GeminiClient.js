@@ -265,6 +265,13 @@ export class GeminiClient {
     async attemptRequest(type, payload, provider, modelId) {
         try {
             const { url, options } = this.buildRequest(type, payload, provider, modelId)
+            
+            // 检查请求体大小，防止 413 错误
+            const bodySize = Buffer.byteLength(options.body, 'utf8')
+            if (bodySize > 10 * 1024 * 1024) { // 10MB 警告阈值
+                logger.warn(`[AI-Plugin] 请求体过大 (${(bodySize / 1024 / 1024).toFixed(2)}MB)，可能导致 413 错误`)
+            }
+            
             const res = await fetchWithProxy(url, options)
 
             if (!res.ok) {

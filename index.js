@@ -26,6 +26,7 @@ if (!global.segment) {
 
 global.AIPluginClient = new GeminiClient()
 global.AIPluginConversationManager = new ConversationManager()
+await global.AIPluginConversationManager.waitForMigration()
 global.AIPluginScheduler = new AIScheduler(global.AIPluginClient)
 global.AIPluginScheduler.start()
 

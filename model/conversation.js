@@ -11,7 +11,18 @@ export class ConversationManager {
         this.userProfiles = new Map()
         this.loadUserProfiles()
         this.ensureHistoryDirExists()
-        this.migrateOldData()
+        this._initPromise = this._initialize()
+    }
+
+    async _initialize() {
+        await this.db.waitForReady()
+        await this.migrateOldData()
+    }
+
+    async waitForMigration() {
+        if (this._initPromise) {
+            await this._initPromise
+        }
     }
 
     loadUserProfiles() {
@@ -60,7 +71,7 @@ export class ConversationManager {
         }
 
         logger.info('[AI-Plugin] 开始迁移旧 JSON 数据到 SQLite...')
-        let migratedUsers = 0
+        const migratedUserIds = new Set()
         let migratedTurns = 0
 
         try {
@@ -87,7 +98,7 @@ export class ConversationManager {
                         if (!Array.isArray(history)) continue
 
                         await this.db.saveConversation(userId, history)
-                        migratedUsers++
+                        migratedUserIds.add(userId)
                         migratedTurns += history.length
                     } catch (err) {
                         logger.warn(`[AI-Plugin] 迁移用户 ${userId} 的数据失败: ${err.message}`)
@@ -96,7 +107,7 @@ export class ConversationManager {
             }
 
             await this.db.setMigrationStatus(true)
-            logger.info(`[AI-Plugin] 迁移完成！共迁移 ${migratedUsers} 个用户，${migratedTurns} 条对话。`)
+            logger.info(`[AI-Plugin] 迁移完成！共迁移 ${migratedUserIds.size} 个用户，${migratedTurns} 条对话。`)
             logger.info('[AI-Plugin] 旧 JSON 文件已保留，不会被删除。')
         } catch (error) {
             logger.error('[AI-Plugin] 迁移过程中出错:', error)
@@ -210,13 +221,13 @@ export class ConversationManager {
         }
 
         try {
-            const lastTurn = history[history.length - 1]
-            if (lastTurn) {
-                const dateStr = getTodayDateStr()
-                await this.db.saveConversationEntry(userId, lastTurn.role, lastTurn.parts, dateStr)
+            const dateStr = getTodayDateStr()
+            const lastTwoTurns = history.slice(-2)
+
+            for (const turn of lastTwoTurns) {
+                await this.db.saveConversationEntry(userId, turn.role, turn.parts, dateStr)
             }
 
-            const dateStr = getTodayDateStr()
             const dateDir = path.join(this.HISTORY_DIR, dateStr)
 
             if (!fs.existsSync(dateDir)) {
