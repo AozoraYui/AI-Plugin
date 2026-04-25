@@ -244,18 +244,27 @@ export class ConversationManager {
         try {
             const dateStr = getTodayDateStr()
 
-            // 只保存当天的对话到 SQLite（与 JSON 文件结构一致）
-            const todayHistory = history.filter(turn => {
-                const turnDate = turn.date_str || dateStr
-                return turnDate === dateStr
-            })
+            // 按日期分组保存完整历史到 SQLite（与 JSON 文件结构一致）
+            // 对于从 Redis 加载的历史（没有 date_str），统一标记为今天
+            // 对于从迁移加载的历史（有 date_str），保留原有日期
+            const historyWithDate = history.map(turn => ({
+                ...turn,
+                date_str: turn.date_str || dateStr
+            }))
 
-            if (todayHistory.length > 0) {
-                const historyToSave = todayHistory.map(turn => ({
-                    ...turn,
-                    date_str: turn.date_str || dateStr
-                }))
-                await this.db.saveConversation(userId, historyToSave)
+            // 按日期分组
+            const groupedByDate = {}
+            for (const turn of historyWithDate) {
+                const date = turn.date_str
+                if (!groupedByDate[date]) {
+                    groupedByDate[date] = []
+                }
+                groupedByDate[date].push(turn)
+            }
+
+            // 保存每个日期的对话到 SQLite
+            for (const [date, dayHistory] of Object.entries(groupedByDate)) {
+                await this.db.saveConversation(userId, dayHistory)
             }
 
             const dateDir = path.join(this.HISTORY_DIR, dateStr)

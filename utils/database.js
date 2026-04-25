@@ -78,14 +78,15 @@ export class AIDatabase {
     getConversationHistory(userId) {
         return new Promise((resolve, reject) => {
             const userIdStr = String(userId)
-            this.db.all('SELECT role, parts FROM conversations WHERE user_id = ? ORDER BY id ASC', [userIdStr], (err, rows) => {
+            this.db.all('SELECT role, parts, date_str FROM conversations WHERE user_id = ? ORDER BY id ASC', [userIdStr], (err, rows) => {
                 if (err) {
                     reject(err)
                     return
                 }
                 resolve(rows.map(row => ({
                     role: row.role,
-                    parts: JSON.parse(row.parts)
+                    parts: JSON.parse(row.parts),
+                    date_str: row.date_str
                 })))
             })
         })
@@ -95,43 +96,64 @@ export class AIDatabase {
         return new Promise((resolve, reject) => {
             const userIdStr = String(userId)
             
-            // 获取日期（从第一条对话中获取，如果没有则使用今天）
+            // 获取日期（从第一条对话中获取）
             const dateStr = history.length > 0 && history[0].date_str 
                 ? history[0].date_str 
                 : new Date().toISOString().split('T')[0]
 
-            this.db.serialize(() => {
-                this.db.run('BEGIN TRANSACTION')
+            logger.debug(`[AI-Plugin] 保存用户 ${userId} 的 ${history.length} 条对话到 SQLite，日期: ${dateStr}`)
+
+            // 先删除该用户该日期的旧数据
+            this.db.run('DELETE FROM conversations WHERE user_id = ? AND date_str = ?', [userIdStr, dateStr], (err) => {
+                if (err) {
+                    logger.error(`[AI-Plugin] 删除用户 ${userId} 的旧数据失败:`, err)
+                    reject(err)
+                    return
+                }
                 
-                // 先删除该用户当天的旧数据
-                this.db.run('DELETE FROM conversations WHERE user_id = ? AND date_str = ?', [userIdStr, dateStr], (err) => {
-                    if (err) {
-                        this.db.run('ROLLBACK')
-                        reject(err)
-                        return
-                    }
-                    
-                    // 再插入新的完整历史
-                    const insert = this.db.prepare(`
-                        INSERT INTO conversations (user_id, role, parts, date_str)
-                        VALUES (?, ?, ?, ?)
-                    `)
-                    
-                    for (const turn of history) {
-                        insert.run(
-                            userIdStr,
-                            turn.role,
-                            JSON.stringify(turn.parts),
-                            turn.date_str || dateStr
-                        )
-                    }
-                    
-                    insert.finalize()
-                    this.db.run('COMMIT', (err) => {
-                        if (err) reject(err)
-                        else resolve()
+                if (history.length === 0) {
+                    logger.debug(`[AI-Plugin] 没有数据需要保存，跳过插入`)
+                    resolve()
+                    return
+                }
+                
+                logger.debug(`[AI-Plugin] 已删除用户 ${userId} 在 ${dateStr} 的旧数据，准备插入 ${history.length} 条新数据`)
+                
+                // 再插入新的完整历史
+                const insert = this.db.prepare(`
+                    INSERT INTO conversations (user_id, role, parts, date_str)
+                    VALUES (?, ?, ?, ?)
+                `)
+                
+                try {
+                    this.db.serialize(() => {
+                        this.db.run('BEGIN TRANSACTION')
+                        
+                        for (const turn of history) {
+                            insert.run(
+                                userIdStr,
+                                turn.role,
+                                JSON.stringify(turn.parts),
+                                turn.date_str || dateStr
+                            )
+                        }
+                        
+                        this.db.run('COMMIT', (err) => {
+                            insert.finalize()
+                            if (err) {
+                                logger.error(`[AI-Plugin] 提交事务失败:`, err)
+                                reject(err)
+                            } else {
+                                logger.debug(`[AI-Plugin] 成功保存用户 ${userId} 的 ${history.length} 条对话`)
+                                resolve()
+                            }
+                        })
                     })
-                })
+                } catch (err) {
+                    insert.finalize()
+                    logger.error(`[AI-Plugin] 插入数据时出错:`, err)
+                    reject(err)
+                }
             })
         })
     }
