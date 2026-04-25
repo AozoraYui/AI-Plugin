@@ -93,11 +93,11 @@ export class HelpHandler extends plugin {
   查看当前所有模型配置及状态。
 > #gemini模型测试
   测试所有模型的连通性和响应时间。
-> #gemini模型全部启用
+> #gemini启用全部模型
   启用配置文件中的所有模型。
-> #gemini模型禁用 [模型ID]
+> #gemini禁用 [模型ID]
   禁用指定模型。
-> #gemini模型启用 [模型ID]
+> #gemini启用 [模型ID]
   启用已禁用的模型。
 
 【 权限管理 】
@@ -166,9 +166,9 @@ export class HelpHandler extends plugin {
 ⚙️ 管理功能(管理员):
   #gemini模型列表 - 查看当前模型配置
   #gemini模型测试 - 测试所有模型
-  #gemini模型全部启用 - 启用所有模型
-  #gemini模型禁用[模型ID] - 禁用指定模型
-  #gemini模型启用[模型ID] - 启用指定模型
+  #gemini启用全部模型 - 启用所有模型
+  #gemini禁用[模型ID] - 禁用指定模型
+  #gemini启用[模型ID] - 启用指定模型
   #gemini状态 - 查看插件运行状态
   #gemini权限模式 whitelist/blacklist - 切换权限模式
   #gemini权限添加/删除 白名单用户[用户ID]
