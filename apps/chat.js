@@ -684,7 +684,10 @@ export class ChatHandler extends plugin {
     async _checkAndCreateAutoCheckpoint(userId, history) {
         const CHECKPOINT_THRESHOLD = 20
         
+        logger.debug(`[AI-Plugin] _checkAndCreateAutoCheckpoint: history.length = ${history.length}`)
+        
         if (history.length < CHECKPOINT_THRESHOLD) {
+            logger.debug(`[AI-Plugin] 历史条数 ${history.length} < ${CHECKPOINT_THRESHOLD}，跳过`)
             return
         }
         
@@ -692,10 +695,15 @@ export class ChatHandler extends plugin {
         const latestCheckpoint = await this.conversationManager.db.getLatestCheckpoint(userId)
         const lastCheckpointMessageCount = latestCheckpoint?.messageCount || 0
         
+        logger.debug(`[AI-Plugin] 最近锚点: dateStr=${latestCheckpoint?.dateStr}, messageCount=${lastCheckpointMessageCount}`)
+        
         // 计算自上次锚点以来的新消息数
         const newMessagesSinceLastCheckpoint = history.length - lastCheckpointMessageCount
         
+        logger.debug(`[AI-Plugin] 新增消息数: ${newMessagesSinceLastCheckpoint} = ${history.length} - ${lastCheckpointMessageCount}`)
+        
         if (newMessagesSinceLastCheckpoint < CHECKPOINT_THRESHOLD) {
+            logger.debug(`[AI-Plugin] 新增消息 ${newMessagesSinceLastCheckpoint} < ${CHECKPOINT_THRESHOLD}，跳过`)
             return
         }
         
