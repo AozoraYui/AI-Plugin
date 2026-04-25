@@ -687,7 +687,7 @@ export class ChatHandler extends plugin {
         // 检查今天是否已经创建过锚点
         const todayCheckpoint = await this.conversationManager.db.getCheckpoint(userId, today)
         if (todayCheckpoint) {
-            logger.debug(`[AI-Plugin] 用户 ${userId} 今天已创建过锚点，跳过`)
+            logger.info(`[AI-Plugin] 用户 ${userId} 今天已创建过锚点，跳过`)
             return
         }
         
