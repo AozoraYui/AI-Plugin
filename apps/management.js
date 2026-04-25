@@ -15,7 +15,7 @@ export class ManagementHandler extends plugin {
             name: 'AI管理',
             dsc: 'AI插件管理功能',
             event: 'message',
-            priority: 1147,
+            priority: 1140,
             rule: [
                 { reg: /^#gemini模型列表$/i, fnc: 'listModels', permission: 'master' },
                 { reg: /^#gemini模型测试$/i, fnc: 'testAllModels', permission: 'master' },
