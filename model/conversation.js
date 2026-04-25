@@ -243,11 +243,13 @@ export class ConversationManager {
 
         try {
             const dateStr = getTodayDateStr()
-            const lastTwoTurns = history.slice(-2)
 
-            for (const turn of lastTwoTurns) {
-                await this.db.saveConversationEntry(userId, turn.role, turn.parts, dateStr)
-            }
+            // 保存完整历史到 SQLite（与 JSON 文件结构一致）
+            const historyToSave = history.map(turn => ({
+                ...turn,
+                date_str: turn.date_str || dateStr
+            }))
+            await this.db.saveConversation(userId, historyToSave)
 
             const dateDir = path.join(this.HISTORY_DIR, dateStr)
 
