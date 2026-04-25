@@ -144,7 +144,6 @@ export class HelpHandler extends plugin {
 
 🎨 作图功能:
   #bnn [内容] - 自定义作图
-  #probnn [内容] - 使用Pro模型作图
   #3bnn [内容] - 使用Gemini3模型作图
   #画图预设列表 - 查看作图预设列表
   #画图预设列表pro - 查看详细预设列表
