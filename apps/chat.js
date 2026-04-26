@@ -42,10 +42,23 @@ async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
                             subText += " [图片] "
                         }
                     } else if (seg.type === 'forward' && seg.id) {
+                        logger.info(`[AI-Plugin] 发现嵌套合并消息，开始递归展开 (深度${depth + 1})`)
                         const nested = await expandForwardMsg(bot, seg.id, depth + 1, maxDepth)
                         textParts.push(`${indent}  [${sender}] (嵌套消息):`)
                         textParts.push(nested.text)
                         images.push(...nested.images)
+                    } else if ((seg.type === 'json' || seg.type === 'xml') && seg.data) {
+                        const residMatch = seg.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
+                        if (residMatch) {
+                            const nestedResid = residMatch[1]
+                            logger.info(`[AI-Plugin] 从 JSON/XML 中发现嵌套 resid: ${nestedResid}，开始递归展开 (深度${depth + 1})`)
+                            const nested = await expandForwardMsg(bot, nestedResid, depth + 1, maxDepth)
+                            textParts.push(`${indent}  [${sender}] (嵌套消息):`)
+                            textParts.push(nested.text)
+                            images.push(...nested.images)
+                        }
+                    } else {
+                        logger.debug(`[AI-Plugin] 未处理的消息段类型: ${seg.type}`, JSON.stringify(seg).slice(0, 200))
                     }
                 }
                 if (subText.trim()) {
