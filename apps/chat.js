@@ -74,15 +74,7 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
         } else if (seg.type === 'forward') {
             const nestedId = seg.id || seg.data?.id
             const nestedContent = seg.data?.content || seg.content
-            if (nestedId) {
-                logger.info(`[AI-Plugin] 发现嵌套合并消息 (type=forward, id=${nestedId})，开始递归展开 (深度${depth + 1})`)
-                const nested = await expandForwardMsg(bot, nestedId, depth + 1, maxDepth)
-                if (subText.trim()) {
-                    textParts.push(`${indent}[${sender}] (嵌套消息):`)
-                    textParts.push(nested.text)
-                }
-                images.push(...nested.images)
-            } else if (Array.isArray(nestedContent)) {
+            if (Array.isArray(nestedContent)) {
                 logger.info(`[AI-Plugin] 发现内联合并消息 (type=forward, 内联content)，开始递归展开 (深度${depth + 1})`)
                 for (const nestedMsg of nestedContent) {
                     const nestedSender = nestedMsg.nickname || nestedMsg.sender?.nickname || sender
@@ -97,6 +89,14 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
                     textParts.push(`${indent}[${sender}]: ${subText}`)
                     subText = ""
                 }
+            } else if (nestedId) {
+                logger.info(`[AI-Plugin] 发现嵌套合并消息 (type=forward, id=${nestedId})，开始递归展开 (深度${depth + 1})`)
+                const nested = await expandForwardMsg(bot, nestedId, depth + 1, maxDepth)
+                if (subText.trim()) {
+                    textParts.push(`${indent}[${sender}] (嵌套消息):`)
+                    textParts.push(nested.text)
+                }
+                images.push(...nested.images)
             }
         } else if ((seg.type === 'json' || seg.type === 'xml') && seg.data) {
             const residMatch = seg.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
