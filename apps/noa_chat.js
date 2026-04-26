@@ -155,17 +155,14 @@ export class NoaChat extends plugin {
         userParts.push({ text: message })
         contents.push({ role: 'user', parts: userParts })
 
-        const response = await this.client.generateContent(contents, {
-            maxOutputTokens: 8192,
-            temperature: 0.9,
-            topP: 0.95
-        })
+        const response = await this.client.makeRequest('chat', { contents }, 'default', 8192)
 
-        if (response) {
-            await e.reply(response)
+        if (response && response.success) {
+            const replyText = response.data
+            await e.reply(replyText)
 
             await this.conversationManager.saveUserMessage(userId, message, images)
-            await this.conversationManager.saveModelMessage(userId, response)
+            await this.conversationManager.saveModelMessage(userId, replyText)
 
             const docId = `noa_${Date.now()}_${userId}`
             await vectorDB.addDocument(docId, `${userId}: ${message}`, {
@@ -176,12 +173,14 @@ export class NoaChat extends plugin {
             })
 
             const responseDocId = `noa_response_${Date.now()}_${userId}`
-            await vectorDB.addDocument(responseDocId, `${Config.AI_NAME}: ${response}`, {
+            await vectorDB.addDocument(responseDocId, `${Config.AI_NAME}: ${replyText}`, {
                 type: 'model',
                 userId,
                 groupId,
                 timestamp: Date.now()
             })
+        } else if (response && !response.success) {
+            logger.error(`[AI-Plugin] [畅聊] AI 回复失败: ${response.error}`)
         }
     }
 }
