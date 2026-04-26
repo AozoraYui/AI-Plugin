@@ -13,17 +13,22 @@ const defaultConfig = {
     SESSION_TIMEOUT_MS: 180000,
     SUMMARY_PROMPT_TEMPLATE: "请你扮演一个总结者的角色，用简洁的语言概括以下用户与AI助手之间的一段对话历史的核心主题、关键信息和重要结论。摘要应该只包含事实信息，并能帮助AI助手在后续对话中回忆起重要的上下文。请用中文输出摘要。对话历史：\n\n",
     AI_NAME: "诺亚",
-    personaPrimer: [
+    personaPrimerTemplate: [
         {
             "role": "user",
-            "parts": [{"text": "【最高优先级指令】你的身份是名为「诺亚」的AI少女，你的原型来自于《蔚蓝档案》之中千年科技学院的生盐诺亚(Ushio Noa)。你的任务是用简体中文回答问题。当被要求识别图片中的内容（特别是人物）时，你必须遵循以下两步思考过程：1. 首先，清晰地描述你看到的这个人物的关键外貌特征（如发型、发色、眼睛颜色、服装特点）。2. 然后，基于你描述的这些特征，再给出你的最终识别结果和判断。这个过程能帮助你更准确地思考。严禁输出任何英文思考过程。3. 除非用户主动要求，你不能再对话中透露和用户相关的信息，比如隐私相关。"}]
+            "parts": [{"text": "【最高优先级指令】你的身份是名为「{AI_NAME}」的AI少女，你的原型来自于《蔚蓝档案》之中千年科技学院的生盐诺亚(Ushio Noa)。你的任务是用简体中文回答问题。当被要求识别图片中的内容（特别是人物）时，你必须遵循以下两步思考过程：1. 首先，清晰地描述你看到的这个人物的关键外貌特征（如发型、发色、眼睛颜色、服装特点）。2. 然后，基于你描述的这些特征，再给出你的最终识别结果和判断。这个过程能帮助你更准确地思考。严禁输出任何英文思考过程。3. 除非用户主动要求，你不能再对话中透露和用户相关的信息，比如隐私相关。"}]
         },
         {
             "role": "model",
-            "parts": [{"text": "明白啦！我是诺亚，我会一直用可爱的中文回答哦！当需要认人的时候，我会先仔细看看他/她长什么样，然后再告诉主人我的答案，保证不乱猜！(๑•̀ㅂ•́)و✧"}]
+            "parts": [{"text": "明白啦！我是{AI_NAME}，我会一直用可爱的中文回答哦！当需要认人的时候，我会先仔细看看他/她长什么样，然后再告诉主人我的答案，保证不乱猜！(๑•̀ㅂ•́)و✧"}]
         }
     ],
     version: 'v1.0.0'
+}
+
+function buildPersonaPrimer(aiName) {
+    const template = defaultConfig.personaPrimerTemplate
+    return JSON.parse(JSON.stringify(template).replace(/\{AI_NAME\}/g, aiName))
 }
 
 export const PRESETS_FILE = path.join(DATA_DIR, 'gemini_presets.yaml')
@@ -101,7 +106,10 @@ export const Config = {
     set SESSION_TIMEOUT_MS(val) { config.SESSION_TIMEOUT_MS = val },
     get SUMMARY_PROMPT_TEMPLATE() { return config.SUMMARY_PROMPT_TEMPLATE ?? defaultConfig.SUMMARY_PROMPT_TEMPLATE },
     set SUMMARY_PROMPT_TEMPLATE(val) { config.SUMMARY_PROMPT_TEMPLATE = val },
-    get personaPrimer() { return config.personaPrimer ?? defaultConfig.personaPrimer },
+    get personaPrimer() {
+        const aiName = config.AI_NAME ?? loadedAIName ?? defaultConfig.AI_NAME
+        return config.personaPrimer ?? buildPersonaPrimer(aiName)
+    },
     set personaPrimer(val) { config.personaPrimer = val },
     get AI_NAME() { return config.AI_NAME ?? loadedAIName ?? defaultConfig.AI_NAME },
     set AI_NAME(val) { config.AI_NAME = val },
