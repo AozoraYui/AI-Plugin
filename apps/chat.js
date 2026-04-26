@@ -248,6 +248,19 @@ export class ChatHandler extends plugin {
 
             let contents = [...Config.personaPrimer]
 
+            // 添加当前服务器时间
+            const now = new Date()
+            const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000)
+            const timeStr = beijingTime.toISOString().replace('T', ' ').substring(0, 19) + ' (北京时间)'
+            contents.push({
+                "role": "user",
+                "parts": [{ "text": `【当前时间】现在是北京时间：${timeStr}。请基于这个时间信息来回答用户关于时间的问题。` }]
+            })
+            contents.push({
+                "role": "model",
+                "parts": [{ "text": "好的，我已经知道现在的时间了！" }]
+            })
+
             if (checkpoint) {
                 contents.push({
                     "role": "user",
