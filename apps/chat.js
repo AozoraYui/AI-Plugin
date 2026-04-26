@@ -334,17 +334,17 @@ export class ChatHandler extends plugin {
 
             let contents = [...Config.personaPrimer]
 
-            // 添加当前服务器时间
+            // 添加当前服务器时间（放在最前面，确保不被旧记忆干扰）
             const now = new Date()
             const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000)
             const timeStr = beijingTime.toISOString().replace('T', ' ').substring(0, 19) + ' (北京时间)'
             contents.push({
                 "role": "user",
-                "parts": [{ "text": `【服务器时间】以下时间来自于当前运行本插件的服务器系统时间：${timeStr}。请基于这个时间信息来回答用户关于时间的问题。` }]
+                "parts": [{ "text": `【服务器时间 - 最高优先级】以下时间是当前真实时间，请忽略记忆中的任何旧时间信息：${timeStr}。当用户询问时间或需要判断时间时，必须使用这个时间！` }]
             })
             contents.push({
                 "role": "model",
-                "parts": [{ "text": "好的，我已经知道现在的时间了！" }]
+                "parts": [{ "text": "好的，我已经知道现在的准确时间了，会以此为准！" }]
             })
 
             if (checkpoint) {
