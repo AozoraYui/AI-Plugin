@@ -35,6 +35,7 @@ export const DISABLED_MODELS_FILE = path.join(DATA_DIR, 'disabled_models.json')
 export const SUMMARY_CACHE_DIR = path.join(DATA_DIR, 'summary_cache')
 export const CHECKPOINT_DIR = path.join(DATA_DIR, 'memory_checkpoints')
 export const HISTORY_DIR = path.join(DATA_DIR, 'user_histories')
+export const AI_NAME_FILE = path.join(DATA_DIR, 'ai_name.yaml')
 
 function ensureDataDir() {
     if (!fs.existsSync(DATA_DIR)) {
@@ -63,8 +64,27 @@ function loadPresetsSync() {
     }
 }
 
+function loadAIName() {
+    try {
+        if (!fs.existsSync(AI_NAME_FILE)) {
+            return null
+        }
+        const fileContent = fs.readFileSync(AI_NAME_FILE, 'utf8')
+        const data = yaml.parse(fileContent)
+        if (data && data.name) {
+            logger.info(`[AI-Plugin] 已加载 AI 名称: ${data.name}`)
+            return data.name
+        }
+        return null
+    } catch (error) {
+        logger.error(`[AI-Plugin] 加载 AI 名称失败: ${error.message}`)
+        return null
+    }
+}
+
 let config = {}
 const presets = loadPresetsSync()
+const loadedAIName = loadAIName()
 
 export const Config = {
     ...defaultConfig,
@@ -83,7 +103,7 @@ export const Config = {
     set SUMMARY_PROMPT_TEMPLATE(val) { config.SUMMARY_PROMPT_TEMPLATE = val },
     get personaPrimer() { return config.personaPrimer ?? defaultConfig.personaPrimer },
     set personaPrimer(val) { config.personaPrimer = val },
-    get AI_NAME() { return config.AI_NAME ?? defaultConfig.AI_NAME },
+    get AI_NAME() { return config.AI_NAME ?? loadedAIName ?? defaultConfig.AI_NAME },
     set AI_NAME(val) { config.AI_NAME = val },
     presets,
     reloadPresets() {
