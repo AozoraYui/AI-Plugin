@@ -94,22 +94,28 @@ export class ChatHandler extends plugin {
                                     for (const subMsg of details.slice(0, 100)) {
                                         const sender = subMsg.nickname || subMsg.sender?.nickname || "未知用户"
                                         let subText = ""
-                                        if (subMsg.message) {
-                                            for (const seg of subMsg.message) {
+                                        const msgArray = subMsg.content || subMsg.message
+
+                                        if (Array.isArray(msgArray)) {
+                                            for (const seg of msgArray) {
                                                 if (seg.type === 'text') {
                                                     subText += seg.data?.text || seg.text || ''
                                                 } else if (seg.type === 'image') {
                                                     const imgUrl = seg.data?.url || seg.url
                                                     if (imgUrl) {
                                                         forwardImages.push(imgUrl)
+                                                        subText += " [图片] "
                                                     }
                                                 }
                                             }
+                                        } else if (typeof msgArray === 'string') {
+                                            subText = msgArray
                                         }
-                                        if (subText) {
+                                        if (subText.trim()) {
                                             forwardContent += `[${sender}]: ${subText}\n`
                                         }
                                     }
+                                    forwardContent += "--- [合并转发结束] ---\n"
                                 }
                             } catch (err) {
                                 logger.warn('[AI-Plugin] 展开合并转发失败:', err)
@@ -183,7 +189,7 @@ export class ChatHandler extends plugin {
             const currentUserTurnParts = []
 
             // 限制图片数量和大小，防止请求体过大
-            const MAX_IMAGES = 32
+            const MAX_IMAGES = 100
             const MAX_IMAGE_SIZE_MB = 4 // 单张图片最大 4MB
             if (allImages.length > 0) {
                 const imagesToProcess = allImages.slice(0, MAX_IMAGES)
