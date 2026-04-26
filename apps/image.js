@@ -235,7 +235,7 @@ export class ImageHandler extends plugin {
 
         const forwardMsg = await Bot.makeForwardMsg(allForwardMsgs.map(msg => ({
             user_id: Bot.uin,
-            nickname: "诺亚",
+            nickname: Config.AI_NAME,
             message: msg
         })))
 
@@ -259,7 +259,7 @@ export class ImageHandler extends plugin {
 
                 forwardMsgNodes.push({
                     user_id: Bot.uin,
-                    nickname: "诺亚",
+                    nickname: Config.AI_NAME,
                     message: `🎨 AI 作图预设 (Pro - 详细版)\n(第 ${page} 页 / 共 ${totalPages} 页)`
                 })
 
@@ -275,7 +275,7 @@ export class ImageHandler extends plugin {
 
                     forwardMsgNodes.push({
                         user_id: Bot.uin,
-                        nickname: "诺亚",
+                        nickname: Config.AI_NAME,
                         message: msg
                     })
                 }

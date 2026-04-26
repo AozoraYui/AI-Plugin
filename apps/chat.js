@@ -17,8 +17,8 @@ export class ChatHandler extends plugin {
             rule: [
                 { reg: /^#([a-zA-Z0-9]*)(?:s|single)([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleSingleChat' },
                 { reg: /^#([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleChat' },
-                { reg: /^#导出诺亚记忆$/i, fnc: 'exportMyMemory' },
-                { reg: /^#导出诺亚全部记忆$/i, fnc: 'exportAllMemory', permission: 'master' },
+                { reg: new RegExp(`^#导出${Config.AI_NAME}记忆$`, 'i'), fnc: 'exportMyMemory' },
+                { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆$`, 'i'), fnc: 'exportAllMemory', permission: 'master' },
                 { reg: /^#gemini思考(开启|关闭)$/i, fnc: 'switchThinkingMode', permission: 'master' },
             ]
         })
@@ -160,9 +160,9 @@ export class ChatHandler extends plugin {
             const userId = e.user_id
 
             if (!isSingleMode) {
-                await e.reply(`诺亚思考中 (使用 ${modelGroupKey} 模型组)…`, true)
+                await e.reply(`${Config.AI_NAME}思考中 (使用 ${modelGroupKey} 模型组)…`, true)
             } else {
-                await e.reply(`诺亚思考中 (单次对话模式，使用 ${modelGroupKey} 模型组)…`, true)
+                await e.reply(`${Config.AI_NAME}思考中 (单次对话模式，使用 ${modelGroupKey} 模型组)…`, true)
             }
             await setMsgEmojiLike(e, 282)
 
@@ -390,13 +390,13 @@ export class ChatHandler extends plugin {
                             // 最后一段，加上耗时信息
                             forwardMsgNodes.push({
                                 user_id: Bot.uin,
-                                nickname: `诺亚 (Part ${part})`,
+                                nickname: `${Config.AI_NAME} (Part ${part})`,
                                 message: `${chunk}\n\n${footerInfo}`
                             })
                         } else {
                             forwardMsgNodes.push({
                                 user_id: Bot.uin,
-                                nickname: `诺亚 (Part ${part})`,
+                                nickname: `${Config.AI_NAME} (Part ${part})`,
                                 message: chunk
                             })
                         }
@@ -442,7 +442,7 @@ export class ChatHandler extends plugin {
     }
 
     async exportAllMemory(e) {
-        await e.reply("收到最高权限指令，开始导出诺亚的全部记忆… 这可能需要一点时间喵~ ⏳")
+        await e.reply(`收到最高权限指令，开始导出${Config.AI_NAME}的全部记忆… 这可能需要一点时间喵~ ⏳`)
         try {
             const result = await this.conversationManager.exportMemory(e, null, 'all')
             if (result.success) {

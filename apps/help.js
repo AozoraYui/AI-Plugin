@@ -1,4 +1,5 @@
 import plugin from '../../../lib/plugins/plugin.js'
+import { Config } from '../utils/config.js'
 
 export class HelpHandler extends plugin {
     constructor() {
@@ -14,13 +15,14 @@ export class HelpHandler extends plugin {
     }
 
     async showHelp(e) {
+        const aiName = Config.AI_NAME
         const msg1_header = `
 喵~ 欢迎使用~
-这里是诺亚的万能口袋哦~ (ฅ'ω'ฅ)`
+这里是${aiName}的万能口袋哦~ (ฅ'ω'ฅ)`
 
         const msg2_chat = `
 - - - - - - - - - - - - - - - - -
-💬 智能对话 (诺亚)
+💬 智能对话 (${aiName})
 - - - - - - - - - - - - - - - - -
 ✨ 三档模型，随心切换 ✨
 > #gm [内容]
@@ -37,7 +39,7 @@ export class HelpHandler extends plugin {
   > 示例: #gm 你好呀！
   > 示例: #progm 这张图里是什么？ [图片]
 
-> #导出诺亚记忆
+> #导出${aiName}记忆
   导出该用户的对话记忆。`
 
         const msg3_drawing = `
@@ -121,7 +123,7 @@ export class HelpHandler extends plugin {
   查看插件运行状态。
 > #gemini思考开启/关闭
   切换是否显示AI的思考过程。
-> #导出诺亚全部记忆
+> #导出${aiName}全部记忆
   导出所有用户的对话记忆。`
 
         const msg6_tips = `
@@ -153,7 +155,7 @@ export class HelpHandler extends plugin {
         try {
             const forwardMsg = await Bot.makeForwardMsg(forwardMsgArr.map(msg => ({
                 user_id: Bot.uin,
-                nickname: "诺亚AI助手",
+                nickname: `${aiName}AI助手`,
                 message: msg.trim()
             })))
             await e.reply(forwardMsg, false)
