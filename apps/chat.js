@@ -118,8 +118,11 @@ export class ChatHandler extends plugin {
 
                         if (m.type === 'text') {
                             replyText += m.text || ''
-                        } else if (m.type === 'image' && m.url) {
-                            allImages.push(m.url)
+                        } else if (m.type === 'image') {
+                            const imgUrl = m.data?.url || m.url
+                            if (imgUrl) {
+                                allImages.push(imgUrl)
+                            }
                         }
                     }
 
@@ -142,7 +145,7 @@ export class ChatHandler extends plugin {
                 }
             }
 
-            const currentImages = e.message.filter(m => m.type === "image").map(m => m.url)
+            const currentImages = e.message.filter(m => m.type === "image").map(m => m.data?.url || m.url).filter(url => url)
             if (currentImages.length > 0) allImages = allImages.concat(currentImages)
 
             if (!userMessage && allImages.length === 0) return e.reply('请输入内容或发送图片呀', true)
