@@ -24,6 +24,8 @@ export class ManagementHandler extends plugin {
                 { reg: /^#gemini权限模式\s*(whitelist|blacklist)$/i, fnc: 'switchAccessMode', permission: 'master' },
                 { reg: /^#gemini权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(\d+)$/i, fnc: 'modifyAccess', permission: 'master' },
                 { reg: /^#gemini权限列表$/i, fnc: 'listAccessControl', permission: 'master' },
+                { reg: /^#gemini信任群(添加|删除)\s*(\d+)$/i, fnc: 'modifyTrustedGroup', permission: 'master' },
+                { reg: /^#gemini信任群列表$/i, fnc: 'listTrustedGroups', permission: 'master' },
                 { reg: /^#gemini状态$/i, fnc: 'showStatus', permission: 'master' },
             ]
         })
@@ -358,6 +360,9 @@ export class ManagementHandler extends plugin {
             const accessMode = accessConfig.mode === 'whitelist' ? '白名单模式' : '黑名单模式'
             const thinkingMode = accessConfig.show_thinking ? '✅ 开启 (Raw模式)' : '🚫 关闭 (自动清洗)'
 
+            const trustedGroups = Config.trustedGroups
+            const trustedGroupCount = trustedGroups.length
+
             const statusPanel = [
                 `====== 🐾 ${Config.AI_NAME}状态面板 🐾 ======`,
                 '🔧 核心配置',
@@ -372,6 +377,7 @@ export class ManagementHandler extends plugin {
                 '🔑 权限与模式',
                 `  - 权限控制: ${accessMode}`,
                 `  - AI思考过程: ${thinkingMode}`,
+                `  - 信任群聊: ${trustedGroupCount} 个`,
                 '=============================='
             ].join('\n')
 
@@ -382,5 +388,45 @@ export class ManagementHandler extends plugin {
             await e.reply(`❌ 获取状态失败: ${err.message}`)
         }
         return true
+    }
+
+    async modifyTrustedGroup(e) {
+        const match = e.msg.match(/^#gemini信任群(添加|删除)\s*(\d+)$/i)
+        if (!match) return
+
+        const action = match[1]
+        const groupId = match[2]
+
+        let trustedGroups = Config.trustedGroups
+
+        if (action === '添加') {
+            if (!trustedGroups.includes(groupId)) {
+                trustedGroups.push(groupId)
+                Config.trustedGroups = trustedGroups
+                await e.reply(`✅ 已将群 ${groupId} 添加到信任群列表`)
+            } else {
+                await e.reply(`⚠️ 群 ${groupId} 已在信任群列表中`)
+            }
+        } else {
+            const index = trustedGroups.indexOf(groupId)
+            if (index !== -1) {
+                trustedGroups.splice(index, 1)
+                Config.trustedGroups = trustedGroups
+                await e.reply(`✅ 已从信任群列表删除群 ${groupId}`)
+            } else {
+                await e.reply(`⚠️ 群 ${groupId} 不在信任群列表中`)
+            }
+        }
+    }
+
+    async listTrustedGroups(e) {
+        const trustedGroups = Config.trustedGroups
+        if (trustedGroups.length === 0) {
+            await e.reply('当前没有信任的群聊')
+        } else {
+            let msg = `--- 信任群聊列表 (${trustedGroups.length}个) ---\n`
+            msg += trustedGroups.join('\n')
+            await e.reply(msg)
+        }
     }
 }

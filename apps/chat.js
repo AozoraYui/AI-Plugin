@@ -334,6 +334,28 @@ export class ChatHandler extends plugin {
 
             let contents = [...Config.personaPrimer]
 
+            // 添加聊天环境提示
+            const trustedGroups = Config.trustedGroups
+            let environmentHint = ""
+            if (e.isGroup) {
+                const groupId = String(e.group_id)
+                if (trustedGroups.includes(groupId)) {
+                    environmentHint = `【当前聊天环境】这是一个受信任的群聊环境（群号：${groupId}）。你可以正常交流，但仍需遵守基本的隐私保护规则。`
+                } else {
+                    environmentHint = `【当前聊天环境】这是一个公开的 QQ 群聊（群号：${groupId}），属于公开场合。请严格遵守隐私保护规则，不要在与用户相关的对话中透露任何个人信息或敏感内容。`
+                }
+            } else {
+                environmentHint = `【当前聊天环境】这是与用户的私聊对话，属于安全环境。可以正常交流。`
+            }
+            contents.push({
+                "role": "user",
+                "parts": [{ "text": environmentHint }]
+            })
+            contents.push({
+                "role": "model",
+                "parts": [{ "text": "好的，我已经了解当前的聊天环境，会根据环境调整我的行为！" }]
+            })
+
             // 添加当前服务器时间
             const now = new Date()
             const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000)
@@ -384,6 +406,15 @@ export class ChatHandler extends plugin {
                 while (currentSizeMB > 5 && history.length > 5) {
                     history = history.slice(-Math.max(5, history.length - 5))
                     contents = [...Config.personaPrimer]
+                    // 重新添加环境提示
+                    contents.push({
+                        "role": "user",
+                        "parts": [{ "text": environmentHint }]
+                    })
+                    contents.push({
+                        "role": "model",
+                        "parts": [{ "text": "好的，我已经了解当前的聊天环境，会根据环境调整我的行为！" }]
+                    })
                     if (checkpoint) {
                         contents.push({
                             "role": "user",
