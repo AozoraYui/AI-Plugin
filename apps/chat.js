@@ -7,7 +7,7 @@ import { ConversationManager } from '../model/conversation.js'
 import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, getTodayDateStr } from '../utils/common.js'
 
-async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
+export async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
     const textParts = []
     const images = []
 
