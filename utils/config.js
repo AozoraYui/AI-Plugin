@@ -3,7 +3,7 @@ import path from 'node:path'
 import yaml from 'yaml'
 
 const _path = process.cwd()
-const DATA_DIR = path.join(_path, 'data', 'ai_assistant')
+export const DATA_DIR = path.join(_path, 'data', 'ai_assistant')
 
 const defaultConfig = {
     USE_PROXY: false,
