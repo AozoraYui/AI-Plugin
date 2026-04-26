@@ -50,6 +50,21 @@ class VectorDBClient {
         }
     }
 
+    killProcessOnPort(port) {
+        try {
+            const result = execSync(`lsof -ti:${port} 2>/dev/null || ss -tlnp | grep ":${port} " | grep -oP 'pid=\K[0-9]+'`, { encoding: 'utf8' }).trim()
+            if (result) {
+                const pids = result.split('\n').filter(Boolean)
+                for (const pid of pids) {
+                    logger.info(`[AI-Plugin] [畅聊] 清理占用端口 ${port} 的进程 PID: ${pid}`)
+                    execSync(`kill -9 ${pid} 2>/dev/null || true`)
+                }
+            }
+        } catch {
+            // 忽略清理失败
+        }
+    }
+
     async init() {
         const noaConfig = Config.noaChatConfig
         if (!noaConfig.enabled) {
@@ -71,6 +86,9 @@ class VectorDBClient {
             logger.warn('[AI-Plugin] [畅聊] Python 依赖未就绪，跳过向量数据库初始化')
             return
         }
+
+        // 清理可能残留的旧进程
+        this.killProcessOnPort(9901)
 
         return new Promise((resolve, reject) => {
             this.pythonProcess = spawn('python3', [PYTHON_SCRIPT, CHROMA_DB_DIR, this.serverUrl], {
