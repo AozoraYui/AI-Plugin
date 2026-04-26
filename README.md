@@ -209,6 +209,7 @@ AI-Plugin/
 | 文件 | 说明 |
 |------|------|
 | `ai_name.yaml` | AI 名称配置（可选，不创建则使用默认值"诺亚"） |
+| `trusted_groups.yaml` | 信任群聊列表（通过 `#gemini信任群添加` 命令自动管理） |
 | `models_config.yaml` | 模型供应商配置 |
 | `model_status.json` | 模型测试状态 |
 | `disabled_models.json` | 禁用的模型列表 |

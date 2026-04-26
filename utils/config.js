@@ -42,6 +42,7 @@ export const SUMMARY_CACHE_DIR = path.join(DATA_DIR, 'summary_cache')
 export const CHECKPOINT_DIR = path.join(DATA_DIR, 'memory_checkpoints')
 export const HISTORY_DIR = path.join(DATA_DIR, 'user_histories')
 export const AI_NAME_FILE = path.join(DATA_DIR, 'ai_name.yaml')
+export const TRUSTED_GROUPS_FILE = path.join(DATA_DIR, 'trusted_groups.yaml')
 
 function ensureDataDir() {
     if (!fs.existsSync(DATA_DIR)) {
@@ -88,9 +89,37 @@ function loadAIName() {
     }
 }
 
+function loadTrustedGroups() {
+    try {
+        if (!fs.existsSync(TRUSTED_GROUPS_FILE)) {
+            return []
+        }
+        const fileContent = fs.readFileSync(TRUSTED_GROUPS_FILE, 'utf8')
+        const data = yaml.parse(fileContent)
+        if (data && Array.isArray(data.groups)) {
+            logger.info(`[AI-Plugin] 已加载 ${data.groups.length} 个信任群聊`)
+            return data.groups
+        }
+        return []
+    } catch (error) {
+        logger.error(`[AI-Plugin] 加载信任群聊失败: ${error.message}`)
+        return []
+    }
+}
+
+function saveTrustedGroups(groups) {
+    try {
+        ensureDataDir()
+        fs.writeFileSync(TRUSTED_GROUPS_FILE, yaml.stringify({ groups }), 'utf8')
+    } catch (error) {
+        logger.error(`[AI-Plugin] 保存信任群聊失败: ${error.message}`)
+    }
+}
+
 let config = {}
 const presets = loadPresetsSync()
 const loadedAIName = loadAIName()
+const loadedTrustedGroups = loadTrustedGroups()
 
 export const Config = {
     ...defaultConfig,
@@ -114,8 +143,8 @@ export const Config = {
     set personaPrimer(val) { config.personaPrimer = val },
     get AI_NAME() { return config.AI_NAME ?? loadedAIName ?? defaultConfig.AI_NAME },
     set AI_NAME(val) { config.AI_NAME = val },
-    get trustedGroups() { return config.trustedGroups ?? defaultConfig.trustedGroups },
-    set trustedGroups(val) { config.trustedGroups = val },
+    get trustedGroups() { return config.trustedGroups ?? loadedTrustedGroups ?? defaultConfig.trustedGroups },
+    set trustedGroups(val) { config.trustedGroups = val; saveTrustedGroups(val) },
     presets,
     reloadPresets() {
         this.presets = loadPresetsSync()
