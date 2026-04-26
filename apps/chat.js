@@ -29,11 +29,19 @@ export class ChatHandler extends plugin {
     async handleSingleChat(e) {
         if (!await checkAccess(e)) return true
 
-        const match = e.msg.match(/^#(s|single)([a-zA-Z0-9]*)gm([\s\S]*)/i)
+        const match = e.msg.match(/^#([a-zA-Z0-9]*)(?:s|single)([a-zA-Z0-9]*)gm([\s\S]*)/i)
         if (!match) return
 
         e._singleMode = true
-        e.msg = `#${match[2]}gm${match[3]}`
+
+        const prefix1 = match[1].toLowerCase()
+        const prefix2 = match[2].toLowerCase()
+
+        let modelPrefix = ''
+        if (prefix1 === 'pro' || prefix1 === '3') modelPrefix = prefix1
+        if (prefix2 === 'pro' || prefix2 === '3') modelPrefix = prefix2
+
+        e.msg = `#${modelPrefix}gm${match[3]}`
         return this.handleChat(e)
     }
 
