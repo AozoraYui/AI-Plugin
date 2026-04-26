@@ -91,6 +91,13 @@ pnpm install
   prompt: "请将图片转换为像素艺术风格"
 ```
 
+**`ai_name.yaml`** - AI 名称配置（可选）
+```yaml
+name: 诺亚
+```
+
+> 💡 如果不创建此文件，将使用默认名称"诺亚"。你可以修改 `name` 字段来自定义 AI 名称。
+
 4. **重启 Yunzai-Bot**
 ```bash
 # 重启后插件会自动加载
@@ -197,6 +204,7 @@ AI-Plugin/
 
 | 文件 | 说明 |
 |------|------|
+| `ai_name.yaml` | AI 名称配置（可选，不创建则使用默认值"诺亚"） |
 | `models_config.yaml` | 模型供应商配置 |
 | `model_status.json` | 模型测试状态 |
 | `disabled_models.json` | 禁用的模型列表 |
