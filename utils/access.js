@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import yaml from 'yaml'
 import { ACCESS_CONTROL_FILE } from './config.js'
+import { Config } from './config.js'
 
 const defaultAccessConfig = {
     mode: 'whitelist',
@@ -43,7 +44,7 @@ export async function checkAccess(e) {
     }
 
     const config = getAccessConfig()
-    const unauthorizedMsg = "抱歉哦，诺亚暂时还不能在这里或为你提供这项服务呢~ (´-ω-`)"
+    const unauthorizedMsg = "抱歉哦，" + Config.AI_NAME + "暂时还不能在这里或为你提供这项服务呢~ (´-ω-`)"
 
     if (e.isGroup) {
         const groupId = String(e.group_id)

@@ -173,7 +173,7 @@ export class ManagementHandler extends plugin {
 
     async listAccessControl(e) {
         const config = getAccessConfig()
-        let msg = `--- 诺亚权限配置 ---\n`
+        let msg = `--- ${Config.AI_NAME}权限配置 ---\n`
         msg += `当前模式: ${config.mode.toUpperCase()} (主人不受限)\n\n`
 
         msg += `✅ 白名单群聊 (${config.whitelist_groups.length}个):\n`
@@ -260,7 +260,7 @@ export class ManagementHandler extends plugin {
         
         const forwardMsgNodes = [{ 
             user_id: Bot.uin, 
-            nickname: "诺亚", 
+            nickname: Config.AI_NAME, 
             message: `🧠 思考过程显示: ${thinkingStatus}`
         }]
         
@@ -325,7 +325,7 @@ export class ManagementHandler extends plugin {
             if (drawCount > 0) groupMsg += drawMsg
             
             if (chatCount > 0 || drawCount > 0) {
-                forwardMsgNodes.push({ user_id: Bot.uin, nickname: "诺亚", message: groupMsg })
+                forwardMsgNodes.push({ user_id: Bot.uin, nickname: Config.AI_NAME, message: groupMsg })
             }
         }
 
@@ -359,7 +359,7 @@ export class ManagementHandler extends plugin {
             const thinkingMode = accessConfig.show_thinking ? '✅ 开启 (Raw模式)' : '🚫 关闭 (自动清洗)'
 
             const statusPanel = [
-                '====== 🐾 诺亚状态面板 🐾 ======',
+                `====== 🐾 ${Config.AI_NAME}状态面板 🐾 ======`,
                 '🔧 核心配置',
                 `  - API供应商: ${providerCount} 个`,
                 `  - 作图预设: ${presetCount} 个`,

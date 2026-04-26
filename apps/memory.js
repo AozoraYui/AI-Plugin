@@ -39,7 +39,7 @@ export class MemoryHandler extends plugin {
 
         let dayContent = ""
         for (const turn of dayHistory) {
-            const role = turn.role === 'user' ? '用户' : '诺亚'
+            const role = turn.role === 'user' ? '用户' : Config.AI_NAME
             const text = turn.parts.map(p => p.text).join(' ')
             if (text) dayContent += `${role}: ${text}\n`
         }
@@ -133,7 +133,7 @@ ${dayContent}`
                     const dayHistory = await this.conversationManager.db.getConversationHistoryByDate(userIdStr, dateDir)
                     let todayText = ""
                     for (const turn of dayHistory) {
-                        const role = turn.role === 'user' ? '用户' : '诺亚'
+                        const role = turn.role === 'user' ? '用户' : Config.AI_NAME
                         const text = turn.parts.map(p => p.text).join(' ')
                         if (text) todayText += `${role}: ${text}\n`
                     }
@@ -203,7 +203,7 @@ ${dayContent}`
                 const forwardMsgNodes = [
                     {
                         user_id: Bot.uin,
-                        nickname: "诺亚",
+                        nickname: Config.AI_NAME,
                         message: `✅ 锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s${tokenInfo}\n🔗 继承自: ${baseCheckpointDate || '无 (重构)'}`
                     }
                 ]
@@ -262,7 +262,7 @@ ${dayContent}`
         // 从数据库获取所有日期
         const dateDirs = await this.conversationManager.db.getDistinctDates(userIdStr)
         if (dateDirs.length === 0) {
-            return e.reply("诺亚找遍了柜子，目前还没有任何按日期的历史存档呢。")
+            return e.reply(`${Config.AI_NAME}找遍了柜子，目前还没有任何按日期的历史存档呢。`)
         }
 
         dateDirs.sort()
@@ -308,7 +308,7 @@ ${dayContent}`
         }
 
         if (listContent.length === 0) {
-            return e.reply("诺亚还没有关于你的任何按日存档哦。多和我聊聊天吧！")
+            return e.reply(`${Config.AI_NAME}还没有关于你的任何按日存档哦。多和我聊聊天吧！`)
         }
 
         listContent.reverse()
@@ -318,7 +318,7 @@ ${dayContent}`
         const forwardMsgNodes = [
             {
                 user_id: Bot.uin,
-                nickname: "诺亚",
+                nickname: Config.AI_NAME,
                 message: header + "\n" + listContent.join("\n")
             },
             {

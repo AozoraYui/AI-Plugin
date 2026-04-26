@@ -81,7 +81,7 @@ export class AIScheduler {
 
             let dayContent = ""
             for (const turn of dayHistory) {
-                const role = turn.role === 'user' ? '用户' : '诺亚'
+                const role = turn.role === 'user' ? '用户' : global.AIPluginConfig?.AI_NAME || '诺亚'
                 const text = turn.parts.map(p => p.text).join(' ')
                 if (text) dayContent += `${role}: ${text}\n`
             }
@@ -159,7 +159,7 @@ ${dayContent}`
 
             let dayContent = ""
             for (const turn of dayHistory) {
-                const role = turn.role === 'user' ? '用户' : '诺亚'
+                const role = turn.role === 'user' ? '用户' : global.AIPluginConfig?.AI_NAME || '诺亚'
                 const text = turn.parts.map(p => p.text).join(' ')
                 if (text) dayContent += `${role}: ${text}\n`
             }

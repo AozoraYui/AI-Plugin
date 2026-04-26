@@ -12,6 +12,7 @@ const defaultConfig = {
     HISTORY_TO_KEEP_AFTER_SUMMARY: 10,
     SESSION_TIMEOUT_MS: 180000,
     SUMMARY_PROMPT_TEMPLATE: "请你扮演一个总结者的角色，用简洁的语言概括以下用户与AI助手之间的一段对话历史的核心主题、关键信息和重要结论。摘要应该只包含事实信息，并能帮助AI助手在后续对话中回忆起重要的上下文。请用中文输出摘要。对话历史：\n\n",
+    AI_NAME: "诺亚",
     personaPrimer: [
         {
             "role": "user",
@@ -82,6 +83,8 @@ export const Config = {
     set SUMMARY_PROMPT_TEMPLATE(val) { config.SUMMARY_PROMPT_TEMPLATE = val },
     get personaPrimer() { return config.personaPrimer ?? defaultConfig.personaPrimer },
     set personaPrimer(val) { config.personaPrimer = val },
+    get AI_NAME() { return config.AI_NAME ?? defaultConfig.AI_NAME },
+    set AI_NAME(val) { config.AI_NAME = val },
     presets,
     reloadPresets() {
         this.presets = loadPresetsSync()
