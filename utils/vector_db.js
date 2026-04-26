@@ -106,9 +106,15 @@ class VectorDBClient {
 
             setTimeout(() => {
                 if (!this.isReady) {
-                    reject(new Error('向量数据库启动超时'))
+                    logger.warn('[AI-Plugin] [畅聊] 向量数据库启动较慢，正在继续等待...')
                 }
             }, 60000)
+
+            setTimeout(() => {
+                if (!this.isReady) {
+                    reject(new Error('向量数据库启动超时（180秒）'))
+                }
+            }, 180000)
         })
     }
 
@@ -135,7 +141,10 @@ class VectorDBClient {
     }
 
     async search(query, limit = 10) {
-        await this.waitForReady()
+        if (!this.isReady) {
+            logger.debug('[AI-Plugin] [畅聊] 向量数据库未就绪，跳过历史检索')
+            return []
+        }
         try {
             const response = await fetch(`${this.serverUrl}/search`, {
                 method: 'POST',

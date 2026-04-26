@@ -22,10 +22,11 @@ MODEL_NAME = 'shibing624/text2vec-base-chinese'
 embedding_model = None
 chroma_client = None
 collection = None
+is_ready = False
 
 def init_model():
     """初始化向量模型和 ChromaDB"""
-    global embedding_model, chroma_client, collection
+    global embedding_model, chroma_client, collection, is_ready
     
     print(f"Loading embedding model: {MODEL_NAME}...", flush=True)
     embedding_model = SentenceTransformer(MODEL_NAME)
@@ -41,6 +42,9 @@ def init_model():
     except:
         collection = chroma_client.create_collection(name="ai_conversations")
         print("Created new collection", flush=True)
+    
+    is_ready = True
+    print("Vector database ready", flush=True)
 
 def get_embedding(text):
     """获取文本向量"""
@@ -54,11 +58,27 @@ class VectorDBHandler(BaseHTTPRequestHandler):
             self.handle_add()
         elif self.path == '/search':
             self.handle_search()
+        elif self.path == '/health':
+            self.handle_health()
         else:
             self.send_error(404)
     
+    def handle_health(self):
+        """健康检查"""
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps({'ready': is_ready}).encode())
+    
     def handle_add(self):
         """添加文档到向量数据库"""
+        if not is_ready:
+            self.send_response(503)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': 'Service not ready'}).encode())
+            return
+        
         content_length = int(self.headers['Content-Length'])
         body = self.rfile.read(content_length)
         data = json.loads(body)
@@ -85,6 +105,13 @@ class VectorDBHandler(BaseHTTPRequestHandler):
     
     def handle_search(self):
         """搜索相似文档"""
+        if not is_ready:
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'results': []}).encode())
+            return
+        
         content_length = int(self.headers['Content-Length'])
         body = self.rfile.read(content_length)
         data = json.loads(body)
@@ -124,10 +151,13 @@ class VectorDBHandler(BaseHTTPRequestHandler):
 
 def main():
     """主函数"""
-    init_model()
-    
+    # 先启动 HTTP 服务
     server = HTTPServer((SERVER_HOST, SERVER_PORT), VectorDBHandler)
     print(f"Server ready at http://{SERVER_HOST}:{SERVER_PORT}", flush=True)
+    
+    # 后台加载模型
+    model_thread = threading.Thread(target=init_model, daemon=True)
+    model_thread.start()
     
     try:
         server.serve_forever()
