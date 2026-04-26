@@ -118,6 +118,14 @@ export class HelpHandler extends plugin {
 > #gemini权限添加/删除 白名单群 [群号]
 > #gemini权限添加/删除 黑名单群 [群号]
 
+【 聊天环境管理 】
+> #gemini信任群添加 [群号]
+  将指定群聊添加到信任列表，该群内AI可更自由交流。
+> #gemini信任群删除 [群号]
+  从信任列表移除指定群聊。
+> #gemini信任群列表
+  查看当前所有信任的群聊。
+
 【 其他 】
 > #gemini状态
   查看插件运行状态。
