@@ -254,7 +254,7 @@ export class ChatHandler extends plugin {
             const timeStr = beijingTime.toISOString().replace('T', ' ').substring(0, 19) + ' (北京时间)'
             contents.push({
                 "role": "user",
-                "parts": [{ "text": `【当前时间】现在是北京时间：${timeStr}。请基于这个时间信息来回答用户关于时间的问题。` }]
+                "parts": [{ "text": `【服务器时间】以下时间来自于当前运行本插件的服务器系统时间：${timeStr}。请基于这个时间信息来回答用户关于时间的问题。` }]
             })
             contents.push({
                 "role": "model",
