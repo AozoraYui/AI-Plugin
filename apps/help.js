@@ -126,6 +126,14 @@ export class HelpHandler extends plugin {
 > #gemini信任群列表
   查看当前所有信任的群聊。
 
+【 畅聊模式 】
+> #gemini畅聊开启
+  开启畅聊模式，${aiName}会监听所有消息，当消息包含"${aiName}"或"noa"时自动回复。
+> #gemini畅聊关闭
+  关闭畅聊模式，${aiName}只响应带#的指令消息。
+> #gemini畅聊状态
+  查看畅聊模式当前配置状态。
+
 【 其他 】
 > #gemini状态
   查看插件运行状态。

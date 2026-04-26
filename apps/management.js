@@ -26,6 +26,8 @@ export class ManagementHandler extends plugin {
                 { reg: /^#gemini权限列表$/i, fnc: 'listAccessControl', permission: 'master' },
                 { reg: /^#gemini信任群(添加|删除)\s*(\d+)$/i, fnc: 'modifyTrustedGroup', permission: 'master' },
                 { reg: /^#gemini信任群列表$/i, fnc: 'listTrustedGroups', permission: 'master' },
+                { reg: /^#gemini畅聊(开启|关闭)$/i, fnc: 'toggleNoaChat', permission: 'master' },
+                { reg: /^#gemini畅聊状态$/i, fnc: 'showNoaChatStatus', permission: 'master' },
                 { reg: /^#gemini状态$/i, fnc: 'showStatus', permission: 'master' },
             ]
         })
@@ -428,5 +430,38 @@ export class ManagementHandler extends plugin {
             msg += trustedGroups.join('\n')
             await e.reply(msg)
         }
+    }
+
+    async toggleNoaChat(e) {
+        const match = e.msg.match(/^#gemini畅聊(开启|关闭)$/i)
+        if (!match) return
+
+        const action = match[1]
+        const noaConfig = Config.noaChatConfig
+
+        if (action === '开启') {
+            noaConfig.enabled = true
+            Config.noaChatConfig = noaConfig
+            await e.reply('✅ 畅聊模式已开启，诺亚现在会监听所有消息啦！')
+        } else {
+            noaConfig.enabled = false
+            Config.noaChatConfig = noaConfig
+            await e.reply('✅ 畅聊模式已关闭，诺亚现在只响应指令消息')
+        }
+    }
+
+    async showNoaChatStatus(e) {
+        const noaConfig = Config.noaChatConfig
+        const status = noaConfig.enabled ? '✅ 已开启' : '❌ 已关闭'
+        const triggerKeywords = noaConfig.triggerKeywords.join('、')
+        const replyRateLimit = noaConfig.replyRateLimit || 8
+
+        let msg = `--- 畅聊模式状态 ---\n`
+        msg += `状态: ${status}\n`
+        msg += `触发关键词: ${triggerKeywords}\n`
+        msg += `回复频率限制: ${replyRateLimit} 次/分钟\n`
+        msg += `向量模型: ${noaConfig.vectorModel || '未配置'}`
+
+        await e.reply(msg)
     }
 }

@@ -43,6 +43,7 @@ export const CHECKPOINT_DIR = path.join(DATA_DIR, 'memory_checkpoints')
 export const HISTORY_DIR = path.join(DATA_DIR, 'user_histories')
 export const AI_NAME_FILE = path.join(DATA_DIR, 'ai_name.yaml')
 export const TRUSTED_GROUPS_FILE = path.join(DATA_DIR, 'trusted_groups.yaml')
+export const NOA_CHAT_CONFIG_FILE = path.join(DATA_DIR, 'noa_chat_config.yaml')
 
 function ensureDataDir() {
     if (!fs.existsSync(DATA_DIR)) {
@@ -116,10 +117,44 @@ function saveTrustedGroups(groups) {
     }
 }
 
+function loadNoaChatConfig() {
+    try {
+        if (!fs.existsSync(NOA_CHAT_CONFIG_FILE)) {
+            const defaultNoaConfig = {
+                enabled: false,
+                replyRateLimit: 8,
+                triggerKeywords: ["诺亚", "noa"],
+                vectorModel: "shibing624/text2vec-base-chinese"
+            }
+            ensureDataDir()
+            fs.writeFileSync(NOA_CHAT_CONFIG_FILE, yaml.stringify(defaultNoaConfig), 'utf8')
+            logger.info('[AI-Plugin] 已创建畅聊模式默认配置')
+            return defaultNoaConfig
+        }
+        const fileContent = fs.readFileSync(NOA_CHAT_CONFIG_FILE, 'utf8')
+        const data = yaml.parse(fileContent)
+        logger.info(`[AI-Plugin] 已加载畅聊模式配置: 启用=${data.enabled}`)
+        return data
+    } catch (error) {
+        logger.error(`[AI-Plugin] 加载畅聊模式配置失败: ${error.message}`)
+        return { enabled: false, replyRateLimit: 8, triggerKeywords: ["诺亚", "noa"] }
+    }
+}
+
+function saveNoaChatConfig(config) {
+    try {
+        ensureDataDir()
+        fs.writeFileSync(NOA_CHAT_CONFIG_FILE, yaml.stringify(config), 'utf8')
+    } catch (error) {
+        logger.error(`[AI-Plugin] 保存畅聊模式配置失败: ${error.message}`)
+    }
+}
+
 let config = {}
 const presets = loadPresetsSync()
 const loadedAIName = loadAIName()
 const loadedTrustedGroups = loadTrustedGroups()
+const loadedNoaChatConfig = loadNoaChatConfig()
 
 export const Config = {
     ...defaultConfig,
@@ -145,6 +180,8 @@ export const Config = {
     set AI_NAME(val) { config.AI_NAME = val },
     get trustedGroups() { return config.trustedGroups ?? loadedTrustedGroups ?? defaultConfig.trustedGroups },
     set trustedGroups(val) { config.trustedGroups = val; saveTrustedGroups(val) },
+    get noaChatConfig() { return config.noaChatConfig ?? loadedNoaChatConfig },
+    set noaChatConfig(val) { config.noaChatConfig = val; saveNoaChatConfig(val) },
     presets,
     reloadPresets() {
         this.presets = loadPresetsSync()

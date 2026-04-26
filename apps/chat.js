@@ -122,6 +122,41 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
     return { text: textParts.join('\n'), images }
 }
 
+export async function extractImagesFromMsg(e) {
+    const allImages = []
+
+    if (e.message && Array.isArray(e.message)) {
+        const currentImages = e.message.filter(m => m.type === "image").map(m => m.data?.url || m.url).filter(url => url)
+        if (currentImages.length > 0) allImages.push(...currentImages)
+    }
+
+    if (e.reply_message) {
+        const replyMsg = e.reply_message
+        if (replyMsg.message && Array.isArray(replyMsg.message)) {
+            for (const m of replyMsg.message) {
+                if (m.type === 'image') {
+                    const imgUrl = m.data?.url || m.url
+                    if (imgUrl) allImages.push(imgUrl)
+                } else if (m.type === 'forward') {
+                    const resid = m.data?.id || m.id
+                    if (resid) {
+                        try {
+                            const expanded = await expandForwardMsg(e.bot, resid)
+                            if (expanded.images.length > 0) {
+                                allImages.push(...expanded.images)
+                            }
+                        } catch (err) {
+                            logger.warn(`[AI-Plugin] 展开引用合并消息失败: ${err.message}`)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return allImages
+}
+
 export class ChatHandler extends plugin {
     constructor() {
         super({

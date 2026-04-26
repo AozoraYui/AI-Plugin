@@ -52,6 +52,14 @@ if (migrationStatus.json_migrated) {
 global.AIPluginScheduler = new AIScheduler(global.AIPluginClient)
 global.AIPluginScheduler.start()
 
+// 初始化向量数据库（畅聊模式）
+import { vectorDB } from './utils/vector_db.js'
+try {
+    await vectorDB.init()
+} catch (error) {
+    logger.warn(`[AI-Plugin] 向量数据库初始化失败，畅聊模式将不可用: ${error.message}`)
+}
+
 const files = fs.readdirSync('./plugins/AI-Plugin/apps').filter(file => file.endsWith('.js'))
 
 let ret = []

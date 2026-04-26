@@ -11,6 +11,8 @@
 - 单次对话模式（不污染上下文）
 - 自动请求体优化，防止 413 错误
 - 聊天环境自适应（群聊/私聊自动调整隐私保护级别）
+- **畅聊模式**：监听所有消息，触发词自动回复（需开启）
+- **向量检索**：基于 ChromaDB 的语义搜索，自动关联历史对话
 
 ### 🎨 AI 作图
 - 丰富的作图预设（风格转换、角色生成等）
@@ -175,6 +177,9 @@ name: 诺亚
 | `#gemini信任群添加 [群号]` | 添加信任群（在信任群中 AI 可以更自由地交流） |
 | `#gemini信任群删除 [群号]` | 删除信任群 |
 | `#gemini信任群列表` | 查看信任群列表 |
+| `#gemini畅聊开启` | 开启畅聊模式（监听所有消息，触发词自动回复） |
+| `#gemini畅聊关闭` | 关闭畅聊模式 |
+| `#gemini畅聊状态` | 查看畅聊模式配置状态 |
 | `#gemini思考开启/关闭` | 开启/关闭思考过程显示 |
 | `#gemini帮助` | 显示帮助信息 |
 
@@ -187,7 +192,8 @@ AI-Plugin/
 │   ├── image.js            # 作图功能
 │   ├── memory.js           # 记忆管理
 │   ├── management.js       # 管理功能
-│   └── help.js             # 帮助信息
+│   ├── help.js             # 帮助信息
+│   └── noa_chat.js         # 畅聊模式
 ├── client/                  # API 客户端
 │   └── GeminiClient.js     # Gemini API 封装
 ├── model/                   # 数据模型
@@ -196,7 +202,11 @@ AI-Plugin/
 │   ├── config.js           # 配置管理
 │   ├── session.js          # 会话管理
 │   ├── access.js           # 权限控制
-│   └── common.js           # 通用工具
+│   ├── common.js           # 通用工具
+│   ├── database.js         # SQLite 数据库
+│   └── vector_db.js        # ChromaDB 向量数据库
+├── scripts/                 # 辅助脚本
+│   └── vector_server.py    # Python 向量服务
 ├── index.js                 # 入口文件
 └── package.json             # 依赖配置
 ```
@@ -210,6 +220,7 @@ AI-Plugin/
 |------|------|
 | `ai_name.yaml` | AI 名称配置（可选，不创建则使用默认值"诺亚"） |
 | `trusted_groups.yaml` | 信任群聊列表（通过 `#gemini信任群添加` 命令自动管理） |
+| `noa_chat_config.yaml` | 畅聊模式配置（触发词、回复频率等） |
 | `models_config.yaml` | 模型供应商配置 |
 | `model_status.json` | 模型测试状态 |
 | `disabled_models.json` | 禁用的模型列表 |
@@ -219,8 +230,41 @@ AI-Plugin/
 
 ### 数据存储
 - **SQLite 数据库**：主要存储引擎，存储对话历史、记忆锚点、摘要缓存
+- **ChromaDB**：向量数据库，用于畅聊模式的语义检索
 - **JSON/YAML 文件**：配置文件（模型配置、权限配置、预设等）
 - **Redis**：可选缓存层，加速对话读取
+
+### 畅聊模式
+
+畅聊模式让 AI 能够监听群内所有消息，并在检测到触发词时自动回复。
+
+#### 功能特点
+- **全局监听**：监听所有群的消息（默认关闭，需手动开启）
+- **触发词回复**：当消息包含"诺亚"或"noa"时触发回复
+- **向量检索**：使用 ChromaDB 进行语义搜索，自动关联历史对话
+- **静默查询**：自动从数据库检索相关信息，无需用户手动操作
+- **频率限制**：默认 8 次/分钟，防止刷屏
+
+#### 使用方法
+1. 安装 Python 依赖：
+```bash
+pip3 install chromadb sentence-transformers
+```
+
+2. 开启畅聊模式：
+```
+#gemini畅聊开启
+```
+
+3. 在群聊中发送包含触发词的消息即可：
+```
+诺亚，你觉得今天天气怎么样？
+```
+
+#### 技术细节
+- **向量模型**：`shibing624/text2vec-base-chinese`（中文优化，CPU 可用）
+- **检索策略**：双源检索（SQLite 全文搜索 + ChromaDB 向量搜索）
+- **上下文构建**：personaPrimer + 环境提示 + 检索历史 + 当前消息
 
 ### 模型组说明
 - **default**: 默认模型组，适用于日常对话
