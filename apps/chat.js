@@ -347,6 +347,7 @@ export class ChatHandler extends plugin {
             } else {
                 environmentHint = `【当前聊天环境】这是与用户的私聊对话，属于安全环境。可以正常交流。`
             }
+            logger.info(`[AI-Plugin] 环境提示: ${environmentHint}`)
             contents.push({
                 "role": "user",
                 "parts": [{ "text": environmentHint }]
