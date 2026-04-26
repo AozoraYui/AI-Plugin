@@ -168,18 +168,23 @@ export class ChatHandler extends plugin {
 
             let history = []
             let checkpoint = null
+            let incrementalCheckpoint = null
 
             if (!isSingleMode) {
                 const memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(userId)
                 history = memoryData.history
                 checkpoint = memoryData.checkpoint
+                incrementalCheckpoint = memoryData.incrementalCheckpoint
 
                 if (checkpoint) {
                     logger.debug(`[AI-Plugin] 用户 ${userId} 加载全量锚点记忆`)
                 }
+                if (incrementalCheckpoint) {
+                    logger.debug(`[AI-Plugin] 用户 ${userId} 加载今日增量锚点记忆`)
+                }
 
                 // 防止请求体过大导致 413 错误，限制历史长度
-                const MAX_HISTORY_LENGTH = 32
+                const MAX_HISTORY_LENGTH = 16
                 if (history.length > MAX_HISTORY_LENGTH) {
                     history = history.slice(-MAX_HISTORY_LENGTH)
                     logger.debug(`[AI-Plugin] 用户 ${userId} 的历史过长，已截断至最近 ${MAX_HISTORY_LENGTH} 条`)
@@ -254,6 +259,17 @@ export class ChatHandler extends plugin {
                 })
             }
 
+            if (incrementalCheckpoint) {
+                contents.push({
+                    "role": "user",
+                    "parts": [{ "text": `【今日对话摘要】这是今天早些时候的对话摘要，请基于这些摘要继续对话：\n${incrementalCheckpoint}` }]
+                })
+                contents.push({
+                    "role": "model",
+                    "parts": [{ "text": "好的，我已经想起了今天的重要记忆！" }]
+                })
+            }
+
             contents.push(...history)
             contents.push({ "role": "user", "parts": currentUserTurnParts })
 
@@ -277,6 +293,16 @@ export class ChatHandler extends plugin {
                         contents.push({
                             "role": "model",
                             "parts": [{ "text": "好的，我已经想起了之前的重要记忆！" }]
+                        })
+                    }
+                    if (incrementalCheckpoint) {
+                        contents.push({
+                            "role": "user",
+                            "parts": [{ "text": `【今日对话摘要】这是今天早些时候的对话摘要，请基于这些摘要继续对话：\n${incrementalCheckpoint}` }]
+                        })
+                        contents.push({
+                            "role": "model",
+                            "parts": [{ "text": "好的，我已经想起了今天的重要记忆！" }]
                         })
                     }
                     contents.push(...history)

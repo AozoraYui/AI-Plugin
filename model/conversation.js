@@ -301,6 +301,13 @@ export class ConversationManager {
             fullCheckpointContent = latestCheckpoint.content
         }
 
+        // 从 SQLite 读取今天的增量锚点
+        const todaySummary = await this.db.getSummaryCache(userIdStr, today)
+        let incrementalContent = ""
+        if (todaySummary) {
+            incrementalContent = todaySummary.content
+        }
+
         let history = []
 
         try {
@@ -309,7 +316,11 @@ export class ConversationManager {
             logger.error(`[AI-Plugin] 从 SQLite 读取用户 ${userId} 的历史失败:`, err)
         }
 
-        return { checkpoint: fullCheckpointContent, history }
+        return { 
+            checkpoint: fullCheckpointContent, 
+            incrementalCheckpoint: incrementalContent,
+            history 
+        }
     }
 
     async saveUserHistory(userId, history) {
