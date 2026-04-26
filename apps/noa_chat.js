@@ -1,7 +1,6 @@
 import plugin from '../../../lib/plugins/plugin.js'
 import { Config } from '../utils/config.js'
 import { GeminiClient } from '../client/GeminiClient.js'
-import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { expandForwardMsg, extractImagesFromMsg } from './chat.js'
 import { vectorDB } from '../utils/vector_db.js'
@@ -26,7 +25,6 @@ export class NoaChat extends plugin {
         })
 
         this.client = new GeminiClient()
-        this.conversationManager = new ConversationManager()
     }
 
     async handleNoaChat(e) {
@@ -160,9 +158,6 @@ export class NoaChat extends plugin {
         if (response && response.success) {
             const replyText = response.data
             await e.reply(replyText)
-
-            await this.conversationManager.saveUserMessage(userId, message, images)
-            await this.conversationManager.saveModelMessage(userId, replyText)
 
             const docId = `noa_${Date.now()}_${userId}`
             await vectorDB.addDocument(docId, `${userId}: ${message}`, {
