@@ -42,7 +42,7 @@ async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
                             subText += " [图片] "
                         }
                     } else if (seg.type === 'forward' && seg.id) {
-                        logger.info(`[AI-Plugin] 发现嵌套合并消息，开始递归展开 (深度${depth + 1})`)
+                        logger.info(`[AI-Plugin] 发现嵌套合并消息 (type=forward)，开始递归展开 (深度${depth + 1})`)
                         const nested = await expandForwardMsg(bot, seg.id, depth + 1, maxDepth)
                         textParts.push(`${indent}  [${sender}] (嵌套消息):`)
                         textParts.push(nested.text)
@@ -58,7 +58,7 @@ async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
                             images.push(...nested.images)
                         }
                     } else {
-                        logger.debug(`[AI-Plugin] 未处理的消息段类型: ${seg.type}`, JSON.stringify(seg).slice(0, 200))
+                        logger.info(`[AI-Plugin] 消息段类型: ${seg.type}, 内容预览: ${JSON.stringify(seg).slice(0, 300)}`)
                     }
                 }
                 if (subText.trim()) {
@@ -68,6 +68,8 @@ async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
                 if (msgArray.trim()) {
                     textParts.push(`${indent}[${sender}]: ${msgArray}`)
                 }
+            } else {
+                logger.info(`[AI-Plugin] msgArray 类型异常: ${typeof msgArray}, 内容: ${JSON.stringify(msgArray).slice(0, 300)}`)
             }
         }
 
