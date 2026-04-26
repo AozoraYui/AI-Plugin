@@ -31,39 +31,9 @@ async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
             const msgArray = subMsg.content || subMsg.message
 
             if (Array.isArray(msgArray)) {
-                let subText = ""
-                for (const seg of msgArray) {
-                    if (seg.type === 'text') {
-                        subText += seg.data?.text || seg.text || ''
-                    } else if (seg.type === 'image') {
-                        const imgUrl = seg.data?.url || seg.url
-                        if (imgUrl) {
-                            images.push(imgUrl)
-                            subText += " [图片] "
-                        }
-                    } else if (seg.type === 'forward' && seg.id) {
-                        logger.info(`[AI-Plugin] 发现嵌套合并消息 (type=forward)，开始递归展开 (深度${depth + 1})`)
-                        const nested = await expandForwardMsg(bot, seg.id, depth + 1, maxDepth)
-                        textParts.push(`${indent}  [${sender}] (嵌套消息):`)
-                        textParts.push(nested.text)
-                        images.push(...nested.images)
-                    } else if ((seg.type === 'json' || seg.type === 'xml') && seg.data) {
-                        const residMatch = seg.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
-                        if (residMatch) {
-                            const nestedResid = residMatch[1]
-                            logger.info(`[AI-Plugin] 从 JSON/XML 中发现嵌套 resid: ${nestedResid}，开始递归展开 (深度${depth + 1})`)
-                            const nested = await expandForwardMsg(bot, nestedResid, depth + 1, maxDepth)
-                            textParts.push(`${indent}  [${sender}] (嵌套消息):`)
-                            textParts.push(nested.text)
-                            images.push(...nested.images)
-                        }
-                    } else {
-                        logger.info(`[AI-Plugin] 消息段类型: ${seg.type}, 内容预览: ${JSON.stringify(seg).slice(0, 300)}`)
-                    }
-                }
-                if (subText.trim()) {
-                    textParts.push(`${indent}[${sender}]: ${subText}`)
-                }
+                const expanded = await expandInlineContent(bot, msgArray, sender, depth, maxDepth)
+                textParts.push(expanded.text)
+                images.push(...expanded.images)
             } else if (typeof msgArray === 'string') {
                 if (msgArray.trim()) {
                     textParts.push(`${indent}[${sender}]: ${msgArray}`)
@@ -77,6 +47,76 @@ async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
     } catch (err) {
         logger.warn(`[AI-Plugin] 展开合并转发失败 (深度${depth}):`, err)
         return { text: `--- [展开失败: ${err.message}] ---`, images: [] }
+    }
+
+    return { text: textParts.join('\n'), images }
+}
+
+async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 0, maxDepth = 5) {
+    const textParts = []
+    const images = []
+    const indent = '  '.repeat(depth)
+
+    if (depth >= maxDepth) {
+        return { text: '--- [嵌套层级过深，停止展开] ---', images: [] }
+    }
+
+    let subText = ""
+    for (const seg of msgArray) {
+        if (seg.type === 'text') {
+            subText += seg.data?.text || seg.text || ''
+        } else if (seg.type === 'image') {
+            const imgUrl = seg.data?.url || seg.url
+            if (imgUrl) {
+                images.push(imgUrl)
+                subText += " [图片] "
+            }
+        } else if (seg.type === 'forward') {
+            const nestedId = seg.id || seg.data?.id
+            const nestedContent = seg.data?.content || seg.content
+            if (nestedId) {
+                logger.info(`[AI-Plugin] 发现嵌套合并消息 (type=forward, id=${nestedId})，开始递归展开 (深度${depth + 1})`)
+                const nested = await expandForwardMsg(bot, nestedId, depth + 1, maxDepth)
+                if (subText.trim()) {
+                    textParts.push(`${indent}[${sender}] (嵌套消息):`)
+                    textParts.push(nested.text)
+                }
+                images.push(...nested.images)
+            } else if (Array.isArray(nestedContent)) {
+                logger.info(`[AI-Plugin] 发现内联合并消息 (type=forward, 内联content)，开始递归展开 (深度${depth + 1})`)
+                for (const nestedMsg of nestedContent) {
+                    const nestedSender = nestedMsg.nickname || nestedMsg.sender?.nickname || sender
+                    const nestedMsgArray = nestedMsg.content || nestedMsg.message
+                    if (Array.isArray(nestedMsgArray)) {
+                        const nested = await expandInlineContent(bot, nestedMsgArray, nestedSender, depth + 1, maxDepth)
+                        textParts.push(nested.text)
+                        images.push(...nested.images)
+                    }
+                }
+                if (subText.trim()) {
+                    textParts.push(`${indent}[${sender}]: ${subText}`)
+                    subText = ""
+                }
+            }
+        } else if ((seg.type === 'json' || seg.type === 'xml') && seg.data) {
+            const residMatch = seg.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
+            if (residMatch) {
+                const nestedResid = residMatch[1]
+                logger.info(`[AI-Plugin] 从 JSON/XML 中发现嵌套 resid: ${nestedResid}，开始递归展开 (深度${depth + 1})`)
+                const nested = await expandForwardMsg(bot, nestedResid, depth + 1, maxDepth)
+                if (subText.trim()) {
+                    textParts.push(`${indent}[${sender}] (嵌套消息):`)
+                    textParts.push(nested.text)
+                }
+                images.push(...nested.images)
+            }
+        } else {
+            logger.info(`[AI-Plugin] 消息段类型: ${seg.type}, 内容预览: ${JSON.stringify(seg).slice(0, 300)}`)
+        }
+    }
+
+    if (subText.trim()) {
+        textParts.push(`${indent}[${sender}]: ${subText}`)
     }
 
     return { text: textParts.join('\n'), images }
