@@ -99,7 +99,10 @@ export class ChatHandler extends plugin {
                                                 if (seg.type === 'text') {
                                                     subText += seg.data?.text || seg.text || ''
                                                 } else if (seg.type === 'image') {
-                                                    forwardImages.push(seg.url)
+                                                    const imgUrl = seg.data?.url || seg.url
+                                                    if (imgUrl) {
+                                                        forwardImages.push(imgUrl)
+                                                    }
                                                 }
                                             }
                                         }
@@ -115,7 +118,7 @@ export class ChatHandler extends plugin {
 
                         if (m.type === 'text') {
                             replyText += m.text || ''
-                        } else if (m.type === 'image') {
+                        } else if (m.type === 'image' && m.url) {
                             allImages.push(m.url)
                         }
                     }
