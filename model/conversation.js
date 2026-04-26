@@ -301,11 +301,11 @@ export class ConversationManager {
             fullCheckpointContent = latestCheckpoint.content
         }
 
-        // 从 SQLite 读取今天的增量锚点
-        const todaySummary = await this.db.getSummaryCache(userIdStr, today)
+        // 从 SQLite 读取最近的增量锚点
+        const latestSummary = await this.db.getLatestSummaryCache(userIdStr)
         let incrementalContent = ""
-        if (todaySummary) {
-            incrementalContent = todaySummary.content
+        if (latestSummary) {
+            incrementalContent = latestSummary.content
         }
 
         let history = []
