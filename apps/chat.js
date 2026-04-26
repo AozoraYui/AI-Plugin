@@ -7,6 +7,66 @@ import { ConversationManager } from '../model/conversation.js'
 import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, getTodayDateStr } from '../utils/common.js'
 
+async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
+    const textParts = []
+    const images = []
+
+    if (depth >= maxDepth) {
+        return { text: '--- [嵌套层级过深，停止展开] ---', images: [] }
+    }
+
+    try {
+        const res = await bot.sendApi('get_forward_msg', { message_id: resid })
+        const details = res?.messages || res?.data?.messages || res
+
+        if (!Array.isArray(details) || details.length === 0) {
+            return { text: '', images: [] }
+        }
+
+        const indent = '  '.repeat(depth)
+        textParts.push(`${indent}--- [已展开合并转发消息${depth > 0 ? ` (第${depth}层嵌套)` : ''}] ---`)
+
+        for (const subMsg of details.slice(0, 100)) {
+            const sender = subMsg.nickname || subMsg.sender?.nickname || "未知用户"
+            const msgArray = subMsg.content || subMsg.message
+
+            if (Array.isArray(msgArray)) {
+                let subText = ""
+                for (const seg of msgArray) {
+                    if (seg.type === 'text') {
+                        subText += seg.data?.text || seg.text || ''
+                    } else if (seg.type === 'image') {
+                        const imgUrl = seg.data?.url || seg.url
+                        if (imgUrl) {
+                            images.push(imgUrl)
+                            subText += " [图片] "
+                        }
+                    } else if (seg.type === 'forward' && seg.id) {
+                        const nested = await expandForwardMsg(bot, seg.id, depth + 1, maxDepth)
+                        textParts.push(`${indent}  [${sender}] (嵌套消息):`)
+                        textParts.push(nested.text)
+                        images.push(...nested.images)
+                    }
+                }
+                if (subText.trim()) {
+                    textParts.push(`${indent}[${sender}]: ${subText}`)
+                }
+            } else if (typeof msgArray === 'string') {
+                if (msgArray.trim()) {
+                    textParts.push(`${indent}[${sender}]: ${msgArray}`)
+                }
+            }
+        }
+
+        textParts.push(`${indent}--- [合并转发结束] ---`)
+    } catch (err) {
+        logger.warn(`[AI-Plugin] 展开合并转发失败 (深度${depth}):`, err)
+        return { text: `--- [展开失败: ${err.message}] ---`, images: [] }
+    }
+
+    return { text: textParts.join('\n'), images }
+}
+
 export class ChatHandler extends plugin {
     constructor() {
         super({
@@ -67,7 +127,6 @@ export class ChatHandler extends plugin {
             if (sourceMsg) {
                 if (sourceMsg.message) {
                     let replyText = ""
-
                     let forwardContent = ""
                     let forwardImages = []
 
@@ -85,40 +144,12 @@ export class ChatHandler extends plugin {
                         }
 
                         if (resid) {
-                            try {
-                                const res = await e.bot.sendApi('get_forward_msg', { message_id: resid })
-                                const details = res?.messages || res?.data?.messages || res
-
-                                if (Array.isArray(details) && details.length > 0) {
-                                    forwardContent += "\n--- [已展开合并转发消息] ---\n"
-                                    for (const subMsg of details.slice(0, 100)) {
-                                        const sender = subMsg.nickname || subMsg.sender?.nickname || "未知用户"
-                                        let subText = ""
-                                        const msgArray = subMsg.content || subMsg.message
-
-                                        if (Array.isArray(msgArray)) {
-                                            for (const seg of msgArray) {
-                                                if (seg.type === 'text') {
-                                                    subText += seg.data?.text || seg.text || ''
-                                                } else if (seg.type === 'image') {
-                                                    const imgUrl = seg.data?.url || seg.url
-                                                    if (imgUrl) {
-                                                        forwardImages.push(imgUrl)
-                                                        subText += " [图片] "
-                                                    }
-                                                }
-                                            }
-                                        } else if (typeof msgArray === 'string') {
-                                            subText = msgArray
-                                        }
-                                        if (subText.trim()) {
-                                            forwardContent += `[${sender}]: ${subText}\n`
-                                        }
-                                    }
-                                    forwardContent += "--- [合并转发结束] ---\n"
-                                }
-                            } catch (err) {
-                                logger.warn('[AI-Plugin] 展开合并转发失败:', err)
+                            const expanded = await expandForwardMsg(e.bot, resid)
+                            if (expanded.text) {
+                                forwardContent += "\n" + expanded.text + "\n"
+                            }
+                            if (expanded.images.length > 0) {
+                                forwardImages.push(...expanded.images)
                             }
                         }
 
