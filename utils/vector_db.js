@@ -90,10 +90,13 @@ class VectorDBClient {
         // 清理可能残留的旧进程
         this.killProcessOnPort(9901)
 
+        // 设置 HuggingFace 镜像（国内服务器）
+        const hfEndpoint = process.env.HF_ENDPOINT || 'https://hf-mirror.com'
+
         return new Promise((resolve, reject) => {
             this.pythonProcess = spawn('python3', [PYTHON_SCRIPT, CHROMA_DB_DIR, this.serverUrl], {
                 stdio: ['pipe', 'pipe', 'pipe'],
-                env: { ...process.env, PYTHONUNBUFFERED: '1' }
+                env: { ...process.env, PYTHONUNBUFFERED: '1', HF_ENDPOINT: hfEndpoint }
             })
 
             this.pythonProcess.stdout.on('data', (data) => {

@@ -18,6 +18,10 @@ SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 9901
 MODEL_NAME = 'shibing624/text2vec-base-chinese'
 
+# 配置 HuggingFace 镜像（如果环境变量设置了）
+HF_ENDPOINT = os.environ.get('HF_ENDPOINT', 'https://huggingface.co')
+os.environ['HF_ENDPOINT'] = HF_ENDPOINT
+
 # 全局变量
 embedding_model = None
 chroma_client = None
