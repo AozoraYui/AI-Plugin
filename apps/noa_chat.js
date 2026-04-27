@@ -1,6 +1,7 @@
 import plugin from '../../../lib/plugins/plugin.js'
 import { Config } from '../utils/config.js'
 import { GeminiClient } from '../client/GeminiClient.js'
+import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { expandForwardMsg, extractImagesFromMsg } from './chat.js'
 import { vectorDB } from '../utils/vector_db.js'
@@ -25,6 +26,7 @@ export class NoaChat extends plugin {
         })
 
         this.client = new GeminiClient()
+        this.conversationManager = new ConversationManager()
     }
 
     async handleNoaChat(e) {
@@ -74,10 +76,27 @@ export class NoaChat extends plugin {
             return
         }
 
+        const memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(userId)
+        let history = memoryData.history
+        const checkpoint = memoryData.checkpoint
+        const incrementalCheckpoint = memoryData.incrementalCheckpoint
+
+        if (checkpoint) {
+            logger.debug(`[AI-Plugin] [畅聊] 用户 ${userId} 加载全量锚点记忆`)
+        }
+        if (incrementalCheckpoint) {
+            logger.debug(`[AI-Plugin] [畅聊] 用户 ${userId} 加载今日增量锚点记忆`)
+        }
+
+        const MAX_HISTORY_LENGTH = 16
+        if (history.length > MAX_HISTORY_LENGTH) {
+            history = history.slice(-MAX_HISTORY_LENGTH)
+        }
+
         const query = message
         const searchResults = await vectorDB.search(query, 10)
 
-        logger.info(`[AI-Plugin] [畅聊] 静默检索到 ${searchResults.length} 条相关历史`)
+        logger.info(`[AI-Plugin] [畅聊] 向量检索到 ${searchResults.length} 条相关历史`)
 
         let contextParts = []
         if (searchResults.length > 0) {
@@ -107,16 +126,32 @@ export class NoaChat extends plugin {
             {
                 role: 'model',
                 parts: [{ text: '好的，我已经知道现在的准确时间了，会以此为准！' }]
-            },
-            {
-                role: 'user',
-                parts: [{ text: environmentHint }]
-            },
-            {
-                role: 'model',
-                parts: [{ text: '好的，我会根据当前环境自动调整我的回复方式！' }]
             }
         ]
+
+        if (checkpoint) {
+            contents.push({
+                role: 'user',
+                parts: [{ text: `【重要记忆摘要】这是你之前记住的关于这个用户的对话摘要，请基于这些摘要继续对话：\n${checkpoint}` }]
+            })
+            contents.push({
+                role: 'model',
+                parts: [{ text: '好的，我已经想起了之前的重要记忆！' }]
+            })
+        }
+
+        if (incrementalCheckpoint) {
+            contents.push({
+                role: 'user',
+                parts: [{ text: `【今日对话摘要】这是今天早些时候的对话摘要，请基于这些摘要继续对话：\n${incrementalCheckpoint}` }]
+            })
+            contents.push({
+                role: 'model',
+                parts: [{ text: '好的，我已经想起了今天的重要记忆！' }]
+            })
+        }
+
+        contents.push(...history)
 
         if (contextParts.length > 0) {
             contents.push({
@@ -128,6 +163,15 @@ export class NoaChat extends plugin {
                 parts: [{ text: '好的，我已经了解了相关的历史信息！' }]
             })
         }
+
+        contents.push({
+            role: 'user',
+            parts: [{ text: environmentHint }]
+        })
+        contents.push({
+            role: 'model',
+            parts: [{ text: '好的，我会根据当前环境自动调整我的回复方式！' }]
+        })
 
         const images = await extractImagesFromMsg(e)
         let userParts = []
@@ -158,6 +202,9 @@ export class NoaChat extends plugin {
         if (response && response.success) {
             const replyText = response.data
             await e.reply(replyText)
+
+            const updatedHistory = [...history, { role: 'user', parts: userParts }, { role: 'model', parts: [{ text: replyText }] }]
+            await this.conversationManager.saveUserHistory(userId, updatedHistory)
 
             const docId = `noa_${Date.now()}_${userId}`
             await vectorDB.addDocument(docId, `${userId}: ${message}`, {
