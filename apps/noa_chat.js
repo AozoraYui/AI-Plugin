@@ -173,11 +173,53 @@ export class NoaChat extends plugin {
             parts: [{ text: '好的，我会根据当前环境自动调整我的回复方式！' }]
         })
 
-        const images = await extractImagesFromMsg(e)
+        let allImages = await extractImagesFromMsg(e)
+
+        let forwardContent = ""
+        let forwardImages = []
+
+        if (e.message && Array.isArray(e.message)) {
+            for (const m of e.message) {
+                let resid = null
+                if (m.type === 'forward' && m.id) {
+                    resid = m.id
+                } else if ((m.type === 'json' || m.type === 'xml') && m.data) {
+                    const residMatch = m.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
+                    if (residMatch) resid = residMatch[1]
+                    if (!resid) {
+                        const templateMatch = m.data.match(/template-id"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
+                        if (templateMatch) resid = templateMatch[1]
+                    }
+                }
+
+                if (resid) {
+                    try {
+                        const expanded = await expandForwardMsg(e.bot, resid)
+                        if (expanded.text) {
+                            forwardContent += "\n" + expanded.text + "\n"
+                        }
+                        if (expanded.images.length > 0) {
+                            forwardImages.push(...expanded.images)
+                        }
+                    } catch (err) {
+                        logger.warn(`[AI-Plugin] [畅聊] 展开合并消息失败: ${err.message}`)
+                    }
+                }
+            }
+        }
+
+        if (forwardImages.length > 0) {
+            allImages = allImages.concat(forwardImages)
+        }
+
         let userParts = []
 
-        if (images.length > 0) {
-            for (const imgUrl of images.slice(0, 100)) {
+        if (forwardContent.trim()) {
+            userParts.push({ text: `=== 合并消息内容 ===\n${forwardContent.trim()}\n=======================\n` })
+        }
+
+        if (allImages.length > 0) {
+            for (const imgUrl of allImages.slice(0, 100)) {
                 try {
                     const buffer = await urlToBuffer(imgUrl)
                     if (buffer) {
