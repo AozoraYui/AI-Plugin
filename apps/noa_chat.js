@@ -39,8 +39,45 @@ export class NoaChat extends plugin {
             return false
         }
 
+        let messageContent = e.msg
+
+        if (e.message && Array.isArray(e.message)) {
+            for (const m of e.message) {
+                let resid = null
+                if (m.type === 'forward' && m.id) {
+                    resid = m.id
+                    logger.info(`[AI-Plugin] [畅聊] 发现嵌套合并消息 (type=forward, id=${resid})，开始递归展开`)
+                } else if ((m.type === 'json' || m.type === 'xml') && m.data) {
+                    const residMatch = m.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
+                    if (residMatch) {
+                        resid = residMatch[1]
+                        logger.info(`[AI-Plugin] [畅聊] 发现嵌套合并消息 (json/xml, resid=${resid})，开始递归展开`)
+                    }
+                    if (!resid) {
+                        const templateMatch = m.data.match(/template-id"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
+                        if (templateMatch) {
+                            resid = templateMatch[1]
+                            logger.info(`[AI-Plugin] [畅聊] 发现嵌套合并消息 (json/xml, template-id=${resid})，开始递归展开`)
+                        }
+                    }
+                }
+
+                if (resid) {
+                    try {
+                        const expanded = await expandForwardMsg(e.bot, resid)
+                        if (expanded.text) {
+                            messageContent = expanded.text
+                            logger.info(`[AI-Plugin] [畅聊] 展开合并消息成功，内容长度: ${expanded.text.length}`)
+                        }
+                    } catch (err) {
+                        logger.warn(`[AI-Plugin] [畅聊] 展开合并消息失败: ${err.message}`)
+                    }
+                }
+            }
+        }
+
         const triggerKeywords = noaConfig.triggerKeywords || ['诺亚', 'noa']
-        const lowerMsg = e.msg.toLowerCase()
+        const lowerMsg = messageContent.toLowerCase()
         const isTriggered = triggerKeywords.some(kw => lowerMsg.includes(kw.toLowerCase()))
 
         if (!isTriggered) {
@@ -59,7 +96,7 @@ export class NoaChat extends plugin {
         replyCooldown.set(groupId, now)
 
         try {
-            await this.processNoaChat(e, e.msg)
+            await this.processNoaChat(e, messageContent)
         } catch (error) {
             logger.error(`[AI-Plugin] [畅聊] 处理失败: ${error.message}`)
         }
@@ -74,6 +111,65 @@ export class NoaChat extends plugin {
 
         if (!await checkAccess(e)) {
             return
+        }
+
+        let recentGroupChat = ""
+        if (isGroup && e.group?.getChatHistory) {
+            try {
+                const recentMsgs = await e.group.getChatHistory(e.source?.seq || e.message_id, 10)
+                if (recentMsgs && recentMsgs.length > 0) {
+                    const chatLines = []
+                    for (const msg of recentMsgs) {
+                        if (msg.sender?.user_id === e.user_id) continue
+                        const senderName = msg.sender?.nickname || msg.sender?.card || `用户${msg.sender?.user_id}`
+                        let textContent = ""
+
+                        if (msg.message && Array.isArray(msg.message)) {
+                            for (const seg of msg.message) {
+                                if (seg.type === 'text') {
+                                    textContent += seg.data?.text || seg.text || ''
+                                } else if (seg.type === 'image') {
+                                    textContent += '[图片]'
+                                } else if (seg.type === 'forward') {
+                                    const resid = seg.data?.id || seg.id
+                                    if (resid) {
+                                        try {
+                                            const expanded = await expandForwardMsg(e.bot, resid)
+                                            if (expanded.text) {
+                                                textContent += `\n[合并消息内容]\n${expanded.text}\n`
+                                            }
+                                        } catch (err) {
+                                            textContent += '[合并转发消息]'
+                                        }
+                                    }
+                                } else if ((seg.type === 'json' || seg.type === 'xml') && seg.data) {
+                                    const residMatch = seg.data?.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
+                                    if (residMatch) {
+                                        try {
+                                            const expanded = await expandForwardMsg(e.bot, residMatch[1])
+                                            if (expanded.text) {
+                                                textContent += `\n[合并消息内容]\n${expanded.text}\n`
+                                            }
+                                        } catch (err) {
+                                            textContent += '[合并转发消息]'
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (textContent.trim()) {
+                            chatLines.push(`[${senderName}]: ${textContent.trim()}`)
+                        }
+                    }
+                    if (chatLines.length > 0) {
+                        recentGroupChat = chatLines.join('\n')
+                        logger.info(`[AI-Plugin] [畅聊] 加载最近 ${chatLines.length} 条群聊历史`)
+                    }
+                }
+            } catch (err) {
+                logger.warn(`[AI-Plugin] [畅聊] 获取群聊历史失败: ${err.message}`)
+            }
         }
 
         const memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(userId)
@@ -148,6 +244,17 @@ export class NoaChat extends plugin {
             contents.push({
                 role: 'model',
                 parts: [{ text: '好的，我已经想起了今天的重要记忆！' }]
+            })
+        }
+
+        if (recentGroupChat) {
+            contents.push({
+                role: 'user',
+                parts: [{ text: `【最近群聊上下文】以下是当前群聊中最近的对话，帮助你了解上下文：\n${recentGroupChat}\n【群聊上下文结束】` }]
+            })
+            contents.push({
+                role: 'model',
+                parts: [{ text: '好的，我已经了解了当前群聊的最近对话！' }]
             })
         }
 
