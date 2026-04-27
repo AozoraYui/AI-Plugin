@@ -367,7 +367,49 @@ export class NoaChat extends plugin {
 
         let userParts = []
 
-        if (allImages.length > 0) {
+        if (allImages.length > 0 && message.includes('[图片]')) {
+            const parts = message.split(/\[图片\]/)
+            let imgIndex = 0
+            for (let i = 0; i < parts.length; i++) {
+                if (parts[i].trim()) {
+                    userParts.push({ text: parts[i] })
+                }
+                if (i < parts.length - 1 && imgIndex < allImages.length) {
+                    try {
+                        const imgUrl = allImages[imgIndex]
+                        const buffer = await urlToBuffer(imgUrl)
+                        if (buffer) {
+                            userParts.push({
+                                inlineData: {
+                                    mimeType: getImageMimeType(buffer) || 'image/jpeg',
+                                    data: buffer.toString('base64')
+                                }
+                            })
+                        }
+                    } catch (err) {
+                        logger.warn(`[AI-Plugin] [畅聊] 图片加载失败: ${err.message}`)
+                    }
+                    imgIndex++
+                }
+            }
+            if (imgIndex < allImages.length) {
+                for (let i = imgIndex; i < allImages.length; i++) {
+                    try {
+                        const buffer = await urlToBuffer(allImages[i])
+                        if (buffer) {
+                            userParts.push({
+                                inlineData: {
+                                    mimeType: getImageMimeType(buffer) || 'image/jpeg',
+                                    data: buffer.toString('base64')
+                                }
+                            })
+                        }
+                    } catch (err) {
+                        logger.warn(`[AI-Plugin] [畅聊] 图片加载失败: ${err.message}`)
+                    }
+                }
+            }
+        } else if (allImages.length > 0) {
             for (const imgUrl of allImages.slice(0, 100)) {
                 try {
                     const buffer = await urlToBuffer(imgUrl)
@@ -383,9 +425,10 @@ export class NoaChat extends plugin {
                     logger.warn(`[AI-Plugin] [畅聊] 图片加载失败: ${err.message}`)
                 }
             }
+            userParts.push({ text: message })
+        } else {
+            userParts.push({ text: message })
         }
-
-        userParts.push({ text: message })
         contents.push({ role: 'user', parts: userParts })
 
         const response = await this.client.makeRequest('chat', { contents }, 'default', 8192)
