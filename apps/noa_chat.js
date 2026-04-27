@@ -3,9 +3,9 @@ import { Config } from '../utils/config.js'
 import { GeminiClient } from '../client/GeminiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
-import { expandForwardMsg, takeSourceMsg } from './chat.js'
+import { expandForwardMsg } from './chat.js'
+import { takeSourceMsg, getImageMimeType, urlToBuffer } from '../utils/common.js'
 import { vectorDB } from '../utils/vector_db.js'
-import { getImageMimeType, urlToBuffer } from '../utils/common.js'
 
 const replyCooldown = new Map()
 
