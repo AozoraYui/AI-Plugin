@@ -35,11 +35,21 @@ export class NoaChat extends plugin {
             return false
         }
 
-        if (!e.msg || e.msg.startsWith('#')) {
+        // 检查是否有合并消息需要展开
+        let hasForwardMsg = false
+        if (e.message && Array.isArray(e.message)) {
+            hasForwardMsg = e.message.some(m => m.type === 'forward' || ((m.type === 'json' || m.type === 'xml') && m.data?.match(/resid|template-id/)))
+        }
+
+        if (!e.msg && !hasForwardMsg) {
             return false
         }
 
-        let messageContent = e.msg
+        if (e.msg && e.msg.startsWith('#')) {
+            return false
+        }
+
+        let messageContent = e.msg || ''
         let allImages = []
 
         const sourceMsg = await takeSourceMsg(e)
@@ -151,7 +161,7 @@ export class NoaChat extends plugin {
 
         const triggerKeywords = noaConfig.triggerKeywords || ['诺亚', 'noa']
         const lowerMsg = messageContent.toLowerCase()
-        const isTriggered = triggerKeywords.some(kw => lowerMsg.includes(kw.toLowerCase()))
+        const isTriggered = hasForwardMsg || triggerKeywords.some(kw => lowerMsg.includes(kw.toLowerCase()))
 
         if (!isTriggered) {
             return false
