@@ -112,10 +112,15 @@ export class NoaChat extends plugin {
 
             if (replyText.trim()) {
                 const separator = "\n=== 引用/转发内容 ===\n"
-                messageContent = `${messageContent}\n${separator}${replyText.trim()}\n=======================\n`
+                if (!messageContent) {
+                    messageContent = replyText.trim()
+                } else {
+                    messageContent = `${messageContent}\n${separator}${replyText.trim()}\n=======================\n`
+                }
             }
         }
 
+        // 处理当前消息中的嵌套消息（与 gm 命令保持一致）
         if (e.message && Array.isArray(e.message)) {
             for (const m of e.message) {
                 let resid = null
@@ -141,7 +146,11 @@ export class NoaChat extends plugin {
                     try {
                         const expanded = await expandForwardMsg(e.bot, resid)
                         if (expanded.text) {
-                            messageContent = expanded.text
+                            if (!messageContent) {
+                                messageContent = expanded.text
+                            } else {
+                                messageContent += "\n" + expanded.text + "\n"
+                            }
                             logger.info(`[AI-Plugin] [畅聊] 展开合并消息成功，内容长度: ${expanded.text.length}`)
                         }
                         if (expanded.images.length > 0) {
@@ -150,13 +159,12 @@ export class NoaChat extends plugin {
                     } catch (err) {
                         logger.warn(`[AI-Plugin] [畅聊] 展开合并消息失败: ${err.message}`)
                     }
-                } else if (m.type === 'image') {
-                    const imgUrl = m.data?.url || m.url
-                    if (imgUrl) {
-                        allImages.push(imgUrl)
-                    }
                 }
             }
+
+            // 提取当前消息中的图片（与 gm 命令保持一致）
+            const currentImages = e.message.filter(m => m.type === "image").map(m => m.data?.url || m.url).filter(url => url)
+            if (currentImages.length > 0) allImages = allImages.concat(currentImages)
         }
 
         const triggerKeywords = noaConfig.triggerKeywords || ['诺亚', 'noa']
