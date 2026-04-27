@@ -269,9 +269,11 @@ export class NoaChat extends plugin {
 
         let contextParts = []
         if (searchResults.length > 0) {
-            contextParts.push('【相关历史记忆】以下是与当前话题相关的历史对话：')
+            contextParts.push('【相关历史记忆】以下是与当前话题相关的历史对话（括号内为消息发生的时间）：')
             searchResults.forEach((result, idx) => {
-                contextParts.push(`${idx + 1}. ${result.text}`)
+                const ts = result.metadata?.timestamp
+                const timeStr = ts ? new Date(ts).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '未知时间'
+                contextParts.push(`${idx + 1}. [${timeStr}] ${result.text}`)
             })
             contextParts.push('【历史记忆结束】')
         }
