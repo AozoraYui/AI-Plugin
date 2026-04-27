@@ -33,7 +33,12 @@ def init_model():
     global embedding_model, chroma_client, collection, is_ready
     
     print(f"Loading embedding model: {MODEL_NAME}...", flush=True)
-    embedding_model = SentenceTransformer(MODEL_NAME)
+    import io
+    import contextlib
+    
+    stderr_capture = io.StringIO()
+    with contextlib.redirect_stderr(stderr_capture):
+        embedding_model = SentenceTransformer(MODEL_NAME, progress_bar=False)
     print("Embedding model loaded successfully", flush=True)
     
     print(f"Initializing ChromaDB at: {CHROMA_DB_PATH}", flush=True)
