@@ -3,7 +3,7 @@ import { Config } from '../utils/config.js'
 import { GeminiClient } from '../client/GeminiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
-import { expandForwardMsg, extractImagesFromMsg } from './chat.js'
+import { expandForwardMsg, takeSourceMsg } from './chat.js'
 import { vectorDB } from '../utils/vector_db.js'
 import { getImageMimeType, urlToBuffer } from '../utils/common.js'
 
@@ -40,6 +40,71 @@ export class NoaChat extends plugin {
         }
 
         let messageContent = e.msg
+        let allImages = []
+
+        const sourceMsg = await takeSourceMsg(e)
+        if (sourceMsg && sourceMsg.message) {
+            let replyText = ""
+            let forwardContent = ""
+            let forwardImages = []
+
+            for (const m of sourceMsg.message) {
+                let resid = null
+                if (m.type === 'forward' && m.id) {
+                    resid = m.id
+                    logger.info(`[AI-Plugin] [畅聊] 发现引用中的嵌套合并消息 (type=forward, id=${resid})，开始递归展开`)
+                } else if ((m.type === 'json' || m.type === 'xml') && m.data) {
+                    const residMatch = m.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
+                    if (residMatch) {
+                        resid = residMatch[1]
+                        logger.info(`[AI-Plugin] [畅聊] 发现引用中的嵌套合并消息 (json/xml, resid=${resid})，开始递归展开`)
+                    }
+                    if (!resid) {
+                        const templateMatch = m.data.match(/template-id"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
+                        if (templateMatch) {
+                            resid = templateMatch[1]
+                            logger.info(`[AI-Plugin] [畅聊] 发现引用中的嵌套合并消息 (json/xml, template-id=${resid})，开始递归展开`)
+                        }
+                    }
+                }
+
+                if (resid) {
+                    try {
+                        const expanded = await expandForwardMsg(e.bot, resid)
+                        if (expanded.text) {
+                            forwardContent += "\n" + expanded.text + "\n"
+                        }
+                        if (expanded.images.length > 0) {
+                            forwardImages.push(...expanded.images)
+                        }
+                    } catch (err) {
+                        logger.warn(`[AI-Plugin] [畅聊] 展开引用中的合并消息失败: ${err.message}`)
+                    }
+                }
+
+                if (m.type === 'text') {
+                    replyText += m.text || ''
+                } else if (m.type === 'image') {
+                    const imgUrl = m.data?.url || m.url
+                    if (imgUrl) {
+                        allImages.push(imgUrl)
+                    }
+                }
+            }
+
+            if (forwardContent) {
+                replyText += forwardContent
+            }
+
+            if (forwardImages.length > 0) {
+                allImages = allImages.concat(forwardImages)
+            }
+
+            if (replyText.trim()) {
+                const separator = "\n=== 引用/转发内容 ===\n"
+                messageContent = `${messageContent}\n${separator}${replyText.trim()}\n=======================\n`
+            }
+        }
 
         if (e.message && Array.isArray(e.message)) {
             for (const m of e.message) {
@@ -69,8 +134,16 @@ export class NoaChat extends plugin {
                             messageContent = expanded.text
                             logger.info(`[AI-Plugin] [畅聊] 展开合并消息成功，内容长度: ${expanded.text.length}`)
                         }
+                        if (expanded.images.length > 0) {
+                            allImages = allImages.concat(expanded.images)
+                        }
                     } catch (err) {
                         logger.warn(`[AI-Plugin] [畅聊] 展开合并消息失败: ${err.message}`)
+                    }
+                } else if (m.type === 'image') {
+                    const imgUrl = m.data?.url || m.url
+                    if (imgUrl) {
+                        allImages.push(imgUrl)
                     }
                 }
             }
@@ -96,7 +169,7 @@ export class NoaChat extends plugin {
         replyCooldown.set(groupId, now)
 
         try {
-            await this.processNoaChat(e, messageContent)
+            await this.processNoaChat(e, messageContent, allImages)
         } catch (error) {
             logger.error(`[AI-Plugin] [畅聊] 处理失败: ${error.message}`)
         }
@@ -104,7 +177,7 @@ export class NoaChat extends plugin {
         return true
     }
 
-    async processNoaChat(e, message) {
+    async processNoaChat(e, message, allImages = []) {
         const userId = String(e.user_id)
         const groupId = e.group_id ? String(e.group_id) : null
         const isGroup = !!groupId
@@ -280,50 +353,7 @@ export class NoaChat extends plugin {
             parts: [{ text: '好的，我会根据当前环境自动调整我的回复方式！' }]
         })
 
-        let allImages = await extractImagesFromMsg(e)
-
-        let forwardContent = ""
-        let forwardImages = []
-
-        if (e.message && Array.isArray(e.message)) {
-            for (const m of e.message) {
-                let resid = null
-                if (m.type === 'forward' && m.id) {
-                    resid = m.id
-                } else if ((m.type === 'json' || m.type === 'xml') && m.data) {
-                    const residMatch = m.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
-                    if (residMatch) resid = residMatch[1]
-                    if (!resid) {
-                        const templateMatch = m.data.match(/template-id"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
-                        if (templateMatch) resid = templateMatch[1]
-                    }
-                }
-
-                if (resid) {
-                    try {
-                        const expanded = await expandForwardMsg(e.bot, resid)
-                        if (expanded.text) {
-                            forwardContent += "\n" + expanded.text + "\n"
-                        }
-                        if (expanded.images.length > 0) {
-                            forwardImages.push(...expanded.images)
-                        }
-                    } catch (err) {
-                        logger.warn(`[AI-Plugin] [畅聊] 展开合并消息失败: ${err.message}`)
-                    }
-                }
-            }
-        }
-
-        if (forwardImages.length > 0) {
-            allImages = allImages.concat(forwardImages)
-        }
-
         let userParts = []
-
-        if (forwardContent.trim()) {
-            userParts.push({ text: `=== 合并消息内容 ===\n${forwardContent.trim()}\n=======================\n` })
-        }
 
         if (allImages.length > 0) {
             for (const imgUrl of allImages.slice(0, 100)) {
