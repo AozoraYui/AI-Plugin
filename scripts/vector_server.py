@@ -33,12 +33,19 @@ def init_model():
     global embedding_model, chroma_client, collection, is_ready
     
     print(f"Loading embedding model: {MODEL_NAME}...", flush=True)
+    
+    # 临时重定向 stderr 以抑制进度条输出
     import io
     import contextlib
+    import sys as _sys
     
-    stderr_capture = io.StringIO()
-    with contextlib.redirect_stderr(stderr_capture):
-        embedding_model = SentenceTransformer(MODEL_NAME, progress_bar=False)
+    old_stderr = _sys.stderr
+    _sys.stderr = io.StringIO()
+    try:
+        embedding_model = SentenceTransformer(MODEL_NAME)
+    finally:
+        _sys.stderr = old_stderr
+    
     print("Embedding model loaded successfully", flush=True)
     
     print(f"Initializing ChromaDB at: {CHROMA_DB_PATH}", flush=True)
