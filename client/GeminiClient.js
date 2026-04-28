@@ -19,8 +19,45 @@ export class GeminiClient {
         this.modelsConfig = []
         if (!fs.existsSync(MODELS_CONFIG_FILE)) {
             logger.warn(`[AI-Plugin] 未找到模型配置文件，将在 ${MODELS_CONFIG_FILE} 创建示例文件。`)
-            const defaultConfig = []
-            fs.writeFileSync(MODELS_CONFIG_FILE, yaml.stringify(defaultConfig), 'utf8')
+            const defaultConfig = `# AI 插件模型供应商配置
+# 每个供应商包含以下字段：
+#   id: 供应商标识（唯一）
+#   name: 供应商显示名称
+#   base_url: API 基础地址
+#   api_key: API 密钥
+#   model_groups: 模型组配置
+#     default: 默认模型组（用于 #gm, #bnn 等指令）
+#     pro: Pro 模型组（用于 #progm 指令）
+#     gemini3: Gemini 3 模型组（用于 #3gm, #3bnn 指令）
+#   每个模型组包含：
+#     chat_models: 对话模型列表
+#     draw_models: 绘图模型列表
+
+- id: "your-provider-id"
+  name: "供应商名称"
+  base_url: "https://api.example.com/v1"
+  api_key: "your-api-key-here"
+  model_groups:
+    # 默认组 (Flash): 用于 #gm, #bnn 等指令
+    default:
+      chat_models:
+        - "gemini-2.5-flash"
+      draw_models:
+        - "gemini-2.5-flash-image"
+
+    # 专业组 (Pro): 用于 #progm 指令
+    pro:
+      chat_models:
+        - "gemini-2.5-pro"
+      draw_models: []
+
+    # 旗舰组 (Gemini 3): 用于 #3gm, #3bnn 等指令
+    gemini3:
+      chat_models:
+        - "gemini-3-pro"
+      draw_models: []
+`
+            fs.writeFileSync(MODELS_CONFIG_FILE, defaultConfig, 'utf8')
             return
         }
 
@@ -54,7 +91,13 @@ export class GeminiClient {
                 this.modelStatus = {}
             }
         } else {
+            logger.info(`[AI-Plugin] 未找到模型状态文件，将在 ${MODEL_STATUS_FILE} 创建默认文件。`)
             this.modelStatus = {}
+            const defaultModelStatus = `{
+  "_comment": "模型测试状态文件，由插件自动管理",
+  "_format": "键名格式: 供应商ID-模型ID, 值包含 status(状态), responseTime(响应时间), usage(用量), lastTested(最后测试时间)"
+}`
+            fs.writeFileSync(MODEL_STATUS_FILE, defaultModelStatus, 'utf8')
         }
     }
 
@@ -73,7 +116,12 @@ export class GeminiClient {
                 this.disabledModels = new Set(JSON.parse(data))
                 logger.debug(`[AI-Plugin] 成功加载 ${this.disabledModels.size} 个禁用的模型。`)
             } else {
+                logger.info(`[AI-Plugin] 未找到禁用模型列表文件，将在 ${DISABLED_MODELS_FILE} 创建默认文件。`)
                 this.disabledModels = new Set()
+                const defaultDisabledModels = `[
+  "_comment": "禁用的模型ID列表，由插件自动管理"
+]`
+                fs.writeFileSync(DISABLED_MODELS_FILE, defaultDisabledModels, 'utf8')
             }
         } catch (error) {
             logger.error('[AI-Plugin] 加载禁用模型列表文件失败:', error)
