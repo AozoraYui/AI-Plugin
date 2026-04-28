@@ -12,7 +12,7 @@ async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
     const images = []
 
     if (depth >= maxDepth) {
-        return { text: '--- [嵌套层级过深，停止展开] ---', images: [] }
+        return { text: '【嵌套层级过深，停止展开】', images: [] }
     }
 
     try {
@@ -23,8 +23,8 @@ async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
             return { text: '', images: [] }
         }
 
-        const indent = '  '.repeat(depth)
-        textParts.push(`${indent}--- [已展开合并转发消息${depth > 0 ? ` (第${depth}层嵌套)` : ''}] ---`)
+        const layerTag = depth > 0 ? `第${depth}层` : ''
+        textParts.push(`【合并转发消息${layerTag} 开始】`)
 
         for (const subMsg of details.slice(0, 100)) {
             const sender = subMsg.nickname || subMsg.sender?.nickname || "未知用户"
@@ -36,17 +36,17 @@ async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
                 images.push(...expanded.images)
             } else if (typeof msgArray === 'string') {
                 if (msgArray.trim()) {
-                    textParts.push(`${indent}[${sender}]: ${msgArray}`)
+                    textParts.push(`[${sender}]: ${msgArray}`)
                 }
             } else {
                 logger.info(`[AI-Plugin] msgArray 类型异常: ${typeof msgArray}, 内容: ${JSON.stringify(msgArray).slice(0, 300)}`)
             }
         }
 
-        textParts.push(`${indent}--- [合并转发结束] ---`)
+        textParts.push(`【合并转发消息${layerTag} 结束】`)
     } catch (err) {
         logger.warn(`[AI-Plugin] 展开合并转发失败 (深度${depth}):`, err)
-        return { text: `--- [展开失败: ${err.message}] ---`, images: [] }
+        return { text: `【展开失败: ${err.message}】`, images: [] }
     }
 
     return { text: textParts.join('\n'), images }
@@ -55,10 +55,9 @@ async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
 async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 0, maxDepth = 5) {
     const textParts = []
     const images = []
-    const indent = '  '.repeat(depth)
 
     if (depth >= maxDepth) {
-        return { text: '--- [嵌套层级过深，停止展开] ---', images: [] }
+        return { text: '【嵌套层级过深，停止展开】', images: [] }
     }
 
     let subText = ""
@@ -76,8 +75,10 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
             const nestedContent = seg.data?.content || seg.content
             if (Array.isArray(nestedContent)) {
                 logger.info(`[AI-Plugin] 发现内联合并消息 (type=forward, 内联content)，开始递归展开 (深度${depth + 1})`)
+                const layerTag = `第${depth + 1}层`
+                textParts.push(`【${layerTag}嵌套消息 开始】`)
                 for (const nestedMsg of nestedContent) {
-                    const nestedSender = nestedMsg.nickname || nestedMsg.sender?.nickname || sender
+                    const nestedSender = nestedMsg.nickname || nestedMsg.sender?.nickname || "未知用户"
                     const nestedMsgArray = nestedMsg.content || nestedMsg.message
                     if (Array.isArray(nestedMsgArray)) {
                         const nested = await expandInlineContent(bot, nestedMsgArray, nestedSender, depth + 1, maxDepth)
@@ -85,17 +86,19 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
                         images.push(...nested.images)
                     }
                 }
+                textParts.push(`【${layerTag}嵌套消息 结束】`)
                 if (subText.trim()) {
-                    textParts.push(`${indent}[${sender}]: ${subText}`)
+                    textParts.push(`[${sender}]: ${subText}`)
                     subText = ""
                 }
             } else if (nestedId) {
                 logger.info(`[AI-Plugin] 发现嵌套合并消息 (type=forward, id=${nestedId})，开始递归展开 (深度${depth + 1})`)
                 const nested = await expandForwardMsg(bot, nestedId, depth + 1, maxDepth)
                 if (subText.trim()) {
-                    textParts.push(`${indent}[${sender}] (嵌套消息):`)
-                    textParts.push(nested.text)
+                    textParts.push(`[${sender}]: ${subText}`)
+                    subText = ""
                 }
+                textParts.push(nested.text)
                 images.push(...nested.images)
             }
         } else if ((seg.type === 'json' || seg.type === 'xml') && seg.data) {
@@ -105,9 +108,10 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
                 logger.info(`[AI-Plugin] 从 JSON/XML 中发现嵌套 resid: ${nestedResid}，开始递归展开 (深度${depth + 1})`)
                 const nested = await expandForwardMsg(bot, nestedResid, depth + 1, maxDepth)
                 if (subText.trim()) {
-                    textParts.push(`${indent}[${sender}] (嵌套消息):`)
-                    textParts.push(nested.text)
+                    textParts.push(`[${sender}]: ${subText}`)
+                    subText = ""
                 }
+                textParts.push(nested.text)
                 images.push(...nested.images)
             }
         } else {
@@ -116,7 +120,7 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
     }
 
     if (subText.trim()) {
-        textParts.push(`${indent}[${sender}]: ${subText}`)
+        textParts.push(`[${sender}]: ${subText}`)
     }
 
     return { text: textParts.join('\n'), images }
