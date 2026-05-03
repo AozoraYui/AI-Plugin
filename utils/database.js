@@ -86,8 +86,15 @@ export class AIDatabase {
                         logger.debug('[AI-Plugin] checkpoint_type 字段迁移:', alterErr.message)
                     }
 
-                    // 检查表状态并处理
-                    this.checkAndCreateUserHistoriesTable(resolve, reject)
+                    // 将所有现有记录的 checkpoint_type 设置为 'incremental'（兼容旧数据）
+                    this.db.run(`UPDATE memory_checkpoints SET checkpoint_type = 'incremental' WHERE checkpoint_type IS NULL`, (updateErr) => {
+                        if (updateErr) {
+                            logger.debug('[AI-Plugin] checkpoint_type 数据迁移:', updateErr.message)
+                        }
+
+                        // 检查表状态并处理
+                        this.checkAndCreateUserHistoriesTable(resolve, reject)
+                    })
                 })
             })
         })
