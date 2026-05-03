@@ -18,6 +18,7 @@ export class MemoryHandler extends plugin {
             rule: [
                 { reg: /^#([a-zA-Z0-9]*)gemini创建全量总结$/i, fnc: "createFullCheckpoint" },
                 { reg: /^#([a-zA-Z0-9]*)gemini创建增量总结$/i, fnc: "createIncrementalCheckpoint" },
+                { reg: /^#([a-zA-Z0-9]*)gemini批量增量总结$/i, fnc: "batchIncrementalSummaries" },
                 { reg: /^#gemini总结记忆列表$/i, fnc: "listMemorySummaries" },
             ]
         })
@@ -336,5 +337,117 @@ ${dayContent}`
 
         const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
         await e.reply(forwardMsg)
+    }
+
+    async batchIncrementalSummaries(e) {
+        if (!await checkAccess(e)) return true
+
+        const userIdStr = String(e.user_id)
+        const todayStr = getTodayDateStr()
+
+        const prefixMatch = e.msg.match(/^#([a-zA-Z0-9]*)gemini/i)
+        const prefix = prefixMatch ? (prefixMatch[1] || '').toLowerCase() : ''
+        let modelGroupKey = 'default'
+        if (prefix === 'pro') modelGroupKey = 'pro'
+        else if (prefix === '3') modelGroupKey = 'gemini3'
+
+        let modelDisplay = "Flash模型组"
+        if (modelGroupKey === 'pro') modelDisplay = "Pro模型组"
+        if (modelGroupKey === 'gemini3') modelDisplay = "Gemini 3模型组"
+
+        // 从数据库获取所有日期
+        const dateDirs = await this.conversationManager.db.getDistinctDates(userIdStr)
+        if (dateDirs.length === 0) {
+            return e.reply(`${Config.AI_NAME}找遍了柜子，目前还没有任何按日期的历史存档呢。`)
+        }
+
+        dateDirs.sort()
+
+        // 找出所有"未总结"的日期（没有checkpoint且不是今天）
+        const unsummarizedDates = []
+        for (const date of dateDirs) {
+            if (date === todayStr) continue
+            const dbCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, date)
+            if (!dbCheckpoint) {
+                unsummarizedDates.push(date)
+            }
+        }
+
+        if (unsummarizedDates.length === 0) {
+            return e.reply(`✨ 所有日期都已经总结过啦！没有需要批量处理的日期哦。`)
+        }
+
+        await e.reply(`📚 开始批量增量总结 [${modelDisplay}]...\n共找到 ${unsummarizedDates.length} 个未总结的日期，正在逐个处理...`, true)
+
+        const startTime = Date.now()
+        let successCount = 0
+        let failCount = 0
+        let processedDates = []
+
+        for (const dateDir of unsummarizedDates) {
+            try {
+                // 获取该日期的摘要
+                const summary = await this._getOrCreateDailySummary(dateDir, userIdStr, modelGroupKey)
+                if (!summary) {
+                    failCount++
+                    continue
+                }
+
+                const cleanSummary = summary.replace(/^【.*?】:\s*/, '')
+
+                // 获取该日期之前的最新checkpoint作为基础
+                const previousDates = dateDirs.filter(d => d < dateDir)
+                let baseCheckpointContent = ""
+                let baseCheckpointDate = null
+
+                for (const prevDate of previousDates.reverse()) {
+                    const prevCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, prevDate)
+                    if (prevCheckpoint) {
+                        baseCheckpointDate = prevDate
+                        baseCheckpointContent = prevCheckpoint.content
+                        break
+                    }
+                }
+
+                // 构建增量总结内容
+                let finalContext = ""
+                if (baseCheckpointDate && baseCheckpointContent) {
+                    finalContext += `\n=== 📜 【核心记忆存档 (截止于 ${baseCheckpointDate})】 ===\n${baseCheckpointContent}\n`
+                }
+                finalContext += `\n=== ➕ 【增量记忆 (${dateDir})】 ===\n${cleanSummary}\n`
+
+                const currentTime = new Date().toLocaleString('zh-CN', { hour12: false })
+                let finalPrompt = `你是一位专业的传记作家和档案管理员。现在是【${currentTime}】。\n`
+                if (baseCheckpointDate) {
+                    finalPrompt += `这是一次【记忆存档接力 (Update)】操作。请基于旧的【核心记忆存档】，合并后续的【增量记忆】，生成一份**最新的**人生总结报告。**关键要求**：旧存档中的核心设定（背景、性格、长期经历）非常重要，请务必继承和保留，不要丢失细节。\n`
+                } else {
+                    finalPrompt += `这是一次【记忆存档重构 (Rebuild)】操作。请阅读以下用户的【每日摘要】，将这些碎片化的信息整合成一份**完整的、连贯的**人生总结报告。\n`
+                }
+                finalPrompt += `输出要求：\n1. 报告将作为**新的存档文件**保存，供未来使用，请确保信息密度高。\n2. 请用第三人称叙述。\n3. 重点关注：用户的性格变化、核心人际关系、重要事件的时间线。\n\n--- 🗂️ 待处理数据 ---\n${finalContext}\n--- 数据结束 ---`
+
+                const payload = { "contents": [{ "role": "user", "parts": [{ "text": finalPrompt }] }] }
+                const result = await this.client.makeRequest('chat', payload, modelGroupKey, 65536)
+
+                if (result.success) {
+                    const newSummary = result.data
+                    await this.conversationManager.db.saveCheckpoint(userIdStr, newSummary, dateDir, 0, 'incremental')
+                    successCount++
+                    processedDates.push(dateDir)
+                    logger.info(`[AI-Plugin] 批量增量总结成功: ${dateDir}`)
+                } else {
+                    failCount++
+                    logger.warn(`[AI-Plugin] 批量增量总结失败: ${dateDir}, 错误: ${result.error}`)
+                }
+            } catch (err) {
+                failCount++
+                logger.error(`[AI-Plugin] 批量增量总结异常: ${dateDir}`, err)
+            }
+        }
+
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
+
+        const resultMsg = `✅ 批量增量总结完成！\n⏱️ 总耗时: ${elapsed}s\n📊 成功: ${successCount}个 | 失败: ${failCount}个\n📅 处理日期: ${processedDates.slice(-5).join(', ')}${processedDates.length > 5 ? ` 等${processedDates.length}个` : ''}`
+
+        await e.reply(resultMsg)
     }
 }
