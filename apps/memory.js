@@ -190,8 +190,9 @@ ${dayContent}`
 
                 const modelInfo = result.platform ? `\n🔮 模型: ${result.platform}` : ''
 
-                // 保存到数据库
-                await this.conversationManager.db.saveCheckpoint(e.user_id, newSummary, todayStr)
+                // 保存到数据库，记录锚点类型
+                const checkpointType = isFullRebuild ? 'full' : 'incremental'
+                await this.conversationManager.db.saveCheckpoint(e.user_id, newSummary, todayStr, 0, checkpointType)
 
                 let currentHistory = await this.conversationManager.getUserHistory(e.user_id)
                 currentHistory.push({
@@ -270,7 +271,8 @@ ${dayContent}`
         let listContent = []
         let totalDays = 0
         let summarizedCount = 0
-        let checkpointCount = 0
+        let fullCheckpointCount = 0
+        let incrementalCheckpointCount = 0
         const todayStr = getTodayDateStr()
 
         for (const date of dateDirs) {
@@ -291,9 +293,16 @@ ${dayContent}`
                 statusIcon = "📝"
                 statusText = "(记录中)"
             } else if (hasCheckpoint) {
-                statusIcon = "💾"
-                statusText = "(锚点存档)"
-                checkpointCount++
+                const checkpointType = dbCheckpoint.checkpointType || 'incremental'
+                if (checkpointType === 'full') {
+                    statusIcon = "💾"
+                    statusText = "(全量锚点)"
+                    fullCheckpointCount++
+                } else {
+                    statusIcon = "🔗"
+                    statusText = "(增量锚点)"
+                    incrementalCheckpointCount++
+                }
                 summarizedCount++
             } else if (hasSummary) {
                 statusIcon = "✅"
@@ -313,7 +322,7 @@ ${dayContent}`
 
         listContent.reverse()
 
-        const header = `📜 记忆档案列表 (共${totalDays}天)\n💾 锚点存档: ${checkpointCount}个\n✅ 每日摘要: ${summarizedCount}天\n- - - - - - - - - -`
+        const header = `📜 记忆档案列表 (共${totalDays}天)\n💾 全量锚点: ${fullCheckpointCount}个\n🔗 增量锚点: ${incrementalCheckpointCount}个\n✅ 每日摘要: ${summarizedCount}天\n- - - - - - - - - -`
 
         const forwardMsgNodes = [
             {
@@ -324,11 +333,11 @@ ${dayContent}`
             {
                 user_id: Bot.uin,
                 nickname: "图例说明",
-                message: "💾 锚点存档：包含该日期之前的所有核心记忆 (里程碑)。\n✅ 已总结：该日期的流水账已生成摘要 (增量)。\n☁️ 未总结：原始对话尚未处理。\n📝 记录中：今天的实时对话。"
+                message: "💾 全量锚点：包含该日期之前的所有核心记忆 (里程碑)。\n🔗 增量锚点：基于上一个锚点的接力存档 (快速存档)。\n✅ 已总结：该日期的流水账已生成摘要 (增量)。\n☁️ 未总结：原始对话尚未处理。\n📝 记录中：今天的实时对话。"
             }
         ]
 
-        if (checkpointCount === 0 && summarizedCount < totalDays - 1) {
+        if (fullCheckpointCount === 0 && incrementalCheckpointCount === 0 && summarizedCount < totalDays - 1) {
             forwardMsgNodes.push({
                 user_id: Bot.uin,
                 nickname: "提示",

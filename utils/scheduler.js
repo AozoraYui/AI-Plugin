@@ -124,8 +124,8 @@ ${dayContent}`
             return
         }
 
-        // 保存到数据库，附带消息计数
-        await global.AIPluginConversationManager.db.saveCheckpoint(userId, finalContext, today, messageCount)
+        // 保存到数据库，附带消息计数和锚点类型
+        await global.AIPluginConversationManager.db.saveCheckpoint(userId, finalContext, today, messageCount, 'incremental')
         logger.info(`[AI-Plugin] 为用户 ${userId} 创建增量锚点成功: ${today}`)
     }
 
@@ -202,8 +202,8 @@ ${dayContent}`
             return
         }
 
-        // 保存到数据库
-        await global.AIPluginConversationManager.db.saveCheckpoint(userId, finalContext, today)
+        // 保存到数据库，记录锚点类型
+        await global.AIPluginConversationManager.db.saveCheckpoint(userId, finalContext, today, 0, 'full')
         logger.info(`[AI-Plugin] 为用户 ${userId} 创建全量锚点成功: ${today}`)
     }
 }
