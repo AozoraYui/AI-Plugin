@@ -37,6 +37,7 @@ export class AIDatabase {
                     content TEXT NOT NULL,
                     date_str TEXT NOT NULL,
                     message_count INTEGER DEFAULT 0,
+                    checkpoint_type TEXT DEFAULT 'incremental',
                     created_at DATETIME DEFAULT (datetime('now', '+8 hours')),
                     UNIQUE(user_id, date_str)
                 );
@@ -78,8 +79,16 @@ export class AIDatabase {
                     return
                 }
 
-                // 检查表状态并处理
-                this.checkAndCreateUserHistoriesTable(resolve, reject)
+                // 为已存在的表添加 checkpoint_type 字段（如果不存在）
+                this.db.run(`ALTER TABLE memory_checkpoints ADD COLUMN checkpoint_type TEXT DEFAULT 'incremental'`, (alterErr) => {
+                    // 忽略字段已存在的错误
+                    if (alterErr && alterErr.message && !alterErr.message.includes('duplicate column')) {
+                        logger.debug('[AI-Plugin] checkpoint_type 字段迁移:', alterErr.message)
+                    }
+
+                    // 检查表状态并处理
+                    this.checkAndCreateUserHistoriesTable(resolve, reject)
+                })
             })
         })
     }
@@ -448,13 +457,13 @@ export class AIDatabase {
 
     // ========== 全量锚点方法（对应 memory_checkpoints/用户_日期.txt） ==========
 
-    saveCheckpoint(userId, content, dateStr, messageCount = 0) {
+    saveCheckpoint(userId, content, dateStr, messageCount = 0, checkpointType = 'incremental') {
         return new Promise((resolve, reject) => {
             this.db.run(`
-                INSERT INTO memory_checkpoints (user_id, content, date_str, message_count)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(user_id, date_str) DO UPDATE SET content = ?, message_count = ?, created_at = datetime('now', '+8 hours')
-            `, [String(userId), content, dateStr, messageCount, content, messageCount], (err) => {
+                INSERT INTO memory_checkpoints (user_id, content, date_str, message_count, checkpoint_type)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, date_str) DO UPDATE SET content = ?, message_count = ?, checkpoint_type = ?, created_at = datetime('now', '+8 hours')
+            `, [String(userId), content, dateStr, messageCount, checkpointType, content, messageCount, checkpointType], (err) => {
                 if (err) reject(err)
                 else resolve()
             })
@@ -463,13 +472,13 @@ export class AIDatabase {
 
     getCheckpoint(userId, dateStr) {
         return new Promise((resolve, reject) => {
-            this.db.get('SELECT content, message_count, created_at FROM memory_checkpoints WHERE user_id = ? AND date_str = ?',
+            this.db.get('SELECT content, message_count, checkpoint_type, created_at FROM memory_checkpoints WHERE user_id = ? AND date_str = ?',
                 [String(userId), dateStr], (err, row) => {
                     if (err) {
                         reject(err)
                         return
                     }
-                    resolve(row ? { content: row.content, messageCount: row.message_count, createdAt: row.created_at } : null)
+                    resolve(row ? { content: row.content, messageCount: row.message_count, checkpointType: row.checkpoint_type, createdAt: row.created_at } : null)
                 })
         })
     }
