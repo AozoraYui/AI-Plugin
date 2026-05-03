@@ -16,8 +16,8 @@ export class MemoryHandler extends plugin {
             event: 'message',
             priority: 1146,
             rule: [
-                { reg: /^#([a-zA-Z0-9]*)gemini创建全量锚点$/i, fnc: "createFullCheckpoint" },
-                { reg: /^#([a-zA-Z0-9]*)gemini创建增量锚点$/i, fnc: "createIncrementalCheckpoint" },
+                { reg: /^#([a-zA-Z0-9]*)gemini创建全量总结$/i, fnc: "createFullCheckpoint" },
+                { reg: /^#([a-zA-Z0-9]*)gemini创建增量总结$/i, fnc: "createIncrementalCheckpoint" },
                 { reg: /^#gemini总结记忆列表$/i, fnc: "listMemorySummaries" },
             ]
         })
@@ -94,7 +94,7 @@ ${dayContent}`
                 baseCheckpointDate = latestCheckpoint.dateStr
                 baseCheckpointContent = latestCheckpoint.content
                 if (baseCheckpointDate === todayStr) {
-                    return e.reply("📅 今天已经创建过锚点啦！无需重复创建。\n如果想强制刷新，请使用 #gemini创建全量锚点")
+                    return e.reply("📅 今天已经创建过总结啦！无需重复创建。\n如果想强制刷新，请使用 #gemini创建全量总结")
                 }
             }
         }
@@ -270,7 +270,6 @@ ${dayContent}`
 
         let listContent = []
         let totalDays = 0
-        let summarizedCount = 0
         let fullCheckpointCount = 0
         let incrementalCheckpointCount = 0
         const todayStr = getTodayDateStr()
@@ -278,13 +277,8 @@ ${dayContent}`
         for (const date of dateDirs) {
             totalDays++
 
-            // 从数据库检查是否有摘要缓存
-            const dbSummary = await this.conversationManager.db.getSummaryCache(userIdStr, date)
-            const hasSummary = !!dbSummary
-
             // 从数据库检查是否有锚点
             const dbCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, date)
-            const hasCheckpoint = !!dbCheckpoint
 
             let statusIcon = ""
             let statusText = ""
@@ -292,22 +286,17 @@ ${dayContent}`
             if (date === todayStr) {
                 statusIcon = "📝"
                 statusText = "(记录中)"
-            } else if (hasCheckpoint) {
+            } else if (dbCheckpoint) {
                 const checkpointType = dbCheckpoint.checkpointType || 'incremental'
                 if (checkpointType === 'full') {
                     statusIcon = "💾"
-                    statusText = "(全量锚点)"
+                    statusText = "(全量总结)"
                     fullCheckpointCount++
                 } else {
                     statusIcon = "🔗"
-                    statusText = "(增量锚点)"
+                    statusText = "(增量总结)"
                     incrementalCheckpointCount++
                 }
-                summarizedCount++
-            } else if (hasSummary) {
-                statusIcon = "✅"
-                statusText = "(已总结)"
-                summarizedCount++
             } else {
                 statusIcon = "☁️"
                 statusText = "(未总结)"
@@ -322,7 +311,7 @@ ${dayContent}`
 
         listContent.reverse()
 
-        const header = `📜 记忆档案列表 (共${totalDays}天)\n💾 全量锚点: ${fullCheckpointCount}个\n🔗 增量锚点: ${incrementalCheckpointCount}个\n✅ 每日摘要: ${summarizedCount}天\n- - - - - - - - - -`
+        const header = `📜 记忆档案列表 (共${totalDays}天)\n💾 全量总结: ${fullCheckpointCount}个\n🔗 增量总结: ${incrementalCheckpointCount}个\n- - - - - - - - - -`
 
         const forwardMsgNodes = [
             {
@@ -333,15 +322,15 @@ ${dayContent}`
             {
                 user_id: Bot.uin,
                 nickname: "图例说明",
-                message: "💾 全量锚点：包含该日期之前的所有核心记忆 (里程碑)。\n🔗 增量锚点：基于上一个锚点的接力存档 (快速存档)。\n✅ 已总结：该日期的流水账已生成摘要 (增量)。\n☁️ 未总结：原始对话尚未处理。\n📝 记录中：今天的实时对话。"
+                message: "💾 全量总结：包含该日期之前的所有核心记忆 (里程碑)。\n🔗 增量总结：基于上一个总结的接力存档 (每天23:50自动创建)。\n☁️ 未总结：原始对话尚未处理。\n📝 记录中：今天的实时对话。"
             }
         ]
 
-        if (fullCheckpointCount === 0 && incrementalCheckpointCount === 0 && summarizedCount < totalDays - 1) {
+        if (fullCheckpointCount === 0 && incrementalCheckpointCount === 0) {
             forwardMsgNodes.push({
                 user_id: Bot.uin,
                 nickname: "提示",
-                message: "💡 建议使用 #gemini创建全量锚点 来生成你的第一个记忆里程碑哦！"
+                message: "💡 建议使用 #gemini创建全量总结 来生成你的第一个记忆里程碑哦！"
             })
         }
 
