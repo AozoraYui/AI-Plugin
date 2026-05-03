@@ -92,6 +92,19 @@ export class AIDatabase {
                             logger.debug('[AI-Plugin] checkpoint_type 数据迁移:', updateErr.message)
                         }
 
+                        // 通过内容特征识别旧的全量总结（包含"人生总结报告"或"完整的、连贯的"等关键词）
+                        this.db.run(`UPDATE memory_checkpoints SET checkpoint_type = 'full' WHERE checkpoint_type = 'incremental' AND (content LIKE '%人生总结报告%' OR content LIKE '%完整的、连贯的%')`, (fullUpdateErr) => {
+                            if (fullUpdateErr) {
+                                logger.debug('[AI-Plugin] 全量总结识别迁移:', fullUpdateErr.message)
+                            } else {
+                                this.db.get(`SELECT COUNT(*) as count FROM memory_checkpoints WHERE checkpoint_type = 'full'`, (err, row) => {
+                                    if (!err && row) {
+                                        logger.info(`[AI-Plugin] 已自动识别 ${row.count} 个旧的全量总结记录`)
+                                    }
+                                })
+                            }
+                        })
+
                         // 检查表状态并处理
                         this.checkAndCreateUserHistoriesTable(resolve, reject)
                     })
