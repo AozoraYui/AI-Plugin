@@ -102,17 +102,30 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
                 images.push(...nested.images)
             }
         } else if ((seg.type === 'json' || seg.type === 'xml') && seg.data) {
-            const residMatch = seg.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
-            if (residMatch) {
-                const nestedResid = residMatch[1]
-                logger.info(`[AI-Plugin] 从 JSON/XML 中发现嵌套 resid: ${nestedResid}，开始递归展开 (深度${depth + 1})`)
-                const nested = await expandForwardMsg(bot, nestedResid, depth + 1, maxDepth)
-                if (subText.trim()) {
-                    textParts.push(`[${sender}]: ${subText}`)
-                    subText = ""
+            if (typeof seg.data === 'string') {
+                const residMatch = seg.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
+                if (residMatch) {
+                    const nestedResid = residMatch[1]
+                    logger.info(`[AI-Plugin] 从 JSON/XML 中发现嵌套 resid: ${nestedResid}，开始递归展开 (深度${depth + 1})`)
+                    const nested = await expandForwardMsg(bot, nestedResid, depth + 1, maxDepth)
+                    if (subText.trim()) {
+                        textParts.push(`[${sender}]: ${subText}`)
+                        subText = ""
+                    }
+                    textParts.push(nested.text)
+                    images.push(...nested.images)
                 }
-                textParts.push(nested.text)
-                images.push(...nested.images)
+            } else if (typeof seg.data === 'object') {
+                const cardFields = ['prompt', 'title', 'desc', 'content', 'summary', 'text', 'brief', 'meta', 'news', 'source']
+                const texts = []
+                for (const field of cardFields) {
+                    if (seg.data[field] && typeof seg.data[field] === 'string' && seg.data[field].trim()) {
+                        texts.push(seg.data[field].trim())
+                    }
+                }
+                if (texts.length > 0) {
+                    subText += ` [卡片: ${texts.join(' | ')}] `
+                }
             }
         } else {
             logger.info(`[AI-Plugin] 消息段类型: ${seg.type}, 内容预览: ${JSON.stringify(seg).slice(0, 300)}`)
@@ -194,11 +207,24 @@ export class ChatHandler extends plugin {
                         if (m.type === 'forward' && m.id) {
                             resid = m.id
                         } else if ((m.type === 'json' || m.type === 'xml') && m.data) {
-                            const residMatch = m.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
-                            if (residMatch) resid = residMatch[1]
-                            if (!resid) {
-                                const templateMatch = m.data.match(/template-id"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
-                                if (templateMatch) resid = templateMatch[1]
+                            if (typeof m.data === 'string') {
+                                const residMatch = m.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
+                                if (residMatch) resid = residMatch[1]
+                                if (!resid) {
+                                    const templateMatch = m.data.match(/template-id"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
+                                    if (templateMatch) resid = templateMatch[1]
+                                }
+                            } else if (typeof m.data === 'object') {
+                                const cardFields = ['prompt', 'title', 'desc', 'content', 'summary', 'text', 'brief', 'meta', 'news', 'source']
+                                const texts = []
+                                for (const field of cardFields) {
+                                    if (m.data[field] && typeof m.data[field] === 'string' && m.data[field].trim()) {
+                                        texts.push(m.data[field].trim())
+                                    }
+                                }
+                                if (texts.length > 0) {
+                                    replyText += `\n[卡片: ${texts.join(' | ')}]\n`
+                                }
                             }
                         }
 
