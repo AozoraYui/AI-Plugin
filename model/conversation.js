@@ -1,14 +1,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { USER_PROFILES_FILE, HISTORY_DIR, CHECKPOINT_DIR, SUMMARY_CACHE_DIR } from '../utils/config.js'
+import { HISTORY_DIR, CHECKPOINT_DIR, SUMMARY_CACHE_DIR } from '../utils/config.js'
 import { AIDatabase } from '../utils/database.js'
 import { getTodayDateStr } from '../utils/common.js'
 
 export class ConversationManager {
     constructor() {
         this.db = new AIDatabase()
-        this.userProfiles = new Map()
-        this.loadUserProfiles()
         this._initPromise = this._initialize()
     }
 
@@ -20,27 +18,6 @@ export class ConversationManager {
     async waitForMigration() {
         if (this._initPromise) {
             await this._initPromise
-        }
-    }
-
-    loadUserProfiles() {
-        try {
-            if (fs.existsSync(USER_PROFILES_FILE)) {
-                const data = fs.readFileSync(USER_PROFILES_FILE, 'utf8')
-                this.userProfiles = new Map(JSON.parse(data))
-                logger.info(`[AI-Plugin] 成功加载 ${this.userProfiles.size} 条用户档案。`)
-            }
-        } catch (err) {
-            logger.error('[AI-Plugin] 加载用户档案失败:', err)
-        }
-    }
-
-    saveUserProfiles() {
-        try {
-            const data = JSON.stringify(Array.from(this.userProfiles.entries()), null, 2)
-            fs.writeFileSync(USER_PROFILES_FILE, data, 'utf8')
-        } catch (err) {
-            logger.error('[AI-Plugin] 保存用户档案失败:', err)
         }
     }
 
@@ -188,7 +165,7 @@ export class ConversationManager {
             return
         }
 
-        if (!fs.existsSync(this.SUMMARY_CACHE_DIR)) {
+        if (!fs.existsSync(SUMMARY_CACHE_DIR)) {
             logger.info('[AI-Plugin] 未找到增量锚点目录，无需迁移。')
             await this.db.setSummaryMigrationStatus(true)
             return
@@ -198,13 +175,13 @@ export class ConversationManager {
         let migratedCount = 0
 
         try {
-            const dateDirs = fs.readdirSync(this.SUMMARY_CACHE_DIR).filter(name => {
-                const fullPath = path.join(this.SUMMARY_CACHE_DIR, name)
+            const dateDirs = fs.readdirSync(SUMMARY_CACHE_DIR).filter(name => {
+                const fullPath = path.join(SUMMARY_CACHE_DIR, name)
                 return /^\d{4}-\d{2}-\d{2}$/.test(name) && fs.statSync(fullPath).isDirectory()
             })
 
             for (const dateDir of dateDirs) {
-                const dirPath = path.join(this.SUMMARY_CACHE_DIR, dateDir)
+                const dirPath = path.join(SUMMARY_CACHE_DIR, dateDir)
                 const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.txt'))
 
                 for (const file of files) {
@@ -374,43 +351,6 @@ export class ConversationManager {
             logger.error(`[AI-Plugin] 重置对话历史失败:`, error)
             return false
         }
-    }
-
-    async getUserProfile(userId) {
-        const profile = await this.db.getUserProfile(userId)
-        if (profile) return profile
-
-        const userProfileId = `private_${userId}`
-        const localProfile = this.userProfiles.get(userProfileId)
-        if (localProfile) {
-            await this.db.saveUserProfile(userId, localProfile.info)
-            return localProfile
-        }
-        return null
-    }
-
-    async saveUserProfile(userId, info) {
-        const userProfileId = `private_${userId}`
-        this.userProfiles.set(userProfileId, { info, lastUpdated: new Date().toISOString() })
-        this.saveUserProfiles()
-        await this.db.saveUserProfile(userId, info)
-    }
-
-    async deleteUserProfile(userId) {
-        const userProfileId = `private_${userId}`
-        let deleted = false
-
-        if (this.userProfiles.has(userProfileId)) {
-            this.userProfiles.delete(userProfileId)
-            this.saveUserProfiles()
-            deleted = true
-        }
-
-        if (await this.db.deleteUserProfile(userId)) {
-            deleted = true
-        }
-
-        return deleted
     }
 
     _ensureSummaryCacheDir() {

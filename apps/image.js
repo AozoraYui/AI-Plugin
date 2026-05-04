@@ -123,7 +123,7 @@ export class ImageHandler extends plugin {
                 }
             }
 
-            const imagesToProcess = allImages.slice(0, 16)
+            const imagesToProcess = allImages.slice(0, Config.MAX_IMAGES_PER_MESSAGE)
 
             if (imagesToProcess.length === 0 && !isCustomCommand) {
                 await setMsgEmojiLike(e, 10)
@@ -488,6 +488,8 @@ export class ImageHandler extends plugin {
     }
 
     _savePresets(presets) {
-        fs.writeFileSync(PRESETS_FILE, yaml.stringify(presets), 'utf8')
+        const tmpFile = PRESETS_FILE + '.tmp'
+        fs.writeFileSync(tmpFile, yaml.stringify(presets), 'utf8')
+        fs.renameSync(tmpFile, PRESETS_FILE)
     }
 }

@@ -90,6 +90,68 @@ export function getTodayDateStr() {
     return `${year}-${month}-${day}`
 }
 
+export function getBeijingTime() {
+    const now = new Date()
+    const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000)
+    return beijingTime
+}
+
+export function getBeijingTimeStr() {
+    const beijingTime = getBeijingTime()
+    return beijingTime.toISOString().replace('T', ' ').substring(0, 19) + ' (北京时间)'
+}
+
+export function getDBTimestamp() {
+    const now = new Date()
+    const year = now.getUTCFullYear()
+    const month = String(now.getUTCMonth() + 1).padStart(2, '0')
+    const day = String(now.getUTCDate()).padStart(2, '0')
+    const hours = String(now.getUTCHours()).padStart(2, '0')
+    const minutes = String(now.getUTCMinutes()).padStart(2, '0')
+    const seconds = String(now.getUTCSeconds()).padStart(2, '0')
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
+}
+
+export async function generateDailySummary(client, userId, dateDir, dayHistory, modelGroupKey = 'default') {
+    if (dayHistory.length === 0) return ""
+
+    let dayContent = ""
+    const aiName = Config.AI_NAME || '诺亚'
+    for (const turn of dayHistory) {
+        const role = turn.role === 'user' ? '用户' : aiName
+        const text = turn.parts.map(p => p.text).join(' ')
+        if (text) dayContent += `${role}: ${text}\n`
+    }
+
+    if (!dayContent.trim()) return ""
+
+    // 从数据库获取摘要缓存
+    const dbSummary = await global.AIPluginConversationManager.db.getSummaryCache(userId, dateDir)
+    if (dbSummary) {
+        return dbSummary.content
+    }
+
+    logger.info(`[AI-Plugin] 正在为 ${dateDir} 生成新摘要...`)
+    const summaryPrompt = `
+请将以下这段发生在【${dateDir}】的对话概括为一个简短的摘要（${Config.SUMMARY_MAX_LENGTH}字以内）。
+重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
+直接输出摘要内容，不要加"好的"等客套话。
+对话内容：
+${dayContent}`
+
+    const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
+    const result = await client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
+
+    if (result.success) {
+        const summaryText = result.data.trim()
+        await global.AIPluginConversationManager.db.saveSummaryCache(userId, summaryText, dateDir)
+        return summaryText
+    } else {
+        logger.warn(`[AI-Plugin] ${dateDir} 摘要生成失败: ${result.error}`)
+        return `【${dateDir} 原始片段】: ${dayContent.slice(0, 500)}...`
+    }
+}
+
 export async function getAvatarUrl(qq) {
     return `https://q1.qlogo.cn/g?b=qq&nk=${qq}&s=640`
 }

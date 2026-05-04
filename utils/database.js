@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import sqlite3 from 'sqlite3'
+import { getDBTimestamp } from './common.js'
 
 const _path = process.cwd()
 const DATA_DIR = path.join(_path, 'data', 'ai_assistant')
@@ -38,7 +39,7 @@ export class AIDatabase {
                     date_str TEXT NOT NULL,
                     message_count INTEGER DEFAULT 0,
                     checkpoint_type TEXT DEFAULT 'incremental',
-                    created_at DATETIME DEFAULT (datetime('now', '+8 hours')),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(user_id, date_str)
                 );
 
@@ -51,7 +52,7 @@ export class AIDatabase {
                     user_id TEXT NOT NULL,
                     content TEXT NOT NULL,
                     date_str TEXT NOT NULL,
-                    created_at DATETIME DEFAULT (datetime('now', '+8 hours')),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(user_id, date_str)
                 );
 
@@ -62,7 +63,7 @@ export class AIDatabase {
                 CREATE TABLE IF NOT EXISTS user_profiles (
                     user_id TEXT PRIMARY KEY,
                     info TEXT NOT NULL,
-                    last_updated DATETIME DEFAULT (datetime('now', '+8 hours'))
+                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
 
                 -- 迁移状态表
@@ -147,7 +148,7 @@ export class AIDatabase {
                         user_id TEXT NOT NULL,
                         role TEXT NOT NULL,
                         parts TEXT NOT NULL,
-                        created_at DATETIME DEFAULT (datetime('now', '+8 hours')),
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                         date_str TEXT NOT NULL
                     );
 
@@ -479,11 +480,12 @@ export class AIDatabase {
 
     saveCheckpoint(userId, content, dateStr, messageCount = 0, checkpointType = 'incremental') {
         return new Promise((resolve, reject) => {
+            const createdAt = getDBTimestamp()
             this.db.run(`
-                INSERT INTO memory_checkpoints (user_id, content, date_str, message_count, checkpoint_type)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(user_id, date_str) DO UPDATE SET content = ?, message_count = ?, checkpoint_type = ?, created_at = datetime('now', '+8 hours')
-            `, [String(userId), content, dateStr, messageCount, checkpointType, content, messageCount, checkpointType], (err) => {
+                INSERT INTO memory_checkpoints (user_id, content, date_str, message_count, checkpoint_type, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, date_str) DO UPDATE SET content = ?, message_count = ?, checkpoint_type = ?, created_at = ?
+            `, [String(userId), content, dateStr, messageCount, checkpointType, createdAt, content, messageCount, checkpointType, createdAt], (err) => {
                 if (err) reject(err)
                 else resolve()
             })
@@ -547,11 +549,12 @@ export class AIDatabase {
 
     saveSummaryCache(userId, content, dateStr) {
         return new Promise((resolve, reject) => {
+            const createdAt = getDBTimestamp()
             this.db.run(`
-                INSERT INTO summary_cache (user_id, content, date_str)
-                VALUES (?, ?, ?)
-                ON CONFLICT(user_id, date_str) DO UPDATE SET content = ?, created_at = datetime('now', '+8 hours')
-            `, [String(userId), content, dateStr, content], (err) => {
+                INSERT INTO summary_cache (user_id, content, date_str, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, date_str) DO UPDATE SET content = ?, created_at = ?
+            `, [String(userId), content, dateStr, createdAt, content, createdAt], (err) => {
                 if (err) reject(err)
                 else resolve()
             })

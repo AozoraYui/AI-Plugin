@@ -1,5 +1,6 @@
 import schedule from 'node-schedule'
-import { getTodayDateStr } from './common.js'
+import { getTodayDateStr, generateDailySummary } from './common.js'
+import { Config } from './config.js'
 
 export class AIScheduler {
     constructor(client) {
@@ -79,42 +80,8 @@ export class AIScheduler {
             const dayHistory = await global.AIPluginConversationManager.db.getConversationHistoryByDate(userId, dateDir)
             if (dayHistory.length === 0) continue
 
-            let dayContent = ""
-            for (const turn of dayHistory) {
-                const role = turn.role === 'user' ? '用户' : global.AIPluginConfig?.AI_NAME || '诺亚'
-                const text = turn.parts.map(p => p.text).join(' ')
-                if (text) dayContent += `${role}: ${text}\n`
-            }
-
-            if (!dayContent.trim()) continue
-
-            let summaryText = ""
-
-            // 从数据库获取摘要缓存
-            const dbSummary = await global.AIPluginConversationManager.db.getSummaryCache(userId, dateDir)
-            if (dbSummary) {
-                summaryText = dbSummary.content
-            } else {
-                logger.debug(`[AI-Plugin] 为用户 ${userId} 生成 ${dateDir} 摘要...`)
-                const summaryPrompt = `
-请将以下这段发生在【${dateDir}】的对话概括为一个简短的摘要（4096字以内）。
-重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
-直接输出摘要内容，不要加"好的"等客套话。
-对话内容：
-${dayContent}`
-
-                const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
-                const result = await this.client.makeRequest('chat', payload, 'default', 16384)
-
-                if (result.success) {
-                    summaryText = result.data.trim()
-                    // 保存到数据库
-                    await global.AIPluginConversationManager.db.saveSummaryCache(userId, summaryText, dateDir)
-                } else {
-                    logger.warn(`[AI-Plugin] ${dateDir} 摘要生成失败: ${result.error}`)
-                    summaryText = `【${dateDir} 原始片段】: ${dayContent.slice(0, 500)}...`
-                }
-            }
+            const summaryText = await generateDailySummary(this.client, userId, dateDir, dayHistory, 'default')
+            if (!summaryText) continue
 
             finalContext += `\n=== 📅 【${dateDir} 记忆摘要】 ===\n${summaryText}\n`
         }
@@ -157,42 +124,8 @@ ${dayContent}`
             const dayHistory = await global.AIPluginConversationManager.db.getConversationHistoryByDate(userId, dateDir)
             if (dayHistory.length === 0) continue
 
-            let dayContent = ""
-            for (const turn of dayHistory) {
-                const role = turn.role === 'user' ? '用户' : global.AIPluginConfig?.AI_NAME || '诺亚'
-                const text = turn.parts.map(p => p.text).join(' ')
-                if (text) dayContent += `${role}: ${text}\n`
-            }
-
-            if (!dayContent.trim()) continue
-
-            let summaryText = ""
-
-            // 从数据库获取摘要缓存
-            const dbSummary = await global.AIPluginConversationManager.db.getSummaryCache(userId, dateDir)
-            if (dbSummary) {
-                summaryText = dbSummary.content
-            } else {
-                logger.debug(`[AI-Plugin] 为用户 ${userId} 生成 ${dateDir} 摘要...`)
-                const summaryPrompt = `
-请将以下这段发生在【${dateDir}】的对话概括为一个简短的摘要（4096字以内）。
-重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
-直接输出摘要内容，不要加"好的"等客套话。
-对话内容：
-${dayContent}`
-
-                const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
-                const result = await this.client.makeRequest('chat', payload, 'default', 16384)
-
-                if (result.success) {
-                    summaryText = result.data.trim()
-                    // 保存到数据库
-                    await global.AIPluginConversationManager.db.saveSummaryCache(userId, summaryText, dateDir)
-                } else {
-                    logger.warn(`[AI-Plugin] ${dateDir} 摘要生成失败: ${result.error}`)
-                    summaryText = `【${dateDir} 原始片段】: ${dayContent.slice(0, 500)}...`
-                }
-            }
+            const summaryText = await generateDailySummary(this.client, userId, dateDir, dayHistory, 'default')
+            if (!summaryText) continue
 
             finalContext += `\n=== 📅 【${dateDir} 记忆摘要】 ===\n${summaryText}\n`
         }

@@ -5,9 +5,9 @@ import { Config } from '../utils/config.js'
 import { GeminiClient } from '../client/GeminiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
-import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, getTodayDateStr } from '../utils/common.js'
+import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, getBeijingTimeStr } from '../utils/common.js'
 
-async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
+async function expandForwardMsg(bot, resid, depth = 0, maxDepth = Config.FORWARD_MSG_MAX_DEPTH) {
     const textParts = []
     const images = []
 
@@ -26,7 +26,7 @@ async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
         const layerTag = depth > 0 ? `第${depth}层` : ''
         textParts.push(`【合并转发消息${layerTag} 开始】`)
 
-        for (const subMsg of details.slice(0, 100)) {
+        for (const subMsg of details.slice(0, Config.FORWARD_MSG_MAX_COUNT)) {
             const sender = subMsg.nickname || subMsg.sender?.nickname || "未知用户"
             const msgArray = subMsg.content || subMsg.message
 
@@ -52,7 +52,7 @@ async function expandForwardMsg(bot, resid, depth = 0, maxDepth = 5) {
     return { text: textParts.join('\n'), images }
 }
 
-async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 0, maxDepth = 5) {
+async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 0, maxDepth = Config.FORWARD_MSG_MAX_DEPTH) {
     const textParts = []
     const images = []
 
@@ -274,7 +274,7 @@ export class ChatHandler extends plugin {
                 }
 
                 // 防止请求体过大导致 413 错误，限制历史长度
-                const MAX_HISTORY_LENGTH = 16
+                const MAX_HISTORY_LENGTH = Config.MAX_HISTORY_LENGTH
                 if (history.length > MAX_HISTORY_LENGTH) {
                     history = history.slice(-MAX_HISTORY_LENGTH)
                     logger.debug(`[AI-Plugin] 用户 ${userId} 的历史过长，已截断至最近 ${MAX_HISTORY_LENGTH} 条`)
@@ -284,8 +284,8 @@ export class ChatHandler extends plugin {
             const currentUserTurnParts = []
 
             // 限制图片数量和大小，防止请求体过大
-            const MAX_IMAGES = 100
-            const MAX_IMAGE_SIZE_MB = 4 // 单张图片最大 4MB
+            const MAX_IMAGES = Config.MAX_IMAGES_PER_MESSAGE
+            const MAX_IMAGE_SIZE_MB = Config.MAX_IMAGE_SIZE_MB
             if (allImages.length > 0) {
                 const imagesToProcess = allImages.slice(0, MAX_IMAGES)
 
@@ -303,8 +303,8 @@ export class ChatHandler extends plugin {
                             logger.warn(`[AI-Plugin] 图片过大 (${sizeMB.toFixed(2)}MB)，正在压缩...`)
                             const sharp = (await import('sharp')).default
                             imageBuffer = await sharp(imageBuffer)
-                                .resize(1920, 1920, { fit: 'inside', withoutEnlargement: true })
-                                .jpeg({ quality: 80 })
+                                .resize(Config.MAX_IMAGE_RESIZE, Config.MAX_IMAGE_RESIZE, { fit: 'inside', withoutEnlargement: true })
+                                .jpeg({ quality: Config.IMAGE_QUALITY })
                                 .toBuffer()
                         }
 
@@ -329,7 +329,14 @@ export class ChatHandler extends plugin {
                 })
 
                 const processedImages = await Promise.all(imagePromises)
-                currentUserTurnParts.push(...processedImages.filter(img => img !== null))
+                const validImages = processedImages.filter(img => img !== null)
+                
+                if (validImages.length < allImages.length) {
+                    const failedCount = allImages.length - validImages.length
+                    logger.warn(`[AI-Plugin] ${failedCount} 张图片处理失败`)
+                }
+                
+                currentUserTurnParts.push(...validImages)
             }
 
             if (userMessage) {
@@ -339,9 +346,7 @@ export class ChatHandler extends plugin {
             let contents = [...Config.personaPrimer]
 
             // 添加当前服务器时间（放在最前面，确保不被旧记忆干扰）
-            const now = new Date()
-            const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000)
-            const timeStr = beijingTime.toISOString().replace('T', ' ').substring(0, 19) + ' (北京时间)'
+            const timeStr = getBeijingTimeStr()
             contents.push({
                 "role": "user",
                 "parts": [{ "text": `【服务器时间 - 最高优先级】以下时间是当前真实时间，请忽略记忆中的任何旧时间信息：${timeStr}。当用户询问时间或需要判断时间时，必须使用这个时间！` }]
@@ -400,26 +405,23 @@ export class ChatHandler extends plugin {
 
             contents.push({ "role": "user", "parts": currentUserTurnParts })
 
-            const payload = { "contents": contents }
-            
             // 估算请求体大小，防止 413 错误
             let currentPayload = { "contents": contents }
             let currentSizeMB = JSON.stringify(currentPayload).length / (1024 * 1024)
             
-            if (currentSizeMB > 8) { // 8MB 警告阈值
+            if (currentSizeMB > Config.REQUEST_SIZE_WARNING_MB) { // 警告阈值
                 logger.warn(`[AI-Plugin] 请求体过大 (${currentSizeMB.toFixed(2)}MB)，正在裁剪历史...`)
                 // 减少历史条目直到大小合理
-                while (currentSizeMB > 5 && history.length > 5) {
-                    history = history.slice(-Math.max(5, history.length - 5))
+                while (currentSizeMB > Config.REQUEST_SIZE_LIMIT_MB && history.length > Config.MIN_HISTORY_FOR_TRUNCATION) {
+                    history = history.slice(-Math.max(Config.MIN_HISTORY_FOR_TRUNCATION, history.length - 5))
                     contents = [...Config.personaPrimer]
-                    // 重新添加环境提示
                     contents.push({
                         "role": "user",
-                        "parts": [{ "text": environmentHint }]
+                        "parts": [{ "text": `【服务器时间 - 最高优先级】以下时间是当前真实时间，请忽略记忆中的任何旧时间信息：${timeStr}。当用户询问时间或需要判断时间时，必须使用这个时间！` }]
                     })
                     contents.push({
                         "role": "model",
-                        "parts": [{ "text": "好的，我已经了解当前的聊天环境，会根据环境调整我的行为！" }]
+                        "parts": [{ "text": "好的，我已经知道现在的准确时间了，会以此为准！" }]
                     })
                     if (checkpoint) {
                         contents.push({
@@ -442,6 +444,14 @@ export class ChatHandler extends plugin {
                         })
                     }
                     contents.push(...history)
+                    contents.push({
+                        "role": "user",
+                        "parts": [{ "text": environmentHint }]
+                    })
+                    contents.push({
+                        "role": "model",
+                        "parts": [{ "text": "好的，我已经了解当前的聊天环境，会根据环境调整我的行为！" }]
+                    })
                     contents.push({ "role": "user", "parts": currentUserTurnParts })
                     currentPayload = { "contents": contents }
                     currentSizeMB = JSON.stringify(currentPayload).length / (1024 * 1024)
@@ -488,7 +498,7 @@ export class ChatHandler extends plugin {
                 }
 
                 // 分段处理：如果回复内容过长，使用合并消息发送
-                const MAX_LENGTH = 3500
+                const MAX_LENGTH = Config.CHECKPOINT_DISPLAY_MAX_LENGTH
                 const footerSuffix = isSingleMode ? ' (单次对话)' : ''
                 const footerInfo = `⏱️ 耗时: ${elapsed}s${tokenInfo} @${result.platform}${footerSuffix}`
 
@@ -610,25 +620,6 @@ export class ChatHandler extends plugin {
             await e.reply("✅ 设置成功：已开启思考过程显示 (Raw模式)。")
         } else {
             await e.reply("🚫 设置成功：已关闭思考过程显示 (自动清洗模式)。")
-        }
-    }
-
-    async _checkAndCreateAutoCheckpoint(userId) {
-        const today = getTodayDateStr()
-        
-        // 检查今天是否已经创建过锚点
-        const todayCheckpoint = await this.conversationManager.db.getCheckpoint(userId, today)
-        if (todayCheckpoint) {
-            logger.info(`[AI-Plugin] 用户 ${userId} 今天已创建过锚点，跳过`)
-            return
-        }
-        
-        try {
-            logger.info(`[AI-Plugin] 用户 ${userId} 今天首次对话，自动创建增量锚点...`)
-            await this.conversationManager.createIncrementalCheckpoint(userId, today, 0)
-            logger.info(`[AI-Plugin] 用户 ${userId} 自动增量锚点创建成功`)
-        } catch (err) {
-            logger.error(`[AI-Plugin] 为用户 ${userId} 创建自动增量锚点失败:`, err)
         }
     }
 }
