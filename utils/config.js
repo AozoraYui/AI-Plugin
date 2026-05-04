@@ -45,7 +45,7 @@ const defaultConfig = {
     // ========== 合并转发消息展开配置 ==========
     // 合并转发消息递归展开的最大深度，防止无限递归
     // 使用场景: apps/chat.js 中 expandForwardMsg 和 expandInlineContent 函数
-    FORWARD_MSG_MAX_DEPTH: 5,
+    FORWARD_MSG_MAX_DEPTH: 3,
     // 单条合并转发消息最多展开的消息条数，超过此数量的消息将被忽略
     // 使用场景: apps/chat.js 中限制展开的消息数量
     FORWARD_MSG_MAX_COUNT: 100,
