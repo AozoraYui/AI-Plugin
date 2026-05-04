@@ -26,7 +26,6 @@ if (!global.segment) {
 
 global.AIPluginClient = new GeminiClient()
 global.AIPluginConversationManager = new ConversationManager()
-global.AIPluginConfig = Config
 await global.AIPluginConversationManager.waitForMigration()
 
 // 检查是否需要修复迁移日期

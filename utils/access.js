@@ -35,7 +35,19 @@ export function getAccessConfig() {
 }
 
 export function saveAccessConfig(config) {
-    fs.writeFileSync(ACCESS_CONTROL_FILE, yaml.stringify(config), 'utf8')
+    const tempFile = ACCESS_CONTROL_FILE + '.tmp'
+    try {
+        fs.writeFileSync(tempFile, yaml.stringify(config), 'utf8')
+        fs.renameSync(tempFile, ACCESS_CONTROL_FILE)
+    } catch (error) {
+        logger.error(`[AI-Plugin] 保存权限配置失败: ${error.message}`)
+        try {
+            fs.unlinkSync(tempFile)
+        } catch (e) {
+            // 忽略清理错误
+        }
+        throw error
+    }
 }
 
 export async function checkAccess(e) {

@@ -55,124 +55,6 @@ export class ManagementHandler extends plugin {
         await e.reply(result.message)
     }
 
-    async reloadPlugin(e) {
-        try {
-            this.client.reload()
-            Config.reloadPresets()
-            await e.reply("✅ 插件已重载完成")
-        } catch (err) {
-            await e.reply(`❌ 重载失败: ${err.message}`)
-        }
-    }
-
-    async addWhitelistUser(e) {
-        const userId = e.msg.replace(/^#gemini添加白名单用户/, '').trim()
-        if (!userId) return e.reply("请提供用户ID")
-        const config = getAccessConfig()
-        if (!config.whitelist_users.includes(userId)) {
-            config.whitelist_users.push(userId)
-            saveAccessConfig(config)
-            await e.reply(`✅ 已添加用户 ${userId} 到白名单`)
-        } else {
-            await e.reply(`用户 ${userId} 已在白名单中`)
-        }
-    }
-
-    async removeWhitelistUser(e) {
-        const userId = e.msg.replace(/^#gemini删除白名单用户/, '').trim()
-        if (!userId) return e.reply("请提供用户ID")
-        const config = getAccessConfig()
-        const index = config.whitelist_users.indexOf(userId)
-        if (index > -1) {
-            config.whitelist_users.splice(index, 1)
-            saveAccessConfig(config)
-            await e.reply(`✅ 已从白名单删除用户 ${userId}`)
-        } else {
-            await e.reply(`用户 ${userId} 不在白名单中`)
-        }
-    }
-
-    async addWhitelistGroup(e) {
-        const groupId = e.msg.replace(/^#gemini添加白名单群/, '').trim()
-        if (!groupId) return e.reply("请提供群号")
-        const config = getAccessConfig()
-        if (!config.whitelist_groups.includes(groupId)) {
-            config.whitelist_groups.push(groupId)
-            saveAccessConfig(config)
-            await e.reply(`✅ 已添加群 ${groupId} 到白名单`)
-        } else {
-            await e.reply(`群 ${groupId} 已在白名单中`)
-        }
-    }
-
-    async removeWhitelistGroup(e) {
-        const groupId = e.msg.replace(/^#gemini删除白名单群/, '').trim()
-        if (!groupId) return e.reply("请提供群号")
-        const config = getAccessConfig()
-        const index = config.whitelist_groups.indexOf(groupId)
-        if (index > -1) {
-            config.whitelist_groups.splice(index, 1)
-            saveAccessConfig(config)
-            await e.reply(`✅ 已从白名单删除群 ${groupId}`)
-        } else {
-            await e.reply(`群 ${groupId} 不在白名单中`)
-        }
-    }
-
-    async addBlacklistUser(e) {
-        const userId = e.msg.replace(/^#gemini添加黑名单用户/, '').trim()
-        if (!userId) return e.reply("请提供用户ID")
-        const config = getAccessConfig()
-        if (!config.blacklist_users.includes(userId)) {
-            config.blacklist_users.push(userId)
-            saveAccessConfig(config)
-            await e.reply(`✅ 已添加用户 ${userId} 到黑名单`)
-        } else {
-            await e.reply(`用户 ${userId} 已在黑名单中`)
-        }
-    }
-
-    async removeBlacklistUser(e) {
-        const userId = e.msg.replace(/^#gemini删除黑名单用户/, '').trim()
-        if (!userId) return e.reply("请提供用户ID")
-        const config = getAccessConfig()
-        const index = config.blacklist_users.indexOf(userId)
-        if (index > -1) {
-            config.blacklist_users.splice(index, 1)
-            saveAccessConfig(config)
-            await e.reply(`✅ 已从黑名单删除用户 ${userId}`)
-        } else {
-            await e.reply(`用户 ${userId} 不在黑名单中`)
-        }
-    }
-
-    async addBlacklistGroup(e) {
-        const groupId = e.msg.replace(/^#gemini添加黑名单群/, '').trim()
-        if (!groupId) return e.reply("请提供群号")
-        const config = getAccessConfig()
-        if (!config.blacklist_groups.includes(groupId)) {
-            config.blacklist_groups.push(groupId)
-            saveAccessConfig(config)
-            await e.reply(`✅ 已添加群 ${groupId} 到黑名单`)
-        } else {
-            await e.reply(`群 ${groupId} 已在黑名单中`)
-        }
-    }
-
-    async removeBlacklistGroup(e) {
-        const groupId = e.msg.replace(/^#gemini删除黑名单群/, '').trim()
-        if (!groupId) return e.reply("请提供群号")
-        const config = getAccessConfig()
-        const index = config.blacklist_groups.indexOf(groupId)
-        if (index > -1) {
-            config.blacklist_groups.splice(index, 1)
-            saveAccessConfig(config)
-            await e.reply(`✅ 已从黑名单删除群 ${groupId}`)
-        } else {
-            await e.reply(`群 ${groupId} 不在黑名单中`)
-        }
-    }
-
     async listAccessControl(e) {
         const config = getAccessConfig()
         let msg = `--- ${Config.AI_NAME}权限配置 ---\n`
@@ -200,6 +82,12 @@ export class ManagementHandler extends plugin {
         const action = match[1]
         const typeKeyword = match[2]
         const id = match[3]
+
+        // 输入验证
+        if (!/^\d{5,15}$/.test(id)) {
+            const entityType = typeKeyword.includes('群') ? '群号' : '用户ID'
+            return e.reply(`❌ ${entityType}格式不正确，请输入有效的${entityType}`)
+        }
 
         let targetListKey
         let entityType
@@ -233,16 +121,15 @@ export class ManagementHandler extends plugin {
         }
     }
 
-    async viewAccessConfig(e) {
+    async switchAccessMode(e) {
+        const match = e.msg.match(/^#gemini权限模式\s*(whitelist|blacklist)$/i)
+        if (!match) return
+
+        const newMode = match[1].toLowerCase()
         const config = getAccessConfig()
-        let message = "📋 权限配置信息:\n"
-        message += `模式: ${config.mode === 'whitelist' ? '白名单' : '黑名单'}\n`
-        message += `白名单用户: ${config.whitelist_users.join(', ') || '无'}\n`
-        message += `白名单群: ${config.whitelist_groups.join(', ') || '无'}\n`
-        message += `黑名单用户: ${config.blacklist_users.join(', ') || '无'}\n`
-        message += `黑名单群: ${config.blacklist_groups.join(', ') || '无'}\n`
-        message += `显示思考: ${config.show_thinking ? '开启' : '关闭'}`
-        await e.reply(message)
+        config.mode = newMode
+        saveAccessConfig(config)
+        await e.reply(`✅ 权限模式已切换为: ${newMode === 'whitelist' ? '白名单模式' : '黑名单模式'}`)
     }
 
     async listModels(e) {
@@ -334,16 +221,6 @@ export class ManagementHandler extends plugin {
         return await Bot.makeForwardMsg(forwardMsgNodes)
     }
 
-    async listDisabledModels(e) {
-        if (this.client.disabledModels.size === 0) {
-            return e.reply("当前没有被禁用的模型。")
-        }
-
-        let msg = '--- ⚪️ 当前禁用的模型列表 ---\n'
-        msg += Array.from(this.client.disabledModels).join('\n')
-        await e.reply(msg)
-    }
-
     async showStatus(e) {
         try {
             const providerCount = this.client.modelsConfig.length
@@ -396,6 +273,11 @@ export class ManagementHandler extends plugin {
 
         const action = match[1]
         const groupId = match[2]
+
+        // 输入验证
+        if (!/^\d{5,15}$/.test(groupId)) {
+            return e.reply(`❌ 群号格式不正确，请输入有效的群号`)
+        }
 
         let trustedGroups = Config.trustedGroups
 

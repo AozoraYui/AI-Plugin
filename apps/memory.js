@@ -6,7 +6,7 @@ import { GeminiClient } from '../client/GeminiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { sessionManager } from '../utils/session.js'
-import { setMsgEmojiLike, getTodayDateStr } from '../utils/common.js'
+import { setMsgEmojiLike, getTodayDateStr, generateDailySummary } from '../utils/common.js'
 
 export class MemoryHandler extends plugin {
     constructor() {
@@ -31,42 +31,17 @@ export class MemoryHandler extends plugin {
         const dbSummary = await this.conversationManager.db.getSummaryCache(userId, dateDir)
         if (dbSummary) {
             logger.debug(`[AI-Plugin] 命中摘要缓存: ${dateDir}`)
-            return dbSummary.content
+            return `【${dateDir} 摘要】: ${dbSummary.content}`
         }
 
         // 从数据库获取当日对话历史
         const dayHistory = await this.conversationManager.db.getConversationHistoryByDate(userId, dateDir)
         if (dayHistory.length === 0) return ""
 
-        let dayContent = ""
-        for (const turn of dayHistory) {
-            const role = turn.role === 'user' ? '用户' : Config.AI_NAME
-            const text = turn.parts.map(p => p.text).join(' ')
-            if (text) dayContent += `${role}: ${text}\n`
-        }
+        const summaryText = await generateDailySummary(this.client, userId, dateDir, dayHistory, modelGroupKey)
+        if (!summaryText) return ""
 
-        if (!dayContent.trim()) return ""
-
-        logger.info(`[AI-Plugin] 正在为 ${dateDir} 生成新摘要...`)
-        const summaryPrompt = `
-请将以下这段发生在【${dateDir}】的对话概括为一个简短的摘要（4096字以内）。
-重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
-直接输出摘要内容，不要加"好的"等客套话。
-对话内容：
-${dayContent}`
-
-        const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
-        const result = await this.client.makeRequest('chat', payload, modelGroupKey, 16384)
-
-        if (result.success) {
-            const summaryText = result.data.trim()
-            // 保存到数据库
-            await this.conversationManager.db.saveSummaryCache(userId, summaryText, dateDir)
-            return `【${dateDir} 摘要】: ${summaryText}`
-        } else {
-            logger.warn(`[AI-Plugin] ${dateDir} 摘要生成失败: ${result.error}`)
-            return `【${dateDir} 原始片段】: ${dayContent.slice(0, 500)}...`
-        }
+        return `【${dateDir} 摘要】: ${summaryText}`
     }
 
     async _runCheckpointLogic(e, isFullRebuild) {
@@ -174,7 +149,7 @@ ${dayContent}`
 
         try {
             const payload = { "contents": [{ "role": "user", "parts": [{ "text": finalPrompt }] }] }
-            const result = await this.client.makeRequest('chat', payload, modelGroupKey, 65536)
+            const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
 
             if (result.success) {
                 const newSummary = result.data
@@ -210,7 +185,7 @@ ${dayContent}`
                     }
                 ]
 
-                const MAX_LENGTH = 3500
+                const MAX_LENGTH = Config.CHECKPOINT_DISPLAY_MAX_LENGTH
                 if (newSummary.length <= MAX_LENGTH) {
                     forwardMsgNodes.push({
                         user_id: Bot.uin,
@@ -426,7 +401,7 @@ ${dayContent}`
                 finalPrompt += `输出要求：\n1. 报告将作为**新的存档文件**保存，供未来使用，请确保信息密度高。\n2. 请用第三人称叙述。\n3. 重点关注：用户的性格变化、核心人际关系、重要事件的时间线。\n\n--- 🗂️ 待处理数据 ---\n${finalContext}\n--- 数据结束 ---`
 
                 const payload = { "contents": [{ "role": "user", "parts": [{ "text": finalPrompt }] }] }
-                const result = await this.client.makeRequest('chat', payload, modelGroupKey, 65536)
+                const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
 
                 if (result.success) {
                     const newSummary = result.data

@@ -14,6 +14,51 @@ const defaultConfig = {
     SUMMARY_PROMPT_TEMPLATE: "请你扮演一个总结者的角色，用简洁的语言概括以下用户与AI助手之间的一段对话历史的核心主题、关键信息和重要结论。摘要应该只包含事实信息，并能帮助AI助手在后续对话中回忆起重要的上下文。请用中文输出摘要。对话历史：\n\n",
     AI_NAME: "诺亚",
     trustedGroups: [],
+    // ========== 对话历史管理配置 ==========
+    // 发送给 AI 的最大对话历史条数，防止请求体过大导致 413 错误
+    // 使用场景: apps/chat.js 中限制历史长度
+    MAX_HISTORY_LENGTH: 16,
+    // ========== 图片处理配置 ==========
+    // 单条消息最多处理的图片总数，包括当前消息、引用/回复消息、合并转发展开（含嵌套多层）的所有图片
+    // 超过此数量的图片将被忽略，防止请求体过大
+    // 使用场景: apps/chat.js 中收集所有来源图片后限制处理数量；apps/image.js 中作图指令的图片数量限制
+    MAX_IMAGES_PER_MESSAGE: 100,
+    // 单张图片的最大大小（MB），超过此大小的图片将被压缩
+    // 使用场景: apps/chat.js 中检查图片大小
+    MAX_IMAGE_SIZE_MB: 4,
+    // 图片压缩后的最大边长（像素），用于等比缩放
+    // 使用场景: apps/chat.js 中压缩过大图片
+    MAX_IMAGE_RESIZE: 1920,
+    // 图片压缩后的 JPEG 质量（1-100），数值越高质量越好
+    // 使用场景: apps/chat.js 中压缩图片时指定质量
+    IMAGE_QUALITY: 80,
+    // ========== API 请求体大小控制 ==========
+    // 请求体大小警告阈值（MB），超过此值时记录警告日志并开始裁剪历史
+    // 使用场景: apps/chat.js 中检测请求体大小
+    REQUEST_SIZE_WARNING_MB: 8,
+    // 请求体大小限制（MB），裁剪历史直到低于此值
+    // 使用场景: apps/chat.js 中循环裁剪历史
+    REQUEST_SIZE_LIMIT_MB: 5,
+    // 裁剪历史时最少保留的历史条数，即使超过大小限制也不会低于此值
+    // 使用场景: apps/chat.js 中控制裁剪下限
+    MIN_HISTORY_FOR_TRUNCATION: 5,
+    // ========== 合并转发消息展开配置 ==========
+    // 合并转发消息递归展开的最大深度，防止无限递归
+    // 使用场景: apps/chat.js 中 expandForwardMsg 和 expandInlineContent 函数
+    FORWARD_MSG_MAX_DEPTH: 5,
+    // 单条合并转发消息最多展开的消息条数，超过此数量的消息将被忽略
+    // 使用场景: apps/chat.js 中限制展开的消息数量
+    FORWARD_MSG_MAX_COUNT: 100,
+    // ========== 记忆总结配置 ==========
+    // 每日摘要的最大字数，用于控制 AI 生成摘要的长度
+    // 使用场景: apps/memory.js, utils/scheduler.js 中生成每日摘要
+    SUMMARY_MAX_LENGTH: 4096,
+    // 记忆锚点（总结）的最大 token 数，用于控制 API 请求的 max_tokens 参数
+    // 使用场景: apps/memory.js, utils/scheduler.js 中调用 AI 生成总结
+    CHECKPOINT_MAX_LENGTH: 65536,
+    // 记忆锚点在前端显示时的最大字符数，超过此值将分段显示
+    // 使用场景: apps/memory.js 中分段显示总结内容
+    CHECKPOINT_DISPLAY_MAX_LENGTH: 3500,
     personaPrimerTemplate: [
         {
             "role": "user",
@@ -33,7 +78,6 @@ function buildPersonaPrimer(aiName) {
 }
 
 export const PRESETS_FILE = path.join(DATA_DIR, 'gemini_presets.yaml')
-export const USER_PROFILES_FILE = path.join(DATA_DIR, 'gemini_user_profiles.json')
 export const ACCESS_CONTROL_FILE = path.join(DATA_DIR, 'access_control.yaml')
 export const MODELS_CONFIG_FILE = path.join(DATA_DIR, 'models_config.yaml')
 export const MODEL_STATUS_FILE = path.join(DATA_DIR, 'model_status.json')
@@ -151,9 +195,16 @@ groups: []
 function saveTrustedGroups(groups) {
     try {
         ensureDataDir()
-        fs.writeFileSync(TRUSTED_GROUPS_FILE, yaml.stringify({ groups }), 'utf8')
+        const tempFile = TRUSTED_GROUPS_FILE + '.tmp'
+        fs.writeFileSync(tempFile, yaml.stringify({ groups }), 'utf8')
+        fs.renameSync(tempFile, TRUSTED_GROUPS_FILE)
     } catch (error) {
         logger.error(`[AI-Plugin] 保存信任群聊失败: ${error.message}`)
+        try {
+            fs.unlinkSync(TRUSTED_GROUPS_FILE + '.tmp')
+        } catch (e) {
+            // 忽略清理错误
+        }
     }
 }
 
@@ -186,6 +237,32 @@ export const Config = {
     set AI_NAME(val) { config.AI_NAME = val },
     get trustedGroups() { return config.trustedGroups ?? loadedTrustedGroups ?? defaultConfig.trustedGroups },
     set trustedGroups(val) { config.trustedGroups = val; saveTrustedGroups(val) },
+    get MAX_HISTORY_LENGTH() { return config.MAX_HISTORY_LENGTH ?? defaultConfig.MAX_HISTORY_LENGTH },
+    set MAX_HISTORY_LENGTH(val) { config.MAX_HISTORY_LENGTH = val },
+    get MAX_IMAGES_PER_MESSAGE() { return config.MAX_IMAGES_PER_MESSAGE ?? defaultConfig.MAX_IMAGES_PER_MESSAGE },
+    set MAX_IMAGES_PER_MESSAGE(val) { config.MAX_IMAGES_PER_MESSAGE = val },
+    get MAX_IMAGE_SIZE_MB() { return config.MAX_IMAGE_SIZE_MB ?? defaultConfig.MAX_IMAGE_SIZE_MB },
+    set MAX_IMAGE_SIZE_MB(val) { config.MAX_IMAGE_SIZE_MB = val },
+    get MAX_IMAGE_RESIZE() { return config.MAX_IMAGE_RESIZE ?? defaultConfig.MAX_IMAGE_RESIZE },
+    set MAX_IMAGE_RESIZE(val) { config.MAX_IMAGE_RESIZE = val },
+    get IMAGE_QUALITY() { return config.IMAGE_QUALITY ?? defaultConfig.IMAGE_QUALITY },
+    set IMAGE_QUALITY(val) { config.IMAGE_QUALITY = val },
+    get REQUEST_SIZE_WARNING_MB() { return config.REQUEST_SIZE_WARNING_MB ?? defaultConfig.REQUEST_SIZE_WARNING_MB },
+    set REQUEST_SIZE_WARNING_MB(val) { config.REQUEST_SIZE_WARNING_MB = val },
+    get REQUEST_SIZE_LIMIT_MB() { return config.REQUEST_SIZE_LIMIT_MB ?? defaultConfig.REQUEST_SIZE_LIMIT_MB },
+    set REQUEST_SIZE_LIMIT_MB(val) { config.REQUEST_SIZE_LIMIT_MB = val },
+    get MIN_HISTORY_FOR_TRUNCATION() { return config.MIN_HISTORY_FOR_TRUNCATION ?? defaultConfig.MIN_HISTORY_FOR_TRUNCATION },
+    set MIN_HISTORY_FOR_TRUNCATION(val) { config.MIN_HISTORY_FOR_TRUNCATION = val },
+    get FORWARD_MSG_MAX_DEPTH() { return config.FORWARD_MSG_MAX_DEPTH ?? defaultConfig.FORWARD_MSG_MAX_DEPTH },
+    set FORWARD_MSG_MAX_DEPTH(val) { config.FORWARD_MSG_MAX_DEPTH = val },
+    get FORWARD_MSG_MAX_COUNT() { return config.FORWARD_MSG_MAX_COUNT ?? defaultConfig.FORWARD_MSG_MAX_COUNT },
+    set FORWARD_MSG_MAX_COUNT(val) { config.FORWARD_MSG_MAX_COUNT = val },
+    get SUMMARY_MAX_LENGTH() { return config.SUMMARY_MAX_LENGTH ?? defaultConfig.SUMMARY_MAX_LENGTH },
+    set SUMMARY_MAX_LENGTH(val) { config.SUMMARY_MAX_LENGTH = val },
+    get CHECKPOINT_MAX_LENGTH() { return config.CHECKPOINT_MAX_LENGTH ?? defaultConfig.CHECKPOINT_MAX_LENGTH },
+    set CHECKPOINT_MAX_LENGTH(val) { config.CHECKPOINT_MAX_LENGTH = val },
+    get CHECKPOINT_DISPLAY_MAX_LENGTH() { return config.CHECKPOINT_DISPLAY_MAX_LENGTH ?? defaultConfig.CHECKPOINT_DISPLAY_MAX_LENGTH },
+    set CHECKPOINT_DISPLAY_MAX_LENGTH(val) { config.CHECKPOINT_DISPLAY_MAX_LENGTH = val },
     presets,
     reloadPresets() {
         this.presets = loadPresetsSync()

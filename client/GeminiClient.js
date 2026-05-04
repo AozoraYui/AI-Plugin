@@ -103,7 +103,9 @@ export class GeminiClient {
 
     saveModelStatus() {
         try {
-            fs.writeFileSync(MODEL_STATUS_FILE, JSON.stringify(this.modelStatus, null, 2), 'utf8')
+            const tmpFile = MODEL_STATUS_FILE + '.tmp'
+            fs.writeFileSync(tmpFile, JSON.stringify(this.modelStatus, null, 2), 'utf8')
+            fs.renameSync(tmpFile, MODEL_STATUS_FILE)
         } catch (error) {
             logger.error('[AI-Plugin] 保存模型状态文件失败:', error)
         }
@@ -118,9 +120,7 @@ export class GeminiClient {
             } else {
                 logger.info(`[AI-Plugin] 未找到禁用模型列表文件，将在 ${DISABLED_MODELS_FILE} 创建默认文件。`)
                 this.disabledModels = new Set()
-                const defaultDisabledModels = `[
-  "_comment": "禁用的模型ID列表，由插件自动管理"
-]`
+                const defaultDisabledModels = `[]`
                 fs.writeFileSync(DISABLED_MODELS_FILE, defaultDisabledModels, 'utf8')
             }
         } catch (error) {
@@ -131,8 +131,10 @@ export class GeminiClient {
 
     saveDisabledModels() {
         try {
+            const tmpFile = DISABLED_MODELS_FILE + '.tmp'
             const data = JSON.stringify(Array.from(this.disabledModels), null, 2)
-            fs.writeFileSync(DISABLED_MODELS_FILE, data, 'utf8')
+            fs.writeFileSync(tmpFile, data, 'utf8')
+            fs.renameSync(tmpFile, DISABLED_MODELS_FILE)
         } catch (error) {
             logger.error('[AI-Plugin] 保存禁用模型列表文件失败:', error)
         }
