@@ -265,20 +265,7 @@ export class ConversationManager {
 
     async getUserHistoryWithCheckpoint(userId) {
         const userIdStr = String(userId)
-        const today = getTodayDateStr()
 
-        // 从 SQLite 读取全量锚点
-        const latestCheckpoint = await this.db.getLatestCheckpoint(userIdStr)
-
-        let fullCheckpointDate = null
-        let fullCheckpointContent = ""
-
-        if (latestCheckpoint && latestCheckpoint.dateStr !== today) {
-            fullCheckpointDate = latestCheckpoint.dateStr
-            fullCheckpointContent = latestCheckpoint.content
-        }
-
-        // 从 SQLite 读取最近的增量锚点
         const latestSummary = await this.db.getLatestSummaryCache(userIdStr)
         let incrementalContent = ""
         if (latestSummary) {
@@ -288,13 +275,12 @@ export class ConversationManager {
         let history = []
 
         try {
-            history = await this.db.getConversationHistoryByDateRange(userId, fullCheckpointDate, null)
+            history = await this.db.getConversationHistory(userIdStr)
         } catch (err) {
             logger.error(`[AI-Plugin] 从 SQLite 读取用户 ${userId} 的历史失败:`, err)
         }
 
         return { 
-            checkpoint: fullCheckpointContent, 
             incrementalCheckpoint: incrementalContent,
             history 
         }
@@ -414,11 +400,11 @@ export class ConversationManager {
         }
     }
 
-    async createIncrementalCheckpoint(userId, today, messageCount = 0) {
+    async createIncrementalCheckpoint(userId, today, messageCount = 0, modelGroupKey = 'default') {
         if (!global.AIPluginScheduler) {
-            logger.error('[AI-Plugin] 定时任务未初始化，无法创建增量锚点')
+            logger.error('[AI-Plugin] 定时任务未初始化，无法创建增量总结')
             return
         }
-        await global.AIPluginScheduler._createIncrementalCheckpoint(userId, today, messageCount)
+        await global.AIPluginScheduler._createIncrementalCheckpoint(userId, today, messageCount, modelGroupKey)
     }
 }

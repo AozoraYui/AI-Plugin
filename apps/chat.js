@@ -5,7 +5,7 @@ import { Config } from '../utils/config.js'
 import { GeminiClient } from '../client/GeminiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
-import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, getBeijingTimeStr } from '../utils/common.js'
+import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, getBeijingTimeStr, getTodayDateStr } from '../utils/common.js'
 
 function extractCardInfo(data) {
     const lines = []
@@ -327,23 +327,17 @@ export class ChatHandler extends plugin {
             await setMsgEmojiLike(e, 282)
 
             let history = []
-            let checkpoint = null
             let incrementalCheckpoint = null
 
             if (!isSingleMode) {
                 const memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(userId)
                 history = memoryData.history
-                checkpoint = memoryData.checkpoint
                 incrementalCheckpoint = memoryData.incrementalCheckpoint
 
-                if (checkpoint) {
-                    logger.debug(`[AI-Plugin] 用户 ${userId} 加载全量锚点记忆`)
-                }
                 if (incrementalCheckpoint) {
-                    logger.debug(`[AI-Plugin] 用户 ${userId} 加载今日增量锚点记忆`)
+                    logger.debug(`[AI-Plugin] 用户 ${userId} 加载增量总结记忆`)
                 }
 
-                // 防止请求体过大导致 413 错误，限制历史长度
                 const MAX_HISTORY_LENGTH = Config.MAX_HISTORY_LENGTH
                 if (history.length > MAX_HISTORY_LENGTH) {
                     history = history.slice(-MAX_HISTORY_LENGTH)
@@ -426,25 +420,14 @@ export class ChatHandler extends plugin {
                 "parts": [{ "text": "好的，我已经知道现在的准确时间了，会以此为准！" }]
             })
 
-            if (checkpoint) {
-                contents.push({
-                    "role": "user",
-                    "parts": [{ "text": `【重要记忆摘要】这是你之前记住的关于这个用户的对话摘要，请基于这些摘要继续对话：\n${checkpoint}` }]
-                })
-                contents.push({
-                    "role": "model",
-                    "parts": [{ "text": "好的，我已经想起了之前的重要记忆！" }]
-                })
-            }
-
             if (incrementalCheckpoint) {
                 contents.push({
                     "role": "user",
-                    "parts": [{ "text": `【今日对话摘要】这是今天早些时候的对话摘要，请基于这些摘要继续对话：\n${incrementalCheckpoint}` }]
+                    "parts": [{ "text": `【记忆总结】这是关于你与用户之前对话的记忆总结，包含了重要的上下文信息，请基于这些记忆继续对话：\n${incrementalCheckpoint}` }]
                 })
                 contents.push({
                     "role": "model",
-                    "parts": [{ "text": "好的，我已经想起了今天的重要记忆！" }]
+                    "parts": [{ "text": "好的，我已经想起了之前的记忆！" }]
                 })
             }
 
@@ -493,24 +476,14 @@ export class ChatHandler extends plugin {
                         "role": "model",
                         "parts": [{ "text": "好的，我已经知道现在的准确时间了，会以此为准！" }]
                     })
-                    if (checkpoint) {
-                        contents.push({
-                            "role": "user",
-                            "parts": [{ "text": `【重要记忆摘要】这是你之前记住的关于这个用户的对话摘要，请基于这些摘要继续对话：\n${checkpoint}` }]
-                        })
-                        contents.push({
-                            "role": "model",
-                            "parts": [{ "text": "好的，我已经想起了之前的重要记忆！" }]
-                        })
-                    }
                     if (incrementalCheckpoint) {
                         contents.push({
                             "role": "user",
-                            "parts": [{ "text": `【今日对话摘要】这是今天早些时候的对话摘要，请基于这些摘要继续对话：\n${incrementalCheckpoint}` }]
+                            "parts": [{ "text": `【记忆总结】这是关于你与用户之前对话的记忆总结，包含了重要的上下文信息，请基于这些记忆继续对话：\n${incrementalCheckpoint}` }]
                         })
                         contents.push({
                             "role": "model",
-                            "parts": [{ "text": "好的，我已经想起了今天的重要记忆！" }]
+                            "parts": [{ "text": "好的，我已经想起了之前的记忆！" }]
                         })
                     }
                     contents.push(...history)
@@ -612,10 +585,24 @@ export class ChatHandler extends plugin {
 
                 await setMsgEmojiLike(e, 144)
 
-                // 非单次对话模式才保存历史记录
                 if (!isSingleMode) {
                     const updatedHistory = [...history, { "role": "user", "parts": currentUserTurnParts }, { "role": "model", "parts": [{ "text": finalResponseText }] }]
                     await this.conversationManager.saveUserHistory(userId, updatedHistory)
+
+                    const AUTO_SUMMARY_THRESHOLD = 8
+                    if (updatedHistory.length >= AUTO_SUMMARY_THRESHOLD) {
+                        logger.info(`[AI-Plugin] 用户 ${userId} 对话已达 ${updatedHistory.length} 轮，自动触发增量总结`)
+                        const todayStr = getTodayDateStr()
+                        try {
+                            await this.conversationManager.createIncrementalCheckpoint(userId, todayStr, 0, modelGroupKey)
+                            const KEEP_AFTER_SUMMARY = 0
+                            const trimmedHistory = updatedHistory.slice(-KEEP_AFTER_SUMMARY)
+                            await this.conversationManager.saveUserHistory(userId, trimmedHistory)
+                            logger.info(`[AI-Plugin] 用户 ${userId} 增量总结完成，历史已清空`)
+                        } catch (summaryErr) {
+                            logger.error(`[AI-Plugin] 自动增量总结失败:`, summaryErr)
+                        }
+                    }
                 }
             } else {
                 await setMsgEmojiLike(e, 10)
