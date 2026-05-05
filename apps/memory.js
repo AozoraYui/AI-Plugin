@@ -19,7 +19,7 @@ export class MemoryHandler extends plugin {
                 { reg: /^#([a-zA-Z0-9]*)gemini创建全量总结$/i, fnc: "createFullCheckpoint" },
                 { reg: /^#([a-zA-Z0-9]*)gemini创建增量总结$/i, fnc: "createIncrementalCheckpoint" },
                 { reg: /^#([a-zA-Z0-9]*)gemini批量增量总结$/i, fnc: "batchIncrementalSummaries" },
-                { reg: /^#gemini总结记忆列表$/i, fnc: "listMemorySummaries" },
+                { reg: /^#gemini记忆列表$/i, fnc: "listMemorySummaries" },
             ]
         })
         this.client = global.AIPluginClient
