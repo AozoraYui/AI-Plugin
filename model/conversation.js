@@ -365,18 +365,24 @@ export class ConversationManager {
         }
     }
 
-    async exportMemory(e, userId, scope = 'single') {
+    async exportMemory(e, userId, scope = 'single', dateStr = null) {
         const exportedData = {}
 
         if (scope === 'single') {
-            const history = await this.db.getConversationHistory(userId)
+            const history = dateStr
+                ? await this.db.getConversationHistoryByDate(userId, dateStr)
+                : await this.db.getConversationHistory(userId)
             if (history.length > 0) {
                 exportedData[userId] = history
             }
         } else {
-            const userIds = await this.db.getAllUserIds()
+            const userIds = dateStr
+                ? await this.db.getAllUserIdsByDateRange(dateStr, dateStr)
+                : await this.db.getAllUserIds()
             for (const uid of userIds) {
-                const history = await this.db.getConversationHistory(uid)
+                const history = dateStr
+                    ? await this.db.getConversationHistoryByDate(uid, dateStr)
+                    : await this.db.getConversationHistory(uid)
                 if (history.length > 0) {
                     exportedData[uid] = history
                 }
@@ -384,7 +390,8 @@ export class ConversationManager {
         }
 
         if (Object.keys(exportedData).length === 0) {
-            return { success: false, message: "没有找到任何记忆数据" }
+            const dateMsg = dateStr ? ` ${dateStr} 的` : ''
+            return { success: false, message: `没有找到${dateMsg}记忆数据` }
         }
 
         const exportDir = path.join(process.cwd(), 'data', 'ai_assistant')
@@ -394,7 +401,8 @@ export class ConversationManager {
 
         const timestamp = new Date().toISOString().replace(/:/g, '-').slice(0, 19)
         const identifier = scope === 'single' ? userId : 'all'
-        const fileName = `noa_memory_export_${identifier}_${timestamp}.json`
+        const dateSuffix = dateStr ? `_${dateStr}` : ''
+        const fileName = `noa_memory_export_${identifier}${dateSuffix}_${timestamp}.json`
         const filePath = path.join(exportDir, fileName)
 
         try {

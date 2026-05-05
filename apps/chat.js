@@ -175,7 +175,9 @@ export class ChatHandler extends plugin {
                 { reg: /^#([a-zA-Z0-9]*)(?:s|single)([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleSingleChat' },
                 { reg: /^#([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleChat' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}记忆$`, 'i'), fnc: 'exportMyMemory' },
+                { reg: new RegExp(`^#导出${Config.AI_NAME}记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'), fnc: 'exportMemoryByDate' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆$`, 'i'), fnc: 'exportAllMemory', permission: 'master' },
+                { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'), fnc: 'exportAllMemoryByDate', permission: 'master' },
                 { reg: /^#gemini思考(开启|关闭)$/i, fnc: 'switchThinkingMode', permission: 'master' },
             ]
         })
@@ -642,6 +644,24 @@ export class ChatHandler extends plugin {
         }
     }
 
+    async exportMemoryByDate(e) {
+        const dateMatch = e.msg.match(new RegExp(`^#导出${Config.AI_NAME}记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'))
+        const targetDate = dateMatch[1]
+        await e.reply(`收到指令，正在打包 ${targetDate} 的记忆… 请稍等片刻喵~ ⏳`)
+        try {
+            const userId = String(e.user_id)
+            const result = await this.conversationManager.exportMemory(e, userId, 'single', targetDate)
+            if (result.success) {
+                await this._sendMemoryFile(e, result.filePath, `${targetDate} 的记忆`)
+            } else {
+                await e.reply(`❌ 导出失败: ${result.message}`, true)
+            }
+        } catch (err) {
+            logger.error(`[AI-Plugin] 导出指定日期记忆失败:`, err)
+            await e.reply(`❌ 导出失败了，呜呜呜…\n错误信息：${err.message}`, true)
+        }
+    }
+
     async exportAllMemory(e) {
         await e.reply(`收到最高权限指令，开始导出${Config.AI_NAME}的全部记忆… 这可能需要一点时间喵~ ⏳`)
         try {
@@ -653,6 +673,23 @@ export class ChatHandler extends plugin {
             }
         } catch (err) {
             logger.error(`[AI-Plugin] 导出全部记忆失败:`, err)
+            await e.reply(`❌ 导出失败了，呜呜呜…\n错误信息：${err.message}`, true)
+        }
+    }
+
+    async exportAllMemoryByDate(e) {
+        const dateMatch = e.msg.match(new RegExp(`^#导出${Config.AI_NAME}全部记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'))
+        const targetDate = dateMatch[1]
+        await e.reply(`收到最高权限指令，开始导出 ${targetDate} 的全部记忆… 这可能需要一点时间喵~ ⏳`)
+        try {
+            const result = await this.conversationManager.exportMemory(e, null, 'all', targetDate)
+            if (result.success) {
+                await this._sendMemoryFile(e, result.filePath, `${targetDate} 的全部记忆`)
+            } else {
+                await e.reply(`❌ 导出失败: ${result.message}`, true)
+            }
+        } catch (err) {
+            logger.error(`[AI-Plugin] 导出全部指定日期记忆失败:`, err)
             await e.reply(`❌ 导出失败了，呜呜呜…\n错误信息：${err.message}`, true)
         }
     }

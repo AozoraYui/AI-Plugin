@@ -40,7 +40,10 @@ export class HelpHandler extends plugin {
   > 示例: #progm 这张图里是什么？ [图片]
 
 > #导出${aiName}记忆
-  导出该用户的对话记忆。`
+  导出该用户的对话记忆。
+> #导出${aiName}记忆 [日期]
+  导出指定日期的记忆。
+  例如：#导出${aiName}记忆 2025-05-05`
 
         const msg3_drawing = `
 - - - - - - - - - - - - - - - - -
@@ -139,7 +142,10 @@ export class HelpHandler extends plugin {
 > #gemini思考开启/关闭
   切换是否显示AI的思考过程。
 > #导出${aiName}全部记忆
-  导出所有用户的对话记忆。`
+  导出所有用户的对话记忆。
+> #导出${aiName}全部记忆 [日期]
+  导出指定日期所有用户的记忆。
+  例如：#导出${aiName}全部记忆 2025-05-05`
 
         const msg6_tips = `
 - - - - - - - - - - - - - - - - -
