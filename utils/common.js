@@ -18,7 +18,7 @@ const AI_ERROR_PATTERNS = [
 ]
 
 export function isAIErrorResponse(text) {
-    if (!text || !text.trim()) return true
+    if (!text || typeof text !== 'string' || !text.trim()) return false
     const lowerText = text.toLowerCase()
     return AI_ERROR_PATTERNS.some(pattern => lowerText.includes(pattern.toLowerCase()))
 }
