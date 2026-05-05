@@ -91,15 +91,25 @@ export class MemoryHandler extends plugin {
         const aiName = Config.AI_NAME || '诺亚'
         const FULL_CHUNK_SIZE = 128
 
+        let totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+
+        const addUsage = (usage) => {
+            if (!usage) return
+            if (usage.prompt_tokens) totalUsage.prompt_tokens += usage.prompt_tokens
+            if (usage.completion_tokens) totalUsage.completion_tokens += usage.completion_tokens
+            if (usage.total_tokens) totalUsage.total_tokens += usage.total_tokens
+        }
+
         if (allHistory.length <= FULL_CHUNK_SIZE) {
             const historyText = this._buildHistoryText(allHistory, aiName)
             await e.reply(`📖 正在整合 ${allHistory.length} 条对话记录...`, true)
-            const newSummary = await this._summarizeSingleChunk(historyText, modelGroupKey)
-            if (!newSummary) {
+            const result = await this._summarizeSingleChunk(historyText, modelGroupKey)
+            if (!result) {
                 return e.reply(`❌ 全量总结生成失败`)
             }
-            await this.conversationManager.db.saveCheckpoint(e.user_id, newSummary, todayStr, 0, 'full')
-            return this._sendFullCheckpointResult(e, newSummary, allHistory.length, 1, startTime, modelGroupKey)
+            addUsage(result.usage)
+            await this.conversationManager.db.saveCheckpoint(e.user_id, result.summary, todayStr, 0, 'full')
+            return this._sendFullCheckpointResult(e, result.summary, allHistory.length, 1, startTime, modelGroupKey, totalUsage)
         }
 
         const chunks = []
@@ -113,9 +123,10 @@ export class MemoryHandler extends plugin {
             const chunkText = this._buildHistoryText(chunks[i], aiName)
             if (!chunkText.trim()) continue
             await e.reply(`📝 正在总结第 ${i + 1}/${chunks.length} 块 (${chunks[i].length}条)...`, true)
-            const summary = await this._summarizeChunk(chunkText, i + 1, chunks.length, modelGroupKey)
-            if (summary) {
-                chunkSummaries.push(summary)
+            const result = await this._summarizeChunk(chunkText, i + 1, chunks.length, modelGroupKey)
+            if (result) {
+                chunkSummaries.push(result.summary)
+                addUsage(result.usage)
             } else {
                 logger.warn(`[AI-Plugin] 第 ${i + 1}/${chunks.length} 块总结失败，使用原始片段`)
                 chunkSummaries.push(chunkText.slice(0, 2000))
@@ -148,9 +159,9 @@ ${chunkSummaries.map((s, i) => `=== 第${i + 1}段 ===\n${s}`).join('\n\n')}`
             return e.reply(`❌ 全量总结合并失败: ${reason}`)
         }
 
-        const newSummary = result.data
-        await this.conversationManager.db.saveCheckpoint(e.user_id, newSummary, todayStr, 0, 'full')
-        return this._sendFullCheckpointResult(e, newSummary, allHistory.length, chunks.length, startTime, modelGroupKey)
+        addUsage(result.usage)
+        await this.conversationManager.db.saveCheckpoint(e.user_id, result.data, todayStr, 0, 'full')
+        return this._sendFullCheckpointResult(e, result.data, allHistory.length, chunks.length, startTime, modelGroupKey, totalUsage)
     }
 
     _buildHistoryText(history, aiName) {
@@ -181,7 +192,7 @@ ${historyText}`
         const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
 
         if (result.success && !isAIErrorResponse(result.data)) {
-            return result.data.trim()
+            return { summary: result.data.trim(), usage: result.usage || null }
         }
         return null
     }
@@ -199,21 +210,30 @@ ${chunkText}`
         const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
 
         if (result.success && !isAIErrorResponse(result.data)) {
-            return result.data.trim()
+            return { summary: result.data.trim(), usage: result.usage || null }
         }
         return null
     }
 
-    async _sendFullCheckpointResult(e, newSummary, totalMessages, totalChunks, startTime, modelGroupKey) {
+    async _sendFullCheckpointResult(e, newSummary, totalMessages, totalChunks, startTime, modelGroupKey, totalUsage) {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
 
         const modelInfo = modelGroupKey === 'pro' ? '\n🔮 模型组: Pro' : modelGroupKey === 'ultra' ? '\n🔮 模型组: Ultra' : '\n🔮 模型组: Flash'
+
+        let tokenInfo = ''
+        if (totalUsage) {
+            if (totalUsage.prompt_tokens !== undefined && totalUsage.completion_tokens !== undefined) {
+                tokenInfo = `\n📊 Token: 输入 ${totalUsage.prompt_tokens} | 输出 ${totalUsage.completion_tokens}`
+            } else if (totalUsage.total_tokens) {
+                tokenInfo = `\n📊 Token: ${totalUsage.total_tokens}`
+            }
+        }
 
         const forwardMsgNodes = [
             {
                 user_id: e.self_id,
                 nickname: Config.AI_NAME,
-                message: `✅ 全量锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s\n📚 整合了 ${totalMessages} 条对话记录${totalChunks > 1 ? ` (${totalChunks}块分组合并)` : ''}`
+                message: `✅ 全量锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s\n📚 整合了 ${totalMessages} 条对话记录${totalChunks > 1 ? ` (${totalChunks}块分组合并)` : ''}${tokenInfo}`
             }
         ]
 

@@ -106,8 +106,11 @@ ${todayContent}`
             summaryText = `【${today} 原始片段】: ${todayContent.slice(0, 500)}...`
         }
 
+        const tokenLog = result.usage
+            ? ` | Token: 入${result.usage.prompt_tokens || '?'} 出${result.usage.completion_tokens || '?'}`
+            : ''
         await global.AIPluginConversationManager.db.saveSummaryCache(userId, summaryText, today)
-        logger.info(`[AI-Plugin] 为用户 ${userId} 创建增量总结成功: ${today}`)
+        logger.info(`[AI-Plugin] 为用户 ${userId} 创建增量总结成功: ${today}${tokenLog}`)
     }
 
     async _runWeeklyFullCheckpoint() {
@@ -139,12 +142,22 @@ ${todayContent}`
 
         const aiName = Config.AI_NAME || '诺亚'
 
+        let totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+
+        const addUsage = (usage) => {
+            if (!usage) return
+            if (usage.prompt_tokens) totalUsage.prompt_tokens += usage.prompt_tokens
+            if (usage.completion_tokens) totalUsage.completion_tokens += usage.completion_tokens
+            if (usage.total_tokens) totalUsage.total_tokens += usage.total_tokens
+        }
+
         if (allHistory.length <= FULL_CHUNK_SIZE) {
             const historyText = this._buildHistoryText(allHistory, aiName)
             if (!historyText.trim()) return
-            const fullContext = await this._summarizeSingleChunk(historyText, 'flash')
-            await global.AIPluginConversationManager.db.saveCheckpoint(userId, fullContext, today, 0, 'full')
-            logger.info(`[AI-Plugin] 为用户 ${userId} 创建全量锚点成功: ${today} (${allHistory.length}条)`)
+            const result = await this._summarizeSingleChunk(historyText, 'flash')
+            addUsage(result.usage)
+            await global.AIPluginConversationManager.db.saveCheckpoint(userId, result.summary, today, 0, 'full')
+            logger.info(`[AI-Plugin] 为用户 ${userId} 创建全量锚点成功: ${today} (${allHistory.length}条) | Token: 入${totalUsage.prompt_tokens} 出${totalUsage.completion_tokens}`)
             return
         }
 
@@ -159,9 +172,10 @@ ${todayContent}`
             const chunkText = this._buildHistoryText(chunks[i], aiName)
             if (!chunkText.trim()) continue
             logger.info(`[AI-Plugin] 正在总结第 ${i + 1}/${chunks.length} 块 (${chunks[i].length}条)...`)
-            const summary = await this._summarizeChunk(chunkText, i + 1, chunks.length, 'flash')
-            if (summary) {
-                chunkSummaries.push(summary)
+            const result = await this._summarizeChunk(chunkText, i + 1, chunks.length, 'flash')
+            if (result) {
+                chunkSummaries.push(result.summary)
+                addUsage(result.usage)
                 logger.info(`[AI-Plugin] 第 ${i + 1}/${chunks.length} 块总结完成`)
             } else {
                 logger.warn(`[AI-Plugin] 第 ${i + 1}/${chunks.length} 块总结失败，使用原始片段`)
@@ -193,6 +207,7 @@ ${chunkSummaries.map((s, i) => `=== 第${i + 1}段 ===\n${s}`).join('\n\n')}`
         let fullContext = ""
         if (result.success && !isAIErrorResponse(result.data)) {
             fullContext = result.data.trim()
+            addUsage(result.usage)
         } else {
             const reason = isAIErrorResponse(result.data) ? 'AI 安全过滤拦截' : (result.error || '未知错误')
             logger.warn(`[AI-Plugin] ${today} 全量总结合并失败: ${reason}`)
@@ -200,7 +215,7 @@ ${chunkSummaries.map((s, i) => `=== 第${i + 1}段 ===\n${s}`).join('\n\n')}`
         }
 
         await global.AIPluginConversationManager.db.saveCheckpoint(userId, fullContext, today, 0, 'full')
-        logger.info(`[AI-Plugin] 为用户 ${userId} 创建全量锚点成功: ${today} (${allHistory.length}条, ${chunks.length}块)`)
+        logger.info(`[AI-Plugin] 为用户 ${userId} 创建全量锚点成功: ${today} (${allHistory.length}条, ${chunks.length}块) | Token: 入${totalUsage.prompt_tokens} 出${totalUsage.completion_tokens}`)
     }
 
     _buildHistoryText(history, aiName) {
@@ -230,9 +245,9 @@ ${historyText}`
         const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
 
         if (result.success && !isAIErrorResponse(result.data)) {
-            return result.data.trim()
+            return { summary: result.data.trim(), usage: result.usage || null }
         }
-        return historyText.slice(0, Config.CHECKPOINT_MAX_LENGTH)
+        return { summary: historyText.slice(0, Config.CHECKPOINT_MAX_LENGTH), usage: null }
     }
 
     async _summarizeChunk(chunkText, chunkIndex, totalChunks, modelGroupKey) {
@@ -248,7 +263,7 @@ ${chunkText}`
         const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
 
         if (result.success && !isAIErrorResponse(result.data)) {
-            return result.data.trim()
+            return { summary: result.data.trim(), usage: result.usage || null }
         }
         return null
     }
