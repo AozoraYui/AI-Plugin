@@ -61,167 +61,199 @@ export class MemoryHandler extends plugin {
         if (modelGroupKey === 'pro') modelDisplay = "Pro模型组"
         if (modelGroupKey === 'gemini3') modelDisplay = "Gemini 3模型组"
 
-        // 从数据库获取最新全量锚点
-        let baseCheckpointDate = null
-        let baseCheckpointContent = ""
-
-        if (!isFullRebuild) {
-            const latestCheckpoint = await this.conversationManager.db.getLatestCheckpoint(userIdStr)
-            if (latestCheckpoint) {
-                baseCheckpointDate = latestCheckpoint.dateStr
-                baseCheckpointContent = latestCheckpoint.content
-                if (baseCheckpointDate === todayStr) {
-                    return e.reply("📅 今天已经创建过总结啦！无需重复创建。\n如果想强制刷新，请使用 #gemini创建全量总结")
-                }
-            }
+        // 检查今天是否已有总结
+        const todayCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, todayStr)
+        if (todayCheckpoint && !isFullRebuild) {
+            return e.reply("📅 今天已经创建过总结啦！无需重复创建。\n如果想强制刷新，请使用 #gemini创建全量总结")
         }
 
         let statusMsg = `📚 正在启动记忆归档 [${modelDisplay}]...`
+        statusMsg += isFullRebuild
+            ? `\n🔥 全量模式: 读取所有每日摘要，整合成一份完整记忆存档`
+            : `\n🔗 增量模式: 读取今天对话 + 最近全量总结，生成今日摘要`
 
-        if (baseCheckpointDate) {
-            statusMsg += `\n🔗 增量模式: 继承自锚点【${baseCheckpointDate}】\n将读取该存档 + 之后的新增记忆。`
-        } else {
-            statusMsg += isFullRebuild
-                ? `\n🔥 全量模式 (强制重构): 忽略旧存档，正在回溯所有历史流水账...`
-                : `\n🌱 增量模式 (初始化): 未发现旧存档，将从头开始创建第一个锚点。`
-        }
         await e.reply(statusMsg, true)
 
         const startTime = Date.now()
-        let finalContext = ""
-        let processedDays = 0
 
         try {
-            if (baseCheckpointDate && baseCheckpointContent) {
-                finalContext += `\n=== 📜 【核心记忆存档 (截止于 ${baseCheckpointDate})】 ===\n${baseCheckpointContent}\n`
+            if (isFullRebuild) {
+                await this._createFullCheckpointManual(e, userIdStr, todayStr, modelGroupKey, modelDisplay, startTime)
+            } else {
+                await this._createIncrementalCheckpointManual(e, userIdStr, todayStr, modelGroupKey, modelDisplay, startTime)
             }
-
-            // 从数据库获取所有日期
-            let dateDirs = await this.conversationManager.db.getDistinctDates(userIdStr)
-            dateDirs.sort()
-
-            if (baseCheckpointDate) {
-                dateDirs = dateDirs.filter(date => date > baseCheckpointDate)
-            }
-
-            for (const dateDir of dateDirs) {
-                if (dateDir === todayStr) {
-                    // 今天的对话直接从数据库读取
-                    const dayHistory = await this.conversationManager.db.getConversationHistoryByDate(userIdStr, dateDir)
-                    let todayText = ""
-                    for (const turn of dayHistory) {
-                        const role = turn.role === 'user' ? '用户' : Config.AI_NAME
-                        const text = turn.parts.map(p => p.text).join(' ')
-                        if (text) todayText += `${role}: ${text}\n`
-                    }
-                    if (todayText) {
-                        finalContext += `\n=== 🔥 【今天 (${dateDir}) 的实时对话】 ===\n${todayText}\n`
-                    }
-                } else {
-                    processedDays++
-                    const summary = await this._getOrCreateDailySummary(dateDir, userIdStr, modelGroupKey)
-                    if (summary) {
-                        const cleanSummary = summary.replace(/^【.*?】:\s*/, '')
-                        finalContext += `\n=== ➕ 【增量记忆 (${dateDir})】 ===\n${cleanSummary}\n`
-                    }
-                }
-            }
-
-            if (!finalContext.trim()) {
-                return e.reply("没有找到需要归档的内容喵...")
-            }
-
         } catch (error) {
             logger.error(`[AI-Plugin] 归档失败:`, error)
             return e.reply("整理记忆碎片时出错了...")
         }
+    }
 
-        const currentTime = new Date().toLocaleString('zh-CN', { hour12: false })
-
-        let finalPrompt = `你是一位专业的传记作家和档案管理员。现在是【${currentTime}】。\n`
-        if (baseCheckpointDate) {
-            finalPrompt += `这是一次【记忆存档接力 (Update)】操作。请基于旧的【核心记忆存档】，合并后续的【增量记忆】和【今天的对话】，生成一份**最新的**人生总结报告。**关键要求**：旧存档中的核心设定（背景、性格、长期经历）非常重要，请务必继承和保留，不要丢失细节。\n`
-        } else {
-            finalPrompt += `这是一次【记忆存档重构 (Rebuild)】操作。请阅读以下用户每一天的【每日摘要】和【今天的对话】，将这些碎片化的信息整合成一份**完整的、连贯的**人生总结报告。\n`
+    async _createFullCheckpointManual(e, userIdStr, todayStr, modelGroupKey, modelDisplay, startTime) {
+        const allSummaries = await this.conversationManager.db.getAllSummaryCaches(userIdStr)
+        if (allSummaries.length === 0) {
+            return e.reply("没有找到任何每日摘要，无法创建全量总结喵...")
         }
-        finalPrompt += `输出要求：\n1. 报告将作为**新的存档文件**保存，供未来使用，请确保信息密度高。\n2. 请用第三人称叙述。\n3. 重点关注：用户的性格变化、核心人际关系、重要事件的时间线。\n\n--- 🗂️ 待处理数据 ---\n${finalContext}\n--- 数据结束 ---`
 
-        await e.reply(`📖 正在生成新的记忆锚点...\n(模式: ${baseCheckpointDate ? '增量接力' : '全量重构'} | 覆盖天数: ${processedDays}天)`, true)
+        let summariesText = ""
+        for (const summary of allSummaries) {
+            summariesText += `\n=== 📅 【${summary.dateStr} 记忆摘要】 ===\n${summary.content}\n`
+        }
 
-        try {
-            const payload = { "contents": [{ "role": "user", "parts": [{ "text": finalPrompt }] }] }
-            const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
+        const fullSummaryPrompt = `
+你是一位专业的传记作家和档案管理员。现在是【${new Date().toLocaleString('zh-CN', { hour12: false })}】。
+请将以下这些每日对话摘要整合成一份完整的、精炼的核心记忆存档。
+要求：
+1. 保留所有重要的用户信息（性格、偏好、技术能力、重要经历等）
+2. 按主题分类整理（如：个人信息、技术兴趣、重要对话、情感偏好等）
+3. 去除重复和琐碎的细节，保留核心内容
+4. 总字数控制在5000字以内
+5. 直接输出整合后的记忆存档，不要加"好的"等客套话
 
-            if (result.success) {
-                const newSummary = result.data
-                const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
+每日摘要列表：
+${summariesText}`
 
-                let tokenInfo = ''
-                if (result.usage) {
-                    if (result.usage.prompt_tokens !== undefined && result.usage.completion_tokens !== undefined) {
-                        tokenInfo = ` | In: ${result.usage.prompt_tokens} | Out: ${result.usage.completion_tokens}`
-                    } else if (result.usage.total_tokens) {
-                        tokenInfo = ` | Total: ${result.usage.total_tokens}`
-                    }
-                }
+        await e.reply(`📖 正在整合 ${allSummaries.length} 天的记忆摘要...`, true)
 
-                const modelInfo = result.platform ? `\n🔮 模型: ${result.platform}` : ''
+        const payload = { "contents": [{ "role": "user", "parts": [{ "text": fullSummaryPrompt }] }] }
+        const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
 
-                // 保存到数据库，记录锚点类型
-                const checkpointType = isFullRebuild ? 'full' : 'incremental'
-                await this.conversationManager.db.saveCheckpoint(e.user_id, newSummary, todayStr, 0, checkpointType)
+        if (!result.success) {
+            return e.reply(`❌ 全量总结生成失败: ${result.error}`)
+        }
 
-                let currentHistory = await this.conversationManager.getUserHistory(e.user_id)
-                currentHistory.push({
-                    "role": "model",
-                    "parts": [{ "text": `(系统：[${todayStr}] 记忆锚点已建立。)\n${newSummary}` }]
-                })
-                await this.conversationManager.saveUserHistory(e.user_id, currentHistory)
+        const newSummary = result.data
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
 
-                const forwardMsgNodes = [
-                    {
-                        user_id: Bot.uin,
-                        nickname: Config.AI_NAME,
-                        message: `✅ 锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s${tokenInfo}\n🔗 继承自: ${baseCheckpointDate || '无 (重构)'}`
-                    }
-                ]
-
-                const MAX_LENGTH = Config.CHECKPOINT_DISPLAY_MAX_LENGTH
-                if (newSummary.length <= MAX_LENGTH) {
-                    forwardMsgNodes.push({
-                        user_id: Bot.uin,
-                        nickname: "存档预览",
-                        message: newSummary
-                    })
-                } else {
-                    let content = newSummary
-                    let part = 1
-                    while (content.length > 0) {
-                        let splitIndex = MAX_LENGTH
-                        if (content.length > MAX_LENGTH) {
-                            const lastNewLine = content.lastIndexOf('\n', MAX_LENGTH)
-                            if (lastNewLine > MAX_LENGTH * 0.8) splitIndex = lastNewLine + 1
-                        }
-                        const chunk = content.slice(0, splitIndex)
-                        content = content.slice(splitIndex)
-                        forwardMsgNodes.push({
-                            user_id: Bot.uin,
-                            nickname: `存档预览 (Part ${part++})`,
-                            message: chunk
-                        })
-                    }
-                }
-
-                const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
-                await e.reply(forwardMsg)
-
-            } else {
-                await e.reply(`❌ 锚点生成失败: ${result.error}`)
+        let tokenInfo = ''
+        if (result.usage) {
+            if (result.usage.prompt_tokens !== undefined && result.usage.completion_tokens !== undefined) {
+                tokenInfo = ` | In: ${result.usage.prompt_tokens} | Out: ${result.usage.completion_tokens}`
+            } else if (result.usage.total_tokens) {
+                tokenInfo = ` | Total: ${result.usage.total_tokens}`
             }
-        } catch (err) {
-            logger.error(`[AI-Plugin] 最终锚点生成出错:`, err)
-            await e.reply(`❌ 错误: ${err.message}`)
         }
+
+        const modelInfo = result.platform ? `\n🔮 模型: ${result.platform}` : ''
+
+        await this.conversationManager.db.saveCheckpoint(e.user_id, newSummary, todayStr, 0, 'full')
+
+        const forwardMsgNodes = [
+            {
+                user_id: e.self_id,
+                nickname: Config.AI_NAME,
+                message: `✅ 全量锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s${tokenInfo}\n� 整合了 ${allSummaries.length} 天的记忆摘要`
+            }
+        ]
+
+        const MAX_LENGTH = Config.CHECKPOINT_DISPLAY_MAX_LENGTH
+        if (newSummary.length <= MAX_LENGTH) {
+            forwardMsgNodes.push({
+                user_id: e.self_id,
+                nickname: "记忆存档内容",
+                message: newSummary
+            })
+        } else {
+            let content = newSummary
+            let part = 1
+            while (content.length > 0) {
+                let splitIndex = MAX_LENGTH
+                if (content.length > MAX_LENGTH) {
+                    const lastNewLine = content.lastIndexOf('\n', MAX_LENGTH)
+                    if (lastNewLine > MAX_LENGTH * 0.8) splitIndex = lastNewLine + 1
+                }
+                const chunk = content.slice(0, splitIndex)
+                content = content.slice(splitIndex)
+                forwardMsgNodes.push({
+                    user_id: e.self_id,
+                    nickname: `存档预览 (Part ${part++})`,
+                    message: chunk
+                })
+            }
+        }
+
+        const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
+        await e.reply(forwardMsg)
+    }
+
+    async _createIncrementalCheckpointManual(e, userIdStr, todayStr, modelGroupKey, modelDisplay, startTime) {
+        const todayHistory = await this.conversationManager.db.getConversationHistoryByDate(userIdStr, todayStr)
+        if (todayHistory.length === 0) {
+            return e.reply("今天还没有对话记录，无法创建增量总结喵...")
+        }
+
+        const latestFullCheckpoint = await this.conversationManager.db.getLatestFullCheckpoint(userIdStr)
+
+        let todayContent = ""
+        for (const turn of todayHistory) {
+            const role = turn.role === 'user' ? '用户' : Config.AI_NAME
+            const text = turn.parts.map(p => p.text).join(' ')
+            if (text) todayContent += `${role}: ${text}\n`
+        }
+
+        let summaryPrompt = ""
+        if (latestFullCheckpoint) {
+            summaryPrompt = `
+你是一位专业的档案管理员。现在是【${new Date().toLocaleString('zh-CN', { hour12: false })}】。
+请将以下这段发生在【${todayStr}】的对话概括为一个简短的摘要（${Config.SUMMARY_MAX_LENGTH}字以内）。
+重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
+直接输出摘要内容，不要加"好的"等客套话。
+
+以下是之前的核心记忆存档，供你参考上下文（不需要重复总结这些内容）：
+=== 📜 【核心记忆存档 (截止于 ${latestFullCheckpoint.dateStr})】 ===
+${latestFullCheckpoint.content}
+
+今天的对话内容：
+${todayContent}`
+        } else {
+            summaryPrompt = `
+你是一位专业的档案管理员。现在是【${new Date().toLocaleString('zh-CN', { hour12: false })}】。
+请将以下这段发生在【${todayStr}】的对话概括为一个简短的摘要（${Config.SUMMARY_MAX_LENGTH}字以内）。
+重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
+直接输出摘要内容，不要加"好的"等客套话。
+对话内容：
+${todayContent}`
+        }
+
+        await e.reply(`📖 正在生成今日增量总结...`, true)
+
+        const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
+        const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
+
+        if (!result.success) {
+            return e.reply(`❌ 增量总结生成失败: ${result.error}`)
+        }
+
+        const newSummary = result.data
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
+
+        let tokenInfo = ''
+        if (result.usage) {
+            if (result.usage.prompt_tokens !== undefined && result.usage.completion_tokens !== undefined) {
+                tokenInfo = ` | In: ${result.usage.prompt_tokens} | Out: ${result.usage.completion_tokens}`
+            } else if (result.usage.total_tokens) {
+                tokenInfo = ` | Total: ${result.usage.total_tokens}`
+            }
+        }
+
+        const modelInfo = result.platform ? `\n🔮 模型: ${result.platform}` : ''
+
+        await this.conversationManager.db.saveCheckpoint(e.user_id, newSummary, todayStr, 0, 'incremental')
+
+        const forwardMsgNodes = [
+            {
+                user_id: e.self_id,
+                nickname: Config.AI_NAME,
+                message: `✅ 增量锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s${tokenInfo}\n🔗 基于全量总结: ${latestFullCheckpoint ? latestFullCheckpoint.dateStr : '无'}`
+            },
+            {
+                user_id: e.self_id,
+                nickname: "今日增量内容",
+                message: newSummary
+            }
+        ]
+
+        const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
+        await e.reply(forwardMsg)
     }
 
     async createFullCheckpoint(e) {
