@@ -367,87 +367,77 @@ ${todayContent}`
 
         try {
             const checkpoint = await this.conversationManager.db.getCheckpoint(userIdStr, targetDate)
-            const summaryCache = await this.conversationManager.db.getSummaryCache(userIdStr, targetDate)
+            const isFullCheckpoint = checkpoint && checkpoint.checkpointType === 'full'
 
-            if (!checkpoint && !summaryCache) {
-                return e.reply(`📅 没有找到 ${targetDate} 的记忆记录哦。\n该日期可能尚未进行总结，或者记录不存在。`)
-            }
-
-            const DISPLAY_MAX = 3000
-            let content = `📖 ${targetDate} 记忆记录\n- - - - - - - - - -\n`
-
-            if (checkpoint) {
-                const checkpointType = checkpoint.checkpointType
-                let typeLabel
-                if (checkpointType === 'full') {
-                    typeLabel = '全量总结'
-                } else if (checkpointType === 'incremental') {
-                    typeLabel = '历史记录(旧版)'
-                } else {
-                    typeLabel = '历史记录'
-                }
+            if (isFullCheckpoint) {
+                const DISPLAY_MAX = 3000
                 const displayText = checkpoint.content.length > DISPLAY_MAX
                     ? checkpoint.content.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${checkpoint.content.length} 字符，已截断。可使用 #gemini导出记忆 查看完整内容)`
                     : checkpoint.content
-                content += `【${typeLabel}】\n${displayText}\n`
+                const content = `📖 ${targetDate} 全量总结\n- - - - - - - - - -\n${displayText}`
+                return this._sendMemoryContent(e, content, targetDate)
             }
 
+            const summaryCache = await this.conversationManager.db.getSummaryCache(userIdStr, targetDate)
             if (summaryCache) {
-                const isDuplicate = checkpoint && summaryCache.content === checkpoint.content
-                if (!isDuplicate) {
-                    const displayText = summaryCache.content.length > DISPLAY_MAX
-                        ? summaryCache.content.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${summaryCache.content.length} 字符，已截断)`
-                        : summaryCache.content
-                    content += `\n【增量总结】\n${displayText}\n`
-                }
+                const DISPLAY_MAX = 3000
+                const displayText = summaryCache.content.length > DISPLAY_MAX
+                    ? summaryCache.content.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${summaryCache.content.length} 字符，已截断)`
+                    : summaryCache.content
+                const content = `📖 ${targetDate} 增量总结\n- - - - - - - - - -\n${displayText}`
+                return this._sendMemoryContent(e, content, targetDate)
             }
 
-            const MAX_LENGTH = 800
-            const MAX_NODES = 5
-            if (content.length > MAX_LENGTH) {
-                const forwardMsgNodes = [
-                    {
-                        user_id: e.self_id,
-                        nickname: Config.AI_NAME,
-                        message: `📖 ${targetDate} 记忆记录`
-                    }
-                ]
-
-                let remainingContent = content
-                let part = 1
-                while (remainingContent.length > 0 && part <= MAX_NODES) {
-                    let chunk = remainingContent.slice(0, MAX_LENGTH)
-                    if (remainingContent.length > MAX_LENGTH) {
-                        const lastNewline = chunk.lastIndexOf('\n')
-                        if (lastNewline > MAX_LENGTH * 0.8) {
-                            chunk = chunk.slice(0, lastNewline)
-                        }
-                    }
-                    forwardMsgNodes.push({
-                        user_id: e.self_id,
-                        nickname: `记忆内容 (${part})`,
-                        message: chunk
-                    })
-                    remainingContent = remainingContent.slice(chunk.length)
-                    part++
-                }
-
-                if (remainingContent.length > 0) {
-                    forwardMsgNodes.push({
-                        user_id: e.self_id,
-                        nickname: "提示",
-                        message: `⚠️ 内容过长，仅显示前 ${MAX_NODES} 部分。\n如需查看完整内容，请使用 #gemini导出记忆 命令。`
-                    })
-                }
-
-                const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
-                await e.reply(forwardMsg)
-            } else {
-                await e.reply(content)
-            }
+            return e.reply(`📅 没有找到 ${targetDate} 的记忆记录哦。\n该日期可能尚未进行总结，或者记录不存在。`)
         } catch (err) {
             logger.error(`[AI-Plugin] 读取记忆失败:`, err)
             await e.reply(`❌ 读取记忆失败: ${err.message}`)
+        }
+    }
+
+    async _sendMemoryContent(e, content, targetDate) {
+        const MAX_LENGTH = 800
+        const MAX_NODES = 5
+        if (content.length > MAX_LENGTH) {
+            const forwardMsgNodes = [
+                {
+                    user_id: e.self_id,
+                    nickname: Config.AI_NAME,
+                    message: `📖 ${targetDate} 记忆记录`
+                }
+            ]
+
+            let remainingContent = content
+            let part = 1
+            while (remainingContent.length > 0 && part <= MAX_NODES) {
+                let chunk = remainingContent.slice(0, MAX_LENGTH)
+                if (remainingContent.length > MAX_LENGTH) {
+                    const lastNewline = chunk.lastIndexOf('\n')
+                    if (lastNewline > MAX_LENGTH * 0.8) {
+                        chunk = chunk.slice(0, lastNewline)
+                    }
+                }
+                forwardMsgNodes.push({
+                    user_id: e.self_id,
+                    nickname: `记忆内容 (${part})`,
+                    message: chunk
+                })
+                remainingContent = remainingContent.slice(chunk.length)
+                part++
+            }
+
+            if (remainingContent.length > 0) {
+                forwardMsgNodes.push({
+                    user_id: e.self_id,
+                    nickname: "提示",
+                    message: `⚠️ 内容过长，仅显示前 ${MAX_NODES} 部分。\n如需查看完整内容，请使用 #gemini导出记忆 命令。`
+                })
+            }
+
+            const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
+            await e.reply(forwardMsg)
+        } else {
+            await e.reply(content)
         }
     }
 
