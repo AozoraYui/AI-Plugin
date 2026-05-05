@@ -1,5 +1,5 @@
 import schedule from 'node-schedule'
-import { getTodayDateStr } from './common.js'
+import { getTodayDateStr, isAIErrorResponse } from './common.js'
 import { Config } from './config.js'
 
 export class AIScheduler {
@@ -97,10 +97,11 @@ ${todayContent}`
         const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
 
         let summaryText = ""
-        if (result.success) {
+        if (result.success && !isAIErrorResponse(result.data)) {
             summaryText = result.data.trim()
         } else {
-            logger.warn(`[AI-Plugin] ${today} 增量总结生成失败: ${result.error}`)
+            const reason = isAIErrorResponse(result.data) ? 'AI 安全过滤拦截' : (result.error || '未知错误')
+            logger.warn(`[AI-Plugin] ${today} 增量总结生成失败: ${reason}`)
             summaryText = `【${today} 原始片段】: ${todayContent.slice(0, 500)}...`
         }
 
@@ -165,11 +166,11 @@ ${historyText}`
         const result = await this.client.makeRequest('chat', payload, 'default', Config.CHECKPOINT_MAX_LENGTH)
 
         let fullContext = ""
-        if (result.success) {
+        if (result.success && !isAIErrorResponse(result.data)) {
             fullContext = result.data.trim()
         } else {
-            logger.warn(`[AI-Plugin] ${today} 全量总结生成失败: ${result.error}`)
-            // 如果整合失败，回退到截取原始对话
+            const reason = isAIErrorResponse(result.data) ? 'AI 安全过滤拦截' : (result.error || '未知错误')
+            logger.warn(`[AI-Plugin] ${today} 全量总结生成失败: ${reason}`)
             fullContext = historyText.slice(0, Config.CHECKPOINT_MAX_LENGTH)
         }
 

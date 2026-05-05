@@ -5,6 +5,24 @@ import path from 'node:path'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { Config } from './config.js'
 
+const AI_ERROR_PATTERNS = [
+    'AI Studio 过滤了你的请求内容',
+    '无法生成回复',
+    '内容安全策略',
+    'content filter',
+    'safety filter',
+    'blocked by safety',
+    'I cannot generate',
+    'I am unable to',
+    'I\'m unable to',
+]
+
+export function isAIErrorResponse(text) {
+    if (!text || !text.trim()) return true
+    const lowerText = text.toLowerCase()
+    return AI_ERROR_PATTERNS.some(pattern => lowerText.includes(pattern.toLowerCase()))
+}
+
 export const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
 export async function setMsgEmojiLike(e, emojiID) {
@@ -142,12 +160,13 @@ ${dayContent}`
     const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
     const result = await client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
 
-    if (result.success) {
+    if (result.success && !isAIErrorResponse(result.data)) {
         const summaryText = result.data.trim()
         await global.AIPluginConversationManager.db.saveSummaryCache(userId, summaryText, dateDir)
         return summaryText
     } else {
-        logger.warn(`[AI-Plugin] ${dateDir} 摘要生成失败: ${result.error}`)
+        const reason = isAIErrorResponse(result.data) ? 'AI 安全过滤拦截' : (result.error || '未知错误')
+        logger.warn(`[AI-Plugin] ${dateDir} 摘要生成失败: ${reason}`)
         return `【${dateDir} 原始片段】: ${dayContent.slice(0, 500)}...`
     }
 }

@@ -6,7 +6,7 @@ import { GeminiClient } from '../client/GeminiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { sessionManager } from '../utils/session.js'
-import { setMsgEmojiLike, getTodayDateStr, generateDailySummary } from '../utils/common.js'
+import { setMsgEmojiLike, getTodayDateStr, generateDailySummary, isAIErrorResponse } from '../utils/common.js'
 
 export class MemoryHandler extends plugin {
     constructor() {
@@ -127,8 +127,9 @@ ${historyText}`
         const payload = { "contents": [{ "role": "user", "parts": [{ "text": fullSummaryPrompt }] }] }
         const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
 
-        if (!result.success) {
-            return e.reply(`❌ 全量总结生成失败: ${result.error}`)
+        if (!result.success || isAIErrorResponse(result.data)) {
+            const reason = isAIErrorResponse(result.data) ? 'AI 安全过滤拦截' : (result.error || '未知错误')
+            return e.reply(`❌ 全量总结生成失败: ${reason}`)
         }
 
         const newSummary = result.data
@@ -229,8 +230,9 @@ ${todayContent}`
         const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
         const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
 
-        if (!result.success) {
-            return e.reply(`❌ 增量总结生成失败: ${result.error}`)
+        if (!result.success || isAIErrorResponse(result.data)) {
+            const reason = isAIErrorResponse(result.data) ? 'AI 安全过滤拦截' : (result.error || '未知错误')
+            return e.reply(`❌ 增量总结生成失败: ${reason}`)
         }
 
         const newSummary = result.data
@@ -530,7 +532,7 @@ ${todayContent}`
                 const payload = { "contents": [{ "role": "user", "parts": [{ "text": finalPrompt }] }] }
                 const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
 
-                if (result.success) {
+                if (result.success && !isAIErrorResponse(result.data)) {
                     const newSummary = result.data
                     await this.conversationManager.db.saveSummaryCache(userIdStr, newSummary, dateDir)
                     successCount++
@@ -538,7 +540,8 @@ ${todayContent}`
                     logger.info(`[AI-Plugin] 批量增量总结成功: ${dateDir}`)
                 } else {
                     failCount++
-                    logger.warn(`[AI-Plugin] 批量增量总结失败: ${dateDir}, 错误: ${result.error}`)
+                    const reason = isAIErrorResponse(result.data) ? 'AI 安全过滤拦截' : (result.error || '未知错误')
+                    logger.warn(`[AI-Plugin] 批量增量总结失败: ${dateDir}, 错误: ${reason}`)
                 }
             } catch (err) {
                 failCount++
