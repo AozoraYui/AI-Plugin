@@ -213,9 +213,11 @@ export class ChatHandler extends plugin {
         const prefix = match[1].toLowerCase()
         let userMessage = match[2].trim()
 
-        let modelGroupKey = 'default'
+        let modelGroupKey = 'flash'
         if (prefix === 'pro') modelGroupKey = 'pro'
-        else if (prefix === '3') modelGroupKey = 'gemini3'
+        else if (prefix === 'ultra') modelGroupKey = 'ultra'
+
+        const modelDisplay = modelGroupKey === 'pro' ? 'Pro' : modelGroupKey === 'ultra' ? 'Ultra' : 'Flash'
 
         const startTime = Date.now()
         let allImages = []
@@ -320,9 +322,9 @@ export class ChatHandler extends plugin {
             const userId = e.user_id
 
             if (!isSingleMode) {
-                await e.reply(`${Config.AI_NAME}思考中 (使用 ${modelGroupKey} 模型组)…`, true)
+                await e.reply(`${Config.AI_NAME}思考中 (使用 ${modelDisplay} 模型组)…`, true)
             } else {
-                await e.reply(`${Config.AI_NAME}思考中 (单次对话模式，使用 ${modelGroupKey} 模型组)…`, true)
+                await e.reply(`${Config.AI_NAME}思考中 (单次对话模式，使用 ${modelDisplay} 模型组)…`, true)
             }
             await setMsgEmojiLike(e, 282)
 

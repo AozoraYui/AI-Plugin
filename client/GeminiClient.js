@@ -26,9 +26,9 @@ export class GeminiClient {
 #   base_url: API 基础地址
 #   api_key: API 密钥
 #   model_groups: 模型组配置
-#     default: 默认模型组（用于 #gm, #bnn 等指令）
+#     flash: Flash 模型组（用于 #gm, #bnn 等指令）
 #     pro: Pro 模型组（用于 #progm 指令）
-#     gemini3: Gemini 3 模型组（用于 #3gm, #3bnn 指令）
+#     ultra: Ultra 模型组（用于 #ultragm, #ultrabnn 指令）
 #   每个模型组包含：
 #     chat_models: 对话模型列表
 #     draw_models: 绘图模型列表
@@ -38,21 +38,21 @@ export class GeminiClient {
   base_url: "https://api.example.com/v1"
   api_key: "your-api-key-here"
   model_groups:
-    # 默认组 (Flash): 用于 #gm, #bnn 等指令
-    default:
+    # Flash 组: 用于 #gm, #bnn 等指令
+    flash:
       chat_models:
         - "gemini-2.5-flash"
       draw_models:
         - "gemini-2.5-flash-image"
 
-    # 专业组 (Pro): 用于 #progm 指令
+    # Pro 组: 用于 #progm 指令
     pro:
       chat_models:
         - "gemini-2.5-pro"
       draw_models: []
 
-    # 旗舰组 (Gemini 3): 用于 #3gm, #3bnn 等指令
-    gemini3:
+    # Ultra 组: 用于 #ultragm, #ultrabnn 等指令
+    ultra:
       chat_models:
         - "gemini-3-pro"
       draw_models: []
@@ -359,7 +359,7 @@ export class GeminiClient {
         }
     }
 
-    async makeRequest(type, payload, modelGroupKey = 'default', maxTokens = 8192) {
+    async makeRequest(type, payload, modelGroupKey = 'flash', maxTokens = 8192) {
         const modelPool = this.activeModelPools[modelGroupKey]?.[type]
         const taskTypeName = type === 'image' ? '绘图' : '对话'
         let lastError = `模型组 [${modelGroupKey}] 中没有可用的 [${taskTypeName}] 模型。`
@@ -379,7 +379,7 @@ export class GeminiClient {
             logger.error(`[AI-Plugin] ${errorMessage}`)
             return { success: false, error: `${errorMessage}\n建议运行 #gemini模型测试。` }
         } else {
-            if (modelGroupKey !== 'default') {
+            if (modelGroupKey !== 'flash') {
                 lastError = `模型组 [${modelGroupKey}] 中没有可用的 [${taskTypeName}] 模型。请检查 models_config.yaml 配置或使用其他指令。`
             } else {
                 lastError = `[默认] 模型组中也找不到可用的 [${taskTypeName}] 类型模型。请运行 #gemini模型测试 来更新可用模型列表。`

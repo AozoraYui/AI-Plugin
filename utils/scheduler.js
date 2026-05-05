@@ -50,7 +50,7 @@ export class AIScheduler {
         }
     }
 
-    async _createIncrementalCheckpoint(userId, today, _messageCount = 0, modelGroupKey = 'default') {
+    async _createIncrementalCheckpoint(userId, today, _messageCount = 0, modelGroupKey = 'flash') {
 
         // 获取今天的对话记录
         const todayHistory = await global.AIPluginConversationManager.db.getConversationHistoryByDate(userId, today)
@@ -142,7 +142,7 @@ ${todayContent}`
         if (allHistory.length <= FULL_CHUNK_SIZE) {
             const historyText = this._buildHistoryText(allHistory, aiName)
             if (!historyText.trim()) return
-            const fullContext = await this._summarizeSingleChunk(historyText, 'default')
+            const fullContext = await this._summarizeSingleChunk(historyText, 'flash')
             await global.AIPluginConversationManager.db.saveCheckpoint(userId, fullContext, today, 0, 'full')
             logger.info(`[AI-Plugin] 为用户 ${userId} 创建全量锚点成功: ${today} (${allHistory.length}条)`)
             return
@@ -159,7 +159,7 @@ ${todayContent}`
             const chunkText = this._buildHistoryText(chunks[i], aiName)
             if (!chunkText.trim()) continue
             logger.info(`[AI-Plugin] 正在总结第 ${i + 1}/${chunks.length} 块 (${chunks[i].length}条)...`)
-            const summary = await this._summarizeChunk(chunkText, i + 1, chunks.length, 'default')
+            const summary = await this._summarizeChunk(chunkText, i + 1, chunks.length, 'flash')
             if (summary) {
                 chunkSummaries.push(summary)
                 logger.info(`[AI-Plugin] 第 ${i + 1}/${chunks.length} 块总结完成`)
@@ -188,7 +188,7 @@ ${todayContent}`
 ${chunkSummaries.map((s, i) => `=== 第${i + 1}段 ===\n${s}`).join('\n\n')}`
 
         const payload = { "contents": [{ "role": "user", "parts": [{ "text": mergePrompt }] }] }
-        const result = await this.client.makeRequest('chat', payload, 'default', Config.CHECKPOINT_MAX_LENGTH)
+        const result = await this.client.makeRequest('chat', payload, 'flash', Config.CHECKPOINT_MAX_LENGTH)
 
         let fullContext = ""
         if (result.success && !isAIErrorResponse(result.data)) {
