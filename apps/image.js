@@ -4,7 +4,7 @@ import { GeminiClient } from '../client/GeminiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { sessionManager } from '../utils/session.js'
-import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType } from '../utils/common.js'
+import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
 import fs from 'node:fs'
 import yaml from 'yaml'
 import sharp from 'sharp'
@@ -72,8 +72,7 @@ export class ImageHandler extends plugin {
             isCustomCommand = true
             const prefix = match[1].toLowerCase()
             instruction = match[2].trim()
-            if (prefix === 'pro') modelGroupKey = 'pro'
-            else if (prefix === 'ultra') modelGroupKey = 'ultra'
+            modelGroupKey = resolveModelGroup(prefix)
         } else {
             const dynamicRule = this.rule.find(r => r.key === 'dynamicImageCommand')
             if (dynamicRule) {
@@ -84,8 +83,7 @@ export class ImageHandler extends plugin {
                     isCustomCommand = false
                     const prefix = match[1].toLowerCase()
                     command = match[2]
-                    if (prefix === 'pro') modelGroupKey = 'pro'
-                    else if (prefix === 'ultra') modelGroupKey = 'ultra'
+                    modelGroupKey = resolveModelGroup(prefix)
                 }
             }
         }
@@ -101,7 +99,7 @@ export class ImageHandler extends plugin {
         if (currentImages.length > 0) allImages = allImages.concat(currentImages)
 
         await setMsgEmojiLike(e, 282)
-        const modelDisplay = modelGroupKey === 'pro' ? 'Pro' : modelGroupKey === 'ultra' ? 'Ultra' : 'Flash'
+        const modelDisplay = resolveModelDisplay(modelGroupKey)
         await e.reply(`🎨 正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
 
         let parts = []

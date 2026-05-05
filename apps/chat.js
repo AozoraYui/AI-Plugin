@@ -5,7 +5,7 @@ import { Config } from '../utils/config.js'
 import { GeminiClient } from '../client/GeminiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
-import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, getBeijingTimeStr, getTodayDateStr } from '../utils/common.js'
+import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, getBeijingTimeStr, getTodayDateStr, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
 
 function extractCardInfo(data) {
     const lines = []
@@ -197,8 +197,8 @@ export class ChatHandler extends plugin {
         const prefix2 = match[2].toLowerCase()
 
         let modelPrefix = ''
-        if (prefix1 === 'pro' || prefix1 === '3') modelPrefix = prefix1
-        if (prefix2 === 'pro' || prefix2 === '3') modelPrefix = prefix2
+        if (resolveModelGroup(prefix1) !== 'flash') modelPrefix = prefix1
+        if (resolveModelGroup(prefix2) !== 'flash') modelPrefix = prefix2
 
         e.msg = `#${modelPrefix}gm${match[3]}`
         return this.handleChat(e)
@@ -213,11 +213,8 @@ export class ChatHandler extends plugin {
         const prefix = match[1].toLowerCase()
         let userMessage = match[2].trim()
 
-        let modelGroupKey = 'flash'
-        if (prefix === 'pro') modelGroupKey = 'pro'
-        else if (prefix === 'ultra') modelGroupKey = 'ultra'
-
-        const modelDisplay = modelGroupKey === 'pro' ? 'Pro' : modelGroupKey === 'ultra' ? 'Ultra' : 'Flash'
+        const modelGroupKey = resolveModelGroup(prefix)
+        const modelDisplay = resolveModelDisplay(modelGroupKey)
 
         const startTime = Date.now()
         let allImages = []

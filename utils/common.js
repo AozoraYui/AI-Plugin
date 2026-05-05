@@ -190,6 +190,20 @@ export async function takeSourceMsg(e, { img } = {}) {
     return source
 }
 
+export function resolveModelGroup(prefix) {
+    if (!prefix) return 'flash'
+    const p = prefix.toLowerCase()
+    if (p === 'pro' || p === 'p') return 'pro'
+    if (p === 'ultra' || p === 'u') return 'ultra'
+    return 'flash'
+}
+
+export function resolveModelDisplay(modelGroupKey) {
+    if (modelGroupKey === 'pro') return 'Pro'
+    if (modelGroupKey === 'ultra') return 'Ultra'
+    return 'Flash'
+}
+
 export function parseModelGroup(e) {
     let modelGroupKey = 'flash'
     let cleanedMsg = e.msg
@@ -200,11 +214,7 @@ export function parseModelGroup(e) {
         const prefix = match[1].toLowerCase()
         const commandAndArgs = match[2]
 
-        if (prefix === 'pro') {
-            modelGroupKey = 'pro'
-        } else if (prefix === 'ultra') {
-            modelGroupKey = 'ultra'
-        }
+        modelGroupKey = resolveModelGroup(prefix)
 
         if (modelGroupKey !== 'flash') {
             cleanedMsg = `#${commandAndArgs}`
