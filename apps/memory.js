@@ -85,9 +85,9 @@ export class MemoryHandler extends plugin {
 
         try {
             if (isFullRebuild) {
-                await this._createFullCheckpointManual(e, userIdStr, todayStr, modelGroupKey, modelDisplay, startTime)
+                await this._createFullCheckpointManual(e, userIdStr, todayStr, modelGroupKey, startTime)
             } else {
-                await this._createIncrementalCheckpointManual(e, userIdStr, todayStr, modelGroupKey, modelDisplay, startTime)
+                await this._createIncrementalCheckpointManual(e, userIdStr, todayStr, modelGroupKey, startTime)
             }
         } catch (error) {
             logger.error(`[AI-Plugin] 归档失败:`, error)
@@ -95,21 +95,89 @@ export class MemoryHandler extends plugin {
         }
     }
 
-    async _createFullCheckpointManual(e, userIdStr, todayStr, modelGroupKey, modelDisplay, startTime) {
+    async _createFullCheckpointManual(e, userIdStr, todayStr, modelGroupKey, startTime) {
         const allHistory = await this.conversationManager.db.getConversationHistory(userIdStr)
         if (allHistory.length === 0) {
             return e.reply("没有找到任何对话记录，无法创建全量总结喵...")
         }
 
         const aiName = Config.AI_NAME || '诺亚'
-        let historyText = ""
-        for (const turn of allHistory) {
-            const role = turn.role === 'user' ? '用户' : aiName
-            const text = turn.parts.map(p => p.text).join(' ')
-            if (text) historyText += `${role}: ${text}\n`
+        const FULL_CHUNK_SIZE = 128
+
+        if (allHistory.length <= FULL_CHUNK_SIZE) {
+            const historyText = this._buildHistoryText(allHistory, aiName)
+            await e.reply(`📖 正在整合 ${allHistory.length} 条对话记录...`, true)
+            const newSummary = await this._summarizeSingleChunk(historyText, modelGroupKey)
+            if (!newSummary) {
+                return e.reply(`❌ 全量总结生成失败`)
+            }
+            await this.conversationManager.db.saveCheckpoint(e.user_id, newSummary, todayStr, 0, 'full')
+            return this._sendFullCheckpointResult(e, newSummary, allHistory.length, 1, startTime, modelGroupKey)
         }
 
-        const fullSummaryPrompt = `
+        const chunks = []
+        for (let i = 0; i < allHistory.length; i += FULL_CHUNK_SIZE) {
+            chunks.push(allHistory.slice(i, i + FULL_CHUNK_SIZE))
+        }
+        await e.reply(`📚 共 ${allHistory.length} 条对话，分 ${chunks.length} 块总结 (每块${FULL_CHUNK_SIZE}条)...`, true)
+
+        const chunkSummaries = []
+        for (let i = 0; i < chunks.length; i++) {
+            const chunkText = this._buildHistoryText(chunks[i], aiName)
+            if (!chunkText.trim()) continue
+            await e.reply(`📝 正在总结第 ${i + 1}/${chunks.length} 块 (${chunks[i].length}条)...`, true)
+            const summary = await this._summarizeChunk(chunkText, i + 1, chunks.length, modelGroupKey)
+            if (summary) {
+                chunkSummaries.push(summary)
+            } else {
+                logger.warn(`[AI-Plugin] 第 ${i + 1}/${chunks.length} 块总结失败，使用原始片段`)
+                chunkSummaries.push(chunkText.slice(0, 2000))
+            }
+        }
+
+        if (chunkSummaries.length === 0) {
+            return e.reply(`❌ 所有分块总结均失败`)
+        }
+
+        await e.reply(`🔗 正在合并 ${chunkSummaries.length} 个分块总结...`, true)
+
+        const mergePrompt = `
+请将以下 ${chunkSummaries.length} 个分段的对话摘要整合成一份完整的、精炼的核心记忆存档。
+要求：
+1. 保留所有重要的用户信息（性格、偏好、技术能力、重要经历等）
+2. 按主题分类整理（如：个人信息、技术兴趣、重要对话、情感偏好等）
+3. 去除重复和琐碎的细节，保留核心内容
+4. 总字数控制在5000字以内
+5. 直接输出整合后的记忆存档，不要加"好的"等客套话
+
+以下是各分段摘要：
+${chunkSummaries.map((s, i) => `=== 第${i + 1}段 ===\n${s}`).join('\n\n')}`
+
+        const payload = { "contents": [{ "role": "user", "parts": [{ "text": mergePrompt }] }] }
+        const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
+
+        if (!result.success || isAIErrorResponse(result.data)) {
+            const reason = isAIErrorResponse(result.data) ? 'AI 安全过滤拦截' : (result.error || '未知错误')
+            return e.reply(`❌ 全量总结合并失败: ${reason}`)
+        }
+
+        const newSummary = result.data
+        await this.conversationManager.db.saveCheckpoint(e.user_id, newSummary, todayStr, 0, 'full')
+        return this._sendFullCheckpointResult(e, newSummary, allHistory.length, chunks.length, startTime, modelGroupKey)
+    }
+
+    _buildHistoryText(history, aiName) {
+        let text = ""
+        for (const turn of history) {
+            const role = turn.role === 'user' ? '用户' : aiName
+            const content = turn.parts.map(p => p.text).join(' ')
+            if (content) text += `${role}: ${content}\n`
+        }
+        return text
+    }
+
+    async _summarizeSingleChunk(historyText, modelGroupKey) {
+        const prompt = `
 你是一位专业的传记作家和档案管理员。现在是【${new Date().toLocaleString('zh-CN', { hour12: false })}】。
 请将以下这些原始对话整合成一份完整的、精炼的核心记忆存档。
 要求：
@@ -122,37 +190,43 @@ export class MemoryHandler extends plugin {
 原始对话记录：
 ${historyText}`
 
-        await e.reply(`📖 正在整合 ${allHistory.length} 条对话记录...`, true)
-
-        const payload = { "contents": [{ "role": "user", "parts": [{ "text": fullSummaryPrompt }] }] }
+        const payload = { "contents": [{ "role": "user", "parts": [{ "text": prompt }] }] }
         const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
 
-        if (!result.success || isAIErrorResponse(result.data)) {
-            const reason = isAIErrorResponse(result.data) ? 'AI 安全过滤拦截' : (result.error || '未知错误')
-            return e.reply(`❌ 全量总结生成失败: ${reason}`)
+        if (result.success && !isAIErrorResponse(result.data)) {
+            return result.data.trim()
         }
+        return null
+    }
 
-        const newSummary = result.data
+    async _summarizeChunk(chunkText, chunkIndex, totalChunks, modelGroupKey) {
+        const prompt = `
+请将以下这段对话记录概括为一个详细的摘要（这是第 ${chunkIndex}/${totalChunks} 段）。
+重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好、重要的个人信息。
+直接输出摘要内容，不要加"好的"等客套话。
+
+对话记录：
+${chunkText}`
+
+        const payload = { "contents": [{ "role": "user", "parts": [{ "text": prompt }] }] }
+        const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
+
+        if (result.success && !isAIErrorResponse(result.data)) {
+            return result.data.trim()
+        }
+        return null
+    }
+
+    async _sendFullCheckpointResult(e, newSummary, totalMessages, totalChunks, startTime, modelGroupKey) {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
 
-        let tokenInfo = ''
-        if (result.usage) {
-            if (result.usage.prompt_tokens !== undefined && result.usage.completion_tokens !== undefined) {
-                tokenInfo = ` | In: ${result.usage.prompt_tokens} | Out: ${result.usage.completion_tokens}`
-            } else if (result.usage.total_tokens) {
-                tokenInfo = ` | Total: ${result.usage.total_tokens}`
-            }
-        }
-
-        const modelInfo = result.platform ? `\n🔮 模型: ${result.platform}` : ''
-
-        await this.conversationManager.db.saveCheckpoint(e.user_id, newSummary, todayStr, 0, 'full')
+        const modelInfo = modelGroupKey === 'pro' ? '\n🔮 模型组: Pro' : modelGroupKey === 'gemini3' ? '\n🔮 模型组: Gemini 3' : '\n🔮 模型组: Flash'
 
         const forwardMsgNodes = [
             {
                 user_id: e.self_id,
                 nickname: Config.AI_NAME,
-                message: `✅ 全量锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s${tokenInfo}\n📚 整合了 ${allHistory.length} 条对话记录`
+                message: `✅ 全量锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s\n📚 整合了 ${totalMessages} 条对话记录${totalChunks > 1 ? ` (${totalChunks}块分组合并)` : ''}`
             }
         ]
 
@@ -186,7 +260,7 @@ ${historyText}`
         await e.reply(forwardMsg)
     }
 
-    async _createIncrementalCheckpointManual(e, userIdStr, todayStr, modelGroupKey, modelDisplay, startTime) {
+    async _createIncrementalCheckpointManual(e, userIdStr, todayStr, modelGroupKey, startTime) {
         const todayHistory = await this.conversationManager.db.getConversationHistoryByDate(userIdStr, todayStr)
         if (todayHistory.length === 0) {
             return e.reply("今天还没有对话记录，无法创建增量总结喵...")
