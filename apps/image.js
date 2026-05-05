@@ -16,7 +16,7 @@ export class ImageHandler extends plugin {
             name: 'AI作图',
             dsc: '使用AI生成图片',
             event: 'message',
-            priority: 1142,
+            priority: -9101,
             rule: [
                 { reg: /^#([a-zA-Z0-9]*)bnn([\s\S]*)$/i, fnc: 'generateImage', key: 'bnnCommand' },
                 { reg: /^#画图预设(列表|list)$/i, fnc: 'listPresets' },
