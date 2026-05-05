@@ -7,6 +7,29 @@ import { ConversationManager } from '../model/conversation.js'
 import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, getBeijingTimeStr } from '../utils/common.js'
 
+function extractCardInfo(data) {
+    const lines = []
+    const meta = data.meta || data.detail || data.appmsg || data.app || {}
+    const news = meta.news || meta.detail || meta.appmsg || meta.app || {}
+    const title = news.title || news.desc || data.prompt || ''
+    const desc = news.desc || news.brief || news.summary || ''
+    const source = news.source || news.tag || news.appname || data.app || ''
+    const url = news.jumpUrl || news.url || news.link || ''
+    if (title) lines.push(`标题: ${title}`)
+    if (desc) lines.push(`描述: ${desc}`)
+    if (source) lines.push(`来源: ${source}`)
+    if (url) lines.push(`链接: ${url}`)
+    if (lines.length === 0) {
+        const fallbackFields = ['prompt', 'title', 'desc', 'content', 'summary', 'text', 'brief', 'source']
+        for (const field of fallbackFields) {
+            if (data[field] && typeof data[field] === 'string' && data[field].trim()) {
+                lines.push(data[field].trim())
+            }
+        }
+    }
+    return lines.length > 0 ? lines.join('\n') : ''
+}
+
 async function expandForwardMsg(bot, resid, depth = 0, maxDepth = Config.FORWARD_MSG_MAX_DEPTH) {
     const textParts = []
     const images = []
@@ -116,15 +139,9 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
                     images.push(...nested.images)
                 }
             } else if (typeof seg.data === 'object') {
-                const cardFields = ['prompt', 'title', 'desc', 'content', 'summary', 'text', 'brief', 'meta', 'news', 'source']
-                const texts = []
-                for (const field of cardFields) {
-                    if (seg.data[field] && typeof seg.data[field] === 'string' && seg.data[field].trim()) {
-                        texts.push(seg.data[field].trim())
-                    }
-                }
-                if (texts.length > 0) {
-                    subText += ` [卡片: ${texts.join(' | ')}] `
+                const cardInfo = extractCardInfo(seg.data)
+                if (cardInfo) {
+                    subText += `\n[卡片消息]\n${cardInfo}\n`
                 }
             }
         } else {
@@ -215,15 +232,9 @@ export class ChatHandler extends plugin {
                                     if (templateMatch) resid = templateMatch[1]
                                 }
                             } else if (typeof m.data === 'object') {
-                                const cardFields = ['prompt', 'title', 'desc', 'content', 'summary', 'text', 'brief', 'meta', 'news', 'source']
-                                const texts = []
-                                for (const field of cardFields) {
-                                    if (m.data[field] && typeof m.data[field] === 'string' && m.data[field].trim()) {
-                                        texts.push(m.data[field].trim())
-                                    }
-                                }
-                                if (texts.length > 0) {
-                                    replyText += `\n[卡片: ${texts.join(' | ')}]\n`
+                                const cardInfo = extractCardInfo(m.data)
+                                if (cardInfo) {
+                                    replyText += `\n[卡片消息]\n${cardInfo}\n`
                                 }
                             }
                         }
