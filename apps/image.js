@@ -60,7 +60,7 @@ export class ImageHandler extends plugin {
     async generateImage(e) {
         if (!await checkAccess(e)) return true
 
-        let modelGroupKey = 'default'
+        let modelGroupKey = 'flash'
         let isCustomCommand = false
         let instruction = ''
         let command = ''
@@ -73,7 +73,7 @@ export class ImageHandler extends plugin {
             const prefix = match[1].toLowerCase()
             instruction = match[2].trim()
             if (prefix === 'pro') modelGroupKey = 'pro'
-            else if (prefix === '3') modelGroupKey = 'gemini3'
+            else if (prefix === 'ultra') modelGroupKey = 'ultra'
         } else {
             const dynamicRule = this.rule.find(r => r.key === 'dynamicImageCommand')
             if (dynamicRule) {
@@ -85,7 +85,7 @@ export class ImageHandler extends plugin {
                     const prefix = match[1].toLowerCase()
                     command = match[2]
                     if (prefix === 'pro') modelGroupKey = 'pro'
-                    else if (prefix === '3') modelGroupKey = 'gemini3'
+                    else if (prefix === 'ultra') modelGroupKey = 'ultra'
                 }
             }
         }
@@ -101,7 +101,8 @@ export class ImageHandler extends plugin {
         if (currentImages.length > 0) allImages = allImages.concat(currentImages)
 
         await setMsgEmojiLike(e, 282)
-        await e.reply(`🎨 正在生成 (使用 ${modelGroupKey} 模型组)，请稍候…`)
+        const modelDisplay = modelGroupKey === 'pro' ? 'Pro' : modelGroupKey === 'ultra' ? 'Ultra' : 'Flash'
+        await e.reply(`🎨 正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
 
         let parts = []
         let presetName = '自定义'

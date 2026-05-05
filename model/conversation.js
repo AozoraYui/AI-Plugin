@@ -400,7 +400,7 @@ export class ConversationManager {
         }
     }
 
-    async createIncrementalCheckpoint(userId, today, messageCount = 0, modelGroupKey = 'default') {
+    async createIncrementalCheckpoint(userId, today, messageCount = 0, modelGroupKey = 'flash') {
         if (!global.AIPluginScheduler) {
             logger.error('[AI-Plugin] 定时任务未初始化，无法创建增量总结')
             return

@@ -130,7 +130,7 @@ export function getDBTimestamp() {
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
-export async function generateDailySummary(client, userId, dateDir, dayHistory, modelGroupKey = 'default') {
+export async function generateDailySummary(client, userId, dateDir, dayHistory, modelGroupKey = 'flash') {
     if (dayHistory.length === 0) return ""
 
     let dayContent = ""
@@ -191,7 +191,7 @@ export async function takeSourceMsg(e, { img } = {}) {
 }
 
 export function parseModelGroup(e) {
-    let modelGroupKey = 'default'
+    let modelGroupKey = 'flash'
     let cleanedMsg = e.msg
 
     const match = e.msg.match(/^#([a-zA-Z0-9]*)(.*)/)
@@ -202,11 +202,11 @@ export function parseModelGroup(e) {
 
         if (prefix === 'pro') {
             modelGroupKey = 'pro'
-        } else if (prefix === '3') {
-            modelGroupKey = 'gemini3'
+        } else if (prefix === 'ultra') {
+            modelGroupKey = 'ultra'
         }
 
-        if (modelGroupKey !== 'default') {
+        if (modelGroupKey !== 'flash') {
             cleanedMsg = `#${commandAndArgs}`
         }
     }

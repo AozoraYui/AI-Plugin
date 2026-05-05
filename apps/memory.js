@@ -53,13 +53,13 @@ export class MemoryHandler extends plugin {
 
         const prefixMatch = e.msg.match(/^#([a-zA-Z0-9]*)gemini/i)
         const prefix = prefixMatch ? (prefixMatch[1] || '').toLowerCase() : ''
-        let modelGroupKey = 'default'
+        let modelGroupKey = 'flash'
         if (prefix === 'pro') modelGroupKey = 'pro'
-        else if (prefix === '3') modelGroupKey = 'gemini3'
+        else if (prefix === 'ultra') modelGroupKey = 'ultra'
 
         let modelDisplay = "Flash模型组"
         if (modelGroupKey === 'pro') modelDisplay = "Pro模型组"
-        if (modelGroupKey === 'gemini3') modelDisplay = "Gemini 3模型组"
+        if (modelGroupKey === 'ultra') modelDisplay = "Ultra模型组"
 
         let statusMsg = `📚 正在启动记忆归档 [${modelDisplay}]...`
         statusMsg += isFullRebuild
@@ -207,7 +207,7 @@ ${chunkText}`
     async _sendFullCheckpointResult(e, newSummary, totalMessages, totalChunks, startTime, modelGroupKey) {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
 
-        const modelInfo = modelGroupKey === 'pro' ? '\n🔮 模型组: Pro' : modelGroupKey === 'gemini3' ? '\n🔮 模型组: Gemini 3' : '\n🔮 模型组: Flash'
+        const modelInfo = modelGroupKey === 'pro' ? '\n🔮 模型组: Pro' : modelGroupKey === 'ultra' ? '\n🔮 模型组: Ultra' : '\n🔮 模型组: Flash'
 
         const forwardMsgNodes = [
             {
@@ -512,13 +512,13 @@ ${todayContent}`
 
         const prefixMatch = e.msg.match(/^#([a-zA-Z0-9]*)gemini/i)
         const prefix = prefixMatch ? (prefixMatch[1] || '').toLowerCase() : ''
-        let modelGroupKey = 'default'
+        let modelGroupKey = 'flash'
         if (prefix === 'pro') modelGroupKey = 'pro'
-        else if (prefix === '3') modelGroupKey = 'gemini3'
+        else if (prefix === 'ultra') modelGroupKey = 'ultra'
 
         let modelDisplay = "Flash模型组"
         if (modelGroupKey === 'pro') modelDisplay = "Pro模型组"
-        if (modelGroupKey === 'gemini3') modelDisplay = "Gemini 3模型组"
+        if (modelGroupKey === 'ultra') modelDisplay = "Ultra模型组"
 
         // 从数据库获取所有日期
         const dateDirs = await this.conversationManager.db.getDistinctDates(userIdStr)
