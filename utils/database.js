@@ -507,8 +507,21 @@ export class AIDatabase {
 
     getLatestCheckpoint(userId) {
         return new Promise((resolve, reject) => {
-            this.db.get('SELECT content, date_str, message_count, created_at FROM memory_checkpoints WHERE user_id = ? ORDER BY date_str DESC LIMIT 1',
+            this.db.get('SELECT content, date_str, message_count, created_at, checkpoint_type FROM memory_checkpoints WHERE user_id = ? ORDER BY date_str DESC LIMIT 1',
                 [String(userId)], (err, row) => {
+                    if (err) {
+                        reject(err)
+                        return
+                    }
+                    resolve(row ? { content: row.content, dateStr: row.date_str, messageCount: row.message_count, createdAt: row.created_at, checkpointType: row.checkpoint_type } : null)
+                })
+        })
+    }
+
+    getLatestFullCheckpoint(userId) {
+        return new Promise((resolve, reject) => {
+            this.db.get('SELECT content, date_str, message_count, created_at FROM memory_checkpoints WHERE user_id = ? AND checkpoint_type = ? ORDER BY date_str DESC LIMIT 1',
+                [String(userId), 'full'], (err, row) => {
                     if (err) {
                         reject(err)
                         return
