@@ -6,7 +6,7 @@ import { GeminiClient } from '../client/GeminiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { sessionManager } from '../utils/session.js'
-import { setMsgEmojiLike, getTodayDateStr, generateDailySummary, isAIErrorResponse } from '../utils/common.js'
+import { setMsgEmojiLike, getTodayDateStr, generateDailySummary, isAIErrorResponse, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
 
 export class MemoryHandler extends plugin {
     constructor() {
@@ -53,13 +53,8 @@ export class MemoryHandler extends plugin {
 
         const prefixMatch = e.msg.match(/^#([a-zA-Z0-9]*)gemini/i)
         const prefix = prefixMatch ? (prefixMatch[1] || '').toLowerCase() : ''
-        let modelGroupKey = 'flash'
-        if (prefix === 'pro') modelGroupKey = 'pro'
-        else if (prefix === 'ultra') modelGroupKey = 'ultra'
-
-        let modelDisplay = "Flash模型组"
-        if (modelGroupKey === 'pro') modelDisplay = "Pro模型组"
-        if (modelGroupKey === 'ultra') modelDisplay = "Ultra模型组"
+        const modelGroupKey = resolveModelGroup(prefix)
+        const modelDisplay = resolveModelDisplay(modelGroupKey) + '模型组'
 
         let statusMsg = `📚 正在启动记忆归档 [${modelDisplay}]...`
         statusMsg += isFullRebuild
@@ -218,7 +213,7 @@ ${chunkText}`
     async _sendFullCheckpointResult(e, newSummary, totalMessages, totalChunks, startTime, modelGroupKey, totalUsage) {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
 
-        const modelInfo = modelGroupKey === 'pro' ? '\n🔮 模型组: Pro' : modelGroupKey === 'ultra' ? '\n🔮 模型组: Ultra' : '\n🔮 模型组: Flash'
+        const modelInfo = '\n🔮 模型组: ' + resolveModelDisplay(modelGroupKey)
 
         let tokenInfo = ''
         if (totalUsage) {
@@ -532,13 +527,8 @@ ${todayContent}`
 
         const prefixMatch = e.msg.match(/^#([a-zA-Z0-9]*)gemini/i)
         const prefix = prefixMatch ? (prefixMatch[1] || '').toLowerCase() : ''
-        let modelGroupKey = 'flash'
-        if (prefix === 'pro') modelGroupKey = 'pro'
-        else if (prefix === 'ultra') modelGroupKey = 'ultra'
-
-        let modelDisplay = "Flash模型组"
-        if (modelGroupKey === 'pro') modelDisplay = "Pro模型组"
-        if (modelGroupKey === 'ultra') modelDisplay = "Ultra模型组"
+        const modelGroupKey = resolveModelGroup(prefix)
+        const modelDisplay = resolveModelDisplay(modelGroupKey) + '模型组'
 
         // 从数据库获取所有日期
         const dateDirs = await this.conversationManager.db.getDistinctDates(userIdStr)
