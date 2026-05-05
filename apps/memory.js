@@ -366,7 +366,6 @@ ${todayContent}`
         const targetDate = dateMatch[2]
 
         try {
-            // 从数据库获取指定日期的记忆锚点
             const checkpoint = await this.conversationManager.db.getCheckpoint(userIdStr, targetDate)
             const summaryCache = await this.conversationManager.db.getSummaryCache(userIdStr, targetDate)
 
@@ -374,19 +373,35 @@ ${todayContent}`
                 return e.reply(`📅 没有找到 ${targetDate} 的记忆记录哦。\n该日期可能尚未进行总结，或者记录不存在。`)
             }
 
+            const DISPLAY_MAX = 3000
             let content = `📖 ${targetDate} 记忆记录\n- - - - - - - - - -\n`
 
             if (checkpoint) {
-                const checkpointType = checkpoint.checkpointType || 'incremental'
-                const typeLabel = checkpointType === 'full' ? '全量总结' : '增量总结'
-                content += `【记忆锚点 (${typeLabel})】\n${checkpoint.content}\n`
+                const checkpointType = checkpoint.checkpointType
+                let typeLabel
+                if (checkpointType === 'full') {
+                    typeLabel = '全量总结'
+                } else if (checkpointType === 'incremental') {
+                    typeLabel = '历史记录(旧版)'
+                } else {
+                    typeLabel = '历史记录'
+                }
+                const displayText = checkpoint.content.length > DISPLAY_MAX
+                    ? checkpoint.content.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${checkpoint.content.length} 字符，已截断。可使用 #gemini导出记忆 查看完整内容)`
+                    : checkpoint.content
+                content += `【${typeLabel}】\n${displayText}\n`
             }
 
-            if (summaryCache && (!checkpoint || summaryCache.content !== checkpoint.content)) {
-                content += `\n【每日摘要】\n${summaryCache.content}\n`
+            if (summaryCache) {
+                const isDuplicate = checkpoint && summaryCache.content === checkpoint.content
+                if (!isDuplicate) {
+                    const displayText = summaryCache.content.length > DISPLAY_MAX
+                        ? summaryCache.content.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${summaryCache.content.length} 字符，已截断)`
+                        : summaryCache.content
+                    content += `\n【增量总结】\n${displayText}\n`
+                }
             }
 
-            // 如果内容太长，使用转发消息分段展示
             const MAX_LENGTH = 800
             const MAX_NODES = 5
             if (content.length > MAX_LENGTH) {
@@ -398,12 +413,10 @@ ${todayContent}`
                     }
                 ]
 
-                // 将内容分割成多个部分
                 let remainingContent = content
                 let part = 1
                 while (remainingContent.length > 0 && part <= MAX_NODES) {
                     let chunk = remainingContent.slice(0, MAX_LENGTH)
-                    // 尝试在换行处分割，避免截断句子
                     if (remainingContent.length > MAX_LENGTH) {
                         const lastNewline = chunk.lastIndexOf('\n')
                         if (lastNewline > MAX_LENGTH * 0.8) {
@@ -423,7 +436,7 @@ ${todayContent}`
                     forwardMsgNodes.push({
                         user_id: e.self_id,
                         nickname: "提示",
-                        message: `⚠️ 内容过长，仅显示前 ${MAX_NODES} 部分（共 ${Math.ceil(content.length / MAX_LENGTH)} 部分）。\n\n如需查看完整内容，建议导出记忆文件。`
+                        message: `⚠️ 内容过长，仅显示前 ${MAX_NODES} 部分。\n如需查看完整内容，请使用 #gemini导出记忆 命令。`
                     })
                 }
 
