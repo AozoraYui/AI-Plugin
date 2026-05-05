@@ -214,30 +214,50 @@ export class ChatHandler extends plugin {
             const sourceMsg = await takeSourceMsg(e)
 
             if (sourceMsg) {
-                logger.info(`[AI-Plugin] sourceMsg 结构: type=${sourceMsg.type}, message类型=${typeof sourceMsg.message}, message长度=${Array.isArray(sourceMsg.message) ? sourceMsg.message.length : 'N/A'}`)
                 if (sourceMsg.message) {
-                    logger.info(`[AI-Plugin] sourceMsg.message 完整内容: ${JSON.stringify(sourceMsg.message).slice(0, 2000)}`)
                     let replyText = ""
                     let forwardContent = ""
                     let forwardImages = []
 
                     for (const m of sourceMsg.message) {
-                        logger.info(`[AI-Plugin] sourceMsg.message 段: type=${m.type}, data类型=${typeof m.data}`)
                         let resid = null
                         if (m.type === 'forward' && m.id) {
-                            resid = m.id
-                        } else if ((m.type === 'json' || m.type === 'xml') && m.data) {
-                            if (typeof m.data === 'string') {
-                                const residMatch = m.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
-                                if (residMatch) resid = residMatch[1]
-                                if (!resid) {
-                                    const templateMatch = m.data.match(/template-id"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
-                                    if (templateMatch) resid = templateMatch[1]
+                            const forwardContentArr = m.content || m.data?.content
+                            if (Array.isArray(forwardContentArr)) {
+                                logger.info(`[AI-Plugin] sourceMsg 中发现内联合并消息 (type=forward, 内联content)，开始递归展开`)
+                                for (const nestedMsg of forwardContentArr) {
+                                    const nestedSender = nestedMsg.nickname || nestedMsg.sender?.nickname || "未知用户"
+                                    const nestedMsgArray = nestedMsg.content || nestedMsg.message
+                                    if (Array.isArray(nestedMsgArray)) {
+                                        const nested = await expandInlineContent(e.bot, nestedMsgArray, nestedSender)
+                                        if (nested.text) {
+                                            replyText += "\n" + nested.text + "\n"
+                                        }
+                                        forwardImages.push(...nested.images)
+                                    }
                                 }
-                            } else if (typeof m.data === 'object') {
-                                const cardInfo = extractCardInfo(m.data)
-                                if (cardInfo) {
-                                    replyText += `\n[卡片消息]\n${cardInfo}\n`
+                            } else {
+                                resid = m.id
+                            }
+                        } else if ((m.type === 'json' || m.type === 'xml') && m.data) {
+                            let cardData = m.data
+                            if (typeof cardData === 'string') {
+                                try {
+                                    cardData = JSON.parse(cardData)
+                                } catch (err) {
+                                    logger.warn(`[AI-Plugin] JSON/XML data 解析失败:`, err)
+                                }
+                            }
+                            if (typeof cardData === 'object') {
+                                const residMatch = cardData.resid || (typeof m.data === 'string' && m.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)?.[1])
+                                if (residMatch) {
+                                    resid = typeof residMatch === 'string' ? residMatch : residMatch[1]
+                                }
+                                if (!resid) {
+                                    const cardInfo = extractCardInfo(cardData)
+                                    if (cardInfo) {
+                                        replyText += `\n[卡片消息]\n${cardInfo}\n`
+                                    }
                                 }
                             }
                         }
