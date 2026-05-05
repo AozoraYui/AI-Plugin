@@ -342,7 +342,7 @@ export class MemoryHandler extends plugin {
             content += `\n【每日摘要】\n${summaryCache.content}\n`
         }
 
-        // 如果内容太长，使用转发消息
+        // 如果内容太长，使用转发消息分段展示
         const MAX_LENGTH = 2000
         if (content.length > MAX_LENGTH) {
             const forwardMsgNodes = [
@@ -350,13 +350,30 @@ export class MemoryHandler extends plugin {
                     user_id: Bot.uin,
                     nickname: Config.AI_NAME,
                     message: `📖 ${targetDate} 记忆记录`
-                },
-                {
-                    user_id: Bot.uin,
-                    nickname: "记忆内容",
-                    message: content
                 }
             ]
+
+            // 将内容分割成多个部分
+            let remainingContent = content
+            let part = 1
+            while (remainingContent.length > 0) {
+                let chunk = remainingContent.slice(0, MAX_LENGTH)
+                // 尝试在换行处分割，避免截断句子
+                if (remainingContent.length > MAX_LENGTH) {
+                    const lastNewline = chunk.lastIndexOf('\n')
+                    if (lastNewline > MAX_LENGTH * 0.8) {
+                        chunk = chunk.slice(0, lastNewline)
+                    }
+                }
+                forwardMsgNodes.push({
+                    user_id: Bot.uin,
+                    nickname: `记忆内容 (${part})`,
+                    message: chunk
+                })
+                remainingContent = remainingContent.slice(chunk.length)
+                part++
+            }
+
             const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
             await e.reply(forwardMsg)
         } else {
