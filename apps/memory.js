@@ -354,71 +354,76 @@ ${todayContent}`
         const dateMatch = e.msg.match(/^#([a-zA-Z0-9]*)gemini读取记忆\s*(\d{4}-\d{2}-\d{2})$/i)
         const targetDate = dateMatch[2]
 
-        // 从数据库获取指定日期的记忆锚点
-        const checkpoint = await this.conversationManager.db.getCheckpoint(userIdStr, targetDate)
-        const summaryCache = await this.conversationManager.db.getSummaryCache(userIdStr, targetDate)
+        try {
+            // 从数据库获取指定日期的记忆锚点
+            const checkpoint = await this.conversationManager.db.getCheckpoint(userIdStr, targetDate)
+            const summaryCache = await this.conversationManager.db.getSummaryCache(userIdStr, targetDate)
 
-        if (!checkpoint && !summaryCache) {
-            return e.reply(`📅 没有找到 ${targetDate} 的记忆记录哦。\n该日期可能尚未进行总结，或者记录不存在。`)
-        }
+            if (!checkpoint && !summaryCache) {
+                return e.reply(`📅 没有找到 ${targetDate} 的记忆记录哦。\n该日期可能尚未进行总结，或者记录不存在。`)
+            }
 
-        let content = `📖 ${targetDate} 记忆记录\n- - - - - - - - - -\n`
+            let content = `📖 ${targetDate} 记忆记录\n- - - - - - - - - -\n`
 
-        if (checkpoint) {
-            const checkpointType = checkpoint.checkpointType || 'incremental'
-            const typeLabel = checkpointType === 'full' ? '全量总结' : '增量总结'
-            content += `【记忆锚点 (${typeLabel})】\n${checkpoint.content}\n`
-        }
+            if (checkpoint) {
+                const checkpointType = checkpoint.checkpointType || 'incremental'
+                const typeLabel = checkpointType === 'full' ? '全量总结' : '增量总结'
+                content += `【记忆锚点 (${typeLabel})】\n${checkpoint.content}\n`
+            }
 
-        if (summaryCache && (!checkpoint || summaryCache.content !== checkpoint.content)) {
-            content += `\n【每日摘要】\n${summaryCache.content}\n`
-        }
+            if (summaryCache && (!checkpoint || summaryCache.content !== checkpoint.content)) {
+                content += `\n【每日摘要】\n${summaryCache.content}\n`
+            }
 
-        // 如果内容太长，使用转发消息分段展示
-        const MAX_LENGTH = 800
-        const MAX_NODES = 5
-        if (content.length > MAX_LENGTH) {
-            const forwardMsgNodes = [
-                {
-                    user_id: e.self_id,
-                    nickname: Config.AI_NAME,
-                    message: `📖 ${targetDate} 记忆记录`
-                }
-            ]
-
-            // 将内容分割成多个部分
-            let remainingContent = content
-            let part = 1
-            while (remainingContent.length > 0 && part <= MAX_NODES) {
-                let chunk = remainingContent.slice(0, MAX_LENGTH)
-                // 尝试在换行处分割，避免截断句子
-                if (remainingContent.length > MAX_LENGTH) {
-                    const lastNewline = chunk.lastIndexOf('\n')
-                    if (lastNewline > MAX_LENGTH * 0.8) {
-                        chunk = chunk.slice(0, lastNewline)
+            // 如果内容太长，使用转发消息分段展示
+            const MAX_LENGTH = 800
+            const MAX_NODES = 5
+            if (content.length > MAX_LENGTH) {
+                const forwardMsgNodes = [
+                    {
+                        user_id: e.self_id,
+                        nickname: Config.AI_NAME,
+                        message: `📖 ${targetDate} 记忆记录`
                     }
+                ]
+
+                // 将内容分割成多个部分
+                let remainingContent = content
+                let part = 1
+                while (remainingContent.length > 0 && part <= MAX_NODES) {
+                    let chunk = remainingContent.slice(0, MAX_LENGTH)
+                    // 尝试在换行处分割，避免截断句子
+                    if (remainingContent.length > MAX_LENGTH) {
+                        const lastNewline = chunk.lastIndexOf('\n')
+                        if (lastNewline > MAX_LENGTH * 0.8) {
+                            chunk = chunk.slice(0, lastNewline)
+                        }
+                    }
+                    forwardMsgNodes.push({
+                        user_id: e.self_id,
+                        nickname: `记忆内容 (${part})`,
+                        message: chunk
+                    })
+                    remainingContent = remainingContent.slice(chunk.length)
+                    part++
                 }
-                forwardMsgNodes.push({
-                    user_id: e.self_id,
-                    nickname: `记忆内容 (${part})`,
-                    message: chunk
-                })
-                remainingContent = remainingContent.slice(chunk.length)
-                part++
-            }
 
-            if (remainingContent.length > 0) {
-                forwardMsgNodes.push({
-                    user_id: e.self_id,
-                    nickname: "提示",
-                    message: `⚠️ 内容过长，仅显示前 ${MAX_NODES} 部分（共 ${Math.ceil(content.length / MAX_LENGTH)} 部分）。\n\n如需查看完整内容，建议导出记忆文件。`
-                })
-            }
+                if (remainingContent.length > 0) {
+                    forwardMsgNodes.push({
+                        user_id: e.self_id,
+                        nickname: "提示",
+                        message: `⚠️ 内容过长，仅显示前 ${MAX_NODES} 部分（共 ${Math.ceil(content.length / MAX_LENGTH)} 部分）。\n\n如需查看完整内容，建议导出记忆文件。`
+                    })
+                }
 
-            const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
-            await e.reply(forwardMsg)
-        } else {
-            await e.reply(content)
+                const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
+                await e.reply(forwardMsg)
+            } else {
+                await e.reply(content)
+            }
+        } catch (err) {
+            logger.error(`[AI-Plugin] 读取记忆失败:`, err)
+            await e.reply(`❌ 读取记忆失败: ${err.message}`)
         }
     }
 
