@@ -214,12 +214,15 @@ export class ChatHandler extends plugin {
             const sourceMsg = await takeSourceMsg(e)
 
             if (sourceMsg) {
+                logger.info(`[AI-Plugin] sourceMsg 结构: type=${sourceMsg.type}, message类型=${typeof sourceMsg.message}, message长度=${Array.isArray(sourceMsg.message) ? sourceMsg.message.length : 'N/A'}`)
                 if (sourceMsg.message) {
+                    logger.info(`[AI-Plugin] sourceMsg.message 完整内容: ${JSON.stringify(sourceMsg.message).slice(0, 2000)}`)
                     let replyText = ""
                     let forwardContent = ""
                     let forwardImages = []
 
                     for (const m of sourceMsg.message) {
+                        logger.info(`[AI-Plugin] sourceMsg.message 段: type=${m.type}, data类型=${typeof m.data}`)
                         let resid = null
                         if (m.type === 'forward' && m.id) {
                             resid = m.id
