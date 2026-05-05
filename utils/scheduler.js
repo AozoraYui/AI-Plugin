@@ -130,23 +130,28 @@ ${todayContent}`
     async _createFullCheckpoint(userId, today) {
         const userIdStr = String(userId)
 
-        // 获取所有每日摘要
-        const allSummaries = await global.AIPluginConversationManager.db.getAllSummaryCaches(userId)
+        // 获取所有原始对话记录
+        const allHistory = await global.AIPluginConversationManager.db.getConversationHistory(userId)
 
-        if (allSummaries.length === 0) {
+        if (allHistory.length === 0) {
             logger.debug(`[AI-Plugin] 用户 ${userId} 没有可归档的记忆，跳过`)
             return
         }
 
-        // 拼接所有每日摘要
-        let summariesText = ""
-        for (const summary of allSummaries) {
-            summariesText += `\n=== 📅 【${summary.dateStr} 记忆摘要】 ===\n${summary.content}\n`
+        // 拼接所有原始对话
+        const aiName = Config.AI_NAME || '诺亚'
+        let historyText = ""
+        for (const turn of allHistory) {
+            const role = turn.role === 'user' ? '用户' : aiName
+            const text = turn.parts.map(p => p.text).join(' ')
+            if (text) historyText += `${role}: ${text}\n`
         }
 
-        // 让 AI 整合成一份完整的记忆存档
+        if (!historyText.trim()) return
+
+        // 让 AI 从原始对话整合成一份完整的记忆存档
         const fullSummaryPrompt = `
-请将以下这些每日对话摘要整合成一份完整的、精炼的核心记忆存档。
+请将以下这些原始对话整合成一份完整的、精炼的核心记忆存档。
 要求：
 1. 保留所有重要的用户信息（性格、偏好、技术能力、重要经历等）
 2. 按主题分类整理（如：个人信息、技术兴趣、重要对话、情感偏好等）
@@ -154,8 +159,8 @@ ${todayContent}`
 4. 总字数控制在5000字以内
 5. 直接输出整合后的记忆存档，不要加"好的"等客套话
 
-每日摘要列表：
-${summariesText}`
+原始对话记录：
+${historyText}`
 
         const payload = { "contents": [{ "role": "user", "parts": [{ "text": fullSummaryPrompt }] }] }
         const result = await this.client.makeRequest('chat', payload, 'default', Config.CHECKPOINT_MAX_LENGTH)
@@ -165,8 +170,8 @@ ${summariesText}`
             fullContext = result.data.trim()
         } else {
             logger.warn(`[AI-Plugin] ${today} 全量总结生成失败: ${result.error}`)
-            // 如果整合失败，回退到直接拼接摘要
-            fullContext = summariesText.slice(0, Config.CHECKPOINT_MAX_LENGTH)
+            // 如果整合失败，回退到截取原始对话
+            fullContext = historyText.slice(0, Config.CHECKPOINT_MAX_LENGTH)
         }
 
         // 保存到数据库，记录锚点类型
