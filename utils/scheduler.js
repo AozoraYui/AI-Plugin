@@ -48,7 +48,7 @@ export class AIScheduler {
         }
     }
 
-    async _createIncrementalCheckpoint(userId, today, messageCount = 0) {
+    async _createIncrementalCheckpoint(userId, today, messageCount = 0, modelGroupKey = 'default') {
         const userIdStr = String(userId)
 
         // 获取今天的对话记录
@@ -94,7 +94,7 @@ ${todayContent}`
         }
 
         const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
-        const result = await this.client.makeRequest('chat', payload, 'default', Config.CHECKPOINT_MAX_LENGTH)
+        const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
 
         let summaryText = ""
         if (result.success) {
@@ -104,9 +104,8 @@ ${todayContent}`
             summaryText = `【${today} 原始片段】: ${todayContent.slice(0, 500)}...`
         }
 
-        // 保存到数据库
-        await global.AIPluginConversationManager.db.saveCheckpoint(userId, summaryText, today, messageCount, 'incremental')
-        logger.info(`[AI-Plugin] 为用户 ${userId} 创建增量锚点成功: ${today}`)
+        await global.AIPluginConversationManager.db.saveSummaryCache(userId, summaryText, today)
+        logger.info(`[AI-Plugin] 为用户 ${userId} 创建增量总结成功: ${today}`)
     }
 
     async _runWeeklyFullCheckpoint() {

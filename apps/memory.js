@@ -62,9 +62,16 @@ export class MemoryHandler extends plugin {
         if (modelGroupKey === 'gemini3') modelDisplay = "Gemini 3模型组"
 
         // 检查今天是否已有总结
-        const todayCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, todayStr)
-        if (todayCheckpoint && !isFullRebuild) {
-            return e.reply("📅 今天已经创建过总结啦！无需重复创建。\n如果想强制刷新，请使用 #gemini创建全量总结")
+        if (!isFullRebuild) {
+            const todaySummary = await this.conversationManager.db.getSummaryCache(userIdStr, todayStr)
+            if (todaySummary) {
+                return e.reply("📅 今天已经创建过增量总结啦！无需重复创建。\n如果想强制刷新，请使用 #gemini创建全量总结")
+            }
+        } else {
+            const todayCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, todayStr)
+            if (todayCheckpoint && todayCheckpoint.checkpointType === 'full') {
+                return e.reply("📅 今天已经创建过全量总结啦！无需重复创建。")
+            }
         }
 
         let statusMsg = `📚 正在启动记忆归档 [${modelDisplay}]...`
@@ -240,13 +247,13 @@ ${todayContent}`
 
         const modelInfo = result.platform ? `\n🔮 模型: ${result.platform}` : ''
 
-        await this.conversationManager.db.saveCheckpoint(e.user_id, newSummary, todayStr, 0, 'incremental')
+        await this.conversationManager.db.saveSummaryCache(e.user_id, newSummary, todayStr)
 
         const forwardMsgNodes = [
             {
                 user_id: e.self_id,
                 nickname: Config.AI_NAME,
-                message: `✅ 增量锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s${tokenInfo}\n🔗 基于全量总结: ${latestFullCheckpoint ? latestFullCheckpoint.dateStr : '无'}`
+                message: `✅ 增量总结创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s${tokenInfo}\n🔗 基于全量总结: ${latestFullCheckpoint ? latestFullCheckpoint.dateStr : '无'}`
             },
             {
                 user_id: e.self_id,
@@ -289,8 +296,8 @@ ${todayContent}`
         for (const date of dateDirs) {
             totalDays++
 
-            // 从数据库检查是否有锚点
             const dbCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, date)
+            const dbSummary = await this.conversationManager.db.getSummaryCache(userIdStr, date)
 
             let statusIcon = ""
             let statusText = ""
@@ -298,17 +305,18 @@ ${todayContent}`
             if (date === todayStr) {
                 statusIcon = "📝"
                 statusText = "(记录中)"
-            } else if (dbCheckpoint) {
-                const checkpointType = dbCheckpoint.checkpointType || 'incremental'
-                if (checkpointType === 'full') {
-                    statusIcon = "💾"
-                    statusText = "(全量总结)"
-                    fullCheckpointCount++
-                } else {
-                    statusIcon = "🔗"
-                    statusText = "(增量总结)"
+            } else if (dbCheckpoint && dbCheckpoint.checkpointType === 'full') {
+                statusIcon = "💾"
+                statusText = "(全量总结)"
+                fullCheckpointCount++
+                if (dbSummary) {
+                    statusText += " + 🔗增量"
                     incrementalCheckpointCount++
                 }
+            } else if (dbSummary) {
+                statusIcon = "🔗"
+                statusText = "(增量总结)"
+                incrementalCheckpointCount++
             } else {
                 statusIcon = "☁️"
                 statusText = "(未总结)"
@@ -454,12 +462,12 @@ ${todayContent}`
 
         dateDirs.sort()
 
-        // 找出所有"未总结"的日期（没有checkpoint且不是今天）
+        // 找出所有"未总结"的日期（没有增量总结且不是今天）
         const unsummarizedDates = []
         for (const date of dateDirs) {
             if (date === todayStr) continue
-            const dbCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, date)
-            if (!dbCheckpoint) {
+            const dbSummary = await this.conversationManager.db.getSummaryCache(userIdStr, date)
+            if (!dbSummary) {
                 unsummarizedDates.push(date)
             }
         }
@@ -521,7 +529,7 @@ ${todayContent}`
 
                 if (result.success) {
                     const newSummary = result.data
-                    await this.conversationManager.db.saveCheckpoint(userIdStr, newSummary, dateDir, 0, 'incremental')
+                    await this.conversationManager.db.saveSummaryCache(userIdStr, newSummary, dateDir)
                     successCount++
                     processedDates.push(dateDir)
                     logger.info(`[AI-Plugin] 批量增量总结成功: ${dateDir}`)
