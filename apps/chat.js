@@ -264,6 +264,7 @@ export class ChatHandler extends plugin {
                                 if (!resid) {
                                     const cardInfo = extractCardInfo(cardData)
                                     if (cardInfo) {
+                                        logger.info(`[AI-Plugin] 提取到卡片信息: ${cardInfo.replace(/\n/g, ' | ')}`)
                                         replyText += `\n[卡片消息]\n${cardInfo}\n`
                                     }
                                 }
