@@ -20,6 +20,7 @@ export class MemoryHandler extends plugin {
                 { reg: /^#([a-zA-Z0-9]*)gemini创建增量总结$/i, fnc: "createIncrementalCheckpoint" },
                 { reg: /^#([a-zA-Z0-9]*)gemini批量增量总结$/i, fnc: "batchIncrementalSummaries" },
                 { reg: /^#gemini记忆列表$/i, fnc: "listMemorySummaries" },
+                { reg: /^#([a-zA-Z0-9]*)gemini读取记忆\s*(\d{4}-\d{2}-\d{2})$/i, fnc: "readMemory", key: "readMemoryCommand" },
             ]
         })
         this.client = global.AIPluginClient
@@ -312,6 +313,55 @@ export class MemoryHandler extends plugin {
 
         const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
         await e.reply(forwardMsg)
+    }
+
+    async readMemory(e) {
+        if (!await checkAccess(e)) return true
+
+        const userIdStr = String(e.user_id)
+        const dateMatch = e.msg.match(/^#([a-zA-Z0-9]*)gemini读取记忆\s*(\d{4}-\d{2}-\d{2})$/i)
+        const targetDate = dateMatch[2]
+
+        // 从数据库获取指定日期的记忆锚点
+        const checkpoint = await this.conversationManager.db.getCheckpoint(userIdStr, targetDate)
+        const summaryCache = await this.conversationManager.db.getSummaryCache(userIdStr, targetDate)
+
+        if (!checkpoint && !summaryCache) {
+            return e.reply(`📅 没有找到 ${targetDate} 的记忆记录哦。\n该日期可能尚未进行总结，或者记录不存在。`)
+        }
+
+        let content = `📖 ${targetDate} 记忆记录\n- - - - - - - - - -\n`
+
+        if (checkpoint) {
+            const checkpointType = checkpoint.checkpointType || 'incremental'
+            const typeLabel = checkpointType === 'full' ? '全量总结' : '增量总结'
+            content += `【记忆锚点 (${typeLabel})】\n${checkpoint.content}\n`
+        }
+
+        if (summaryCache && (!checkpoint || summaryCache.content !== checkpoint.content)) {
+            content += `\n【每日摘要】\n${summaryCache.content}\n`
+        }
+
+        // 如果内容太长，使用转发消息
+        const MAX_LENGTH = 2000
+        if (content.length > MAX_LENGTH) {
+            const forwardMsgNodes = [
+                {
+                    user_id: Bot.uin,
+                    nickname: Config.AI_NAME,
+                    message: `📖 ${targetDate} 记忆记录`
+                },
+                {
+                    user_id: Bot.uin,
+                    nickname: "记忆内容",
+                    message: content
+                }
+            ]
+            const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
+            await e.reply(forwardMsg)
+        } else {
+            await e.reply(content)
+        }
     }
 
     async batchIncrementalSummaries(e) {
