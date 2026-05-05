@@ -343,8 +343,8 @@ export class MemoryHandler extends plugin {
         }
 
         // 如果内容太长，使用转发消息分段展示
-        const MAX_LENGTH = 1500
-        const MAX_NODES = 15
+        const MAX_LENGTH = 800
+        const MAX_NODES = 5
         if (content.length > MAX_LENGTH) {
             const forwardMsgNodes = [
                 {
@@ -379,7 +379,7 @@ export class MemoryHandler extends plugin {
                 forwardMsgNodes.push({
                     user_id: e.self_id,
                     nickname: "提示",
-                    message: `⚠️ 内容过长，仅显示前 ${MAX_NODES} 部分。`
+                    message: `⚠️ 内容过长，仅显示前 ${MAX_NODES} 部分（共 ${Math.ceil(content.length / MAX_LENGTH)} 部分）。\n\n如需查看完整内容，建议导出记忆文件。`
                 })
             }
 
