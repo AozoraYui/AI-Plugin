@@ -85,6 +85,7 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
 
     let subText = ""
     for (const seg of msgArray) {
+        logger.info(`[AI-Plugin] expandInlineContent 段: type=${seg.type}, data类型=${typeof seg.data}, data预览=${typeof seg.data === 'string' ? seg.data.slice(0, 200) : JSON.stringify(seg.data).slice(0, 200)}`)
         if (seg.type === 'text') {
             subText += seg.data?.text || seg.text || ''
         } else if (seg.type === 'image') {
