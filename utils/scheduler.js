@@ -51,13 +51,6 @@ export class AIScheduler {
     async _createIncrementalCheckpoint(userId, today, messageCount = 0) {
         const userIdStr = String(userId)
 
-        // 检查今天是否已有全量总结，如果有则跳过增量总结
-        const todayCheckpoint = await global.AIPluginConversationManager.db.getCheckpoint(userIdStr, today)
-        if (todayCheckpoint && todayCheckpoint.checkpointType === 'full') {
-            logger.info(`[AI-Plugin] 用户 ${userId} 今天已有全量总结，跳过增量总结`)
-            return
-        }
-
         // 获取今天的对话记录
         const todayHistory = await global.AIPluginConversationManager.db.getConversationHistoryByDate(userId, today)
         if (todayHistory.length === 0) {
