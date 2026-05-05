@@ -61,19 +61,6 @@ export class MemoryHandler extends plugin {
         if (modelGroupKey === 'pro') modelDisplay = "Pro模型组"
         if (modelGroupKey === 'gemini3') modelDisplay = "Gemini 3模型组"
 
-        // 检查今天是否已有总结
-        if (!isFullRebuild) {
-            const todaySummary = await this.conversationManager.db.getSummaryCache(userIdStr, todayStr)
-            if (todaySummary) {
-                return e.reply("📅 今天已经创建过增量总结啦！无需重复创建。\n如果想强制刷新，请使用 #gemini创建全量总结")
-            }
-        } else {
-            const todayCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, todayStr)
-            if (todayCheckpoint && todayCheckpoint.checkpointType === 'full') {
-                return e.reply("📅 今天已经创建过全量总结啦！无需重复创建。")
-            }
-        }
-
         let statusMsg = `📚 正在启动记忆归档 [${modelDisplay}]...`
         statusMsg += isFullRebuild
             ? `\n🔥 全量模式: 读取所有原始对话记录，整合成一份完整记忆存档`
