@@ -85,7 +85,6 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
 
     let subText = ""
     for (const seg of msgArray) {
-        logger.info(`[AI-Plugin] expandInlineContent 段: type=${seg.type}, data类型=${typeof seg.data}, data预览=${typeof seg.data === 'string' ? seg.data.slice(0, 200) : JSON.stringify(seg.data).slice(0, 200)}`)
         if (seg.type === 'text') {
             subText += seg.data?.text || seg.text || ''
         } else if (seg.type === 'image') {
@@ -126,8 +125,16 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
                 images.push(...nested.images)
             }
         } else if ((seg.type === 'json' || seg.type === 'xml') && seg.data) {
-            if (typeof seg.data === 'string') {
-                const residMatch = seg.data.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
+            let cardData = seg.data
+            if (typeof cardData === 'object' && typeof cardData.data === 'string') {
+                try {
+                    cardData = JSON.parse(cardData.data)
+                } catch (err) {
+                    logger.warn(`[AI-Plugin] expandInlineContent JSON data 解析失败:`, err)
+                }
+            }
+            if (typeof cardData === 'string') {
+                const residMatch = cardData.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)
                 if (residMatch) {
                     const nestedResid = residMatch[1]
                     logger.info(`[AI-Plugin] 从 JSON/XML 中发现嵌套 resid: ${nestedResid}，开始递归展开 (深度${depth + 1})`)
@@ -139,8 +146,8 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
                     textParts.push(nested.text)
                     images.push(...nested.images)
                 }
-            } else if (typeof seg.data === 'object') {
-                const cardInfo = extractCardInfo(seg.data)
+            } else if (typeof cardData === 'object') {
+                const cardInfo = extractCardInfo(cardData)
                 if (cardInfo) {
                     subText += `\n[卡片消息]\n${cardInfo}\n`
                 }
