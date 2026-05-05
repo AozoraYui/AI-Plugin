@@ -69,7 +69,7 @@ export class MemoryHandler extends plugin {
 
         let statusMsg = `📚 正在启动记忆归档 [${modelDisplay}]...`
         statusMsg += isFullRebuild
-            ? `\n🔥 全量模式: 读取所有每日摘要，整合成一份完整记忆存档`
+            ? `\n🔥 全量模式: 读取所有原始对话记录，整合成一份完整记忆存档`
             : `\n🔗 增量模式: 读取今天对话 + 最近全量总结，生成今日摘要`
 
         await e.reply(statusMsg, true)
@@ -89,19 +89,22 @@ export class MemoryHandler extends plugin {
     }
 
     async _createFullCheckpointManual(e, userIdStr, todayStr, modelGroupKey, modelDisplay, startTime) {
-        const allSummaries = await this.conversationManager.db.getAllSummaryCaches(userIdStr)
-        if (allSummaries.length === 0) {
-            return e.reply("没有找到任何每日摘要，无法创建全量总结喵...")
+        const allHistory = await this.conversationManager.db.getConversationHistory(userIdStr)
+        if (allHistory.length === 0) {
+            return e.reply("没有找到任何对话记录，无法创建全量总结喵...")
         }
 
-        let summariesText = ""
-        for (const summary of allSummaries) {
-            summariesText += `\n=== 📅 【${summary.dateStr} 记忆摘要】 ===\n${summary.content}\n`
+        const aiName = Config.AI_NAME || '诺亚'
+        let historyText = ""
+        for (const turn of allHistory) {
+            const role = turn.role === 'user' ? '用户' : aiName
+            const text = turn.parts.map(p => p.text).join(' ')
+            if (text) historyText += `${role}: ${text}\n`
         }
 
         const fullSummaryPrompt = `
 你是一位专业的传记作家和档案管理员。现在是【${new Date().toLocaleString('zh-CN', { hour12: false })}】。
-请将以下这些每日对话摘要整合成一份完整的、精炼的核心记忆存档。
+请将以下这些原始对话整合成一份完整的、精炼的核心记忆存档。
 要求：
 1. 保留所有重要的用户信息（性格、偏好、技术能力、重要经历等）
 2. 按主题分类整理（如：个人信息、技术兴趣、重要对话、情感偏好等）
@@ -109,10 +112,10 @@ export class MemoryHandler extends plugin {
 4. 总字数控制在5000字以内
 5. 直接输出整合后的记忆存档，不要加"好的"等客套话
 
-每日摘要列表：
-${summariesText}`
+原始对话记录：
+${historyText}`
 
-        await e.reply(`📖 正在整合 ${allSummaries.length} 天的记忆摘要...`, true)
+        await e.reply(`📖 正在整合 ${allHistory.length} 条对话记录...`, true)
 
         const payload = { "contents": [{ "role": "user", "parts": [{ "text": fullSummaryPrompt }] }] }
         const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
@@ -141,7 +144,7 @@ ${summariesText}`
             {
                 user_id: e.self_id,
                 nickname: Config.AI_NAME,
-                message: `✅ 全量锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s${tokenInfo}\n� 整合了 ${allSummaries.length} 天的记忆摘要`
+                message: `✅ 全量锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s${tokenInfo}\n📚 整合了 ${allHistory.length} 条对话记录`
             }
         ]
 
