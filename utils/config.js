@@ -13,7 +13,6 @@ const defaultConfig = {
     HISTORY_TO_KEEP_AFTER_SUMMARY: 10,
     SESSION_TIMEOUT_MS: 180000,
     SUMMARY_PROMPT_TEMPLATE: "请你扮演一个总结者的角色，用简洁的语言概括以下用户与AI助手之间的一段对话历史的核心主题、关键信息和重要结论。摘要应该只包含事实信息，并能帮助AI助手在后续对话中回忆起重要的上下文。请用中文输出摘要。对话历史：\n\n",
-    AI_NAME: "诺亚",
     trustedGroups: [],
     // ========== 对话历史管理配置 ==========
     // 发送给 AI 的最大对话历史条数，防止请求体过大导致 413 错误
@@ -232,7 +231,7 @@ export const Config = {
         return config.personaPrimer ?? buildPersonaPrimer(aiName, prompts)
     },
     set personaPrimer(val) { config.personaPrimer = val },
-    get AI_NAME() { return config.AI_NAME ?? loadedAIName ?? defaultConfig.AI_NAME },
+    get AI_NAME() { return config.AI_NAME ?? loadedAIName ?? '诺亚' },
     set AI_NAME(val) { config.AI_NAME = val },
     get trustedGroups() { return config.trustedGroups ?? loadedTrustedGroups ?? defaultConfig.trustedGroups },
     set trustedGroups(val) { config.trustedGroups = val; saveTrustedGroups(val) },
