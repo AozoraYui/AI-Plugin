@@ -87,13 +87,13 @@ export class MemoryHandler extends plugin {
         const aiName = Config.AI_NAME || '诺亚'
         const FULL_CHUNK_SIZE = 128
 
-        let totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+        let chunkUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
 
-        const addUsage = (usage) => {
+        const addChunkUsage = (usage) => {
             if (!usage) return
-            if (usage.prompt_tokens) totalUsage.prompt_tokens += usage.prompt_tokens
-            if (usage.completion_tokens) totalUsage.completion_tokens += usage.completion_tokens
-            if (usage.total_tokens) totalUsage.total_tokens += usage.total_tokens
+            if (usage.prompt_tokens) chunkUsage.prompt_tokens += usage.prompt_tokens
+            if (usage.completion_tokens) chunkUsage.completion_tokens += usage.completion_tokens
+            if (usage.total_tokens) chunkUsage.total_tokens += usage.total_tokens
         }
 
         if (allHistory.length <= FULL_CHUNK_SIZE) {
@@ -103,9 +103,9 @@ export class MemoryHandler extends plugin {
             if (!result) {
                 return e.reply(`❌ 全量总结生成失败`)
             }
-            addUsage(result.usage)
+            addChunkUsage(result.usage)
             await this.conversationManager.db.saveCheckpoint(e.user_id, result.summary, todayStr, 0, 'full')
-            return this._sendFullCheckpointResult(e, result.summary, allHistory.length, 1, startTime, modelGroupKey, totalUsage)
+            return this._sendFullCheckpointResult(e, result.summary, allHistory.length, 0, startTime, modelGroupKey, chunkUsage, null)
         }
 
         const chunks = []
@@ -122,7 +122,7 @@ export class MemoryHandler extends plugin {
             const result = await this._summarizeChunk(chunkText, i + 1, chunks.length, modelGroupKey)
             if (result) {
                 chunkSummaries.push(result.summary)
-                addUsage(result.usage)
+                addChunkUsage(result.usage)
             } else {
                 logger.warn(`[AI-Plugin] 第 ${i + 1}/${chunks.length} 块总结失败，使用原始片段`)
                 chunkSummaries.push(chunkText.slice(0, 2000))
@@ -155,9 +155,9 @@ ${chunkSummaries.map((s, i) => `=== 第${i + 1}段 ===\n${s}`).join('\n\n')}`
             return e.reply(`❌ 全量总结合并失败: ${reason}`)
         }
 
-        addUsage(result.usage)
+        const mergeUsage = result.usage || null
         await this.conversationManager.db.saveCheckpoint(e.user_id, result.data, todayStr, 0, 'full')
-        return this._sendFullCheckpointResult(e, result.data, allHistory.length, chunks.length, startTime, modelGroupKey, totalUsage)
+        return this._sendFullCheckpointResult(e, result.data, allHistory.length, chunks.length, startTime, modelGroupKey, chunkUsage, mergeUsage)
     }
 
     _buildHistoryText(history, aiName) {
@@ -211,17 +211,33 @@ ${chunkText}`
         return null
     }
 
-    async _sendFullCheckpointResult(e, newSummary, totalMessages, totalChunks, startTime, modelGroupKey, totalUsage) {
+    async _sendFullCheckpointResult(e, newSummary, totalMessages, totalChunks, startTime, modelGroupKey, chunkUsage, mergeUsage) {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
 
         const modelInfo = '\n🔮 模型组: ' + resolveModelDisplay(modelGroupKey)
 
         let tokenInfo = ''
-        if (totalUsage) {
-            if (totalUsage.prompt_tokens !== undefined && totalUsage.completion_tokens !== undefined) {
-                tokenInfo = `\n📊 Token: 输入 ${totalUsage.prompt_tokens} | 输出 ${totalUsage.completion_tokens}`
-            } else if (totalUsage.total_tokens) {
-                tokenInfo = `\n📊 Token: ${totalUsage.total_tokens}`
+        if (chunkUsage) {
+            const hasChunkTokens = chunkUsage.prompt_tokens > 0 || chunkUsage.completion_tokens > 0
+            if (hasChunkTokens) {
+                tokenInfo += `\n📊 分段总结 Token: 入 ${chunkUsage.prompt_tokens} | 出 ${chunkUsage.completion_tokens}`
+            }
+        }
+        if (mergeUsage) {
+            const hasMergeTokens = mergeUsage.prompt_tokens > 0 || mergeUsage.completion_tokens > 0
+            if (hasMergeTokens) {
+                tokenInfo += `\n🔗 合并总结 Token: 入 ${mergeUsage.prompt_tokens} | 出 ${mergeUsage.completion_tokens}`
+            }
+        }
+        if (chunkUsage && mergeUsage) {
+            const totalIn = chunkUsage.prompt_tokens + mergeUsage.prompt_tokens
+            const totalOut = chunkUsage.completion_tokens + mergeUsage.completion_tokens
+            if (totalIn > 0 || totalOut > 0) {
+                tokenInfo += `\n📊 合计 Token: 入 ${totalIn} | 出 ${totalOut}`
+            }
+        } else if (chunkUsage && !mergeUsage) {
+            if (chunkUsage.prompt_tokens > 0 || chunkUsage.completion_tokens > 0) {
+                tokenInfo += `\n📊 合计 Token: 入 ${chunkUsage.prompt_tokens} | 出 ${chunkUsage.completion_tokens}`
             }
         }
 
@@ -229,7 +245,7 @@ ${chunkText}`
             {
                 user_id: e.self_id,
                 nickname: Config.AI_NAME,
-                message: `✅ 全量锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s\n📚 整合了 ${totalMessages} 条对话记录${totalChunks > 1 ? ` (${totalChunks}块分组合并)` : ''}${tokenInfo}`
+                message: `✅ 全量锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s\n📚 整合了 ${totalMessages} 条对话记录${totalChunks > 0 ? ` (${totalChunks}块分组合并)` : ''}${tokenInfo}`
             }
         ]
 
