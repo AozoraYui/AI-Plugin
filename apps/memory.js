@@ -320,7 +320,7 @@ export class MemoryHandler extends plugin {
 
         const modelInfo = result.platform ? `\n🔮 模型: ${result.platform}` : ''
 
-        await this.conversationManager.db.saveSummaryCache(e.user_id, newSummary, dateStr)
+        await this.conversationManager.db.saveSummaryCache(e.user_id, newSummary, dateStr, latestFullCheckpoint?.dateStr)
 
         const forwardMsgNodes = [
             {
@@ -460,10 +460,17 @@ export class MemoryHandler extends plugin {
 
             const summaryCache = await this.conversationManager.db.getSummaryCache(userIdStr, targetDate)
             if (summaryCache) {
+                let displayText = summaryCache.content
+                if (summaryCache.baseCheckpointDate) {
+                    const baseCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, summaryCache.baseCheckpointDate)
+                    if (baseCheckpoint) {
+                        displayText = `=== 📜 【核心记忆存档 (截止于 ${summaryCache.baseCheckpointDate})】 ===\n${baseCheckpoint.content}\n\n=== 🔗 【增量记忆 (${targetDate})】 ===\n${summaryCache.content}`
+                    }
+                }
                 const DISPLAY_MAX = 3000
-                const displayText = summaryCache.content.length > DISPLAY_MAX
-                    ? summaryCache.content.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${summaryCache.content.length} 字符，已截断)`
-                    : summaryCache.content
+                displayText = displayText.length > DISPLAY_MAX
+                    ? displayText.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${displayText.length} 字符，已截断)`
+                    : displayText
                 const content = `📖 ${targetDate} 增量总结\n- - - - - - - - - -\n${displayText}`
                 return this._sendMemoryContent(e, content, targetDate)
             }

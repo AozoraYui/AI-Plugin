@@ -269,7 +269,16 @@ export class ConversationManager {
         const latestSummary = await this.db.getLatestSummaryCache(userIdStr)
         let incrementalContent = ""
         if (latestSummary) {
-            incrementalContent = latestSummary.content
+            if (latestSummary.baseCheckpointDate) {
+                const baseCheckpoint = await this.db.getCheckpoint(userIdStr, latestSummary.baseCheckpointDate)
+                if (baseCheckpoint) {
+                    incrementalContent = `=== 📜 【核心记忆存档 (截止于 ${latestSummary.baseCheckpointDate})】 ===\n${baseCheckpoint.content}\n\n=== 🔗 【增量记忆 (${latestSummary.dateStr})】 ===\n${latestSummary.content}`
+                } else {
+                    incrementalContent = latestSummary.content
+                }
+            } else {
+                incrementalContent = latestSummary.content
+            }
         }
 
         let history = []
@@ -280,9 +289,9 @@ export class ConversationManager {
             logger.error(`[AI-Plugin] 从 SQLite 读取用户 ${userId} 的历史失败:`, err)
         }
 
-        return { 
+        return {
             incrementalCheckpoint: incrementalContent,
-            history 
+            history
         }
     }
 

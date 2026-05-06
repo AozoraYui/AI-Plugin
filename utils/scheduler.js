@@ -107,7 +107,7 @@ export class AIScheduler {
         const tokenLog = result.usage
             ? ` | Token: 入${result.usage.prompt_tokens || '?'} 出${result.usage.completion_tokens || '?'}`
             : ''
-        await global.AIPluginConversationManager.db.saveSummaryCache(userId, summaryText, today)
+        await global.AIPluginConversationManager.db.saveSummaryCache(userId, summaryText, today, latestFullCheckpoint?.dateStr)
         logger.info(`[AI-Plugin] 为用户 ${userId} 创建增量总结成功: ${today}${tokenLog}`)
     }
 

@@ -52,6 +52,7 @@ export class AIDatabase {
                     user_id TEXT NOT NULL,
                     content TEXT NOT NULL,
                     date_str TEXT NOT NULL,
+                    base_checkpoint_date TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(user_id, date_str)
                 );
@@ -93,8 +94,15 @@ export class AIDatabase {
                             logger.debug('[AI-Plugin] checkpoint_type 数据迁移:', updateErr.message)
                         }
 
-                        // 检查表状态并处理
-                        this.checkAndCreateUserHistoriesTable(resolve, reject)
+                        // 为 summary_cache 表添加 base_checkpoint_date 字段（如果不存在）
+                        this.db.run(`ALTER TABLE summary_cache ADD COLUMN base_checkpoint_date TEXT`, (summaryAlterErr) => {
+                            if (summaryAlterErr && summaryAlterErr.message && !summaryAlterErr.message.includes('duplicate column')) {
+                                logger.debug('[AI-Plugin] base_checkpoint_date 字段迁移:', summaryAlterErr.message)
+                            }
+
+                            // 检查表状态并处理
+                            this.checkAndCreateUserHistoriesTable(resolve, reject)
+                        })
                     })
                 })
             })
@@ -547,14 +555,14 @@ export class AIDatabase {
 
     // ========== 增量锚点方法（对应 summary_cache/日期/用户.txt） ==========
 
-    saveSummaryCache(userId, content, dateStr) {
+    saveSummaryCache(userId, content, dateStr, baseCheckpointDate = null) {
         return new Promise((resolve, reject) => {
             const createdAt = getDBTimestamp()
             this.db.run(`
-                INSERT INTO summary_cache (user_id, content, date_str, created_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(user_id, date_str) DO UPDATE SET content = ?, created_at = ?
-            `, [String(userId), content, dateStr, createdAt, content, createdAt], (err) => {
+                INSERT INTO summary_cache (user_id, content, date_str, base_checkpoint_date, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, date_str) DO UPDATE SET content = ?, base_checkpoint_date = ?, created_at = ?
+            `, [String(userId), content, dateStr, baseCheckpointDate, createdAt, content, baseCheckpointDate, createdAt], (err) => {
                 if (err) reject(err)
                 else resolve()
             })
@@ -563,33 +571,33 @@ export class AIDatabase {
 
     getSummaryCache(userId, dateStr) {
         return new Promise((resolve, reject) => {
-            this.db.get('SELECT content, created_at FROM summary_cache WHERE user_id = ? AND date_str = ?',
+            this.db.get('SELECT content, created_at, base_checkpoint_date FROM summary_cache WHERE user_id = ? AND date_str = ?',
                 [String(userId), dateStr], (err, row) => {
                     if (err) {
                         reject(err)
                         return
                     }
-                    resolve(row ? { content: row.content, createdAt: row.created_at } : null)
+                    resolve(row ? { content: row.content, createdAt: row.created_at, baseCheckpointDate: row.base_checkpoint_date } : null)
                 })
         })
     }
 
     getLatestSummaryCache(userId) {
         return new Promise((resolve, reject) => {
-            this.db.get('SELECT content, date_str, created_at FROM summary_cache WHERE user_id = ? ORDER BY date_str DESC LIMIT 1',
+            this.db.get('SELECT content, date_str, created_at, base_checkpoint_date FROM summary_cache WHERE user_id = ? ORDER BY date_str DESC LIMIT 1',
                 [String(userId)], (err, row) => {
                     if (err) {
                         reject(err)
                         return
                     }
-                    resolve(row ? { content: row.content, dateStr: row.date_str, createdAt: row.created_at } : null)
+                    resolve(row ? { content: row.content, dateStr: row.date_str, createdAt: row.created_at, baseCheckpointDate: row.base_checkpoint_date } : null)
                 })
         })
     }
 
     getAllSummaryCaches(userId) {
         return new Promise((resolve, reject) => {
-            this.db.all('SELECT content, date_str, created_at FROM summary_cache WHERE user_id = ? ORDER BY date_str ASC',
+            this.db.all('SELECT content, date_str, created_at, base_checkpoint_date FROM summary_cache WHERE user_id = ? ORDER BY date_str ASC',
                 [String(userId)], (err, rows) => {
                     if (err) {
                         reject(err)
@@ -598,7 +606,8 @@ export class AIDatabase {
                     resolve(rows.map(row => ({
                         content: row.content,
                         dateStr: row.date_str,
-                        createdAt: row.created_at
+                        createdAt: row.created_at,
+                        baseCheckpointDate: row.base_checkpoint_date
                     })))
                 })
         })
