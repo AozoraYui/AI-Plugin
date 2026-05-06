@@ -172,7 +172,7 @@ export class ChatHandler extends plugin {
             event: 'message',
             priority: 1144,
             rule: [
-                { reg: /^#([a-zA-Z0-9]*)(?:s|single)([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleSingleChat' },
+                { reg: /^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleSingleChat' },
                 { reg: /^#([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleChat' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}记忆$`, 'i'), fnc: 'exportMyMemory' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'), fnc: 'exportMemoryByDate' },
