@@ -84,7 +84,7 @@ export class MemoryHandler extends plugin {
             return e.reply("没有找到任何对话记录，无法创建全量总结喵...")
         }
 
-        const aiName = Config.AI_NAME || '诺亚'
+        const aiName = Config.AI_NAME
         const FULL_CHUNK_SIZE = 128
 
         let chunkUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }

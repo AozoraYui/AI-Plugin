@@ -63,7 +63,7 @@ export class AIScheduler {
         const latestFullCheckpoint = await global.AIPluginConversationManager.db.getLatestFullCheckpoint(userId)
 
         let todayContent = ""
-        const aiName = Config.AI_NAME || '诺亚'
+        const aiName = Config.AI_NAME
         for (const turn of todayHistory) {
             const role = turn.role === 'user' ? '用户' : aiName
             const text = turn.parts.map(p => p.text).join(' ')
@@ -138,7 +138,7 @@ export class AIScheduler {
             return
         }
 
-        const aiName = Config.AI_NAME || '诺亚'
+        const aiName = Config.AI_NAME
 
         let chunkUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
 
