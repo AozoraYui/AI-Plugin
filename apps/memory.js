@@ -451,17 +451,14 @@ export class MemoryHandler extends plugin {
         try {
             const checkpoint = await this.conversationManager.db.getCheckpoint(userIdStr, targetDate, 'full')
             if (checkpoint) {
-                const DISPLAY_MAX = 3000
-                const displayText = checkpoint.content.length > DISPLAY_MAX
-                    ? checkpoint.content.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${checkpoint.content.length} 字符，已截断。可使用 #ai导出记忆 查看完整内容)`
-                    : checkpoint.content
+                const displayText = this._truncateContent(checkpoint.content, true)
                 const content = `📖 ${targetDate} 全量总结\n- - - - - - - - - -\n${displayText}`
                 return this._sendMemoryContent(e, content, targetDate)
             }
 
             return e.reply(`📅 没有找到 ${targetDate} 的全量总结哦。\n该日期可能尚未创建全量总结，请使用 #ai全量总结 创建。`)
         } catch (err) {
-            logger.error(`[AI-Plugin] 读取全量总结失败:`, err)
+            logger.error(`[AI-Plugin] 读取全量总结失败 (用户: ${userIdStr}, 日期: ${targetDate}):`, err)
             await e.reply(`❌ 读取全量总结失败: ${err.message}`)
         }
     }
@@ -483,10 +480,7 @@ export class MemoryHandler extends plugin {
                         displayText = `=== 📜 【核心记忆存档 (截止于 ${summaryCache.baseCheckpointDate})】 ===\n${baseCheckpoint.content}\n\n=== 🔗 【增量记忆 (${targetDate})】 ===\n${summaryCache.content}`
                     }
                 }
-                const DISPLAY_MAX = 3000
-                displayText = displayText.length > DISPLAY_MAX
-                    ? displayText.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${displayText.length} 字符，已截断)`
-                    : displayText
+                displayText = this._truncateContent(displayText, false)
                 const content = `📖 ${targetDate} 增量总结\n- - - - - - - - - -\n${displayText}`
                 return this._sendMemoryContent(e, content, targetDate)
             }
@@ -508,10 +502,7 @@ export class MemoryHandler extends plugin {
         try {
             const checkpoint = await this.conversationManager.db.getCheckpoint(userIdStr, targetDate, 'full')
             if (checkpoint) {
-                const DISPLAY_MAX = 3000
-                const displayText = checkpoint.content.length > DISPLAY_MAX
-                    ? checkpoint.content.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${checkpoint.content.length} 字符，已截断。可使用 #ai导出记忆 查看完整内容)`
-                    : checkpoint.content
+                const displayText = this._truncateContent(checkpoint.content, true)
                 const content = `📖 ${targetDate} 全量总结\n- - - - - - - - - -\n${displayText}`
                 return this._sendMemoryContent(e, content, targetDate)
             }
@@ -525,19 +516,27 @@ export class MemoryHandler extends plugin {
                         displayText = `=== 📜 【核心记忆存档 (截止于 ${summaryCache.baseCheckpointDate})】 ===\n${baseCheckpoint.content}\n\n=== 🔗 【增量记忆 (${targetDate})】 ===\n${summaryCache.content}`
                     }
                 }
-                const DISPLAY_MAX = 3000
-                displayText = displayText.length > DISPLAY_MAX
-                    ? displayText.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${displayText.length} 字符，已截断)`
-                    : displayText
+                displayText = this._truncateContent(displayText, false)
                 const content = `📖 ${targetDate} 增量总结\n- - - - - - - - - -\n${displayText}`
                 return this._sendMemoryContent(e, content, targetDate)
             }
 
             return e.reply(`📅 没有找到 ${targetDate} 的记忆记录哦。\n该日期可能尚未进行总结，或者记录不存在。`)
         } catch (err) {
-            logger.error(`[AI-Plugin] 读取记忆失败:`, err)
+            logger.error(`[AI-Plugin] 读取记忆失败 (用户: ${userIdStr}, 日期: ${targetDate}):`, err)
             await e.reply(`❌ 读取记忆失败: ${err.message}`)
         }
+    }
+
+    _truncateContent(content, isFullCheckpoint = false) {
+        const DISPLAY_MAX = 3000
+        if (content.length <= DISPLAY_MAX) {
+            return content
+        }
+        const suffix = isFullCheckpoint
+            ? `\n\n... (内容过长，共 ${content.length} 字符，已截断。可使用 #ai导出记忆 查看完整内容)`
+            : `\n\n... (内容过长，共 ${content.length} 字符，已截断)`
+        return content.slice(0, DISPLAY_MAX) + suffix
     }
 
     async _sendMemoryContent(e, content, targetDate) {
