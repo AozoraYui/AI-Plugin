@@ -5,6 +5,7 @@
 #   base_url: API 基础地址
 #   api_key: API 密钥
 #   model_groups: 模型组配置
+#     分组根据模型能力以及响应速度请综合评估后手动排序归类，此排序与模型名称无直接关系
 #     flash: Flash 模型组（用于 #chat, #draw 等指令）
 #     pro: Pro 模型组（用于 #prochat 指令）
 #     ultra: Ultra 模型组（用于 #ultrachat, #ultradraw 指令）
