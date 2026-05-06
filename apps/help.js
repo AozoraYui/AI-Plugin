@@ -17,8 +17,8 @@ export class HelpHandler extends plugin {
     async showHelp(e) {
         const aiName = Config.AI_NAME
         const msg1_header = `
-喵~ 欢迎使用~
-这里是${aiName}的万能口袋哦~ (ฅ'ω'ฅ)`
+你好，欢迎使用 AI 插件
+这里是${aiName}，你的多模型智能助手`
 
         const msg2_chat = `
 - - - - - - - - - - - - - - - - -
