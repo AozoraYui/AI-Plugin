@@ -1,6 +1,6 @@
 import schedule from 'node-schedule'
 import { getTodayDateStr, isAIErrorResponse } from './common.js'
-import { Config } from './config.js'
+import { Config, expandPrompt } from './config.js'
 
 const FULL_CHUNK_SIZE = 128
 
@@ -74,24 +74,22 @@ export class AIScheduler {
 
         let summaryPrompt = ""
         if (latestFullCheckpoint) {
-            summaryPrompt = `
-请将以下这段发生在【${today}】的对话概括为一个简短的摘要（${Config.SUMMARY_MAX_LENGTH}字以内）。
-重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
-直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。
-
-以下是之前的核心记忆存档，供你参考上下文（不需要重复总结这些内容）：
-=== 📜 【核心记忆存档 (截止于 ${latestFullCheckpoint.dateStr})】 ===
-${latestFullCheckpoint.content}
-
-今天的对话内容：
-${todayContent}`
+            const template = Config.Prompts?.incremental_checkpoint?.with_context
+                || `你是一位专业的档案管理员。现在是【{current_time}】。\n请将以下这段发生在【{date}】的对话概括为一个简短的摘要（{summary_max_length}字以内）。\n重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。\n直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。\n\n以下是之前的核心记忆存档，供你参考上下文（不需要重复总结这些内容）：\n=== 📜 【核心记忆存档 (截止于 {checkpoint_date})】 ===`
+            summaryPrompt = expandPrompt(template, {
+                current_time: new Date().toLocaleString('zh-CN', { hour12: false }),
+                date: today,
+                summary_max_length: Config.SUMMARY_MAX_LENGTH,
+                checkpoint_date: latestFullCheckpoint.dateStr
+            }) + `\n${latestFullCheckpoint.content}\n\n今天的对话内容：\n${todayContent}`
         } else {
-            summaryPrompt = `
-请将以下这段发生在【${today}】的对话概括为一个简短的摘要（${Config.SUMMARY_MAX_LENGTH}字以内）。
-重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
-直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。
-对话内容：
-${todayContent}`
+            const template = Config.Prompts?.incremental_checkpoint?.no_context
+                || `你是一位专业的档案管理员。现在是【{current_time}】。\n请将以下这段发生在【{date}】的对话概括为一个简短的摘要（{summary_max_length}字以内）。\n重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。\n直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。\n\n对话内容：`
+            summaryPrompt = expandPrompt(template, {
+                current_time: new Date().toLocaleString('zh-CN', { hour12: false }),
+                date: today,
+                summary_max_length: Config.SUMMARY_MAX_LENGTH
+            }) + `\n${todayContent}`
         }
 
         const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
@@ -189,17 +187,10 @@ ${todayContent}`
         }
 
         logger.info(`[AI-Plugin] 正在合并 ${chunkSummaries.length} 个分块总结...`)
-        const mergePrompt = `
-请将以下 ${chunkSummaries.length} 个分段的对话摘要整合成一份完整的、精炼的核心记忆存档。
-要求：
-1. 保留所有重要的用户信息（性格、偏好、技术能力、重要经历等）
-2. 按主题分类整理（如：个人信息、技术兴趣、重要对话、情感偏好等）
-3. 去除重复的内容，保留核心内容
-4. 字数不限，尽可能写好各处细节
-5. 直接输出整合后的记忆存档，不要加"好的"等客套话，严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本
-
-以下是各分段摘要：
-${chunkSummaries.map((s, i) => `=== 第${i + 1}段 ===\n${s}`).join('\n\n')}`
+        const mergeTemplate = Config.Prompts?.full_checkpoint?.merge
+            || `请将以下 {chunk_count} 个分段的对话摘要整合成一份完整的、精炼的核心记忆存档。\n要求：\n1. 保留所有重要的用户信息（性格、偏好、技术能力、重要经历等）\n2. 按主题分类整理（如：个人信息、技术兴趣、重要对话、情感偏好等）\n3. 去除重复的内容，保留核心内容\n4. 字数不限，尽可能写好各处细节\n5. 直接输出整合后的记忆存档，不要加"好的"等客套话，严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本\n\n以下是各分段摘要：`
+        const mergePrompt = expandPrompt(mergeTemplate, { chunk_count: chunkSummaries.length })
+            + `\n${chunkSummaries.map((s, i) => `=== 第${i + 1}段 ===\n${s}`).join('\n\n')}`
 
         const payload = { "contents": [{ "role": "user", "parts": [{ "text": mergePrompt }] }] }
         const result = await this.client.makeRequest('chat', payload, 'flash', Config.CHECKPOINT_MAX_LENGTH)
@@ -238,17 +229,10 @@ ${chunkSummaries.map((s, i) => `=== 第${i + 1}段 ===\n${s}`).join('\n\n')}`
     }
 
     async _summarizeSingleChunk(historyText, modelGroupKey) {
-        const prompt = `
-请将以下这些原始对话整合成一份完整的、精炼的核心记忆存档。
-要求：
-1. 保留所有重要的用户信息（性格、偏好、技术能力、重要经历等）
-2. 按主题分类整理（如：个人信息、技术兴趣、重要对话、情感偏好等）
-3. 去除重复的内容，保留核心内容
-4. 字数不限，尽可能写好各处细节
-5. 直接输出整合后的记忆存档，不要加"好的"等客套话，严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本
-
-原始对话记录：
-${historyText}`
+        const template = Config.Prompts?.full_checkpoint?.single_chunk
+            || `你是一位专业的传记作家和档案管理员。现在是【{current_time}】。\n请将以下这些原始对话整合成一份完整的、精炼的核心记忆存档。\n要求：\n1. 保留所有重要的用户信息（性格、偏好、技术能力、重要经历等）\n2. 按主题分类整理（如：个人信息、技术兴趣、重要对话、情感偏好等）\n3. 去除重复的内容，保留核心内容\n4. 字数不限，尽可能写好各处细节\n5. 直接输出整合后的记忆存档，不要加"好的"等客套话，严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本\n\n原始对话记录：`
+        const prompt = expandPrompt(template, { current_time: new Date().toLocaleString('zh-CN', { hour12: false }) })
+            + `\n${historyText}`
 
         const payload = { "contents": [{ "role": "user", "parts": [{ "text": prompt }] }] }
         const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
@@ -260,13 +244,10 @@ ${historyText}`
     }
 
     async _summarizeChunk(chunkText, chunkIndex, totalChunks, modelGroupKey) {
-        const prompt = `
-请将以下这段对话记录概括为一个详细的摘要（这是第 ${chunkIndex}/${totalChunks} 段）。
-重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好、重要的个人信息。
-直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。
-
-对话记录：
-${chunkText}`
+        const template = Config.Prompts?.full_checkpoint?.per_chunk
+            || `请将以下这段对话记录概括为一个详细的摘要（这是第 {chunk_index}/{total_chunks} 段）。\n重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好、重要的个人信息。\n直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。\n\n对话记录：`
+        const prompt = expandPrompt(template, { chunk_index: chunkIndex, total_chunks: totalChunks })
+            + `\n${chunkText}`
 
         const payload = { "contents": [{ "role": "user", "parts": [{ "text": prompt }] }] }
         const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)

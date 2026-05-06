@@ -3,4 +3,5 @@ node_modules/
 .DS_Store
 data/
 config/
+!config/ai_prompt.yaml
 package-lock.json

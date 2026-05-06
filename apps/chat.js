@@ -1,7 +1,7 @@
 import plugin from '../../../lib/plugins/plugin.js'
 import fs from 'node:fs'
 import path from 'node:path'
-import { Config } from '../utils/config.js'
+import { Config, expandPrompt } from '../utils/config.js'
 import { AiClient } from '../client/AiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
@@ -434,16 +434,17 @@ export class ChatHandler extends plugin {
 
             // 添加聊天环境提示（放在历史之后，用户消息之前，确保最高优先级）
             const trustedGroups = Config.trustedGroups
+            const prompts = Config.Prompts
             let environmentHint = ""
             if (e.isGroup) {
                 const groupId = String(e.group_id)
                 if (trustedGroups.includes(groupId)) {
-                    environmentHint = `【当前聊天环境】这是一个受信任的群聊环境（群号：${groupId}）。你可以正常交流，但仍需遵守基本的隐私保护规则。`
+                    environmentHint = expandPrompt(prompts?.environment?.trusted_group, { group_id: groupId }) || `【当前聊天环境】这是一个受信任的群聊环境（群号：${groupId}）。你可以正常交流，但仍需遵守基本的隐私保护规则。`
                 } else {
-                    environmentHint = `【当前聊天环境】这是一个公开的 QQ 群聊（群号：${groupId}），属于公开场合。请严格遵守隐私保护规则，不要在与用户相关的对话中透露任何个人信息或敏感内容。`
+                    environmentHint = expandPrompt(prompts?.environment?.public_group, { group_id: groupId }) || `【当前聊天环境】这是一个公开的 QQ 群聊（群号：${groupId}），属于公开场合。请严格遵守隐私保护规则，不要在与用户相关的对话中透露任何个人信息或敏感内容。`
                 }
             } else {
-                environmentHint = `【当前聊天环境】这是与用户的私聊对话，属于安全环境。可以正常交流。`
+                environmentHint = prompts?.environment?.private_chat || `【当前聊天环境】这是与用户的私聊对话，属于安全环境。可以正常交流。`
             }
             logger.info(`[AI-Plugin] 环境提示: ${environmentHint}`)
             contents.push({

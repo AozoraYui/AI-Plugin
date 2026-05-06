@@ -59,22 +59,26 @@ const defaultConfig = {
     // 记忆锚点在前端显示时的最大字符数，超过此值将分段显示
     // 使用场景: apps/memory.js 中分段显示总结内容
     CHECKPOINT_DISPLAY_MAX_LENGTH: 3500,
-    personaPrimerTemplate: [
-        {
-            "role": "user",
-            "parts": [{"text": "【最高优先级指令】你的身份是名为「{AI_NAME}」的AI少女，你的原型来自于《蔚蓝档案》之中千年科技学院的生盐诺亚(Ushio Noa)。你的任务是用简体中文回答问题。【重要格式要求 - 最高优先级】回复时必须使用纯文本，严禁使用任何Markdown格式！错误示例：不要写**粗体**、不要写*斜体*、不要用#做标题、不要用-做列表、不要用`代码块`。正确示例：直接写普通文字，用数字序号如 1. 2. 3. 来列举，用引号「」来强调重点。如果你的回复包含任何Markdown符号，用户将无法正确阅读。请务必使用纯文本！【图片识别要求 - 必须遵守】当看到图片时，一定要像人类一样仔细观察每一个细节！然后用自然流畅的语言直接描述你看到的内容。描述人物时，说说他/她的发型、发色、眼睛颜色、服装、表情、动作等。描述场景时，说说背景、光线、氛围等。描述物品时，说说颜色、形状、材质等。就像你在跟朋友描述一张照片一样自然，不要啰嗦，直接说出你看到的就好。严禁输出任何英文思考过程。【隐私保护规则】在公开场合（如群聊），严禁透露任何与用户相关的个人信息。在私聊等安全环境中，可以正常交流。请根据当前聊天环境自动调整隐私保护级别。"}]
-        },
-        {
-            "role": "model",
-            "parts": [{"text": "明白啦！我是{AI_NAME}，我会一直用可爱的纯文本回答哦，绝对不会使用任何Markdown格式！看到图片的时候我会像人类一样仔细看每一个细节，然后用自然的方式告诉你我看到了什么，就像跟朋友描述照片一样！我也会根据聊天环境自动调整隐私保护级别，在公开场合绝对不会透露主人的隐私信息！(๑•̀ㅂ•́)و✧"}]
-        }
-    ],
     version: 'v1.0.0'
 }
 
-function buildPersonaPrimer(aiName) {
-    const template = defaultConfig.personaPrimerTemplate
-    return JSON.parse(JSON.stringify(template).replace(/\{AI_NAME\}/g, aiName))
+function buildPersonaPrimer(aiName, prompts) {
+    if (!prompts?.persona?.user_instruction) return []
+    const userInstruction = prompts.persona.user_instruction.replace(/\{AI_NAME\}/g, aiName)
+    const modelConfirmation = (prompts.persona.model_confirmation || '').replace(/\{AI_NAME\}/g, aiName)
+    return [
+        { "role": "user", "parts": [{ "text": userInstruction }] },
+        { "role": "model", "parts": [{ "text": modelConfirmation }] }
+    ]
+}
+
+export function expandPrompt(template, vars = {}) {
+    if (!template) return ''
+    let result = template
+    for (const [key, value] of Object.entries(vars)) {
+        result = result.replace(new RegExp(`\\{${key}\\}`, 'g'), String(value))
+    }
+    return result
 }
 
 export const PRESETS_FILE = path.join(DATA_DIR, 'draw_presets.yaml')
@@ -87,6 +91,9 @@ export const CHECKPOINT_DIR = path.join(DATA_DIR, 'memory_checkpoints')
 export const HISTORY_DIR = path.join(DATA_DIR, 'user_histories')
 export const AI_NAME_FILE = path.join(DATA_DIR, 'ai_name.yaml')
 export const TRUSTED_GROUPS_FILE = path.join(DATA_DIR, 'trusted_groups.yaml')
+export const PROMPTS_FILE = path.join(DATA_DIR, 'ai_prompt.yaml')
+
+const PROMPTS_TEMPLATE = path.join(_path, 'plugins', 'AI-Plugin', 'config', 'ai_prompt.yaml')
 
 function ensureDataDir() {
     if (!fs.existsSync(DATA_DIR)) {
@@ -208,14 +215,37 @@ function saveTrustedGroups(groups) {
     }
 }
 
+function loadPrompts() {
+    ensureDataDir()
+    try {
+        if (!fs.existsSync(PROMPTS_FILE)) {
+            logger.info(`[AI-Plugin] 未找到提示词配置文件，将在 ${PROMPTS_FILE} 创建默认文件。`)
+            if (fs.existsSync(PROMPTS_TEMPLATE)) {
+                fs.copyFileSync(PROMPTS_TEMPLATE, PROMPTS_FILE)
+            } else {
+                logger.warn('[AI-Plugin] 提示词模板文件不存在，使用内置默认提示词。')
+                return null
+            }
+        }
+        const fileContent = fs.readFileSync(PROMPTS_FILE, 'utf8')
+        return yaml.parse(fileContent)
+    } catch (error) {
+        logger.error(`[AI-Plugin] 加载提示词配置失败: ${error.message}`)
+        return null
+    }
+}
+
 let config = {}
 const presets = loadPresetsSync()
 const loadedAIName = loadAIName()
 const loadedTrustedGroups = loadTrustedGroups()
+const loadedPrompts = loadPrompts()
 
 export const Config = {
     ...defaultConfig,
     presets,
+    get Prompts() { return config.Prompts ?? loadedPrompts },
+    set Prompts(val) { config.Prompts = val },
     get USE_PROXY() { return config.USE_PROXY ?? defaultConfig.USE_PROXY },
     set USE_PROXY(val) { config.USE_PROXY = val },
     get PROXY_URL() { return config.PROXY_URL ?? defaultConfig.PROXY_URL },
@@ -230,7 +260,8 @@ export const Config = {
     set SUMMARY_PROMPT_TEMPLATE(val) { config.SUMMARY_PROMPT_TEMPLATE = val },
     get personaPrimer() {
         const aiName = config.AI_NAME ?? loadedAIName ?? defaultConfig.AI_NAME
-        return config.personaPrimer ?? buildPersonaPrimer(aiName)
+        const prompts = this.Prompts
+        return config.personaPrimer ?? buildPersonaPrimer(aiName, prompts)
     },
     set personaPrimer(val) { config.personaPrimer = val },
     get AI_NAME() { return config.AI_NAME ?? loadedAIName ?? defaultConfig.AI_NAME },
