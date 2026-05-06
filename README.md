@@ -79,7 +79,7 @@ pnpm install
         - gemini-3-pro
 ```
 
-**`gemini_presets.yaml`** - 作图预设配置
+**`draw_presets.yaml`** - 作图预设配置
 ```yaml
 - command: 二次元
   name: 二次元风格
@@ -217,7 +217,7 @@ AI-Plugin/
 | `models_config.yaml` | 模型供应商配置 |
 | `model_status.json` | 模型测试状态 |
 | `disabled_models.json` | 禁用的模型列表 |
-| `gemini_presets.yaml` | 作图预设配置 |
+| `draw_presets.yaml` | 作图预设配置 |
 | `access_control.yaml` | 权限控制配置 |
 | `ai_plugin.db` | SQLite 数据库（对话历史、记忆锚点、摘要缓存） |
 
