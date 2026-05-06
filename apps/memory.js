@@ -529,60 +529,11 @@ export class MemoryHandler extends plugin {
     }
 
     _truncateContent(content, isFullCheckpoint = false) {
-        const DISPLAY_MAX = 3000
-        if (content.length <= DISPLAY_MAX) {
-            return content
-        }
-        const suffix = isFullCheckpoint
-            ? `\n\n... (内容过长，共 ${content.length} 字符，已截断。可使用 #ai导出记忆 查看完整内容)`
-            : `\n\n... (内容过长，共 ${content.length} 字符，已截断)`
-        return content.slice(0, DISPLAY_MAX) + suffix
+        return content
     }
 
     async _sendMemoryContent(e, content, targetDate) {
-        const MAX_LENGTH = 800
-        const MAX_NODES = 5
-        if (content.length > MAX_LENGTH) {
-            const forwardMsgNodes = [
-                {
-                    user_id: e.self_id,
-                    nickname: Config.AI_NAME,
-                    message: `📖 ${targetDate} 记忆记录`
-                }
-            ]
-
-            let remainingContent = content
-            let part = 1
-            while (remainingContent.length > 0 && part <= MAX_NODES) {
-                let chunk = remainingContent.slice(0, MAX_LENGTH)
-                if (remainingContent.length > MAX_LENGTH) {
-                    const lastNewline = chunk.lastIndexOf('\n')
-                    if (lastNewline > MAX_LENGTH * 0.8) {
-                        chunk = chunk.slice(0, lastNewline)
-                    }
-                }
-                forwardMsgNodes.push({
-                    user_id: e.self_id,
-                    nickname: `记忆内容 (${part})`,
-                    message: chunk
-                })
-                remainingContent = remainingContent.slice(chunk.length)
-                part++
-            }
-
-            if (remainingContent.length > 0) {
-                forwardMsgNodes.push({
-                    user_id: e.self_id,
-                    nickname: "提示",
-                    message: `⚠️ 内容过长，仅显示前 ${MAX_NODES} 部分。\n如需查看完整内容，请使用 #ai导出记忆 命令。`
-                })
-            }
-
-            const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
-            await e.reply(forwardMsg)
-        } else {
-            await e.reply(content)
-        }
+        await e.reply(content)
     }
 
     async batchIncrementalSummaries(e) {
