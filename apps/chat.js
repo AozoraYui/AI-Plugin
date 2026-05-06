@@ -595,10 +595,7 @@ export class ChatHandler extends plugin {
                         const todayStr = getTodayDateStr()
                         try {
                             await this.conversationManager.createIncrementalCheckpoint(userId, todayStr, 0, modelGroupKey)
-                            const KEEP_AFTER_SUMMARY = 0
-                            const trimmedHistory = updatedHistory.slice(-KEEP_AFTER_SUMMARY)
-                            await this.conversationManager.saveUserHistory(userId, trimmedHistory)
-                            logger.info(`[AI-Plugin] 用户 ${userId} 增量总结完成，历史已清空`)
+                            logger.info(`[AI-Plugin] 用户 ${userId} 增量总结完成，保留对话历史`)
                         } catch (summaryErr) {
                             logger.error(`[AI-Plugin] 自动增量总结失败:`, summaryErr)
                         }
