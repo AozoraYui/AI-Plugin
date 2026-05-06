@@ -541,6 +541,7 @@ export class AIDatabase {
                     }
                     resolve(row ? { content: row.content, dateStr: row.date_str, messageCount: row.message_count, createdAt: row.created_at } : null)
                 })
+        })
     }
 
     getAllCheckpoints(userId) {
