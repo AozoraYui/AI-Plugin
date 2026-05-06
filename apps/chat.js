@@ -172,8 +172,8 @@ export class ChatHandler extends plugin {
             event: 'message',
             priority: 1144,
             rule: [
-                { reg: /^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleSingleChat' },
-                { reg: /^#([a-zA-Z0-9]*)gm([\s\S]*)$/i, fnc: 'handleChat' },
+                { reg: /^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)chat([\s\S]*)$/i, fnc: 'handleSingleChat' },
+                { reg: /^#([a-zA-Z0-9]*)chat([\s\S]*)$/i, fnc: 'handleChat' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}记忆$`, 'i'), fnc: 'exportMyMemory' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'), fnc: 'exportMemoryByDate' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆$`, 'i'), fnc: 'exportAllMemory', permission: 'master' },
@@ -188,7 +188,7 @@ export class ChatHandler extends plugin {
     async handleSingleChat(e) {
         if (!await checkAccess(e)) return true
 
-        const match = e.msg.match(/^#([a-zA-Z0-9]*)(?:s|single)([a-zA-Z0-9]*)gm([\s\S]*)/i)
+        const match = e.msg.match(/^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)chat([\s\S]*)/i)
         if (!match) return
 
         e._singleMode = true
@@ -200,14 +200,14 @@ export class ChatHandler extends plugin {
         if (resolveModelGroup(prefix1) !== 'flash') modelPrefix = prefix1
         if (resolveModelGroup(prefix2) !== 'flash') modelPrefix = prefix2
 
-        e.msg = `#${modelPrefix}gm${match[3]}`
+        e.msg = `#${modelPrefix}chat${match[3]}`
         return this.handleChat(e)
     }
 
     async handleChat(e) {
         if (!await checkAccess(e)) return true
 
-        const match = e.msg.match(/^#([a-zA-Z0-9]*)gm([\s\S]*)/i)
+        const match = e.msg.match(/^#([a-zA-Z0-9]*)chat([\s\S]*)/i)
         if (!match) return
 
         const prefix = match[1].toLowerCase()

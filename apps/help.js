@@ -25,23 +25,23 @@ export class HelpHandler extends plugin {
 💬 智能对话 (${aiName})
 - - - - - - - - - - - - - - - - -
 ✨ 三档模型组，随心切换 ✨
-> #gm [内容]
+> #chat [内容]
   使用 Flash 模型组，速度快，适合日常聊天。
-> #pgm [内容] / #progm [内容]
+> #pchat [内容] / #prochat [内容]
   使用 Pro 模型组，更聪明，适合复杂问题。
-> #ugm [内容] / #ultragm [内容]
+> #uchat [内容] / #ultrachat [内容]
   使用 Ultra 模型组，旗舰性能！
 
-> #sgm [内容]
+> #schat [内容]
   单次对话模式（Flash），不保存历史记录。
-> #psgm [内容] / #prosgm [内容]
+> #pschat [内容] / #proschat [内容]
   单次对话模式（Pro），不保存历史记录。
-> #usgm [内容] / #ultrasgm [内容]
+> #uschat [内容] / #ultraschat [内容]
   单次对话模式（Ultra），不保存历史记录。
 
 > 💡 所有对话指令都支持发送图片哦！
-  > 示例: #gm 你好呀！
-  > 示例: #pgm 这张图里是什么？ [图片]
+  > 示例: #chat 你好呀！
+  > 示例: #pchat 这张图里是什么？ [图片]
 
 > #导出${aiName}记忆
   导出该用户的对话记忆。
