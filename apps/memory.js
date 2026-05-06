@@ -16,8 +16,9 @@ export class MemoryHandler extends plugin {
             event: 'message',
             priority: 1146,
             rule: [
-                { reg: /^#([a-zA-Z0-9]*)gemini创建全量总结$/i, fnc: "createFullCheckpoint" },
-                { reg: /^#([a-zA-Z0-9]*)gemini创建增量总结$/i, fnc: "createIncrementalCheckpoint" },
+                { reg: /^#([a-zA-Z0-9]*)gemini全量总结$/i, fnc: "createFullCheckpoint" },
+                { reg: /^#([a-zA-Z0-9]*)gemini增量总结\s+(\d{4}-\d{2}-\d{2})$/i, fnc: "createIncrementalCheckpointForDate" },
+                { reg: /^#([a-zA-Z0-9]*)gemini增量总结$/i, fnc: "createIncrementalCheckpoint" },
                 { reg: /^#([a-zA-Z0-9]*)gemini批量增量总结$/i, fnc: "batchIncrementalSummaries" },
                 { reg: /^#gemini记忆列表$/i, fnc: "listMemorySummaries" },
                 { reg: /^#([a-zA-Z0-9]*)gemini读取记忆\s*(\d{4}-\d{2}-\d{2})$/i, fnc: "readMemory", key: "readMemoryCommand" },
@@ -45,11 +46,11 @@ export class MemoryHandler extends plugin {
         return `【${dateDir} 摘要】: ${summaryText}`
     }
 
-    async _runCheckpointLogic(e, isFullRebuild) {
+    async _runCheckpointLogic(e, isFullRebuild, targetDate = null) {
         if (!await checkAccess(e)) return true
 
         const userIdStr = String(e.user_id)
-        const todayStr = getTodayDateStr()
+        const dateStr = targetDate || getTodayDateStr()
 
         const prefixMatch = e.msg.match(/^#([a-zA-Z0-9]*)gemini/i)
         const prefix = prefixMatch ? (prefixMatch[1] || '').toLowerCase() : ''
@@ -59,7 +60,7 @@ export class MemoryHandler extends plugin {
         let statusMsg = `📚 正在启动记忆归档 [${modelDisplay}]...`
         statusMsg += isFullRebuild
             ? `\n🔥 全量模式: 读取所有原始对话记录，整合成一份完整记忆存档`
-            : `\n🔗 增量模式: 读取今天对话 + 最近全量总结，生成今日摘要`
+            : `\n🔗 增量模式: 读取 ${dateStr} 对话 + 最近全量总结，生成摘要`
 
         await e.reply(statusMsg, true)
 
@@ -67,9 +68,9 @@ export class MemoryHandler extends plugin {
 
         try {
             if (isFullRebuild) {
-                await this._createFullCheckpointManual(e, userIdStr, todayStr, modelGroupKey, startTime)
+                await this._createFullCheckpointManual(e, userIdStr, dateStr, modelGroupKey, startTime)
             } else {
-                await this._createIncrementalCheckpointManual(e, userIdStr, todayStr, modelGroupKey, startTime)
+                await this._createIncrementalCheckpointManual(e, userIdStr, dateStr, modelGroupKey, startTime)
             }
         } catch (error) {
             logger.error(`[AI-Plugin] 归档失败:`, error)
@@ -262,26 +263,26 @@ ${chunkText}`
         await e.reply(forwardMsg)
     }
 
-    async _createIncrementalCheckpointManual(e, userIdStr, todayStr, modelGroupKey, startTime) {
-        const todayHistory = await this.conversationManager.db.getConversationHistoryByDate(userIdStr, todayStr)
-        if (todayHistory.length === 0) {
-            return e.reply("今天还没有对话记录，无法创建增量总结喵...")
+    async _createIncrementalCheckpointManual(e, userIdStr, dateStr, modelGroupKey, startTime) {
+        const targetHistory = await this.conversationManager.db.getConversationHistoryByDate(userIdStr, dateStr)
+        if (targetHistory.length === 0) {
+            return e.reply(`${dateStr} 没有对话记录，无法创建增量总结喵...`)
         }
 
         const latestFullCheckpoint = await this.conversationManager.db.getLatestFullCheckpoint(userIdStr)
 
-        let todayContent = ""
-        for (const turn of todayHistory) {
+        let targetContent = ""
+        for (const turn of targetHistory) {
             const role = turn.role === 'user' ? '用户' : Config.AI_NAME
             const text = turn.parts.map(p => p.text).join(' ')
-            if (text) todayContent += `${role}: ${text}\n`
+            if (text) targetContent += `${role}: ${text}\n`
         }
 
         let summaryPrompt = ""
         if (latestFullCheckpoint) {
             summaryPrompt = `
 你是一位专业的档案管理员。现在是【${new Date().toLocaleString('zh-CN', { hour12: false })}】。
-请将以下这段发生在【${todayStr}】的对话概括为一个简短的摘要（${Config.SUMMARY_MAX_LENGTH}字以内）。
+请将以下这段发生在【${dateStr}】的对话概括为一个简短的摘要（${Config.SUMMARY_MAX_LENGTH}字以内）。
 重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
 直接输出摘要内容，不要加"好的"等客套话。
 
@@ -289,19 +290,19 @@ ${chunkText}`
 === 📜 【核心记忆存档 (截止于 ${latestFullCheckpoint.dateStr})】 ===
 ${latestFullCheckpoint.content}
 
-今天的对话内容：
-${todayContent}`
+对话内容：
+${targetContent}`
         } else {
             summaryPrompt = `
 你是一位专业的档案管理员。现在是【${new Date().toLocaleString('zh-CN', { hour12: false })}】。
-请将以下这段发生在【${todayStr}】的对话概括为一个简短的摘要（${Config.SUMMARY_MAX_LENGTH}字以内）。
+请将以下这段发生在【${dateStr}】的对话概括为一个简短的摘要（${Config.SUMMARY_MAX_LENGTH}字以内）。
 重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
 直接输出摘要内容，不要加"好的"等客套话。
 对话内容：
-${todayContent}`
+${targetContent}`
         }
 
-        await e.reply(`📖 正在生成今日增量总结...`, true)
+        await e.reply(`📖 正在为 ${dateStr} 生成增量总结...`, true)
 
         const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
         const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
@@ -325,17 +326,17 @@ ${todayContent}`
 
         const modelInfo = result.platform ? `\n🔮 模型: ${result.platform}` : ''
 
-        await this.conversationManager.db.saveSummaryCache(e.user_id, newSummary, todayStr)
+        await this.conversationManager.db.saveSummaryCache(e.user_id, newSummary, dateStr)
 
         const forwardMsgNodes = [
             {
                 user_id: e.self_id,
                 nickname: Config.AI_NAME,
-                message: `✅ 增量总结创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s${tokenInfo}\n🔗 基于全量总结: ${latestFullCheckpoint ? latestFullCheckpoint.dateStr : '无'}`
+                message: `✅ 增量总结创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s${tokenInfo}\n🔗 基于全量总结: ${latestFullCheckpoint ? latestFullCheckpoint.dateStr : '无'}\n📅 目标日期: ${dateStr}`
             },
             {
                 user_id: e.self_id,
-                nickname: "今日增量内容",
+                nickname: `${dateStr} 增量内容`,
                 message: newSummary
             }
         ]
@@ -350,6 +351,13 @@ ${todayContent}`
 
     async createIncrementalCheckpoint(e) {
         return await this._runCheckpointLogic(e, false)
+    }
+
+    async createIncrementalCheckpointForDate(e) {
+        const dateMatch = e.msg.match(/^#([a-zA-Z0-9]*)gemini增量总结\s+(\d{4}-\d{2}-\d{2})$/i)
+        if (!dateMatch) return
+        const targetDate = dateMatch[2]
+        return await this._runCheckpointLogic(e, false, targetDate)
     }
 
     async listMemorySummaries(e) {
@@ -428,7 +436,7 @@ ${todayContent}`
             forwardMsgNodes.push({
                 user_id: Bot.uin,
                 nickname: "提示",
-                message: "💡 建议使用 #gemini创建全量总结 来生成你的第一个记忆里程碑哦！"
+                message: "💡 建议使用 #gemini全量总结 来生成你的第一个记忆里程碑哦！"
             })
         }
 
