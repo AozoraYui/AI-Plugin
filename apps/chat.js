@@ -170,7 +170,7 @@ export class ChatHandler extends plugin {
             name: 'AI对话',
             dsc: '与AI进行智能对话',
             event: 'message',
-            priority: 1144,
+            priority: -9101,
             rule: [
                 { reg: /^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)chat([\s\S]*)$/i, fnc: 'handleSingleChat' },
                 { reg: /^#([a-zA-Z0-9]*)chat([\s\S]*)$/i, fnc: 'handleChat' },
