@@ -5,9 +5,9 @@
 #   base_url: API 基础地址
 #   api_key: API 密钥
 #   model_groups: 模型组配置
-#     flash: Flash 模型组（用于 #chat, #bnn 等指令）
+#     flash: Flash 模型组（用于 #chat, #draw 等指令）
 #     pro: Pro 模型组（用于 #prochat 指令）
-#     ultra: Ultra 模型组（用于 #ultrachat, #ultrabnn 指令）
+#     ultra: Ultra 模型组（用于 #ultrachat, #ultradraw 指令）
 #   每个模型组包含：
 #     chat_models: 对话模型列表
 #     draw_models: 绘图模型列表
@@ -17,7 +17,7 @@
   base_url: "https://api.example.com/v1"
   api_key: "your-api-key-here"
   model_groups:
-    # Flash 组: 用于 #chat, #bnn 等指令
+    # Flash 组: 用于 #chat, #draw 等指令
     flash:
       chat_models:
         - "gemini-2.5-flash"
@@ -30,7 +30,7 @@
         - "gemini-2.5-pro"
       draw_models: []
 
-    # Ultra 组: 用于 #ultrachat, #ultrabnn 等指令
+    # Ultra 组: 用于 #ultrachat, #ultradraw 等指令
     ultra:
       chat_models:
         - "gemini-3-pro"

@@ -65,13 +65,13 @@ export class HelpHandler extends plugin {
 > 示例: #二次元 帮我画一只猫
 
 --- 自定义作图 ---
-> #bnn [...]
+> #draw [...]
   使用 Flash 模型组，性价比高。
-> #pbnn [...] / #probnn [...]
+> #pdraw [...] / #prodraw [...]
   使用 Pro 模型组。
-> #ubnn [...] / #ultrabnn [...]
+> #udraw [...] / #ultradraw [...]
   使用 Ultra 模型组，效果更佳！
-  > 示例: #ubnn 一个女孩在星空下看书
+  > 示例: #udraw 一个女孩在星空下看书
 
 --- 预设管理 (主人专用) ---
 > #画图预设列表pro
