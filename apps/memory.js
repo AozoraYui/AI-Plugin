@@ -2,7 +2,7 @@ import plugin from '../../../lib/plugins/plugin.js'
 import path from 'node:path'
 import yaml from 'yaml'
 import { Config } from '../utils/config.js'
-import { GeminiClient } from '../client/GeminiClient.js'
+import { AiClient } from '../client/AiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { sessionManager } from '../utils/session.js'
@@ -16,12 +16,12 @@ export class MemoryHandler extends plugin {
             event: 'message',
             priority: 1146,
             rule: [
-                { reg: /^#([a-zA-Z0-9]*)gemini全量总结$/i, fnc: "createFullCheckpoint" },
-                { reg: /^#([a-zA-Z0-9]*)gemini增量总结\s+(\d{4}-\d{2}-\d{2})$/i, fnc: "createIncrementalCheckpointForDate" },
-                { reg: /^#([a-zA-Z0-9]*)gemini增量总结$/i, fnc: "createIncrementalCheckpoint" },
-                { reg: /^#([a-zA-Z0-9]*)gemini批量增量总结$/i, fnc: "batchIncrementalSummaries" },
-                { reg: /^#gemini记忆列表$/i, fnc: "listMemorySummaries" },
-                { reg: /^#([a-zA-Z0-9]*)gemini读取记忆\s*(\d{4}-\d{2}-\d{2})$/i, fnc: "readMemory", key: "readMemoryCommand" },
+                { reg: /^#([a-zA-Z0-9]*)ai全量总结$/i, fnc: "createFullCheckpoint" },
+                { reg: /^#([a-zA-Z0-9]*)ai增量总结\s+(\d{4}-\d{2}-\d{2})$/i, fnc: "createIncrementalCheckpointForDate" },
+                { reg: /^#([a-zA-Z0-9]*)ai增量总结$/i, fnc: "createIncrementalCheckpoint" },
+                { reg: /^#([a-zA-Z0-9]*)ai批量增量总结$/i, fnc: "batchIncrementalSummaries" },
+                { reg: /^#ai记忆列表$/i, fnc: "listMemorySummaries" },
+                { reg: /^#([a-zA-Z0-9]*)ai读取记忆\s*(\d{4}-\d{2}-\d{2})$/i, fnc: "readMemory", key: "readMemoryCommand" },
             ]
         })
         this.client = global.AIPluginClient
@@ -52,7 +52,7 @@ export class MemoryHandler extends plugin {
         const userIdStr = String(e.user_id)
         const dateStr = targetDate || getTodayDateStr()
 
-        const prefixMatch = e.msg.match(/^#([a-zA-Z0-9]*)gemini/i)
+        const prefixMatch = e.msg.match(/^#([a-zA-Z0-9]*)ai/i)
         const prefix = prefixMatch ? (prefixMatch[1] || '').toLowerCase() : ''
         const modelGroupKey = resolveModelGroup(prefix)
         const modelDisplay = resolveModelDisplay(modelGroupKey) + '模型组'
@@ -370,7 +370,7 @@ ${targetContent}`
     }
 
     async createIncrementalCheckpointForDate(e) {
-        const dateMatch = e.msg.match(/^#([a-zA-Z0-9]*)gemini增量总结\s+(\d{4}-\d{2}-\d{2})$/i)
+        const dateMatch = e.msg.match(/^#([a-zA-Z0-9]*)ai增量总结\s+(\d{4}-\d{2}-\d{2})$/i)
         if (!dateMatch) return
         const targetDate = dateMatch[2]
         return await this._runCheckpointLogic(e, false, targetDate)
@@ -452,7 +452,7 @@ ${targetContent}`
             forwardMsgNodes.push({
                 user_id: Bot.uin,
                 nickname: "提示",
-                message: "💡 建议使用 #gemini全量总结 来生成你的第一个记忆里程碑哦！"
+                message: "💡 建议使用 #ai全量总结 来生成你的第一个记忆里程碑哦！"
             })
         }
 
@@ -464,7 +464,7 @@ ${targetContent}`
         if (!await checkAccess(e)) return true
 
         const userIdStr = String(e.user_id)
-        const dateMatch = e.msg.match(/^#([a-zA-Z0-9]*)gemini读取记忆\s*(\d{4}-\d{2}-\d{2})$/i)
+        const dateMatch = e.msg.match(/^#([a-zA-Z0-9]*)ai读取记忆\s*(\d{4}-\d{2}-\d{2})$/i)
         const targetDate = dateMatch[2]
 
         try {
@@ -474,7 +474,7 @@ ${targetContent}`
             if (isFullCheckpoint) {
                 const DISPLAY_MAX = 3000
                 const displayText = checkpoint.content.length > DISPLAY_MAX
-                    ? checkpoint.content.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${checkpoint.content.length} 字符，已截断。可使用 #gemini导出记忆 查看完整内容)`
+                    ? checkpoint.content.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${checkpoint.content.length} 字符，已截断。可使用 #ai导出记忆 查看完整内容)`
                     : checkpoint.content
                 const content = `📖 ${targetDate} 全量总结\n- - - - - - - - - -\n${displayText}`
                 return this._sendMemoryContent(e, content, targetDate)
@@ -532,7 +532,7 @@ ${targetContent}`
                 forwardMsgNodes.push({
                     user_id: e.self_id,
                     nickname: "提示",
-                    message: `⚠️ 内容过长，仅显示前 ${MAX_NODES} 部分。\n如需查看完整内容，请使用 #gemini导出记忆 命令。`
+                    message: `⚠️ 内容过长，仅显示前 ${MAX_NODES} 部分。\n如需查看完整内容，请使用 #ai导出记忆 命令。`
                 })
             }
 
@@ -549,7 +549,7 @@ ${targetContent}`
         const userIdStr = String(e.user_id)
         const todayStr = getTodayDateStr()
 
-        const prefixMatch = e.msg.match(/^#([a-zA-Z0-9]*)gemini/i)
+        const prefixMatch = e.msg.match(/^#([a-zA-Z0-9]*)ai/i)
         const prefix = prefixMatch ? (prefixMatch[1] || '').toLowerCase() : ''
         const modelGroupKey = resolveModelGroup(prefix)
         const modelDisplay = resolveModelDisplay(modelGroupKey) + '模型组'

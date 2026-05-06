@@ -16,8 +16,8 @@ export class UpdateHandler extends plugin {
             event: 'message',
             priority: 1150,
             rule: [
-                { reg: /^#gemini插件更新$/i, fnc: 'gitPull' },
-                { reg: /^#gemini插件强制更新$/i, fnc: 'gitForceUpdate' },
+                { reg: /^#ai插件更新$/i, fnc: 'gitPull' },
+                { reg: /^#ai插件强制更新$/i, fnc: 'gitForceUpdate' },
             ]
         })
     }

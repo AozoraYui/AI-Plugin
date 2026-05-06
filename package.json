@@ -1,7 +1,7 @@
 {
   "name": "ai-plugin",
   "version": "1.0.0",
-  "description": "AI Plugin for Yunzai-Bot with Gemini support",
+  "description": "AI Plugin for Yunzai-Bot with multi-model support",
   "license": "MIT",
   "main": "index.js",
   "type": "module",
@@ -19,7 +19,8 @@
     "yunzai",
     "bot",
     "ai",
-    "gemini"
+    "llm",
+    "chatbot"
   ],
   "author": "",
   "license": "ISC"

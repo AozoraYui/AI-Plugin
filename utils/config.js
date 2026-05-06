@@ -173,7 +173,7 @@ function loadTrustedGroups() {
             ensureDataDir()
             const defaultTrustedGroups = `# 信任群聊配置
 # 在信任群中，AI 可以更自由地交流（不受严格隐私规则限制）
-# 通过 #gemini信任群添加 [群号] 命令自动管理，或手动添加群号
+# 通过 #ai信任群添加 [群号] 命令自动管理，或手动添加群号
 groups: []
 `
             fs.writeFileSync(TRUSTED_GROUPS_FILE, defaultTrustedGroups, 'utf8')
