@@ -3,7 +3,7 @@ import http from 'http'
 import fs from 'node:fs'
 import path from 'node:path'
 import { HttpsProxyAgent } from 'https-proxy-agent'
-import { Config } from './config.js'
+import { Config, expandPrompt } from './config.js'
 
 const AI_ERROR_PATTERNS = [
     'AI Studio 过滤了你的请求内容',
@@ -150,12 +150,10 @@ export async function generateDailySummary(client, userId, dateDir, dayHistory, 
     }
 
     logger.info(`[AI-Plugin] 正在为 ${dateDir} 生成新摘要...`)
-    const summaryPrompt = `
-请将以下这段发生在【${dateDir}】的对话概括为一个简短的摘要（${Config.SUMMARY_MAX_LENGTH}字以内）。
-重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
-直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。
-对话内容：
-${dayContent}`
+    const template = Config.Prompts?.daily_summary
+        || `请将以下这段发生在【{date}】的对话概括为一个简短的摘要（{summary_max_length}字以内）。\n重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。\n直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。\n\n对话内容：`
+    const summaryPrompt = expandPrompt(template, { date: dateDir, summary_max_length: Config.SUMMARY_MAX_LENGTH })
+        + `\n${dayContent}`
 
     const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
     const result = await client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
