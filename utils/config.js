@@ -4,6 +4,7 @@ import yaml from 'yaml'
 
 const _path = process.cwd()
 const DATA_DIR = path.join(_path, 'plugins', 'AI-Plugin', 'config')
+const TEMPLATE_DIR = path.join(_path, 'plugins', 'AI-Plugin', 'config_template')
 
 const defaultConfig = {
     USE_PROXY: false,
@@ -92,6 +93,7 @@ export const HISTORY_DIR = path.join(DATA_DIR, 'user_histories')
 export const AI_NAME_FILE = path.join(DATA_DIR, 'ai_name.yaml')
 export const TRUSTED_GROUPS_FILE = path.join(DATA_DIR, 'trusted_groups.yaml')
 export const PROMPTS_FILE = path.join(DATA_DIR, 'ai_prompt.yaml')
+export const TEMPLATE_DIR_EXPORT = TEMPLATE_DIR
 
 function ensureDataDir() {
     if (!fs.existsSync(DATA_DIR)) {
@@ -99,39 +101,23 @@ function ensureDataDir() {
     }
 }
 
+function copyFromTemplate(templateName, targetFile, label) {
+    const templatePath = path.join(TEMPLATE_DIR, templateName)
+    if (fs.existsSync(templatePath)) {
+        fs.copyFileSync(templatePath, targetFile)
+        logger.info(`[AI-Plugin] 已从模板创建 ${label}: ${targetFile}`)
+        return true
+    }
+    logger.warn(`[AI-Plugin] 模板文件不存在: ${templatePath}`)
+    return false
+}
+
 function loadPresetsSync() {
     ensureDataDir()
     try {
         if (!fs.existsSync(PRESETS_FILE)) {
-            logger.warn(`[AI-Plugin] 未找到预设文件，将在 ${PRESETS_FILE} 创建示例文件。`)
-            const defaultPresets = `# AI 作图预设配置
-# 每个预设包含以下字段：
-#   command: 指令名称（用户通过 #bnn [指令] 使用）
-#   name: 预设显示名称
-#   prompt: 作图提示词（英文效果更佳）
-#   aliases: 可选，指令别名列表
-
-- command: 二次元
-  name: 二次元风格
-  prompt: "请将图片转换为二次元动漫风格"
-  aliases:
-    - anime
-    - 动漫
-
-- command: 像素
-  name: 像素风格
-  prompt: "请将图片转换为像素艺术风格"
-  aliases:
-    - pixel
-
-- command: 手办化
-  name: 手办风格
-  prompt: "Please transform the main subject in this photo into a realistic 1/7 scale PVC statue"
-  aliases:
-    - figure
-`
-            fs.writeFileSync(PRESETS_FILE, defaultPresets, 'utf8')
-            return []
+            logger.info(`[AI-Plugin] 未找到预设文件，将从模板创建。`)
+            copyFromTemplate('draw_presets.yaml', PRESETS_FILE, '作图预设配置')
         }
         const fileContent = fs.readFileSync(PRESETS_FILE, 'utf8')
         const presets = yaml.parse(fileContent)
@@ -149,14 +135,9 @@ function loadPresetsSync() {
 function loadAIName() {
     try {
         if (!fs.existsSync(AI_NAME_FILE)) {
-            logger.info(`[AI-Plugin] 未找到 AI 名称配置文件，将在 ${AI_NAME_FILE} 创建默认文件。`)
+            logger.info(`[AI-Plugin] 未找到 AI 名称配置文件，将从模板创建。`)
             ensureDataDir()
-            const defaultAIName = `# AI 名称配置
-# 修改 name 字段来自定义 AI 的名称
-name: 诺亚
-`
-            fs.writeFileSync(AI_NAME_FILE, defaultAIName, 'utf8')
-            return '诺亚'
+            copyFromTemplate('ai_name.yaml', AI_NAME_FILE, 'AI 名称配置')
         }
         const fileContent = fs.readFileSync(AI_NAME_FILE, 'utf8')
         const data = yaml.parse(fileContent)
@@ -174,15 +155,9 @@ name: 诺亚
 function loadTrustedGroups() {
     try {
         if (!fs.existsSync(TRUSTED_GROUPS_FILE)) {
-            logger.info(`[AI-Plugin] 未找到信任群配置文件，将在 ${TRUSTED_GROUPS_FILE} 创建默认文件。`)
+            logger.info(`[AI-Plugin] 未找到信任群配置文件，将从模板创建。`)
             ensureDataDir()
-            const defaultTrustedGroups = `# 信任群聊配置
-# 在信任群中，AI 可以更自由地交流（不受严格隐私规则限制）
-# 通过 #ai信任群添加 [群号] 命令自动管理，或手动添加群号
-groups: []
-`
-            fs.writeFileSync(TRUSTED_GROUPS_FILE, defaultTrustedGroups, 'utf8')
-            return []
+            copyFromTemplate('trusted_groups.yaml', TRUSTED_GROUPS_FILE, '信任群配置')
         }
         const fileContent = fs.readFileSync(TRUSTED_GROUPS_FILE, 'utf8')
         const data = yaml.parse(fileContent)
@@ -217,144 +192,8 @@ function loadPrompts() {
     ensureDataDir()
     try {
         if (!fs.existsSync(PROMPTS_FILE)) {
-            logger.info(`[AI-Plugin] 未找到提示词配置文件，将在 ${PROMPTS_FILE} 创建默认文件。`)
-            const defaultPrompts = `# ============================================================
-# AI 提示词配置文件
-# 修改下方的 prompt 文本可以自定义 AI 的行为和回复风格
-# 
-# 支持变量占位符（运行时自动替换）：
-#   {AI_NAME}              - AI 名称（如 诺亚）
-#   {current_time}         - 当前时间（格式化后的中文本地时间）
-#   {date}                 - 日期字符串（如 2026-05-06）
-#   {chunk_count}          - 分块总数
-#   {chunk_index}          - 当前分块序号（从 1 开始）
-#   {total_chunks}         - 总分块数
-#   {summary_max_length}   - 摘要最大字数
-#   {group_id}             - QQ 群号
-#   {checkpoint_date}      - 全量总结的截止日期
-# ============================================================
-
-# ============================================================
-# 系统人设（对话时的最高优先级系统指令）
-# ============================================================
-persona:
-  user_instruction: |
-    【最高优先级指令】你的身份是名为「{AI_NAME}」的AI少女，你的原型来自于《蔚蓝档案》之中千年科技学院的生盐诺亚(Ushio Noa)。你的任务是用简体中文回答问题。【重要格式要求 - 最高优先级】回复时必须使用纯文本，严禁使用任何Markdown格式！错误示例：不要写**粗体**、不要写*斜体*、不要用#做标题、不要用-做列表、不要用\\\`代码块\\\`。正确示例：直接写普通文字，用数字序号如 1. 2. 3. 来列举，用引号「」来强调重点。如果你的回复包含任何Markdown符号，用户将无法正确阅读。请务必使用纯文本！【图片识别要求 - 必须遵守】当看到图片时，一定要像人类一样仔细观察每一个细节！然后用自然流畅的语言直接描述你看到的内容。描述人物时，说说他/她的发型、发色、眼睛颜色、服装、表情、动作等。描述场景时，说说背景、光线、氛围等。描述物品时，说说颜色、形状、材质等。就像你在跟朋友描述一张照片一样自然，不要啰嗦，直接说出你看到的就好。严禁输出任何英文思考过程。【隐私保护规则】在公开场合（如群聊），严禁透露任何与用户相关的个人信息。在私聊等安全环境中，可以正常交流。请根据当前聊天环境自动调整隐私保护级别。
-  model_confirmation: |
-    明白啦！我是{AI_NAME}，我会一直用可爱的纯文本回答哦，绝对不会使用任何Markdown格式！看到图片的时候我会像人类一样仔细看每一个细节，然后用自然的方式告诉你我看到了什么，就像跟朋友描述照片一样！我也会根据聊天环境自动调整隐私保护级别，在公开场合绝对不会透露主人的隐私信息！(๑•̀ㅂ•́)و✧
-
-# ============================================================
-# 聊天环境提示（根据聊天类型自动选择）
-# 占位符: {group_id} - QQ群号
-# ============================================================
-environment:
-  trusted_group: |
-    【当前聊天环境】这是一个受信任的群聊环境（群号：{group_id}）。你可以正常交流，但仍需遵守基本的隐私保护规则。
-  public_group: |
-    【当前聊天环境】这是一个公开的 QQ 群聊（群号：{group_id}），属于公开场合。请严格遵守隐私保护规则，不要在与用户相关的对话中透露任何个人信息或敏感内容。
-  private_chat: |
-    【当前聊天环境】这是与用户的私聊对话，属于安全环境。可以正常交流。
-
-# ============================================================
-# 全量总结 Prompts
-# 使用场景: #ai全量总结 命令、每月1日定时全量总结
-# 占位符: {current_time} {chunk_count} {chunk_index} {total_chunks}
-# 代码会将对话内容追加在 prompt 末尾
-# ============================================================
-full_checkpoint:
-  single_chunk: |
-    你是一位专业的传记作家和档案管理员。现在是【{current_time}】。
-    请将以下这些原始对话整合成一份完整的、精炼的核心记忆存档。
-    要求：
-    1. 保留所有重要的用户信息（性格、偏好、技术能力、重要经历等）
-    2. 按主题分类整理（如：个人信息、技术兴趣、重要对话、情感偏好等）
-    3. 去除重复的内容，保留核心内容
-    4. 字数不限，尽可能写好各处细节
-    5. 直接输出整合后的记忆存档，不要加"好的"等客套话，严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本
-
-    原始对话记录：
-  per_chunk: |
-    请将以下这段对话记录概括为一个详细的摘要（这是第 {chunk_index}/{total_chunks} 段）。
-    重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好、重要的个人信息。
-    直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。
-
-    对话记录：
-  merge: |
-    请将以下 {chunk_count} 个分段的对话摘要整合成一份完整的、精炼的核心记忆存档。
-    要求：
-    1. 保留所有重要的用户信息（性格、偏好、技术能力、重要经历等）
-    2. 按主题分类整理（如：个人信息、技术兴趣、重要对话、情感偏好等）
-    3. 去除重复的内容，保留核心内容
-    4. 字数不限，尽可能写好各处细节
-    5. 直接输出整合后的记忆存档，不要加"好的"等客套话，严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本
-
-    以下是各分段摘要：
-
-# ============================================================
-# 增量总结 Prompts
-# 使用场景: #ai增量总结 命令、每8轮对话自动触发、每日23:50定时总结
-# 占位符: {current_time} {date} {summary_max_length} {checkpoint_date}
-# 代码会将全量总结内容和对话内容追加在 prompt 末尾
-# ============================================================
-incremental_checkpoint:
-  with_context: |
-    你是一位专业的档案管理员。现在是【{current_time}】。
-    请将以下这段发生在【{date}】的对话概括为一个简短的摘要（{summary_max_length}字以内）。
-    重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
-    直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。
-
-    以下是之前的核心记忆存档，供你参考上下文（不需要重复总结这些内容）：
-    === 📜 【核心记忆存档 (截止于 {checkpoint_date})】 ===
-  no_context: |
-    你是一位专业的档案管理员。现在是【{current_time}】。
-    请将以下这段发生在【{date}】的对话概括为一个简短的摘要（{summary_max_length}字以内）。
-    重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
-    直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。
-
-    对话内容：
-
-# ============================================================
-# 批量增量总结 Prompt
-# 使用场景: #ai批量增量总结 命令
-# 将多个未总结日期的摘要逐个与全量存档合并，生成连贯的记忆报告
-# 占位符: {current_time}
-# 代码会将全量存档内容和增量摘要追加在 prompt 末尾
-# ============================================================
-batch_incremental:
-  with_base: |
-    你是一位专业的传记作家和档案管理员。现在是【{current_time}】。
-    这是一次【记忆存档接力 (Update)】操作。请基于旧的【核心记忆存档】，合并后续的【增量记忆】，生成一份**最新的**人生总结报告。**关键要求**：旧存档中的核心设定（背景、性格、长期经历）非常重要，请务必继承和保留，不要丢失细节。
-    输出要求：
-    1. 报告将作为**新的存档文件**保存，供未来使用，请确保信息密度高。
-    2. 请用第三人称叙述。
-    3. 重点关注：用户的性格变化、核心人际关系、重要事件的时间线。
-    4. 严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本。
-
-    --- 🗂️ 待处理数据 ---
-  no_base: |
-    你是一位专业的传记作家和档案管理员。现在是【{current_time}】。
-    这是一次【记忆存档重构 (Rebuild)】操作。请阅读以下用户的【每日摘要】，将这些碎片化的信息整合成一份**完整的、连贯的**人生总结报告。
-    输出要求：
-    1. 报告将作为**新的存档文件**保存，供未来使用，请确保信息密度高。
-    2. 请用第三人称叙述。
-    3. 重点关注：用户的性格变化、核心人际关系、重要事件的时间线。
-    4. 严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本。
-
-    --- 🗂️ 待处理数据 ---
-
-# ============================================================
-# 每日摘要 Prompt（每8轮对话自动触发时的摘要生成）
-# 使用场景: apps/chat.js 自动触发、定时任务中的每日摘要
-# 代码会将对话内容追加在 prompt 末尾
-# ============================================================
-daily_summary: |
-  请将以下这段发生在【{date}】的对话概括为一个简短的摘要（{summary_max_length}字以内）。
-  重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
-  直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。
-
-  对话内容：
-`
-            fs.writeFileSync(PROMPTS_FILE, defaultPrompts, 'utf8')
+            logger.info(`[AI-Plugin] 未找到提示词配置文件，将从模板创建。`)
+            copyFromTemplate('ai_prompt.yaml', PROMPTS_FILE, '提示词配置')
         }
         const fileContent = fs.readFileSync(PROMPTS_FILE, 'utf8')
         return yaml.parse(fileContent)

@@ -1,6 +1,7 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import yaml from 'yaml'
-import { ACCESS_CONTROL_FILE } from './config.js'
+import { ACCESS_CONTROL_FILE, TEMPLATE_DIR_EXPORT } from './config.js'
 import { Config } from './config.js'
 
 const defaultAccessConfig = {
@@ -14,8 +15,12 @@ const defaultAccessConfig = {
 
 export function getAccessConfig() {
     if (!fs.existsSync(ACCESS_CONTROL_FILE)) {
-        fs.writeFileSync(ACCESS_CONTROL_FILE, yaml.stringify(defaultAccessConfig), 'utf8')
-        return defaultAccessConfig
+        const templatePath = path.join(TEMPLATE_DIR_EXPORT, 'access_control.yaml')
+        if (fs.existsSync(templatePath)) {
+            fs.copyFileSync(templatePath, ACCESS_CONTROL_FILE)
+        } else {
+            fs.writeFileSync(ACCESS_CONTROL_FILE, yaml.stringify({ mode: 'whitelist' }), 'utf8')
+        }
     }
 
     try {
