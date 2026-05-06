@@ -21,7 +21,9 @@ export class MemoryHandler extends plugin {
                 { reg: /^#([a-zA-Z0-9]*)ai增量总结$/i, fnc: "createIncrementalCheckpoint" },
                 { reg: /^#([a-zA-Z0-9]*)ai批量增量总结$/i, fnc: "batchIncrementalSummaries" },
                 { reg: /^#ai记忆列表$/i, fnc: "listMemorySummaries" },
-                { reg: /^#([a-zA-Z0-9]*)ai读取记忆\s*(\d{4}-\d{2}-\d{2})$/i, fnc: "readMemory", key: "readMemoryCommand" },
+                { reg: /^#([a-zA-Z0-9]*)ai读取全量总结\s*(\d{4}-\d{2}-\d{2})?$/i, fnc: "readFullMemory" },
+                { reg: /^#([a-zA-Z0-9]*)ai读取增量总结\s*(\d{4}-\d{2}-\d{2})?$/i, fnc: "readIncrementalMemory" },
+                { reg: /^#([a-zA-Z0-9]*)ai读取记忆\s*(\d{4}-\d{2}-\d{2})?$/i, fnc: "readMemory", key: "readMemoryCommand" },
             ]
         })
         this.client = global.AIPluginClient
@@ -439,18 +441,73 @@ export class MemoryHandler extends plugin {
         await e.reply(forwardMsg)
     }
 
+    async readFullMemory(e) {
+        if (!await checkAccess(e)) return true
+
+        const userIdStr = String(e.user_id)
+        const dateMatch = e.msg.match(/^#([a-zA-Z0-9]*)ai读取全量总结\s*(\d{4}-\d{2}-\d{2})?$/i)
+        const targetDate = dateMatch[2] || getTodayDateStr()
+
+        try {
+            const checkpoint = await this.conversationManager.db.getCheckpoint(userIdStr, targetDate, 'full')
+            if (checkpoint) {
+                const DISPLAY_MAX = 3000
+                const displayText = checkpoint.content.length > DISPLAY_MAX
+                    ? checkpoint.content.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${checkpoint.content.length} 字符，已截断。可使用 #ai导出记忆 查看完整内容)`
+                    : checkpoint.content
+                const content = `📖 ${targetDate} 全量总结\n- - - - - - - - - -\n${displayText}`
+                return this._sendMemoryContent(e, content, targetDate)
+            }
+
+            return e.reply(`📅 没有找到 ${targetDate} 的全量总结哦。\n该日期可能尚未创建全量总结，请使用 #ai全量总结 创建。`)
+        } catch (err) {
+            logger.error(`[AI-Plugin] 读取全量总结失败:`, err)
+            await e.reply(`❌ 读取全量总结失败: ${err.message}`)
+        }
+    }
+
+    async readIncrementalMemory(e) {
+        if (!await checkAccess(e)) return true
+
+        const userIdStr = String(e.user_id)
+        const dateMatch = e.msg.match(/^#([a-zA-Z0-9]*)ai读取增量总结\s*(\d{4}-\d{2}-\d{2})?$/i)
+        const targetDate = dateMatch[2] || getTodayDateStr()
+
+        try {
+            const summaryCache = await this.conversationManager.db.getSummaryCache(userIdStr, targetDate)
+            if (summaryCache) {
+                let displayText = summaryCache.content
+                if (summaryCache.baseCheckpointDate) {
+                    const baseCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, summaryCache.baseCheckpointDate, 'full')
+                    if (baseCheckpoint) {
+                        displayText = `=== 📜 【核心记忆存档 (截止于 ${summaryCache.baseCheckpointDate})】 ===\n${baseCheckpoint.content}\n\n=== 🔗 【增量记忆 (${targetDate})】 ===\n${summaryCache.content}`
+                    }
+                }
+                const DISPLAY_MAX = 3000
+                displayText = displayText.length > DISPLAY_MAX
+                    ? displayText.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${displayText.length} 字符，已截断)`
+                    : displayText
+                const content = `📖 ${targetDate} 增量总结\n- - - - - - - - - -\n${displayText}`
+                return this._sendMemoryContent(e, content, targetDate)
+            }
+
+            return e.reply(`📅 没有找到 ${targetDate} 的增量总结哦。\n该日期可能尚未创建增量总结。`)
+        } catch (err) {
+            logger.error(`[AI-Plugin] 读取增量总结失败:`, err)
+            await e.reply(`❌ 读取增量总结失败: ${err.message}`)
+        }
+    }
+
     async readMemory(e) {
         if (!await checkAccess(e)) return true
 
         const userIdStr = String(e.user_id)
-        const dateMatch = e.msg.match(/^#([a-zA-Z0-9]*)ai读取记忆\s*(\d{4}-\d{2}-\d{2})$/i)
-        const targetDate = dateMatch[2]
+        const dateMatch = e.msg.match(/^#([a-zA-Z0-9]*)ai读取记忆\s*(\d{4}-\d{2}-\d{2})?$/i)
+        const targetDate = dateMatch[2] || getTodayDateStr()
 
         try {
-            const checkpoint = await this.conversationManager.db.getCheckpoint(userIdStr, targetDate)
-            const isFullCheckpoint = checkpoint && checkpoint.checkpointType === 'full'
-
-            if (isFullCheckpoint) {
+            const checkpoint = await this.conversationManager.db.getCheckpoint(userIdStr, targetDate, 'full')
+            if (checkpoint) {
                 const DISPLAY_MAX = 3000
                 const displayText = checkpoint.content.length > DISPLAY_MAX
                     ? checkpoint.content.slice(0, DISPLAY_MAX) + `\n\n... (内容过长，共 ${checkpoint.content.length} 字符，已截断。可使用 #ai导出记忆 查看完整内容)`
