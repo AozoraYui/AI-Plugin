@@ -2,6 +2,7 @@
   "name": "ai-plugin",
   "version": "1.0.0",
   "description": "AI Plugin for Yunzai-Bot with Gemini support",
+  "license": "MIT",
   "main": "index.js",
   "type": "module",
   "scripts": {
