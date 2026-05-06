@@ -3,7 +3,7 @@ import yaml from 'yaml'
 import { Config, MODELS_CONFIG_FILE, MODEL_STATUS_FILE, DISABLED_MODELS_FILE } from '../utils/config.js'
 import { fetchWithProxy } from '../utils/common.js'
 
-export class GeminiClient {
+export class AiClient {
     constructor() {
         this.modelsConfig = []
         this.modelStatus = {}
@@ -208,9 +208,9 @@ export class GeminiClient {
         return { url, options }
     }
 
-    convertToOpenAIMessages(geminiPayload) {
+    convertToOpenAIMessages(requestPayload) {
         const messages = []
-        for (const content of geminiPayload.contents) {
+        for (const content of requestPayload.contents) {
             const role = content.role === 'model' ? 'assistant' : 'user'
             const messageContent = []
 
@@ -377,12 +377,12 @@ export class GeminiClient {
 
             const errorMessage = `模型组 [${modelGroupKey}] 中的所有可用模型均尝试失败。\n具体错误:\n${lastError.trim()}`
             logger.error(`[AI-Plugin] ${errorMessage}`)
-            return { success: false, error: `${errorMessage}\n建议运行 #gemini模型测试。` }
+            return { success: false, error: `${errorMessage}\n建议运行 #ai模型测试。` }
         } else {
             if (modelGroupKey !== 'flash') {
                 lastError = `模型组 [${modelGroupKey}] 中没有可用的 [${taskTypeName}] 模型。请检查 models_config.yaml 配置或使用其他指令。`
             } else {
-                lastError = `[默认] 模型组中也找不到可用的 [${taskTypeName}] 类型模型。请运行 #gemini模型测试 来更新可用模型列表。`
+                lastError = `[默认] 模型组中也找不到可用的 [${taskTypeName}] 类型模型。请运行 #ai模型测试 来更新可用模型列表。`
             }
             logger.error(`[AI-Plugin] ${lastError}`)
             return { success: false, error: lastError }

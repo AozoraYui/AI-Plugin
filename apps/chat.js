@@ -2,7 +2,7 @@ import plugin from '../../../lib/plugins/plugin.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Config } from '../utils/config.js'
-import { GeminiClient } from '../client/GeminiClient.js'
+import { AiClient } from '../client/AiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, getBeijingTimeStr, getTodayDateStr, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
@@ -178,7 +178,7 @@ export class ChatHandler extends plugin {
                 { reg: new RegExp(`^#导出${Config.AI_NAME}记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'), fnc: 'exportMemoryByDate' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆$`, 'i'), fnc: 'exportAllMemory', permission: 'master' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'), fnc: 'exportAllMemoryByDate', permission: 'master' },
-                { reg: /^#gemini思考(开启|关闭)$/i, fnc: 'switchThinkingMode', permission: 'master' },
+                { reg: /^#ai思考(开启|关闭)$/i, fnc: 'switchThinkingMode', permission: 'master' },
             ]
         })
         this.client = global.AIPluginClient

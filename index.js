@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import { Config, HISTORY_DIR } from './utils/config.js'
-import { GeminiClient } from './client/GeminiClient.js'
+import { AiClient } from './client/AiClient.js'
 import { ConversationManager } from './model/conversation.js'
 import { AIScheduler } from './utils/scheduler.js'
 
@@ -24,7 +24,7 @@ if (!global.segment) {
     }
 }
 
-global.AIPluginClient = new GeminiClient()
+global.AIPluginClient = new AiClient()
 global.AIPluginConversationManager = new ConversationManager()
 await global.AIPluginConversationManager.waitForMigration()
 

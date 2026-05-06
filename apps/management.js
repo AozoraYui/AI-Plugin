@@ -1,6 +1,6 @@
 import plugin from '../../../lib/plugins/plugin.js'
 import { Config, MODELS_CONFIG_FILE, MODEL_STATUS_FILE, DISABLED_MODELS_FILE, PRESETS_FILE } from '../utils/config.js'
-import { GeminiClient } from '../client/GeminiClient.js'
+import { AiClient } from '../client/AiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { getAccessConfig, saveAccessConfig } from '../utils/access.js'
@@ -17,16 +17,16 @@ export class ManagementHandler extends plugin {
             event: 'message',
             priority: 1140,
             rule: [
-                { reg: /^#gemini模型列表$/i, fnc: 'listModels', permission: 'master' },
-                { reg: /^#gemini模型测试$/i, fnc: 'testAllModels', permission: 'master' },
-                { reg: /^#gemini启用全部模型$/i, fnc: 'enableAllModels', permission: 'master' },
-                { reg: /^#gemini(禁用|启用)\s*(.+)$/i, fnc: 'toggleModelDisabledState', permission: 'master' },
-                { reg: /^#gemini权限模式\s*(whitelist|blacklist)$/i, fnc: 'switchAccessMode', permission: 'master' },
-                { reg: /^#gemini权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(\d+)$/i, fnc: 'modifyAccess', permission: 'master' },
-                { reg: /^#gemini权限列表$/i, fnc: 'listAccessControl', permission: 'master' },
-                { reg: /^#gemini信任群(添加|删除)\s*(\d+)$/i, fnc: 'modifyTrustedGroup', permission: 'master' },
-                { reg: /^#gemini信任群列表$/i, fnc: 'listTrustedGroups', permission: 'master' },
-                { reg: /^#gemini状态$/i, fnc: 'showStatus', permission: 'master' },
+                { reg: /^#ai模型列表$/i, fnc: 'listModels', permission: 'master' },
+                { reg: /^#ai模型测试$/i, fnc: 'testAllModels', permission: 'master' },
+                { reg: /^#ai启用全部模型$/i, fnc: 'enableAllModels', permission: 'master' },
+                { reg: /^#ai(禁用|启用)\s*(.+)$/i, fnc: 'toggleModelDisabledState', permission: 'master' },
+                { reg: /^#ai权限模式\s*(whitelist|blacklist)$/i, fnc: 'switchAccessMode', permission: 'master' },
+                { reg: /^#ai权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(\d+)$/i, fnc: 'modifyAccess', permission: 'master' },
+                { reg: /^#ai权限列表$/i, fnc: 'listAccessControl', permission: 'master' },
+                { reg: /^#ai信任群(添加|删除)\s*(\d+)$/i, fnc: 'modifyTrustedGroup', permission: 'master' },
+                { reg: /^#ai信任群列表$/i, fnc: 'listTrustedGroups', permission: 'master' },
+                { reg: /^#ai状态$/i, fnc: 'showStatus', permission: 'master' },
             ]
         })
         this.client = global.AIPluginClient
@@ -46,7 +46,7 @@ export class ManagementHandler extends plugin {
     }
 
     async toggleModelDisabledState(e) {
-        const match = e.msg.match(/^#gemini(禁用|启用)\s*(.+)$/i)
+        const match = e.msg.match(/^#ai(禁用|启用)\s*(.+)$/i)
         if (!match) return
         const action = match[1]
         const modelId = match[2].trim()
@@ -76,7 +76,7 @@ export class ManagementHandler extends plugin {
     }
 
     async modifyAccess(e) {
-        const match = e.msg.match(/^#gemini权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(\d+)$/i)
+        const match = e.msg.match(/^#ai权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(\d+)$/i)
         if (!match) return
 
         const action = match[1]
@@ -122,7 +122,7 @@ export class ManagementHandler extends plugin {
     }
 
     async switchAccessMode(e) {
-        const match = e.msg.match(/^#gemini权限模式\s*(whitelist|blacklist)$/i)
+        const match = e.msg.match(/^#ai权限模式\s*(whitelist|blacklist)$/i)
         if (!match) return
 
         const newMode = match[1].toLowerCase()
@@ -249,7 +249,7 @@ export class ManagementHandler extends plugin {
                 '🔮 可用模型池',
                 `  - 对话模型: ${activeChatModels} 个可用`,
                 `  - 绘图模型: ${activeImageModels} 个可用`,
-                '  (提示: 可用模型池基于上次 #gemini模型测试 结果)',
+                '  (提示: 可用模型池基于上次 #ai模型测试 结果)',
                 '',
                 '🔑 权限与模式',
                 `  - 权限控制: ${accessMode}`,
@@ -268,7 +268,7 @@ export class ManagementHandler extends plugin {
     }
 
     async modifyTrustedGroup(e) {
-        const match = e.msg.match(/^#gemini信任群(添加|删除)\s*(\d+)$/i)
+        const match = e.msg.match(/^#ai信任群(添加|删除)\s*(\d+)$/i)
         if (!match) return
 
         const action = match[1]
