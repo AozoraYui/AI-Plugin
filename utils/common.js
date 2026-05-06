@@ -153,7 +153,7 @@ export async function generateDailySummary(client, userId, dateDir, dayHistory, 
     const summaryPrompt = `
 请将以下这段发生在【${dateDir}】的对话概括为一个简短的摘要（${Config.SUMMARY_MAX_LENGTH}字以内）。
 重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。
-直接输出摘要内容，不要加"好的"等客套话。
+直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。
 对话内容：
 ${dayContent}`
 
