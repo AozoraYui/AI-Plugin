@@ -77,7 +77,7 @@ function buildPersonaPrimer(aiName) {
     return JSON.parse(JSON.stringify(template).replace(/\{AI_NAME\}/g, aiName))
 }
 
-export const PRESETS_FILE = path.join(DATA_DIR, 'gemini_presets.yaml')
+export const PRESETS_FILE = path.join(DATA_DIR, 'draw_presets.yaml')
 export const ACCESS_CONTROL_FILE = path.join(DATA_DIR, 'access_control.yaml')
 export const MODELS_CONFIG_FILE = path.join(DATA_DIR, 'models_config.yaml')
 export const MODEL_STATUS_FILE = path.join(DATA_DIR, 'model_status.json')
