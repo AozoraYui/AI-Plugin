@@ -74,6 +74,7 @@ export class AIScheduler {
 
         let summaryPrompt = ""
         if (latestFullCheckpoint) {
+            logger.debug(`[AI-Plugin] 增量总结使用全量总结作为基础 (用户: ${userId}, 全量日期: ${latestFullCheckpoint.dateStr})`)
             const template = Config.Prompts?.incremental_checkpoint?.with_context
                 || `你是一位专业的档案管理员。现在是【{current_time}】。\n请将以下这段发生在【{date}】的对话概括为一个简短的摘要（{summary_max_length}字以内）。\n重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。\n直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。\n\n以下是之前的核心记忆存档，供你参考上下文（不需要重复总结这些内容）：\n=== 📜 【核心记忆存档 (截止于 {checkpoint_date})】 ===`
             summaryPrompt = expandPrompt(template, {
@@ -83,6 +84,7 @@ export class AIScheduler {
                 checkpoint_date: latestFullCheckpoint.dateStr
             }) + `\n${latestFullCheckpoint.content}\n\n今天的对话内容：\n${todayContent}`
         } else {
+            logger.debug(`[AI-Plugin] 增量总结无全量总结基础，独立生成 (用户: ${userId})`)
             const template = Config.Prompts?.incremental_checkpoint?.no_context
                 || `你是一位专业的档案管理员。现在是【{current_time}】。\n请将以下这段发生在【{date}】的对话概括为一个简短的摘要（{summary_max_length}字以内）。\n重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。\n直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。\n\n对话内容：`
             summaryPrompt = expandPrompt(template, {
