@@ -3,7 +3,7 @@ import path from 'node:path'
 import yaml from 'yaml'
 
 const _path = process.cwd()
-const DATA_DIR = path.join(_path, 'data', 'ai_assistant')
+const DATA_DIR = path.join(_path, 'plugins', 'AI-Plugin', 'config')
 
 const defaultConfig = {
     USE_PROXY: false,
@@ -92,8 +92,6 @@ export const HISTORY_DIR = path.join(DATA_DIR, 'user_histories')
 export const AI_NAME_FILE = path.join(DATA_DIR, 'ai_name.yaml')
 export const TRUSTED_GROUPS_FILE = path.join(DATA_DIR, 'trusted_groups.yaml')
 export const PROMPTS_FILE = path.join(DATA_DIR, 'ai_prompt.yaml')
-
-const PROMPTS_TEMPLATE = path.join(_path, 'plugins', 'AI-Plugin', 'config', 'ai_prompt.yaml')
 
 function ensureDataDir() {
     if (!fs.existsSync(DATA_DIR)) {
@@ -216,16 +214,10 @@ function saveTrustedGroups(groups) {
 }
 
 function loadPrompts() {
-    ensureDataDir()
     try {
         if (!fs.existsSync(PROMPTS_FILE)) {
-            logger.info(`[AI-Plugin] 未找到提示词配置文件，将在 ${PROMPTS_FILE} 创建默认文件。`)
-            if (fs.existsSync(PROMPTS_TEMPLATE)) {
-                fs.copyFileSync(PROMPTS_TEMPLATE, PROMPTS_FILE)
-            } else {
-                logger.warn('[AI-Plugin] 提示词模板文件不存在，使用内置默认提示词。')
-                return null
-            }
+            logger.warn('[AI-Plugin] 提示词配置文件不存在，使用内置默认提示词。')
+            return null
         }
         const fileContent = fs.readFileSync(PROMPTS_FILE, 'utf8')
         return yaml.parse(fileContent)

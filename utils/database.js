@@ -4,7 +4,7 @@ import sqlite3 from 'sqlite3'
 import { getDBTimestamp } from './common.js'
 
 const _path = process.cwd()
-const DATA_DIR = path.join(_path, 'data', 'ai_assistant')
+const DATA_DIR = path.join(_path, 'plugins', 'AI-Plugin', 'config')
 
 export const DB_FILE = path.join(DATA_DIR, 'ai_plugin.db')
 

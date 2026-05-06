@@ -60,7 +60,7 @@ pnpm install
 
 3. **配置 API**
 
-在 `data/ai_assistant/` 目录下创建或编辑以下文件：
+在 `plugins/AI-Plugin/config/` 目录下创建或编辑以下文件：
 
 **`models_config.yaml`** - 模型供应商配置
 ```yaml
@@ -223,7 +223,7 @@ AI-Plugin/
 ## ⚙️ 配置说明
 
 ### 数据文件
-所有配置和数据文件存储在 `data/ai_assistant/` 目录：
+所有配置和数据文件存储在 `plugins/AI-Plugin/config/` 目录：
 
 | 文件 | 说明 |
 |------|------|
