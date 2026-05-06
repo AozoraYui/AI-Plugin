@@ -18,7 +18,7 @@ export class ImageHandler extends plugin {
             event: 'message',
             priority: -9101,
             rule: [
-                { reg: /^#([a-zA-Z0-9]*)bnn([\s\S]*)$/i, fnc: 'generateImage', key: 'bnnCommand' },
+                { reg: /^#([a-zA-Z0-9]*)draw([\s\S]*)$/i, fnc: 'generateImage', key: 'drawCommand' },
                 { reg: /^#画图预设(列表|list)$/i, fnc: 'listPresets' },
                 { reg: /^#画图预设列表(pro|Pro)$/i, fnc: 'listPresetsPro' },
                 { reg: /^#画图预设重载$/i, fnc: 'reloadPresets', permission: 'master' },
@@ -66,9 +66,9 @@ export class ImageHandler extends plugin {
         let command = ''
         let match
 
-        const bnnMatch = e.msg.match(/^#([a-zA-Z0-9]*)bnn([\s\S]*)/i)
-        if (bnnMatch) {
-            match = bnnMatch
+        const drawMatch = e.msg.match(/^#([a-zA-Z0-9]*)draw([\s\S]*)/i)
+        if (drawMatch) {
+            match = drawMatch
             isCustomCommand = true
             const prefix = match[1].toLowerCase()
             instruction = match[2].trim()
