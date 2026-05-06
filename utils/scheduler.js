@@ -16,12 +16,12 @@ export class AIScheduler {
             await this._runDailyIncrementalCheckpoint()
         })
 
-        this.jobs.weeklyFull = schedule.scheduleJob('0 2 * * 0', async () => {
-            logger.info('[AI-Plugin] 开始执行每周全量锚点总结任务...')
-            await this._runWeeklyFullCheckpoint()
+        this.jobs.monthlyFull = schedule.scheduleJob('0 2 1 * *', async () => {
+            logger.info('[AI-Plugin] 开始执行每月全量锚点总结任务...')
+            await this._runMonthlyFullCheckpoint()
         })
 
-        logger.info('[AI-Plugin] 定时任务已启动: 每日23:50增量锚点, 每周日02:00全量锚点')
+        logger.info('[AI-Plugin] 定时任务已启动: 每日23:50增量锚点, 每月1日02:00全量锚点')
     }
 
     stop() {
@@ -113,7 +113,7 @@ ${todayContent}`
         logger.info(`[AI-Plugin] 为用户 ${userId} 创建增量总结成功: ${today}${tokenLog}`)
     }
 
-    async _runWeeklyFullCheckpoint() {
+    async _runMonthlyFullCheckpoint() {
         const today = getTodayDateStr()
         const userIds = await global.AIPluginConversationManager.db.getAllUserIds()
 
