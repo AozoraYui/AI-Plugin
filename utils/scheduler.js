@@ -59,8 +59,8 @@ export class AIScheduler {
             return
         }
 
-        // 获取最近一份全量总结
-        const latestFullCheckpoint = await global.AIPluginConversationManager.db.getLatestFullCheckpoint(userId)
+        const todayFullCheckpoint = await global.AIPluginConversationManager.db.getFullCheckpointByDate(userId, today)
+        const latestFullCheckpoint = todayFullCheckpoint || await global.AIPluginConversationManager.db.getLatestFullCheckpoint(userId)
 
         let todayContent = ""
         const aiName = Config.AI_NAME

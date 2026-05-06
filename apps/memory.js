@@ -267,7 +267,8 @@ export class MemoryHandler extends plugin {
             return e.reply(`${dateStr} 没有对话记录，无法创建增量总结喵...`)
         }
 
-        const latestFullCheckpoint = await this.conversationManager.db.getLatestFullCheckpoint(userIdStr)
+        const todayFullCheckpoint = await this.conversationManager.db.getFullCheckpointByDate(userIdStr, dateStr)
+        const latestFullCheckpoint = todayFullCheckpoint || await this.conversationManager.db.getLatestFullCheckpoint(userIdStr)
 
         let targetContent = ""
         for (const turn of targetHistory) {
@@ -462,7 +463,7 @@ export class MemoryHandler extends plugin {
             if (summaryCache) {
                 let displayText = summaryCache.content
                 if (summaryCache.baseCheckpointDate) {
-                    const baseCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, summaryCache.baseCheckpointDate)
+                    const baseCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, summaryCache.baseCheckpointDate, 'full')
                     if (baseCheckpoint) {
                         displayText = `=== 📜 【核心记忆存档 (截止于 ${summaryCache.baseCheckpointDate})】 ===\n${baseCheckpoint.content}\n\n=== 🔗 【增量记忆 (${targetDate})】 ===\n${summaryCache.content}`
                     }
@@ -585,7 +586,7 @@ export class MemoryHandler extends plugin {
                 let baseCheckpointDate = null
 
                 for (const prevDate of previousDates.reverse()) {
-                    const prevCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, prevDate)
+                    const prevCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, prevDate, 'full')
                     if (prevCheckpoint) {
                         baseCheckpointDate = prevDate
                         baseCheckpointContent = prevCheckpoint.content

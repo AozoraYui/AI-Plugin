@@ -487,16 +487,21 @@ export class AIDatabase {
         })
     }
 
-    getCheckpoint(userId, dateStr) {
+    getCheckpoint(userId, dateStr, checkpointType = null) {
         return new Promise((resolve, reject) => {
-            this.db.get('SELECT content, message_count, checkpoint_type, created_at FROM memory_checkpoints WHERE user_id = ? AND date_str = ?',
-                [String(userId), dateStr], (err, row) => {
-                    if (err) {
-                        reject(err)
-                        return
-                    }
-                    resolve(row ? { content: row.content, messageCount: row.message_count, checkpointType: row.checkpoint_type, createdAt: row.created_at } : null)
-                })
+            let query = 'SELECT content, message_count, checkpoint_type, created_at FROM memory_checkpoints WHERE user_id = ? AND date_str = ?'
+            let params = [String(userId), dateStr]
+            if (checkpointType) {
+                query += ' AND checkpoint_type = ?'
+                params.push(checkpointType)
+            }
+            this.db.get(query, params, (err, row) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(row ? { content: row.content, messageCount: row.message_count, checkpointType: row.checkpoint_type, createdAt: row.created_at } : null)
+            })
         })
     }
 
@@ -524,6 +529,18 @@ export class AIDatabase {
                     resolve(row ? { content: row.content, dateStr: row.date_str, messageCount: row.message_count, createdAt: row.created_at } : null)
                 })
         })
+    }
+
+    getFullCheckpointByDate(userId, dateStr) {
+        return new Promise((resolve, reject) => {
+            this.db.get('SELECT content, date_str, message_count, created_at FROM memory_checkpoints WHERE user_id = ? AND date_str = ? AND checkpoint_type = ?',
+                [String(userId), dateStr, 'full'], (err, row) => {
+                    if (err) {
+                        reject(err)
+                        return
+                    }
+                    resolve(row ? { content: row.content, dateStr: row.date_str, messageCount: row.message_count, createdAt: row.created_at } : null)
+                })
     }
 
     getAllCheckpoints(userId) {
