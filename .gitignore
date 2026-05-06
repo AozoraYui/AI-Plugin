@@ -3,4 +3,5 @@ node_modules/
 .DS_Store
 data/
 config/
+!config_template/
 package-lock.json

@@ -1,0 +1,9 @@
+# 权限控制配置
+# mode: whitelist(白名单模式) 或 blacklist(黑名单模式)
+# show_thinking: 是否显示 AI 思考过程
+mode: whitelist
+whitelist_groups: []
+whitelist_users: []
+blacklist_groups: []
+blacklist_users: []
+show_thinking: false

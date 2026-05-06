@@ -1,0 +1,25 @@
+# AI 作图预设配置
+# 每个预设包含以下字段：
+#   command: 指令名称（用户通过 #bnn [指令] 使用）
+#   name: 预设显示名称
+#   prompt: 作图提示词（英文效果更佳）
+#   aliases: 可选，指令别名列表
+
+- command: 二次元
+  name: 二次元风格
+  prompt: "请将图片转换为二次元动漫风格"
+  aliases:
+    - anime
+    - 动漫
+
+- command: 像素
+  name: 像素风格
+  prompt: "请将图片转换为像素艺术风格"
+  aliases:
+    - pixel
+
+- command: 手办化
+  name: 手办风格
+  prompt: "Please transform the main subject in this photo into a realistic 1/7 scale PVC statue"
+  aliases:
+    - figure

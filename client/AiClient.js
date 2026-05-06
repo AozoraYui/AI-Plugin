@@ -1,6 +1,7 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import yaml from 'yaml'
-import { Config, MODELS_CONFIG_FILE, MODEL_STATUS_FILE, DISABLED_MODELS_FILE } from '../utils/config.js'
+import { Config, MODELS_CONFIG_FILE, MODEL_STATUS_FILE, DISABLED_MODELS_FILE, TEMPLATE_DIR_EXPORT } from '../utils/config.js'
 import { fetchWithProxy } from '../utils/common.js'
 
 export class AiClient {
@@ -18,47 +19,13 @@ export class AiClient {
     loadModelsConfig() {
         this.modelsConfig = []
         if (!fs.existsSync(MODELS_CONFIG_FILE)) {
-            logger.warn(`[AI-Plugin] 未找到模型配置文件，将在 ${MODELS_CONFIG_FILE} 创建示例文件。`)
-            const defaultConfig = `# AI 插件模型供应商配置
-# 每个供应商包含以下字段：
-#   id: 供应商标识（唯一）
-#   name: 供应商显示名称
-#   base_url: API 基础地址
-#   api_key: API 密钥
-#   model_groups: 模型组配置
-#     flash: Flash 模型组（用于 #chat, #bnn 等指令）
-#     pro: Pro 模型组（用于 #prochat 指令）
-#     ultra: Ultra 模型组（用于 #ultrachat, #ultrabnn 指令）
-#   每个模型组包含：
-#     chat_models: 对话模型列表
-#     draw_models: 绘图模型列表
-
-- id: "your-provider-id"
-  name: "供应商名称"
-  base_url: "https://api.example.com/v1"
-  api_key: "your-api-key-here"
-  model_groups:
-    # Flash 组: 用于 #chat, #bnn 等指令
-    flash:
-      chat_models:
-        - "gemini-2.5-flash"
-      draw_models:
-        - "gemini-2.5-flash-image"
-
-    # Pro 组: 用于 #prochat 指令
-    pro:
-      chat_models:
-        - "gemini-2.5-pro"
-      draw_models: []
-
-    # Ultra 组: 用于 #ultrachat, #ultrabnn 等指令
-    ultra:
-      chat_models:
-        - "gemini-3-pro"
-      draw_models: []
-`
-            fs.writeFileSync(MODELS_CONFIG_FILE, defaultConfig, 'utf8')
-            return
+            logger.info(`[AI-Plugin] 未找到模型配置文件，将从模板创建。`)
+            const templatePath = path.join(TEMPLATE_DIR_EXPORT, 'models_config.yaml')
+            if (fs.existsSync(templatePath)) {
+                fs.copyFileSync(templatePath, MODELS_CONFIG_FILE)
+            } else {
+                logger.warn(`[AI-Plugin] 模板文件不存在: ${templatePath}`)
+            }
         }
 
         try {
@@ -91,13 +58,14 @@ export class AiClient {
                 this.modelStatus = {}
             }
         } else {
-            logger.info(`[AI-Plugin] 未找到模型状态文件，将在 ${MODEL_STATUS_FILE} 创建默认文件。`)
+            logger.info(`[AI-Plugin] 未找到模型状态文件，将从模板创建。`)
             this.modelStatus = {}
-            const defaultModelStatus = `{
-  "_comment": "模型测试状态文件，由插件自动管理",
-  "_format": "键名格式: 供应商ID-模型ID, 值包含 status(状态), responseTime(响应时间), usage(用量), lastTested(最后测试时间)"
-}`
-            fs.writeFileSync(MODEL_STATUS_FILE, defaultModelStatus, 'utf8')
+            const templatePath = path.join(TEMPLATE_DIR_EXPORT, 'model_status.json')
+            if (fs.existsSync(templatePath)) {
+                fs.copyFileSync(templatePath, MODEL_STATUS_FILE)
+            } else {
+                fs.writeFileSync(MODEL_STATUS_FILE, '{}\n', 'utf8')
+            }
         }
     }
 
@@ -118,10 +86,14 @@ export class AiClient {
                 this.disabledModels = new Set(JSON.parse(data))
                 logger.debug(`[AI-Plugin] 成功加载 ${this.disabledModels.size} 个禁用的模型。`)
             } else {
-                logger.info(`[AI-Plugin] 未找到禁用模型列表文件，将在 ${DISABLED_MODELS_FILE} 创建默认文件。`)
+                logger.info(`[AI-Plugin] 未找到禁用模型列表文件，将从模板创建。`)
                 this.disabledModels = new Set()
-                const defaultDisabledModels = `[]`
-                fs.writeFileSync(DISABLED_MODELS_FILE, defaultDisabledModels, 'utf8')
+                const templatePath = path.join(TEMPLATE_DIR_EXPORT, 'disabled_models.json')
+                if (fs.existsSync(templatePath)) {
+                    fs.copyFileSync(templatePath, DISABLED_MODELS_FILE)
+                } else {
+                    fs.writeFileSync(DISABLED_MODELS_FILE, '[]\n', 'utf8')
+                }
             }
         } catch (error) {
             logger.error('[AI-Plugin] 加载禁用模型列表文件失败:', error)

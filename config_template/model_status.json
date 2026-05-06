@@ -1,0 +1,4 @@
+{
+  "_comment": "模型测试状态文件，由插件自动管理",
+  "_format": "键名格式: 供应商ID-模型ID, 值包含 status(状态), responseTime(响应时间), usage(用量), lastTested(最后测试时间)"
+}
