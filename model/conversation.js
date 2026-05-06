@@ -380,7 +380,7 @@ export class ConversationManager {
             return { success: false, message: `没有找到${dateMsg}记忆数据` }
         }
 
-        const exportDir = path.join(process.cwd(), 'data', 'ai_assistant')
+        const exportDir = path.join(process.cwd(), 'plugins', 'AI-Plugin', 'config')
         if (!fs.existsSync(exportDir)) {
             fs.mkdirSync(exportDir, { recursive: true })
         }
