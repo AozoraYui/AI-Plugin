@@ -226,7 +226,7 @@ export const Config = {
     get SUMMARY_PROMPT_TEMPLATE() { return config.SUMMARY_PROMPT_TEMPLATE ?? defaultConfig.SUMMARY_PROMPT_TEMPLATE },
     set SUMMARY_PROMPT_TEMPLATE(val) { config.SUMMARY_PROMPT_TEMPLATE = val },
     get personaPrimer() {
-        const aiName = config.AI_NAME ?? loadedAIName ?? defaultConfig.AI_NAME
+        const aiName = config.AI_NAME ?? loadedAIName ?? '诺亚'
         const prompts = this.Prompts
         return config.personaPrimer ?? buildPersonaPrimer(aiName, prompts)
     },
