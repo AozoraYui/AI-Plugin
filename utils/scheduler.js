@@ -101,7 +101,7 @@ export class AIScheduler {
         } else {
             const reason = isAIErrorResponse(result.data) ? 'AI 安全过滤拦截' : (result.error || '未知错误')
             logger.warn(`[AI-Plugin] ${today} 增量总结生成失败: ${reason}`)
-            summaryText = `【${today} 原始片段】: ${todayContent.slice(0, 500)}...`
+            summaryText = `【${today} 原始片段】: ${todayContent.slice(0, Config.FALLBACK_DAILY_SUMMARY_MAX_LENGTH)}...`
         }
 
         const tokenLog = result.usage
@@ -181,7 +181,7 @@ export class AIScheduler {
                 logger.info(`[AI-Plugin] 第 ${i + 1}/${chunks.length} 块总结完成`)
             } else {
                 logger.warn(`[AI-Plugin] 第 ${i + 1}/${chunks.length} 块总结失败，使用原始片段`)
-                chunkSummaries.push(chunkText.slice(0, 2000))
+                chunkSummaries.push(chunkText.slice(0, Config.FALLBACK_CHUNK_MAX_LENGTH))
             }
         }
 

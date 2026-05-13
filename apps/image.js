@@ -130,7 +130,22 @@ export class ImageHandler extends plugin {
             }
 
             for (const imageUrl of imagesToProcess) {
-                const imageBuffer = await urlToBuffer(imageUrl)
+                let imageBuffer = await urlToBuffer(imageUrl)
+                if (!imageBuffer) {
+                    logger.warn(`[AI-Plugin] 获取图片失败: ${imageUrl}`)
+                    continue
+                }
+
+                // 检查图片大小，超过限制则压缩
+                const sizeMB = imageBuffer.length / (1024 * 1024)
+                if (sizeMB > Config.MAX_IMAGE_SIZE_MB) {
+                    logger.warn(`[AI-Plugin] 图片过大 (${sizeMB.toFixed(2)}MB)，正在压缩...`)
+                    imageBuffer = await sharp(imageBuffer)
+                        .resize(Config.MAX_IMAGE_RESIZE, Config.MAX_IMAGE_RESIZE, { fit: 'inside', withoutEnlargement: true })
+                        .jpeg({ quality: Config.IMAGE_QUALITY })
+                        .toBuffer()
+                }
+
                 let mimeType = getImageMimeType(imageBuffer)
                 let finalBuffer = imageBuffer
                 if (mimeType === 'image/gif') {

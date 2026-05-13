@@ -164,7 +164,7 @@ export async function generateDailySummary(client, userId, dateDir, dayHistory, 
     } else {
         const reason = isAIErrorResponse(result.data) ? 'AI 安全过滤拦截' : (result.error || '未知错误')
         logger.warn(`[AI-Plugin] ${dateDir} 摘要生成失败: ${reason}`)
-        return `【${dateDir} 原始片段】: ${dayContent.slice(0, 500)}...`
+        return `【${dateDir} 原始片段】: ${dayContent.slice(0, Config.FALLBACK_DAILY_SUMMARY_MAX_LENGTH)}...`
     }
 }
 

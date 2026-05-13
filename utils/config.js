@@ -75,6 +75,12 @@ const defaultConfig = {
     // Redis 缓存过期时间（秒），用于缓存用户对话历史
     // 使用场景: model/conversation.js 中 getUserHistory/saveUserHistory
     REDIS_CACHE_EXPIRE_SECONDS: 604800,
+    // 分块总结失败时，使用原始片段的最大长度（字符数）
+    // 使用场景: apps/memory.js, utils/scheduler.js 中分块失败时的降级处理
+    FALLBACK_CHUNK_MAX_LENGTH: 2000,
+    // 每日摘要生成失败时，使用原始片段的最大长度（字符数）
+    // 使用场景: utils/common.js, utils/scheduler.js 中每日摘要降级处理
+    FALLBACK_DAILY_SUMMARY_MAX_LENGTH: 500,
     version: 'v1.0.0'
 }
 
@@ -287,6 +293,10 @@ export const Config = {
     set AUTO_SUMMARY_THRESHOLD(val) { config.AUTO_SUMMARY_THRESHOLD = val },
     get REDIS_CACHE_EXPIRE_SECONDS() { return config.REDIS_CACHE_EXPIRE_SECONDS ?? defaultConfig.REDIS_CACHE_EXPIRE_SECONDS },
     set REDIS_CACHE_EXPIRE_SECONDS(val) { config.REDIS_CACHE_EXPIRE_SECONDS = val },
+    get FALLBACK_CHUNK_MAX_LENGTH() { return config.FALLBACK_CHUNK_MAX_LENGTH ?? defaultConfig.FALLBACK_CHUNK_MAX_LENGTH },
+    set FALLBACK_CHUNK_MAX_LENGTH(val) { config.FALLBACK_CHUNK_MAX_LENGTH = val },
+    get FALLBACK_DAILY_SUMMARY_MAX_LENGTH() { return config.FALLBACK_DAILY_SUMMARY_MAX_LENGTH ?? defaultConfig.FALLBACK_DAILY_SUMMARY_MAX_LENGTH },
+    set FALLBACK_DAILY_SUMMARY_MAX_LENGTH(val) { config.FALLBACK_DAILY_SUMMARY_MAX_LENGTH = val },
     presets,
     reloadPresets() {
         this.presets = loadPresetsSync()

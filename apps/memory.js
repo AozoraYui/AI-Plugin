@@ -127,7 +127,7 @@ export class MemoryHandler extends plugin {
                 addChunkUsage(result.usage)
             } else {
                 logger.warn(`[AI-Plugin] 第 ${i + 1}/${chunks.length} 块总结失败，使用原始片段`)
-                chunkSummaries.push(chunkText.slice(0, 2000))
+                chunkSummaries.push(chunkText.slice(0, Config.FALLBACK_CHUNK_MAX_LENGTH))
             }
         }
 
