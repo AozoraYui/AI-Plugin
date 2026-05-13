@@ -458,47 +458,21 @@ export class ChatHandler extends plugin {
 
             contents.push({ "role": "user", "parts": currentUserTurnParts })
 
-            // 估算请求体大小，防止 413 错误
             let currentPayload = { "contents": contents }
             let currentSizeMB = JSON.stringify(currentPayload).length / (1024 * 1024)
             
-            if (currentSizeMB > Config.REQUEST_SIZE_WARNING_MB) { // 警告阈值
+            if (currentSizeMB > Config.REQUEST_SIZE_WARNING_MB) {
                 logger.warn(`[AI-Plugin] 请求体过大 (${currentSizeMB.toFixed(2)}MB)，正在裁剪历史...`)
-                // 减少历史条目直到大小合理
+
+                const prefixParts = contents.slice(0, contents.length - history.length - 1)
+
                 while (currentSizeMB > Config.REQUEST_SIZE_LIMIT_MB && history.length > Config.MIN_HISTORY_FOR_TRUNCATION) {
                     history = history.slice(-Math.max(Config.MIN_HISTORY_FOR_TRUNCATION, history.length - 5))
-                    contents = [...Config.personaPrimer]
-                    contents.push({
-                        "role": "user",
-                        "parts": [{ "text": `【服务器时间 - 最高优先级】以下时间是当前真实时间，请忽略记忆中的任何旧时间信息：${timeStr}。当用户询问时间或需要判断时间时，必须使用这个时间！` }]
-                    })
-                    contents.push({
-                        "role": "model",
-                        "parts": [{ "text": "好的，我已经知道现在的准确时间了，会以此为准！" }]
-                    })
-                    if (incrementalCheckpoint) {
-                        contents.push({
-                            "role": "user",
-                            "parts": [{ "text": `【记忆总结】这是关于你与用户之前对话的记忆总结，包含了重要的上下文信息，请基于这些记忆继续对话：\n${incrementalCheckpoint}` }]
-                        })
-                        contents.push({
-                            "role": "model",
-                            "parts": [{ "text": "好的，我已经想起了之前的记忆！" }]
-                        })
-                    }
-                    contents.push(...history)
-                    contents.push({
-                        "role": "user",
-                        "parts": [{ "text": environmentHint }]
-                    })
-                    contents.push({
-                        "role": "model",
-                        "parts": [{ "text": "好的，我已经了解当前的聊天环境，会根据环境调整我的行为！" }]
-                    })
-                    contents.push({ "role": "user", "parts": currentUserTurnParts })
-                    currentPayload = { "contents": contents }
+                    const trimmedContents = [...prefixParts, ...history, { "role": "user", "parts": currentUserTurnParts }]
+                    currentPayload = { "contents": trimmedContents }
                     currentSizeMB = JSON.stringify(currentPayload).length / (1024 * 1024)
                 }
+                contents = [...prefixParts, ...history, { "role": "user", "parts": currentUserTurnParts }]
                 logger.info(`[AI-Plugin] 请求体已裁剪至 ${currentSizeMB.toFixed(2)}MB`)
             }
             

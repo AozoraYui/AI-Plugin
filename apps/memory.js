@@ -451,8 +451,7 @@ export class MemoryHandler extends plugin {
         try {
             const checkpoint = await this.conversationManager.db.getCheckpoint(userIdStr, targetDate, 'full')
             if (checkpoint) {
-                const displayText = this._truncateContent(checkpoint.content, true)
-                const content = `📖 ${targetDate} 全量总结\n- - - - - - - - - -\n${displayText}`
+                const content = `📖 ${targetDate} 全量总结\n- - - - - - - - - -\n${checkpoint.content}`
                 return this._sendMemoryContent(e, content, targetDate)
             }
 
@@ -480,7 +479,6 @@ export class MemoryHandler extends plugin {
                         displayText = `=== 📜 【核心记忆存档 (截止于 ${summaryCache.baseCheckpointDate})】 ===\n${baseCheckpoint.content}\n\n=== 🔗 【增量记忆 (${targetDate})】 ===\n${summaryCache.content}`
                     }
                 }
-                displayText = this._truncateContent(displayText, false)
                 const content = `📖 ${targetDate} 增量总结\n- - - - - - - - - -\n${displayText}`
                 return this._sendMemoryContent(e, content, targetDate)
             }
@@ -502,8 +500,7 @@ export class MemoryHandler extends plugin {
         try {
             const checkpoint = await this.conversationManager.db.getCheckpoint(userIdStr, targetDate, 'full')
             if (checkpoint) {
-                const displayText = this._truncateContent(checkpoint.content, true)
-                const content = `📖 ${targetDate} 全量总结\n- - - - - - - - - -\n${displayText}`
+                const content = `📖 ${targetDate} 全量总结\n- - - - - - - - - -\n${checkpoint.content}`
                 return this._sendMemoryContent(e, content, targetDate)
             }
 
@@ -516,7 +513,6 @@ export class MemoryHandler extends plugin {
                         displayText = `=== 📜 【核心记忆存档 (截止于 ${summaryCache.baseCheckpointDate})】 ===\n${baseCheckpoint.content}\n\n=== 🔗 【增量记忆 (${targetDate})】 ===\n${summaryCache.content}`
                     }
                 }
-                displayText = this._truncateContent(displayText, false)
                 const content = `📖 ${targetDate} 增量总结\n- - - - - - - - - -\n${displayText}`
                 return this._sendMemoryContent(e, content, targetDate)
             }
@@ -526,10 +522,6 @@ export class MemoryHandler extends plugin {
             logger.error(`[AI-Plugin] 读取记忆失败 (用户: ${userIdStr}, 日期: ${targetDate}):`, err)
             await e.reply(`❌ 读取记忆失败: ${err.message}`)
         }
-    }
-
-    _truncateContent(content, isFullCheckpoint = false) {
-        return content
     }
 
     async _sendMemoryContent(e, content, targetDate) {

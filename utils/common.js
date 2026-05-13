@@ -109,14 +109,13 @@ export function getTodayDateStr() {
 }
 
 export function getBeijingTime() {
-    const now = new Date()
-    const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000)
-    return beijingTime
+    const beijingStr = new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })
+    return new Date(beijingStr)
 }
 
 export function getBeijingTimeStr() {
-    const beijingTime = getBeijingTime()
-    return beijingTime.toISOString().replace('T', ' ').substring(0, 19) + ' (北京时间)'
+    const beijingStr = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' })
+    return beijingStr.replace('T', ' ') + ' (北京时间)'
 }
 
 export function getDBTimestamp() {

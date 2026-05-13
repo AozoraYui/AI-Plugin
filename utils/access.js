@@ -66,9 +66,15 @@ export async function checkAccess(e) {
     if (e.isGroup) {
         const groupId = String(e.group_id)
         if (config.mode === 'whitelist') {
-            if (!config.whitelist_groups.includes(groupId)) return false
+            if (!config.whitelist_groups.includes(groupId)) {
+                logger.debug(`[AI-Plugin] 群 ${groupId} 不在白名单中，已忽略消息`)
+                return false
+            }
         } else {
-            if (config.blacklist_groups.includes(groupId)) return false
+            if (config.blacklist_groups.includes(groupId)) {
+                logger.debug(`[AI-Plugin] 群 ${groupId} 在黑名单中，已忽略消息`)
+                return false
+            }
         }
     } else {
         const userId = String(e.user_id)

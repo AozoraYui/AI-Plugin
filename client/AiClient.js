@@ -453,7 +453,11 @@ export class AiClient {
         }
 
         if (testPromises.length > 0) {
-            await Promise.all(testPromises)
+            const CONCURRENCY_LIMIT = 5
+            for (let i = 0; i < testPromises.length; i += CONCURRENCY_LIMIT) {
+                const batch = testPromises.slice(i, i + CONCURRENCY_LIMIT)
+                await Promise.all(batch)
+            }
         }
 
         let successCount = 0

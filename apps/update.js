@@ -66,6 +66,13 @@ export class UpdateHandler extends plugin {
     async gitForceUpdate(e) {
         if (!await checkAccess(e)) return true
 
+        const match = e.msg.match(/^#ai插件强制更新\s*(.*)/i)
+        const confirmParam = match ? match[1].trim() : ''
+
+        if (confirmParam !== '确认') {
+            return e.reply('⚠️ 强制更新将丢弃所有本地修改！\n\n如需继续，请发送：\n#ai插件强制更新 确认')
+        }
+
         await e.reply('⚠️ 正在强制更新（将丢弃本地修改）...')
 
         const resetResult = this._runGit('git reset --hard origin/master')
