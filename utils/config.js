@@ -63,6 +63,18 @@ const defaultConfig = {
     // 模型测试时每批并发数量，防止大量并发请求导致 API 限流
     // 使用场景: client/AiClient.js 中 testAllModels 分批并发
     TEST_CONCURRENCY_LIMIT: 5,
+    // 图片处理时每批并发数量，避免大量图片同时处理导致内存峰值
+    // 使用场景: apps/chat.js 中图片分批处理
+    IMAGE_PROCESSING_BATCH_SIZE: 10,
+    // 全量锚点总结时单个分块的最大对话条数，超过此值时分块总结
+    // 使用场景: utils/scheduler.js 中 _createFullCheckpoint 分块逻辑
+    FULL_CHUNK_SIZE: 128,
+    // 对话历史达到此条数时自动触发增量总结
+    // 使用场景: apps/chat.js 中 handleChat 自动触发增量总结
+    AUTO_SUMMARY_THRESHOLD: 8,
+    // Redis 缓存过期时间（秒），用于缓存用户对话历史
+    // 使用场景: model/conversation.js 中 getUserHistory/saveUserHistory
+    REDIS_CACHE_EXPIRE_SECONDS: 604800,
     version: 'v1.0.0'
 }
 
@@ -267,6 +279,14 @@ export const Config = {
     set CHECKPOINT_DISPLAY_MAX_LENGTH(val) { config.CHECKPOINT_DISPLAY_MAX_LENGTH = val },
     get TEST_CONCURRENCY_LIMIT() { return config.TEST_CONCURRENCY_LIMIT ?? defaultConfig.TEST_CONCURRENCY_LIMIT },
     set TEST_CONCURRENCY_LIMIT(val) { config.TEST_CONCURRENCY_LIMIT = val },
+    get IMAGE_PROCESSING_BATCH_SIZE() { return config.IMAGE_PROCESSING_BATCH_SIZE ?? defaultConfig.IMAGE_PROCESSING_BATCH_SIZE },
+    set IMAGE_PROCESSING_BATCH_SIZE(val) { config.IMAGE_PROCESSING_BATCH_SIZE = val },
+    get FULL_CHUNK_SIZE() { return config.FULL_CHUNK_SIZE ?? defaultConfig.FULL_CHUNK_SIZE },
+    set FULL_CHUNK_SIZE(val) { config.FULL_CHUNK_SIZE = val },
+    get AUTO_SUMMARY_THRESHOLD() { return config.AUTO_SUMMARY_THRESHOLD ?? defaultConfig.AUTO_SUMMARY_THRESHOLD },
+    set AUTO_SUMMARY_THRESHOLD(val) { config.AUTO_SUMMARY_THRESHOLD = val },
+    get REDIS_CACHE_EXPIRE_SECONDS() { return config.REDIS_CACHE_EXPIRE_SECONDS ?? defaultConfig.REDIS_CACHE_EXPIRE_SECONDS },
+    set REDIS_CACHE_EXPIRE_SECONDS(val) { config.REDIS_CACHE_EXPIRE_SECONDS = val },
     presets,
     reloadPresets() {
         this.presets = loadPresetsSync()

@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import sqlite3 from 'sqlite3'
-import { getDBTimestamp } from './common.js'
+import { getDBTimestamp, ensureDir } from './common.js'
 
 const _path = process.cwd()
 const DATA_DIR = path.join(_path, 'plugins', 'AI-Plugin', 'config')
@@ -10,7 +10,7 @@ export const DB_FILE = path.join(DATA_DIR, 'ai_plugin.db')
 
 export class AIDatabase {
     constructor() {
-        this.ensureDataDir()
+        ensureDir(DATA_DIR)
         this.db = new sqlite3.Database(DB_FILE)
         this.db.run('PRAGMA journal_mode = WAL')
         this.db.run('PRAGMA foreign_keys = ON')
@@ -20,12 +20,6 @@ export class AIDatabase {
 
     async waitForReady() {
         await this._initPromise
-    }
-
-    ensureDataDir() {
-        if (!fs.existsSync(DATA_DIR)) {
-            fs.mkdirSync(DATA_DIR, { recursive: true })
-        }
     }
 
     initTables() {

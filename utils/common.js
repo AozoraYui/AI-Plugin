@@ -220,3 +220,10 @@ export function parseModelGroup(e) {
 
     return { modelGroupKey, cleanedMsg }
 }
+
+// 确保目录存在（如果不存在则递归创建）
+export function ensureDir(dirPath) {
+    if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true })
+    }
+}

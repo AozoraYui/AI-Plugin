@@ -1,8 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { HISTORY_DIR, CHECKPOINT_DIR, SUMMARY_CACHE_DIR } from '../utils/config.js'
+import { HISTORY_DIR, CHECKPOINT_DIR, SUMMARY_CACHE_DIR, Config } from '../utils/config.js'
 import { AIDatabase } from '../utils/database.js'
-import { getTodayDateStr } from '../utils/common.js'
+import { getTodayDateStr, ensureDir } from '../utils/common.js'
 
 export class ConversationManager {
     constructor() {
@@ -235,12 +235,12 @@ export class ConversationManager {
 
     async getUserHistory(userId) {
         const redisKey = `ai-plugin:history:${userId}`
-        const weekInSeconds = 7 * 24 * 60 * 60
+        const cacheExpire = Config.REDIS_CACHE_EXPIRE_SECONDS
 
         try {
             const historyJson = await redis.get(redisKey)
             if (historyJson) {
-                await redis.expire(redisKey, weekInSeconds)
+                await redis.expire(redisKey, cacheExpire)
                 const data = JSON.parse(historyJson)
                 if (Array.isArray(data)) return data
             }
@@ -252,7 +252,7 @@ export class ConversationManager {
             const history = await this.db.getConversationHistory(userId)
             if (history.length > 0) {
                 const historyToCache = this.cloneHistoryForSaving(history)
-                await redis.set(redisKey, JSON.stringify(historyToCache), { EX: weekInSeconds })
+                await redis.set(redisKey, JSON.stringify(historyToCache), { EX: cacheExpire })
                 logger.debug(`[AI-Plugin] 已从 SQLite 恢复并缓存用户 ${userId} 的记忆`)
                 return history
             }
@@ -297,11 +297,11 @@ export class ConversationManager {
 
     async saveUserHistory(userId, history) {
         const redisKey = `ai-plugin:history:${userId}`
-        const weekInSeconds = 7 * 24 * 60 * 60
+        const cacheExpire = Config.REDIS_CACHE_EXPIRE_SECONDS
 
         try {
             const historyToSave = this.cloneHistoryForSaving(history)
-            await redis.set(redisKey, JSON.stringify(historyToSave), { EX: weekInSeconds })
+            await redis.set(redisKey, JSON.stringify(historyToSave), { EX: cacheExpire })
         } catch (error) {
             logger.error(`[AI-Plugin] 保存用户 ${userId} 的历史到Redis失败:`, error)
         }
@@ -349,15 +349,11 @@ export class ConversationManager {
     }
 
     _ensureSummaryCacheDir() {
-        if (!fs.existsSync(SUMMARY_CACHE_DIR)) {
-            fs.mkdirSync(SUMMARY_CACHE_DIR, { recursive: true })
-        }
+        ensureDir(SUMMARY_CACHE_DIR)
     }
 
     _ensureCheckpointDir() {
-        if (!fs.existsSync(CHECKPOINT_DIR)) {
-            fs.mkdirSync(CHECKPOINT_DIR, { recursive: true })
-        }
+        ensureDir(CHECKPOINT_DIR)
     }
 
     async exportMemory(e, userId, scope = 'single', dateStr = null) {

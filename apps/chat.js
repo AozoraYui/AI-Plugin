@@ -352,47 +352,54 @@ export class ChatHandler extends plugin {
             if (allImages.length > 0) {
                 const imagesToProcess = allImages.slice(0, MAX_IMAGES)
 
-                const imagePromises = imagesToProcess.map(async (imageUrl) => {
-                    try {
-                        let imageBuffer = await urlToBuffer(imageUrl)
-                        if (!imageBuffer) {
-                            logger.warn(`[AI-Plugin] 获取图片失败: ${imageUrl}`)
+                // 分批处理图片，避免大量图片同时处理导致内存峰值
+                const IMAGE_PROCESSING_BATCH_SIZE = Config.IMAGE_PROCESSING_BATCH_SIZE
+                const validImages = []
+
+                for (let i = 0; i < imagesToProcess.length; i += IMAGE_PROCESSING_BATCH_SIZE) {
+                    const batch = imagesToProcess.slice(i, i + IMAGE_PROCESSING_BATCH_SIZE)
+                    const batchPromises = batch.map(async (imageUrl) => {
+                        try {
+                            let imageBuffer = await urlToBuffer(imageUrl)
+                            if (!imageBuffer) {
+                                logger.warn(`[AI-Plugin] 获取图片失败: ${imageUrl}`)
+                                return null
+                            }
+
+                            // 检查图片大小，超过限制则压缩
+                            const sizeMB = imageBuffer.length / (1024 * 1024)
+                            if (sizeMB > MAX_IMAGE_SIZE_MB) {
+                                logger.warn(`[AI-Plugin] 图片过大 (${sizeMB.toFixed(2)}MB)，正在压缩...`)
+                                const sharp = (await import('sharp')).default
+                                imageBuffer = await sharp(imageBuffer)
+                                    .resize(Config.MAX_IMAGE_RESIZE, Config.MAX_IMAGE_RESIZE, { fit: 'inside', withoutEnlargement: true })
+                                    .jpeg({ quality: Config.IMAGE_QUALITY })
+                                    .toBuffer()
+                            }
+
+                            let mimeType = getImageMimeType(imageBuffer)
+                            let finalBuffer = imageBuffer
+
+                            if (mimeType === 'image/gif') {
+                                finalBuffer = await (await import('sharp')).default(imageBuffer).toFormat('png').toBuffer()
+                                mimeType = 'image/png'
+                            }
+
+                            return {
+                                "inline_data": {
+                                    "mime_type": mimeType || 'image/jpeg',
+                                    "data": finalBuffer.toString('base64')
+                                }
+                            }
+                        } catch (err) {
+                            logger.warn(`[AI-Plugin] 图片处理异常: ${err.message}`)
                             return null
                         }
+                    })
 
-                        // 检查图片大小，超过限制则压缩
-                        const sizeMB = imageBuffer.length / (1024 * 1024)
-                        if (sizeMB > MAX_IMAGE_SIZE_MB) {
-                            logger.warn(`[AI-Plugin] 图片过大 (${sizeMB.toFixed(2)}MB)，正在压缩...`)
-                            const sharp = (await import('sharp')).default
-                            imageBuffer = await sharp(imageBuffer)
-                                .resize(Config.MAX_IMAGE_RESIZE, Config.MAX_IMAGE_RESIZE, { fit: 'inside', withoutEnlargement: true })
-                                .jpeg({ quality: Config.IMAGE_QUALITY })
-                                .toBuffer()
-                        }
-
-                        let mimeType = getImageMimeType(imageBuffer)
-                        let finalBuffer = imageBuffer
-
-                        if (mimeType === 'image/gif') {
-                            finalBuffer = await (await import('sharp')).default(imageBuffer).toFormat('png').toBuffer()
-                            mimeType = 'image/png'
-                        }
-
-                        return {
-                            "inline_data": {
-                                "mime_type": mimeType || 'image/jpeg',
-                                "data": finalBuffer.toString('base64')
-                            }
-                        }
-                    } catch (err) {
-                        logger.warn(`[AI-Plugin] 图片处理异常: ${err.message}`)
-                        return null
-                    }
-                })
-
-                const processedImages = await Promise.all(imagePromises)
-                const validImages = processedImages.filter(img => img !== null)
+                    const batchResults = await Promise.all(batchPromises)
+                    validImages.push(...batchResults.filter(img => img !== null))
+                }
                 
                 if (validImages.length < allImages.length) {
                     const failedCount = allImages.length - validImages.length
@@ -569,8 +576,7 @@ export class ChatHandler extends plugin {
                     const updatedHistory = [...history, { "role": "user", "parts": currentUserTurnParts }, { "role": "model", "parts": [{ "text": finalResponseText }] }]
                     await this.conversationManager.saveUserHistory(userId, updatedHistory)
 
-                    const AUTO_SUMMARY_THRESHOLD = 8
-                    if (updatedHistory.length >= AUTO_SUMMARY_THRESHOLD) {
+                    if (updatedHistory.length >= Config.AUTO_SUMMARY_THRESHOLD) {
                         logger.info(`[AI-Plugin] 用户 ${userId} 对话已达 ${updatedHistory.length} 轮，自动触发增量总结`)
                         const todayStr = getTodayDateStr()
                         try {

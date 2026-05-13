@@ -2,8 +2,6 @@ import schedule from 'node-schedule'
 import { getTodayDateStr, isAIErrorResponse } from './common.js'
 import { Config, expandPrompt } from './config.js'
 
-const FULL_CHUNK_SIZE = 128
-
 export class AIScheduler {
     constructor(client) {
         this.client = client
@@ -153,7 +151,7 @@ export class AIScheduler {
         }
 
         // 对话条数不超过分块大小时，直接总结
-        if (allHistory.length <= FULL_CHUNK_SIZE) {
+        if (allHistory.length <= Config.FULL_CHUNK_SIZE) {
             const historyText = this._buildHistoryText(allHistory, aiName)
             if (!historyText.trim()) return
             const result = await this._summarizeSingleChunk(historyText, 'flash')
@@ -165,8 +163,8 @@ export class AIScheduler {
 
         // 对话条数超过分块大小时，分块总结再合并
         const chunks = []
-        for (let i = 0; i < allHistory.length; i += FULL_CHUNK_SIZE) {
-            chunks.push(allHistory.slice(i, i + FULL_CHUNK_SIZE))
+        for (let i = 0; i < allHistory.length; i += Config.FULL_CHUNK_SIZE) {
+            chunks.push(allHistory.slice(i, i + Config.FULL_CHUNK_SIZE))
         }
         logger.info(`[AI-Plugin] 用户 ${userId} 共 ${allHistory.length} 条对话，分 ${chunks.length} 块总结`)
 
