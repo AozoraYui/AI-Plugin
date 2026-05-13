@@ -87,7 +87,7 @@ export class MemoryHandler extends plugin {
         }
 
         const aiName = Config.AI_NAME
-        const FULL_CHUNK_SIZE = 128
+        const chunkSize = Config.FULL_CHUNK_SIZE
 
         let chunkUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
 
@@ -98,7 +98,7 @@ export class MemoryHandler extends plugin {
             if (usage.total_tokens) chunkUsage.total_tokens += usage.total_tokens
         }
 
-        if (allHistory.length <= FULL_CHUNK_SIZE) {
+        if (allHistory.length <= chunkSize) {
             const historyText = this._buildHistoryText(allHistory, aiName)
             await e.reply(`📖 正在整合 ${allHistory.length} 条对话记录...`, true)
             const result = await this._summarizeSingleChunk(historyText, modelGroupKey)
@@ -111,10 +111,10 @@ export class MemoryHandler extends plugin {
         }
 
         const chunks = []
-        for (let i = 0; i < allHistory.length; i += FULL_CHUNK_SIZE) {
-            chunks.push(allHistory.slice(i, i + FULL_CHUNK_SIZE))
+        for (let i = 0; i < allHistory.length; i += chunkSize) {
+            chunks.push(allHistory.slice(i, i + chunkSize))
         }
-        await e.reply(`📚 共 ${allHistory.length} 条对话，分 ${chunks.length} 块总结 (每块${FULL_CHUNK_SIZE}条)...`, true)
+        await e.reply(`📚 共 ${allHistory.length} 条对话，分 ${chunks.length} 块总结 (每块${chunkSize}条)...`, true)
 
         const chunkSummaries = []
         for (let i = 0; i < chunks.length; i++) {
