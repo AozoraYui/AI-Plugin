@@ -142,6 +142,7 @@ export class AIScheduler {
 
         const aiName = Config.AI_NAME
 
+        // Token 用量统计（分块总结 + 合并）
         let chunkUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
 
         const addChunkUsage = (usage) => {
@@ -151,6 +152,7 @@ export class AIScheduler {
             if (usage.total_tokens) chunkUsage.total_tokens += usage.total_tokens
         }
 
+        // 对话条数不超过分块大小时，直接总结
         if (allHistory.length <= FULL_CHUNK_SIZE) {
             const historyText = this._buildHistoryText(allHistory, aiName)
             if (!historyText.trim()) return
@@ -161,12 +163,14 @@ export class AIScheduler {
             return
         }
 
+        // 对话条数超过分块大小时，分块总结再合并
         const chunks = []
         for (let i = 0; i < allHistory.length; i += FULL_CHUNK_SIZE) {
             chunks.push(allHistory.slice(i, i + FULL_CHUNK_SIZE))
         }
         logger.info(`[AI-Plugin] 用户 ${userId} 共 ${allHistory.length} 条对话，分 ${chunks.length} 块总结`)
 
+        // 逐块总结
         const chunkSummaries = []
         for (let i = 0; i < chunks.length; i++) {
             const chunkText = this._buildHistoryText(chunks[i], aiName)
@@ -188,6 +192,7 @@ export class AIScheduler {
             return
         }
 
+        // 合并所有分块总结为一份完整的全量锚点
         logger.info(`[AI-Plugin] 正在合并 ${chunkSummaries.length} 个分块总结...`)
         const mergeTemplate = Config.Prompts?.full_checkpoint?.merge
             || `请将以下 {chunk_count} 个分段的对话摘要整合成一份完整的、精炼的核心记忆存档。\n要求：\n1. 保留所有重要的用户信息（性格、偏好、技术能力、重要经历等）\n2. 按主题分类整理（如：个人信息、技术兴趣、重要对话、情感偏好等）\n3. 去除重复的内容，保留核心内容\n4. 字数不限，尽可能写好各处细节\n5. 直接输出整合后的记忆存档，不要加"好的"等客套话，严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本\n\n以下是各分段摘要：`

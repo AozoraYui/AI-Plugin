@@ -59,6 +59,10 @@ const defaultConfig = {
     // 记忆锚点在前端显示时的最大字符数，超过此值将分段显示
     // 使用场景: apps/memory.js 中分段显示总结内容
     CHECKPOINT_DISPLAY_MAX_LENGTH: 3500,
+    // ========== 并发控制配置 ==========
+    // 模型测试时每批并发数量，防止大量并发请求导致 API 限流
+    // 使用场景: client/AiClient.js 中 testAllModels 分批并发
+    TEST_CONCURRENCY_LIMIT: 5,
     version: 'v1.0.0'
 }
 
@@ -261,9 +265,27 @@ export const Config = {
     set CHECKPOINT_MAX_LENGTH(val) { config.CHECKPOINT_MAX_LENGTH = val },
     get CHECKPOINT_DISPLAY_MAX_LENGTH() { return config.CHECKPOINT_DISPLAY_MAX_LENGTH ?? defaultConfig.CHECKPOINT_DISPLAY_MAX_LENGTH },
     set CHECKPOINT_DISPLAY_MAX_LENGTH(val) { config.CHECKPOINT_DISPLAY_MAX_LENGTH = val },
+    get TEST_CONCURRENCY_LIMIT() { return config.TEST_CONCURRENCY_LIMIT ?? defaultConfig.TEST_CONCURRENCY_LIMIT },
+    set TEST_CONCURRENCY_LIMIT(val) { config.TEST_CONCURRENCY_LIMIT = val },
     presets,
     reloadPresets() {
         this.presets = loadPresetsSync()
+    },
+    reload() {
+        // 重新加载所有配置
+        const newPresets = loadPresetsSync()
+        const newAIName = loadAIName()
+        const newTrustedGroups = loadTrustedGroups()
+        const newPrompts = loadPrompts()
+
+        this.presets = newPresets
+        config.AI_NAME = newAIName
+        config.trustedGroups = newTrustedGroups
+        config.Prompts = newPrompts
+
+        // 重新构建 personaPrimer
+        delete config.personaPrimer
+        logger.info('[AI-Plugin] 配置已重新加载')
     },
     version: defaultConfig.version
 }

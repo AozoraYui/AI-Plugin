@@ -458,20 +458,26 @@ export class ChatHandler extends plugin {
 
             contents.push({ "role": "user", "parts": currentUserTurnParts })
 
+            // 估算请求体大小，防止 413 错误（请求体过大导致 API 拒绝）
             let currentPayload = { "contents": contents }
             let currentSizeMB = JSON.stringify(currentPayload).length / (1024 * 1024)
             
+            // 请求体超过警告阈值时，开始裁剪历史对话
             if (currentSizeMB > Config.REQUEST_SIZE_WARNING_MB) {
                 logger.warn(`[AI-Plugin] 请求体过大 (${currentSizeMB.toFixed(2)}MB)，正在裁剪历史...`)
 
+                // 缓存前缀部分（personaPrimer + 时间注入 + 记忆总结 + 环境提示），避免循环内重复构建
                 const prefixParts = contents.slice(0, contents.length - history.length - 1)
 
+                // 循环裁剪历史，直到请求体低于限制或达到最少保留条数
                 while (currentSizeMB > Config.REQUEST_SIZE_LIMIT_MB && history.length > Config.MIN_HISTORY_FOR_TRUNCATION) {
+                    // 每次裁剪 5 条历史，但保证至少保留 MIN_HISTORY_FOR_TRUNCATION 条
                     history = history.slice(-Math.max(Config.MIN_HISTORY_FOR_TRUNCATION, history.length - 5))
                     const trimmedContents = [...prefixParts, ...history, { "role": "user", "parts": currentUserTurnParts }]
                     currentPayload = { "contents": trimmedContents }
                     currentSizeMB = JSON.stringify(currentPayload).length / (1024 * 1024)
                 }
+                // 更新最终的 contents 为裁剪后的结果
                 contents = [...prefixParts, ...history, { "role": "user", "parts": currentUserTurnParts }]
                 logger.info(`[AI-Plugin] 请求体已裁剪至 ${currentSizeMB.toFixed(2)}MB`)
             }

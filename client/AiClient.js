@@ -340,10 +340,14 @@ export class AiClient {
             logger.debug(`[AI-Plugin] 将从 [${modelGroupKey}] 模型组的 [${taskTypeName}] 池中（共 ${modelPool.length} 个模型）依次尝试...`)
             lastError = ''
             for (const { provider, modelId } of modelPool) {
+                const startTime = Date.now()
                 const result = await this.attemptRequest(type, payload, provider, modelId, maxTokens)
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
                 if (result.success) {
+                    logger.debug(`[AI-Plugin] 请求成功: ${provider.name} (${modelId})，耗时 ${elapsed}s`)
                     return result
                 }
+                logger.debug(`[AI-Plugin] 请求失败: ${provider.name} (${modelId})，耗时 ${elapsed}s，错误: ${result.error}`)
                 lastError += `[${provider.name}-${modelId}]: ${result.error}\n`
             }
 
@@ -453,11 +457,15 @@ export class AiClient {
         }
 
         if (testPromises.length > 0) {
-            const CONCURRENCY_LIMIT = 5
+            const CONCURRENCY_LIMIT = Config.TEST_CONCURRENCY_LIMIT
+            logger.info(`[AI-Plugin] 开始测试 ${testPromises.length} 个模型，每批并发 ${CONCURRENCY_LIMIT} 个`)
+            const startTime = Date.now()
             for (let i = 0; i < testPromises.length; i += CONCURRENCY_LIMIT) {
                 const batch = testPromises.slice(i, i + CONCURRENCY_LIMIT)
                 await Promise.all(batch)
             }
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+            logger.info(`[AI-Plugin] 模型测试完成，耗时 ${elapsed}s`)
         }
 
         let successCount = 0
