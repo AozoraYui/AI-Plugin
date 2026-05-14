@@ -4,7 +4,8 @@ import { AiClient } from '../client/AiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { sessionManager } from '../utils/session.js'
-import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
+import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
+import { processImagesInBatches } from '../utils/image.js'
 import fs from 'node:fs'
 import yaml from 'yaml'
 import sharp from 'sharp'
@@ -129,31 +130,8 @@ export class ImageHandler extends plugin {
                 return e.reply("❌ 该功能需要附带图片才能使用哦！(可以回复图片或@某人)")
             }
 
-            for (const imageUrl of imagesToProcess) {
-                let imageBuffer = await urlToBuffer(imageUrl)
-                if (!imageBuffer) {
-                    logger.warn(`[AI-Plugin] 获取图片失败: ${imageUrl}`)
-                    continue
-                }
-
-                // 检查图片大小，超过限制则压缩
-                const sizeMB = imageBuffer.length / (1024 * 1024)
-                if (sizeMB > Config.MAX_IMAGE_SIZE_MB) {
-                    logger.warn(`[AI-Plugin] 图片过大 (${sizeMB.toFixed(2)}MB)，正在压缩...`)
-                    imageBuffer = await sharp(imageBuffer)
-                        .resize(Config.MAX_IMAGE_RESIZE, Config.MAX_IMAGE_RESIZE, { fit: 'inside', withoutEnlargement: true })
-                        .jpeg({ quality: Config.IMAGE_QUALITY })
-                        .toBuffer()
-                }
-
-                let mimeType = getImageMimeType(imageBuffer)
-                let finalBuffer = imageBuffer
-                if (mimeType === 'image/gif') {
-                    finalBuffer = await sharp(imageBuffer).toFormat('png').toBuffer()
-                    mimeType = 'image/png'
-                }
-                parts.push({ "inline_data": { "mime_type": mimeType || 'image/png', "data": finalBuffer.toString('base64') } })
-            }
+            const processedImages = await processImagesInBatches(imagesToProcess)
+            parts.push(...processedImages)
 
             if (isCustomCommand) {
                 if (!instruction && imagesToProcess.length === 0) {

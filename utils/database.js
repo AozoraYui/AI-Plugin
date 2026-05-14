@@ -69,6 +69,21 @@ export class AIDatabase {
                     summary_migrated BOOLEAN DEFAULT 0,
                     migration_time DATETIME
                 );
+
+                -- Token 用量统计表
+                CREATE TABLE IF NOT EXISTS token_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    date_str TEXT NOT NULL,
+                    model_group TEXT DEFAULT 'flash',
+                    prompt_tokens INTEGER DEFAULT 0,
+                    completion_tokens INTEGER DEFAULT 0,
+                    total_tokens INTEGER DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_token_usage_user_date 
+                ON token_usage(user_id, date_str);
             `, (err) => {
                 if (err) {
                     reject(err)
@@ -695,6 +710,65 @@ export class AIDatabase {
                         else resolve()
                     })
                 }
+            })
+        })
+    }
+
+    // ========== Token 用量统计 ==========
+
+    recordTokenUsage(userId, dateStr, modelGroup, usage) {
+        if (!usage) return
+        const promptTokens = usage.prompt_tokens || 0
+        const completionTokens = usage.completion_tokens || 0
+        const totalTokens = usage.total_tokens || (promptTokens + completionTokens)
+        this.db.run(`
+            INSERT INTO token_usage (user_id, date_str, model_group, prompt_tokens, completion_tokens, total_tokens)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `, [String(userId), dateStr, modelGroup || 'flash', promptTokens, completionTokens, totalTokens], (err) => {
+            if (err) logger.debug(`[AI-Plugin] Token 记录失败: ${err.message}`)
+        })
+    }
+
+    getTokenUsage(userId, startDate, endDate) {
+        return new Promise((resolve, reject) => {
+            let query = `SELECT date_str, model_group, 
+                        SUM(prompt_tokens) as total_prompt, 
+                        SUM(completion_tokens) as total_completion, 
+                        SUM(total_tokens) as total_tokens,
+                        COUNT(*) as count
+                        FROM token_usage WHERE user_id = ?`
+            const params = [String(userId)]
+
+            if (startDate) { query += ' AND date_str >= ?'; params.push(startDate) }
+            if (endDate) { query += ' AND date_str <= ?'; params.push(endDate) }
+
+            query += ' GROUP BY date_str, model_group ORDER BY date_str DESC'
+
+            this.db.all(query, params, (err, rows) => {
+                if (err) { reject(err); return }
+                resolve(rows || [])
+            })
+        })
+    }
+
+    getAllTokenUsage(startDate, endDate) {
+        return new Promise((resolve, reject) => {
+            let query = `SELECT user_id, date_str, model_group, 
+                        SUM(prompt_tokens) as total_prompt, 
+                        SUM(completion_tokens) as total_completion, 
+                        SUM(total_tokens) as total_tokens,
+                        COUNT(*) as count
+                        FROM token_usage WHERE 1=1`
+            const params = []
+
+            if (startDate) { query += ' AND date_str >= ?'; params.push(startDate) }
+            if (endDate) { query += ' AND date_str <= ?'; params.push(endDate) }
+
+            query += ' GROUP BY user_id, date_str, model_group ORDER BY date_str DESC'
+
+            this.db.all(query, params, (err, rows) => {
+                if (err) { reject(err); return }
+                resolve(rows || [])
             })
         })
     }

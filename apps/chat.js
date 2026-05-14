@@ -5,7 +5,8 @@ import { Config, expandPrompt } from '../utils/config.js'
 import { AiClient } from '../client/AiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
-import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, getBeijingTimeStr, getTodayDateStr, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
+import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
+import { processImagesInBatches } from '../utils/image.js'
 
 function extractCardInfo(data) {
     const lines = []
@@ -179,6 +180,9 @@ export class ChatHandler extends plugin {
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆$`, 'i'), fnc: 'exportAllMemory', permission: 'master' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'), fnc: 'exportAllMemoryByDate', permission: 'master' },
                 { reg: /^#ai思考(开启|关闭)$/i, fnc: 'switchThinkingMode', permission: 'master' },
+                { reg: /^#ai用量统计$/i, fnc: 'showTokenUsage' },
+                { reg: /^#ai用量统计\s+(\d{4}-\d{2}-\d{2})$/i, fnc: 'showTokenUsageByDate' },
+                { reg: /^#ai用量统计\s+all$/i, fnc: 'showAllTokenUsage', permission: 'master' },
             ]
         })
         this.client = global.AIPluginClient
@@ -346,66 +350,8 @@ export class ChatHandler extends plugin {
 
             const currentUserTurnParts = []
 
-            // 限制图片数量和大小，防止请求体过大
-            const MAX_IMAGES = Config.MAX_IMAGES_PER_MESSAGE
-            const MAX_IMAGE_SIZE_MB = Config.MAX_IMAGE_SIZE_MB
             if (allImages.length > 0) {
-                const imagesToProcess = allImages.slice(0, MAX_IMAGES)
-
-                // 分批处理图片，避免大量图片同时处理导致内存峰值
-                const IMAGE_PROCESSING_BATCH_SIZE = Config.IMAGE_PROCESSING_BATCH_SIZE
-                const validImages = []
-
-                for (let i = 0; i < imagesToProcess.length; i += IMAGE_PROCESSING_BATCH_SIZE) {
-                    const batch = imagesToProcess.slice(i, i + IMAGE_PROCESSING_BATCH_SIZE)
-                    const batchPromises = batch.map(async (imageUrl) => {
-                        try {
-                            let imageBuffer = await urlToBuffer(imageUrl)
-                            if (!imageBuffer) {
-                                logger.warn(`[AI-Plugin] 获取图片失败: ${imageUrl}`)
-                                return null
-                            }
-
-                            // 检查图片大小，超过限制则压缩
-                            const sizeMB = imageBuffer.length / (1024 * 1024)
-                            if (sizeMB > MAX_IMAGE_SIZE_MB) {
-                                logger.warn(`[AI-Plugin] 图片过大 (${sizeMB.toFixed(2)}MB)，正在压缩...`)
-                                const sharp = (await import('sharp')).default
-                                imageBuffer = await sharp(imageBuffer)
-                                    .resize(Config.MAX_IMAGE_RESIZE, Config.MAX_IMAGE_RESIZE, { fit: 'inside', withoutEnlargement: true })
-                                    .jpeg({ quality: Config.IMAGE_QUALITY })
-                                    .toBuffer()
-                            }
-
-                            let mimeType = getImageMimeType(imageBuffer)
-                            let finalBuffer = imageBuffer
-
-                            if (mimeType === 'image/gif') {
-                                finalBuffer = await (await import('sharp')).default(imageBuffer).toFormat('png').toBuffer()
-                                mimeType = 'image/png'
-                            }
-
-                            return {
-                                "inline_data": {
-                                    "mime_type": mimeType || 'image/jpeg',
-                                    "data": finalBuffer.toString('base64')
-                                }
-                            }
-                        } catch (err) {
-                            logger.warn(`[AI-Plugin] 图片处理异常: ${err.message}`)
-                            return null
-                        }
-                    })
-
-                    const batchResults = await Promise.all(batchPromises)
-                    validImages.push(...batchResults.filter(img => img !== null))
-                }
-                
-                if (validImages.length < allImages.length) {
-                    const failedCount = allImages.length - validImages.length
-                    logger.warn(`[AI-Plugin] ${failedCount} 张图片处理失败`)
-                }
-                
+                const validImages = await processImagesInBatches(allImages)
                 currentUserTurnParts.push(...validImages)
             }
 
@@ -576,6 +522,11 @@ export class ChatHandler extends plugin {
                     const updatedHistory = [...history, { "role": "user", "parts": currentUserTurnParts }, { "role": "model", "parts": [{ "text": finalResponseText }] }]
                     await this.conversationManager.saveUserHistory(userId, updatedHistory)
 
+                    // 异步记录 Token 用量
+                    if (result.usage) {
+                        this.conversationManager.db.recordTokenUsage(userId, getTodayDateStr(), modelGroupKey, result.usage)
+                    }
+
                     if (updatedHistory.length >= Config.AUTO_SUMMARY_THRESHOLD) {
                         logger.info(`[AI-Plugin] 用户 ${userId} 对话已达 ${updatedHistory.length} 轮，自动触发增量总结`)
                         const todayStr = getTodayDateStr()
@@ -682,6 +633,45 @@ export class ChatHandler extends plugin {
                 await e.reply(`呜...文件发送失败了！\n但别担心，文件已经成功保存在服务器上了哦：\n${filePath}`, true)
             }
         }
+    }
+
+    async showTokenUsage(e) {
+        const usage = await this.conversationManager.db.getTokenUsage(e.user_id)
+        if (usage.length === 0) return e.reply("还没有 Token 用量记录哦～多和我聊聊天吧！")
+        const msg = this._formatTokenUsage(usage, `你的 Token 用量统计`)
+        await e.reply(msg)
+    }
+
+    async showTokenUsageByDate(e) {
+        const match = e.msg.match(/^#ai用量统计\s+(\d{4}-\d{2}-\d{2})$/i)
+        const date = match[1]
+        const usage = await this.conversationManager.db.getTokenUsage(e.user_id, date, date)
+        if (usage.length === 0) return e.reply(`${date} 没有 Token 用量记录`)
+        const msg = this._formatTokenUsage(usage, `${date} Token 用量统计`)
+        await e.reply(msg)
+    }
+
+    async showAllTokenUsage(e) {
+        const usage = await this.conversationManager.db.getAllTokenUsage()
+        if (usage.length === 0) return e.reply("还没有任何 Token 用量记录")
+        const msg = this._formatTokenUsage(usage, "全部用户 Token 用量统计", true)
+        await e.reply(msg)
+    }
+
+    _formatTokenUsage(rows, title, showUser = false) {
+        let totalPrompt = 0, totalCompletion = 0, totalAll = 0
+        const lines = [`--- ${title} ---`]
+
+        for (const row of rows) {
+            totalPrompt += row.total_prompt
+            totalCompletion += row.total_completion
+            totalAll += row.total_tokens
+            const prefix = showUser ? `[${row.user_id}] ` : ''
+            lines.push(`${prefix}${row.date_str} | ${row.model_group} | 入${row.total_prompt} 出${row.total_completion} | 共${row.total_tokens} tokens (${row.count}次)`)
+        }
+
+        lines.push(`\n📊 合计: 入${totalPrompt} 出${totalCompletion} | 总计 ${totalAll} tokens`)
+        return lines.join('\n')
     }
 
     async switchThinkingMode(e) {

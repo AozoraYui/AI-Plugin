@@ -299,53 +299,49 @@ export class ConversationManager {
         const redisKey = `ai-plugin:history:${userId}`
         const cacheExpire = Config.REDIS_CACHE_EXPIRE_SECONDS
 
-        try {
-            const historyToSave = this.cloneHistoryForSaving(history)
-            await redis.set(redisKey, JSON.stringify(historyToSave), { EX: cacheExpire })
-        } catch (error) {
-            logger.error(`[AI-Plugin] 保存用户 ${userId} 的历史到Redis失败:`, error)
-        }
+        // Redis 和 SQLite 写入互不依赖，并行执行以减少延迟
+        const historyToSave = this.cloneHistoryForSaving(history)
 
-        try {
-            const dateStr = getTodayDateStr()
+        const redisPromise = (async () => {
+            try {
+                await redis.set(redisKey, JSON.stringify(historyToSave), { EX: cacheExpire })
+            } catch (error) {
+                logger.error(`[AI-Plugin] 保存用户 ${userId} 的历史到Redis失败:`, error)
+            }
+        })()
 
-            // 按日期分组保存完整历史到 SQLite
-            // 对于从 Redis 加载的历史（没有 date_str），统一标记为今天
-            // 对于从迁移加载的历史（有 date_str），保留原有日期
-            const historyWithDate = history.map(turn => ({
-                ...turn,
-                date_str: turn.date_str || dateStr
-            }))
+        const dbPromise = (async () => {
+            try {
+                const dateStr = getTodayDateStr()
 
-            // 按日期分组
-            const groupedByDate = {}
-            for (const turn of historyWithDate) {
-                const date = turn.date_str
-                if (!groupedByDate[date]) {
-                    groupedByDate[date] = []
+                // 按日期分组保存完整历史到 SQLite
+                // 对于从 Redis 加载的历史（没有 date_str），统一标记为今天
+                // 对于从迁移加载的历史（有 date_str），保留原有日期
+                const historyWithDate = history.map(turn => ({
+                    ...turn,
+                    date_str: turn.date_str || dateStr
+                }))
+
+                // 按日期分组
+                const groupedByDate = {}
+                for (const turn of historyWithDate) {
+                    const date = turn.date_str
+                    if (!groupedByDate[date]) {
+                        groupedByDate[date] = []
+                    }
+                    groupedByDate[date].push(turn)
                 }
-                groupedByDate[date].push(turn)
-            }
 
-            // 保存每个日期的对话到 SQLite
-            for (const [date, dayHistory] of Object.entries(groupedByDate)) {
-                await this.db.saveConversation(userId, dayHistory)
+                // 保存每个日期的对话到 SQLite
+                for (const [date, dayHistory] of Object.entries(groupedByDate)) {
+                    await this.db.saveConversation(userId, dayHistory)
+                }
+            } catch (dbError) {
+                logger.error(`[AI-Plugin] 持久化保存用户 ${userId} 的历史到SQLite失败:`, dbError)
             }
-        } catch (dbError) {
-            logger.error(`[AI-Plugin] 持久化保存用户 ${userId} 的历史到SQLite失败:`, dbError)
-        }
-    }
+        })()
 
-    async resetChatHistory(userId) {
-        try {
-            const redisKey = `ai-plugin:history:${userId}`
-            await redis.del(redisKey)
-            await this.db.clearConversationHistory(userId)
-            return true
-        } catch (error) {
-            logger.error(`[AI-Plugin] 重置对话历史失败:`, error)
-            return false
-        }
+        await Promise.all([redisPromise, dbPromise])
     }
 
     _ensureSummaryCacheDir() {

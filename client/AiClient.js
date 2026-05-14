@@ -306,7 +306,8 @@ export class AiClient {
             try {
                 data = JSON.parse(responseText)
             } catch (jsonErr) {
-                if (responseText.includes('data: ') && (responseText.includes('[DONE]') || responseText.includes('"finish_reason":"stop"'))) {
+                // 流式 SSE 响应以 "data: " 开头，避免误判 JSON 中包含 "data:" 字段的情况
+                if (responseText.trimStart().startsWith('data: ') && (responseText.includes('[DONE]') || responseText.includes('"finish_reason":"stop"'))) {
                     data = this.parseStreamResponse(responseText, type)
                 } else {
                     throw new Error(`无法解析的响应: ${responseText.slice(0, 200)}...`)
