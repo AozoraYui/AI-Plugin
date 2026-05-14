@@ -180,9 +180,6 @@ export class ChatHandler extends plugin {
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆$`, 'i'), fnc: 'exportAllMemory', permission: 'master' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'), fnc: 'exportAllMemoryByDate', permission: 'master' },
                 { reg: /^#ai思考(开启|关闭)$/i, fnc: 'switchThinkingMode', permission: 'master' },
-                { reg: /^#ai用量统计$/i, fnc: 'showTokenUsage' },
-                { reg: /^#ai用量统计\s+(\d{4}-\d{2}-\d{2})$/i, fnc: 'showTokenUsageByDate' },
-                { reg: /^#ai用量统计\s+all$/i, fnc: 'showAllTokenUsage', permission: 'master' },
             ]
         })
         this.client = global.AIPluginClient
@@ -522,11 +519,6 @@ export class ChatHandler extends plugin {
                     const updatedHistory = [...history, { "role": "user", "parts": currentUserTurnParts }, { "role": "model", "parts": [{ "text": finalResponseText }] }]
                     await this.conversationManager.saveUserHistory(userId, updatedHistory)
 
-                    // 异步记录 Token 用量
-                    if (result.usage) {
-                        this.conversationManager.db.recordTokenUsage(userId, getTodayDateStr(), modelGroupKey, result.usage)
-                    }
-
                     if (updatedHistory.length >= Config.AUTO_SUMMARY_THRESHOLD) {
                         logger.info(`[AI-Plugin] 用户 ${userId} 对话已达 ${updatedHistory.length} 轮，自动触发增量总结`)
                         const todayStr = getTodayDateStr()
@@ -633,45 +625,6 @@ export class ChatHandler extends plugin {
                 await e.reply(`呜...文件发送失败了！\n但别担心，文件已经成功保存在服务器上了哦：\n${filePath}`, true)
             }
         }
-    }
-
-    async showTokenUsage(e) {
-        const usage = await this.conversationManager.db.getTokenUsage(e.user_id)
-        if (usage.length === 0) return e.reply("还没有 Token 用量记录哦～多和我聊聊天吧！")
-        const msg = this._formatTokenUsage(usage, `你的 Token 用量统计`)
-        await e.reply(msg)
-    }
-
-    async showTokenUsageByDate(e) {
-        const match = e.msg.match(/^#ai用量统计\s+(\d{4}-\d{2}-\d{2})$/i)
-        const date = match[1]
-        const usage = await this.conversationManager.db.getTokenUsage(e.user_id, date, date)
-        if (usage.length === 0) return e.reply(`${date} 没有 Token 用量记录`)
-        const msg = this._formatTokenUsage(usage, `${date} Token 用量统计`)
-        await e.reply(msg)
-    }
-
-    async showAllTokenUsage(e) {
-        const usage = await this.conversationManager.db.getAllTokenUsage()
-        if (usage.length === 0) return e.reply("还没有任何 Token 用量记录")
-        const msg = this._formatTokenUsage(usage, "全部用户 Token 用量统计", true)
-        await e.reply(msg)
-    }
-
-    _formatTokenUsage(rows, title, showUser = false) {
-        let totalPrompt = 0, totalCompletion = 0, totalAll = 0
-        const lines = [`--- ${title} ---`]
-
-        for (const row of rows) {
-            totalPrompt += row.total_prompt
-            totalCompletion += row.total_completion
-            totalAll += row.total_tokens
-            const prefix = showUser ? `[${row.user_id}] ` : ''
-            lines.push(`${prefix}${row.date_str} | ${row.model_group} | 入${row.total_prompt} 出${row.total_completion} | 共${row.total_tokens} tokens (${row.count}次)`)
-        }
-
-        lines.push(`\n📊 合计: 入${totalPrompt} 出${totalCompletion} | 总计 ${totalAll} tokens`)
-        return lines.join('\n')
     }
 
     async switchThinkingMode(e) {

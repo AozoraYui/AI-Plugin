@@ -192,10 +192,7 @@ export class HelpHandler extends plugin {
 
 > 📊 Token 统计
   - 对话回复底部显示 Token 消耗与耗时
-  - 全量/增量总结在日志中记录 Token 消耗详情
-  - #ai用量统计 查看个人 Token 用量汇总
-  - #ai用量统计 [日期] 查看指定日期用量
-  - #ai用量统计 all 管理员查看全部用户用量`
+  - 全量/增量总结在日志中记录 Token 消耗详情`
 
         const forwardMsgArr = [
             msg1_header,
