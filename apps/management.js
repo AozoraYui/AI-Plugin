@@ -23,6 +23,7 @@ export class ManagementHandler extends plugin {
                 { reg: /^#ai(禁用|启用)\s*(.+)$/i, fnc: 'toggleModelDisabledState', permission: 'master' },
                 { reg: /^#ai权限模式\s*(whitelist|blacklist)$/i, fnc: 'switchAccessMode', permission: 'master' },
                 { reg: /^#ai权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(\d+)$/i, fnc: 'modifyAccess', permission: 'master' },
+                { reg: /^#ai权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*$/i, fnc: 'modifyAccess', permission: 'master' },
                 { reg: /^#ai权限列表$/i, fnc: 'listAccessControl', permission: 'master' },
                 { reg: /^#ai信任群(添加|删除)\s*(\d+)$/i, fnc: 'modifyTrustedGroup', permission: 'master' },
                 { reg: /^#ai信任群列表$/i, fnc: 'listTrustedGroups', permission: 'master' },

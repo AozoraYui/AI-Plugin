@@ -86,10 +86,17 @@ export async function checkAccess(e) {
 
     const config = getAccessConfig()
     const unauthorizedMsg = "抱歉哦，" + Config.AI_NAME + "暂时还不能在这里或为你提供这项服务呢~ (´-ω-`)"
+    const userId = String(e.user_id)
+
+    // 用户黑名单全局拦截（无论群聊还是私聊）
+    if (config.blacklist_users.includes(userId)) {
+        logger.debug(`[AI-Plugin] 用户 ${userId} 在黑名单中，已忽略消息`)
+        return false
+    }
 
     if (e.isGroup) {
         const groupId = String(e.group_id)
-        // 黑名单优先级最高（全局拦截）
+        // 群黑名单拦截
         if (config.blacklist_groups.includes(groupId)) {
             logger.debug(`[AI-Plugin] 群 ${groupId} 在黑名单中，已忽略消息`)
             return false
@@ -102,13 +109,7 @@ export async function checkAccess(e) {
             }
         }
     } else {
-        const userId = String(e.user_id)
-        // 黑名单优先级最高（全局拦截）
-        if (config.blacklist_users.includes(userId)) {
-            e.reply(unauthorizedMsg, true)
-            return false
-        }
-        // 白名单模式下，还需在白名单中才允许访问
+        // 私聊：白名单模式下还需在白名单中
         if (config.mode === 'whitelist') {
             if (!config.whitelist_users.includes(userId)) {
                 e.reply(unauthorizedMsg, true)
