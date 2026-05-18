@@ -89,26 +89,28 @@ export async function checkAccess(e) {
 
     if (e.isGroup) {
         const groupId = String(e.group_id)
+        // 黑名单优先级最高（全局拦截）
+        if (config.blacklist_groups.includes(groupId)) {
+            logger.debug(`[AI-Plugin] 群 ${groupId} 在黑名单中，已忽略消息`)
+            return false
+        }
+        // 白名单模式下，还需在白名单中才允许访问
         if (config.mode === 'whitelist') {
             if (!config.whitelist_groups.includes(groupId)) {
                 logger.debug(`[AI-Plugin] 群 ${groupId} 不在白名单中，已忽略消息`)
                 return false
             }
-        } else {
-            if (config.blacklist_groups.includes(groupId)) {
-                logger.debug(`[AI-Plugin] 群 ${groupId} 在黑名单中，已忽略消息`)
-                return false
-            }
         }
     } else {
         const userId = String(e.user_id)
+        // 黑名单优先级最高（全局拦截）
+        if (config.blacklist_users.includes(userId)) {
+            e.reply(unauthorizedMsg, true)
+            return false
+        }
+        // 白名单模式下，还需在白名单中才允许访问
         if (config.mode === 'whitelist') {
             if (!config.whitelist_users.includes(userId)) {
-                e.reply(unauthorizedMsg, true)
-                return false
-            }
-        } else {
-            if (config.blacklist_users.includes(userId)) {
                 e.reply(unauthorizedMsg, true)
                 return false
             }
