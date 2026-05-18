@@ -96,6 +96,10 @@ export async function checkAccess(e) {
 
     if (e.isGroup) {
         const groupId = String(e.group_id)
+        // 白名单用户可以豁免群黑名单
+        if (config.whitelist_users.includes(userId)) {
+            return true
+        }
         // 群黑名单拦截
         if (config.blacklist_groups.includes(groupId)) {
             logger.debug(`[AI-Plugin] 群 ${groupId} 在黑名单中，已忽略消息`)
