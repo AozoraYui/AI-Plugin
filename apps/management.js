@@ -76,12 +76,20 @@ export class ManagementHandler extends plugin {
     }
 
     async modifyAccess(e) {
-        const match = e.msg.match(/^#ai权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(?:\[CQ:at,qq=(\d+)[^\]]*\]|(\d+))$/i)
-        if (!match) return
-
-        const action = match[1]
-        const typeKeyword = match[2]
-        const id = match[3] || match[4]
+        const textMatch = e.msg.match(/^#ai权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(\d+)$/i)
+        if (!textMatch) {
+            const atMatch = e.msg.match(/^#ai权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*$/i)
+            if (!atMatch) return
+            const atSeg = e.message?.find(m => m.type === 'at')
+            if (!atSeg?.qq) return
+            var action = atMatch[1]
+            var typeKeyword = atMatch[2]
+            var id = String(atSeg.qq)
+        } else {
+            var action = textMatch[1]
+            var typeKeyword = textMatch[2]
+            var id = textMatch[3]
+        }
 
         // 输入验证
         if (!/^\d{5,15}$/.test(id)) {
