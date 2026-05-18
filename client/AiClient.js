@@ -208,7 +208,8 @@ export class AiClient {
 
     parseResponse(data, type) {
         if (data.error) {
-            return { success: false, error: data.error.message }
+            const errorMsg = data.error.message || data.error || '未知错误'
+            return { success: false, error: typeof errorMsg === 'string' ? errorMsg : JSON.stringify(errorMsg) }
         }
 
         const usage = data.usage || null
@@ -223,14 +224,28 @@ export class AiClient {
 
         if (type === 'image') {
             let generatedImageUrl = null
-            generatedImageUrl = data?.choices?.[0]?.message?.images?.[0]?.image_url?.url ||
-                data?.choices?.[0]?.message?.images?.[0]?.url
+
+            // OpenAI images API 标准格式: data.data[0].url
+            generatedImageUrl = data?.data?.[0]?.url
+
+            // 兼容格式: data.choices[0].message.images[0].image_url.url
+            if (!generatedImageUrl) {
+                generatedImageUrl = data?.choices?.[0]?.message?.images?.[0]?.image_url?.url ||
+                    data?.choices?.[0]?.message?.images?.[0]?.url
+            }
+
+            // 兼容格式: data.choices[0].message.content 中的 markdown 图片链接
             if (!generatedImageUrl) {
                 const responseText = data?.choices?.[0]?.message?.content || ""
                 const imageUrlMatch = responseText.match(/!\[.*?\]\((.*?)\)/)
                 if (imageUrlMatch && imageUrlMatch[1]) {
                     generatedImageUrl = imageUrlMatch[1]
                 }
+            }
+
+            // 如果是 base64 格式 (data.data[0].b64_json)，转换为 data URL
+            if (!generatedImageUrl && data?.data?.[0]?.b64_json) {
+                generatedImageUrl = `data:image/png;base64,${data.data[0].b64_json}`
             }
 
             if (generatedImageUrl) {
