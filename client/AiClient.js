@@ -339,6 +339,10 @@ export class AiClient {
                     usage: result.usage
                 }
             } else {
+                // 当错误信息为空或极短时，打印原始响应以便排查
+                if (!result.error || result.error.length < 5) {
+                    logger.warn(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 返回空错误，原始响应: ${responseText.slice(0, 500)}`)
+                }
                 throw new Error(`API业务错误: ${result.error}`)
             }
         } catch (err) {
