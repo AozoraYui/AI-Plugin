@@ -301,7 +301,8 @@ export class ChatHandler extends plugin {
                     }
 
                     if (replyText.trim()) {
-                        const separator = "\n=== 引用/转发内容 ===\n"
+                        const sourceSender = sourceMsg.nickname || sourceMsg.sender?.nickname || "未知用户"
+                        const separator = `\n=== 引用${sourceSender}的消息 ===\n`
                         if (!userMessage) {
                             userMessage = replyText.trim()
                         } else {
