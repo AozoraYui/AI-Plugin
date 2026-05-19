@@ -95,7 +95,7 @@ export class ImageHandler extends plugin {
 
         let allImages = []
         const replyImages = await takeSourceMsg(e, { img: true })
-        logger.debug(`[AI-Plugin] takeSourceMsg 结果: ${JSON.stringify(replyImages?.slice?.(0, 2))}, e.source: ${!!e.source}, hasReplySeg: ${!!e.message?.find(m => m.type === 'reply')}`)
+        logger.info(`[AI-Plugin] takeSourceMsg: replyImages=${JSON.stringify(replyImages?.slice?.(0, 2))}, e.source=${!!e.source}, e.source?.seq=${e.source?.seq}, hasReplySeg=${!!e.message?.find(m => m.type === 'reply')}, replySegId=${e.message?.find(m => m.type === 'reply')?.id}, hasGetReply=${typeof e.getReply === 'function'}`)
         if (replyImages) allImages = allImages.concat(replyImages)
         const currentImages = e.message.filter(m => m.type === "image").map(m => m.url)
         if (currentImages.length > 0) allImages = allImages.concat(currentImages)

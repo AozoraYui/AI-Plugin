@@ -174,16 +174,27 @@ export async function getAvatarUrl(qq) {
 
 export async function takeSourceMsg(e, { img } = {}) {
     let source = null
-    if (typeof e.getReply === 'function') source = await e.getReply()
+    if (typeof e.getReply === 'function') {
+        source = await e.getReply()
+        logger.info(`[AI-Plugin] takeSourceMsg: getReply() -> ${!!source}, msgCount=${source?.message?.length}`)
+    }
     else if (e.source) {
-        if (e.group?.getChatHistory) source = (await e.group.getChatHistory(e.source.seq, 1))?.pop()
-        else if (e.friend?.getChatHistory) source = (await e.friend.getChatHistory(e.source.time, 1))?.pop()
+        if (e.group?.getChatHistory) {
+            source = (await e.group.getChatHistory(e.source.seq, 1))?.pop()
+            logger.info(`[AI-Plugin] takeSourceMsg: getChatHistory(seq=${e.source.seq}) -> ${!!source}, msgCount=${source?.message?.length}`)
+        }
+        else if (e.friend?.getChatHistory) {
+            source = (await e.friend.getChatHistory(e.source.time, 1))?.pop()
+            logger.info(`[AI-Plugin] takeSourceMsg: friend.getChatHistory -> ${!!source}`)
+        }
     }
     if (!source) {
-        // TRSS/NapCat 兜底：从 e.message 的 reply segment 获取回复消息ID
         const replySeg = e.message?.find(m => m.type === 'reply')
         if (replySeg?.id && e.group?.getChatHistory) {
             source = (await e.group.getChatHistory(replySeg.id, 1))?.pop()
+            logger.info(`[AI-Plugin] takeSourceMsg: replySeg fallback(id=${replySeg.id}) -> ${!!source}, msgCount=${source?.message?.length}`)
+        } else {
+            logger.info(`[AI-Plugin] takeSourceMsg: all methods failed, replySeg=${!!replySeg}, replySegId=${replySeg?.id}, hasGroup=${!!e.group?.getChatHistory}`)
         }
     }
     if (!source) return false
