@@ -179,6 +179,13 @@ export async function takeSourceMsg(e, { img } = {}) {
         if (e.group?.getChatHistory) source = (await e.group.getChatHistory(e.source.seq, 1))?.pop()
         else if (e.friend?.getChatHistory) source = (await e.friend.getChatHistory(e.source.time, 1))?.pop()
     }
+    if (!source) {
+        // TRSS/NapCat 兜底：从 e.message 的 reply segment 获取回复消息ID
+        const replySeg = e.message?.find(m => m.type === 'reply')
+        if (replySeg?.id && e.group?.getChatHistory) {
+            source = (await e.group.getChatHistory(replySeg.id, 1))?.pop()
+        }
+    }
     if (!source) return false
     if (img) {
         const imgArr = source.message?.filter(s => s.type === "image" && s.url).map(s => s.url) || []
