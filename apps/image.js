@@ -107,20 +107,17 @@ export class ImageHandler extends plugin {
         let presetName = '自定义'
 
         try {
-            if (allImages.length === 0 && !isCustomCommand) {
-                const atSeg = e.message.find(m => m.type === "at")
-                if (atSeg?.qq) {
-                    allImages.push(await getAvatarUrl(atSeg.qq))
-                } else {
-                    allImages.push(await getAvatarUrl(e.user_id))
-                }
+            // 处理 @：回复消息时跳过第一个 @（QQ 自动加的）
+            let atSegments = e.message.filter(m => m.type === "at" && m.qq)
+            if (e.source && atSegments.length > 0) {
+                atSegments = atSegments.slice(1)
+            }
+            for (const atSeg of atSegments) {
+                allImages.push(await getAvatarUrl(atSeg.qq))
             }
 
-            if (isCustomCommand) {
-                const atSegments = e.message.filter(m => m.type === "at" && m.qq)
-                for (const atSeg of atSegments) {
-                    allImages.push(await getAvatarUrl(atSeg.qq))
-                }
+            if (allImages.length === 0 && !isCustomCommand && !e.source) {
+                allImages.push(await getAvatarUrl(e.user_id))
             }
 
             const imagesToProcess = allImages.slice(0, Config.MAX_IMAGES_PER_MESSAGE)
