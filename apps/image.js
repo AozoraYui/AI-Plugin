@@ -109,15 +109,16 @@ export class ImageHandler extends plugin {
 
         try {
             // 处理 @：回复消息时跳过第一个 @（QQ 自动加的）
+            const hasReply = e.source || e.message?.find(m => m.type === 'reply')
             let atSegments = e.message.filter(m => m.type === "at" && m.qq)
-            if (e.source && atSegments.length > 0) {
+            if (hasReply && atSegments.length > 0) {
                 atSegments = atSegments.slice(1)
             }
             for (const atSeg of atSegments) {
                 allImages.push(await getAvatarUrl(atSeg.qq))
             }
 
-            if (allImages.length === 0 && !isCustomCommand && !e.source) {
+            if (allImages.length === 0 && !isCustomCommand && !hasReply) {
                 allImages.push(await getAvatarUrl(e.user_id))
             }
 
