@@ -37,7 +37,7 @@ export class ImageHandler extends plugin {
 
     generateCommandRegex(presets) {
         const allCommands = presets.flatMap(p => [p.command, ...(p.aliases || [])]).filter(Boolean)
-        return allCommands.length > 0 ? `^#([a-zA-Z0-9]*)(${allCommands.join('|')})(?:@(\\d+)|(\\d+))?$` : `^#无任何作图预设$`
+        return allCommands.length > 0 ? `^#([a-zA-Z0-9]*)(${allCommands.join('|')})(?:\\s+(.*))?$` : `^#无任何作图预设$`
     }
 
     updateDynamicRule() {
@@ -64,6 +64,7 @@ export class ImageHandler extends plugin {
         let modelGroupKey = 'flash'
         let isCustomCommand = false
         let instruction = ''
+        let extraInstruction = ''
         let command = ''
         let match
 
@@ -84,6 +85,7 @@ export class ImageHandler extends plugin {
                     isCustomCommand = false
                     const prefix = match[1].toLowerCase()
                     command = match[2]
+                    extraInstruction = (match[3] || '').trim()
                     modelGroupKey = resolveModelGroup(prefix)
                 }
             }
@@ -144,7 +146,8 @@ export class ImageHandler extends plugin {
                     await setMsgEmojiLike(e, 10)
                     return e.reply(`❌ 未找到指令 #${command} 对应的预设。`)
                 }
-                parts.push({ "text": preset.prompt })
+                const prompt = extraInstruction ? `${preset.prompt} ${extraInstruction}` : preset.prompt
+                parts.push({ "text": prompt })
                 presetName = preset.name
             }
 
@@ -168,7 +171,7 @@ export class ImageHandler extends plugin {
 
                     const replyMsg = isCustomCommand
                         ? `✅ 创作完成 (${elapsed}s${tokenInfo}) @${result.platform}`
-                        : `✅ 生成完成 (${elapsed}s${tokenInfo})｜预设：${presetName} @${result.platform}`
+                        : `✅ 生成完成 (${elapsed}s${tokenInfo})｜预设：${presetName}${extraInstruction ? ` + 自定义` : ''} @${result.platform}`
 
                     let imageToSend = result.data
                     if (result.data.startsWith('data:image/')) {
