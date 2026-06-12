@@ -47,13 +47,13 @@ export class UpdateHandler extends plugin {
         }
 
         const localHash = this._runGit('git rev-parse HEAD')
-        const remoteHash = this._runGit('git rev-parse origin/master')
+        const remoteHash = this._runGit('git rev-parse origin/main')
 
         if (localHash.success && remoteHash.success && localHash.output === remoteHash.output) {
             return e.reply(`✅ 已是最新版本\n本地: ${localHash.output.slice(0, 7)}\n远程: ${remoteHash.output.slice(0, 7)}`)
         }
 
-        const pullResult = this._runGit('git pull origin master')
+        const pullResult = this._runGit('git pull origin main')
         if (pullResult.success) {
             const newHash = this._runGit('git rev-parse HEAD')
             const hashStr = newHash.success ? newHash.output.slice(0, 7) : 'unknown'
@@ -75,12 +75,12 @@ export class UpdateHandler extends plugin {
 
         await e.reply('⚠️ 正在强制更新（将丢弃本地修改）...')
 
-        const resetResult = this._runGit('git reset --hard origin/master')
+        const resetResult = this._runGit('git reset --hard origin/main')
         if (!resetResult.success) {
             return e.reply(`❌ git reset 失败:\n${resetResult.output}`)
         }
 
-        const pullResult = this._runGit('git pull origin master')
+        const pullResult = this._runGit('git pull origin main')
         if (pullResult.success) {
             const newHash = this._runGit('git rev-parse HEAD')
             const hashStr = newHash.success ? newHash.output.slice(0, 7) : 'unknown'
