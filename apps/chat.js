@@ -353,16 +353,21 @@ export class ChatHandler extends plugin {
 
             // Vision Relay：非多模态主模型时，先用 Vision 模型描述图片
             if (allImages.length > 0 && this.client.enableVisionRelay) {
-                logger.info(`[AI-Plugin] Vision Relay: 检测到 ${allImages.length} 张图片，开始转述`)
-                const visionConfig = this.client.visionModel
-                const description = await relayImagesToVision(allImages, userMessage, this.client, visionConfig)
+                const visionModels = this.client.visionModels
+                logger.info(`[AI-Plugin] Vision Relay: 检测到 ${allImages.length} 张图片，开始转述，共 ${visionModels.length} 个 Vision 模型`)
+                let description = ''
+                for (const visionConf of visionModels) {
+                    description = await relayImagesToVision(allImages, userMessage, this.client, visionConf)
+                    if (description) break
+                    logger.warn(`[AI-Plugin] Vision Relay: ${visionConf.provider_id}/${visionConf.model_id} 转述失败，尝试下一个`)
+                }
                 if (description) {
                     const relayHeader = '\n\n【以下是对用户发送图片的详细描述，请基于此描述理解图片内容：】\n'
                     userMessage = (userMessage || '') + relayHeader + description + '\n【图片描述结束】\n'
-                    allImages = []  // 不再传图片给非多模态主模型
+                    allImages = []
                     logger.info(`[AI-Plugin] Vision Relay: 转述完成，图片已替换为文本描述`)
                 } else {
-                    logger.warn('[AI-Plugin] Vision Relay: 转述失败，保留原始图片发送给主模型')
+                    logger.warn('[AI-Plugin] Vision Relay: 所有 Vision 模型转述均失败，保留原始图片发送给主模型')
                 }
             }
 

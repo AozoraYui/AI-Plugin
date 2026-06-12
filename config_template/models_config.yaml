@@ -56,6 +56,18 @@
 # 当主模型不支持多模态（无法识图）时，启用此功能后，
 # 插件会先用 Vision 模型描述图片，再将描述文本喂给主模型。
 # 适用于纯文本模型间接"看图"。
+#
+# vision_model: 支持配置多个 Vision 模型，按顺序依次尝试
+#   单模型（兼容旧格式）:
+#     vision_model:
+#       provider_id: "xxx"
+#       model_id: "gemini-2.5-flash"
+#   多模型:
+#     vision_model:
+#       - provider_id: "xxx"
+#         model_id: "gemini-2.5-flash"
+#       - provider_id: "yyy"
+#         model_id: "gemini-3-flash"
 # ================================================
 enable_vision_relay: false
 

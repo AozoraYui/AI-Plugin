@@ -26,13 +26,29 @@ export class AiClient {
     /** 是否启用图文转述 */
     get enableVisionRelay() {
         return this.visionRelayConfig?.enable_vision_relay === true &&
-               !!this.visionRelayConfig?.vision_model?.provider_id &&
-               !!this.visionRelayConfig?.vision_model?.model_id
+               !!(this.hasVisionModels)
     }
 
-    /** Vision 模型配置 */
-    get visionModel() {
-        return this.visionRelayConfig?.vision_model || null
+    /** 是否有可用的 Vision 模型 */
+    get hasVisionModels() {
+        const v = this.visionRelayConfig?.vision_model
+        if (!v) return false
+        // 兼容旧格式（单对象）
+        if (v.provider_id && v.model_id) return true
+        // 新格式（列表）
+        if (Array.isArray(v) && v.length > 0) return v.some(m => m.provider_id && m.model_id)
+        return false
+    }
+
+    /** Vision 模型配置列表（统一返回数组） */
+    get visionModels() {
+        const v = this.visionRelayConfig?.vision_model
+        if (!v) return []
+        // 兼容旧格式（单对象）
+        if (v.provider_id && v.model_id) return [{ provider_id: v.provider_id, model_id: v.model_id }]
+        // 新格式（列表）
+        if (Array.isArray(v)) return v.filter(m => m.provider_id && m.model_id)
+        return []
     }
 
     /** 对话指令关键词 */
@@ -216,8 +232,9 @@ export class AiClient {
                 }
 
                 if (this.enableVisionRelay) {
-                    const vc = this.visionRelayConfig
-                    logger.info(`[AI-Plugin] Vision Relay 已启用: ${vc.vision_model.provider_id}/${vc.vision_model.model_id}`)
+                    const models = this.visionModels
+                    const names = models.map(m => `${m.provider_id}/${m.model_id}`).join(', ')
+                    logger.info(`[AI-Plugin] Vision Relay 已启用: ${models.length} 个模型 (${names})`)
                 } else {
                     logger.debug('[AI-Plugin] Vision Relay 未启用或配置不完整')
                 }
