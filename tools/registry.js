@@ -76,6 +76,26 @@ class ToolRegistry {
     }
 
     /**
+     * 检测并提取文件读取意图（关键词匹配 + 路径提取）
+     * @returns {{ path: string } | null}
+     */
+    detectFileReadIntent(msg) {
+        if (!msg || !msg.trim()) return null
+        const patterns = [
+            /(?:帮我|请|给|来)?(?:读|读取|查看|看看|打开)(?:一下)?(?:这个|文件)?\s*(?:\/[\w\.\-\/]+)/,
+            /文件\s*(?:\/[\w\.\-\/]+)/,
+        ]
+        for (const p of patterns) {
+            const match = msg.match(p)
+            if (match) {
+                const pathMatch = msg.match(/(\/[\w\.\-\/]+)/)
+                if (pathMatch) return { path: pathMatch[1] }
+            }
+        }
+        return null
+    }
+
+    /**
      * 用轻量 LLM 分析用户消息是否需要搜索
      * @param {string} userMessage - 用户消息文本
      * @param {object} client - AiClient 实例

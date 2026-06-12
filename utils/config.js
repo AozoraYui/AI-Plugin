@@ -81,6 +81,13 @@ const defaultConfig = {
     // 每日摘要生成失败时，使用原始片段的最大长度（字符数）
     // 使用场景: utils/common.js, utils/scheduler.js 中每日摘要降级处理
     FALLBACK_DAILY_SUMMARY_MAX_LENGTH: 500,
+    // ========== 文件读取工具配置 ==========
+    // 允许 AI/用户读取的目录白名单（绝对路径），不在名单内的路径拒绝读取
+    // 使用场景: tools/file_read.js
+    FILE_ROOTS: [],
+    // 单次读取文件最大大小（字节），默认 1MB，防止读取超大文件
+    // 使用场景: tools/file_read.js
+    FILE_MAX_SIZE: 1048576,
     version: 'v1.0.0'
 }
 
@@ -299,6 +306,8 @@ export const Config = {
     set FALLBACK_CHUNK_MAX_LENGTH(val) { config.FALLBACK_CHUNK_MAX_LENGTH = val },
     get FALLBACK_DAILY_SUMMARY_MAX_LENGTH() { return config.FALLBACK_DAILY_SUMMARY_MAX_LENGTH ?? defaultConfig.FALLBACK_DAILY_SUMMARY_MAX_LENGTH },
     set FALLBACK_DAILY_SUMMARY_MAX_LENGTH(val) { config.FALLBACK_DAILY_SUMMARY_MAX_LENGTH = val },
+    get FILE_ROOTS() { return config.FILE_ROOTS ?? defaultConfig.FILE_ROOTS },
+    get FILE_MAX_SIZE() { return config.FILE_MAX_SIZE ?? defaultConfig.FILE_MAX_SIZE },
     presets,
     reloadPresets() {
         this.presets = loadPresetsSync()

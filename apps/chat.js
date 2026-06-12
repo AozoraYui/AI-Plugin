@@ -363,6 +363,19 @@ export class ChatHandler extends plugin {
                 }
             }
 
+            // 本地文件读取
+            const fileReadIntent = toolRegistry.detectFileReadIntent(userMessage)
+            if (fileReadIntent) {
+                logger.info(`[AI-Plugin] 检测到文件读取意图: ${fileReadIntent.path}`)
+                const fileResult = await toolRegistry.execute('file_read', { path: fileReadIntent.path })
+                if (fileResult.success) {
+                    userMessage = userMessage + fileResult.data
+                    logger.info('[AI-Plugin] 文件读取完成，结果已注入提示词')
+                } else {
+                    logger.warn(`[AI-Plugin] 文件读取失败: ${fileResult.error}`)
+                }
+            }
+
             // Vision Relay：非多模态主模型时，先用 Vision 模型描述图片
             if (allImages.length > 0 && this.client.enableVisionRelay && this.client._checkModelGroupNeedsVisionRelay(modelGroupKey)) {
                 const visionModels = this.client.visionModels
