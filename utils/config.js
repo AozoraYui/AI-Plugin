@@ -87,7 +87,7 @@ const defaultConfig = {
     FILE_ROOTS: [],
     // 单次读取文件最大大小（字节），默认 1MB，防止读取超大文件
     // 使用场景: tools/file_read.js
-    FILE_MAX_SIZE: 1048576,
+    FILE_MAX_SIZE: 4194304,
     version: 'v1.0.0'
 }
 
