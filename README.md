@@ -47,14 +47,13 @@
 
 ### 安装步骤
 
-1. **克隆插件到 plugins 目录**
+1. **克隆插件到 plugins 目录(确保在云崽根目录)**
 ```bash
-git clone https://github.com/AozoraYui/AI-Plugin.git
+git clone https://github.com/AozoraYui/AI-Plugin.git .plugins/AI-Plugin
 ```
 
-2. **安装依赖**
+2. **安装依赖（在AI-Plugin插件目录执行）**
 ```bash
-cd AI-Plugin
 pnpm install
 # 或 npm install
 ```
