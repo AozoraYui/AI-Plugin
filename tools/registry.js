@@ -61,6 +61,21 @@ class ToolRegistry {
     }
 
     /**
+     * 检测用户消息是否询问服务器系统状态（关键词匹配）
+     */
+    detectSystemInfoIntent(msg) {
+        if (!msg || !msg.trim()) return false
+        const patterns = [
+            /服务器.*(状态|信息|情况|怎么样|好不好|还行吗)/,
+            /(查看|看看|查一下|帮我看看|帮我查).*(服务器|机器|主机)/,
+            /(CPU|内存|温度|负载|硬盘|磁盘|运行时间|频率|进程).*(多少|怎么样|如何)/,
+            /(温度|散热).*(高不高|多少|怎么样)/,
+            /(系统|服务器).*(信息|状态|负载|健康)/,
+        ]
+        return patterns.some(p => p.test(msg))
+    }
+
+    /**
      * 用轻量 LLM 分析用户消息是否需要搜索
      * @param {string} userMessage - 用户消息文本
      * @param {object} client - AiClient 实例

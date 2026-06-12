@@ -351,6 +351,18 @@ export class ChatHandler extends plugin {
                 }
             }
 
+            // 系统信息查询
+            if (toolRegistry.detectSystemInfoIntent(userMessage)) {
+                logger.info('[AI-Plugin] 检测到系统信息查询意图')
+                const sysResult = await toolRegistry.execute('system_info', {})
+                if (sysResult.success) {
+                    userMessage = userMessage + sysResult.data
+                    logger.info('[AI-Plugin] 系统信息查询完成，结果已注入提示词')
+                } else {
+                    logger.warn(`[AI-Plugin] 系统信息查询失败: ${sysResult.error}`)
+                }
+            }
+
             // Vision Relay：非多模态主模型时，先用 Vision 模型描述图片
             if (allImages.length > 0 && this.client.enableVisionRelay && this.client._checkModelGroupNeedsVisionRelay(modelGroupKey)) {
                 const visionModels = this.client.visionModels
