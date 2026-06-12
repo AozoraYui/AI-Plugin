@@ -2,10 +2,13 @@
 # 每个供应商包含以下字段：
 #   id: 供应商标识（唯一）
 #   name: 供应商显示名称
+#   priority: 优先级（数字越小越优先，默认1）
+#             同优先级内按模型得分（成功率+延迟）排序
+#             高优先级组全部失败后自动降级到下一组
+#             例：priority 1 为主力，priority 2 为备用
 #   base_url: API 基础地址
 #   api_key: API 密钥
 #   model_groups: 模型组配置
-#     请根据模型能力以及响应速度综合评估后手动排序归类，此排序归类与模型名称以及flash/pro/ultra模型分组无直接关联
 #     flash: Flash 模型组（用于 #chat, #draw 等指令）
 #     pro: Pro 模型组（用于 #prochat 指令）
 #     ultra: Ultra 模型组（用于 #ultrachat, #ultradraw 指令）
@@ -15,23 +18,21 @@
 
 - id: "your-provider-id"
   name: "供应商名称"
+  priority: 1
   base_url: "https://api.example.com/v1"
   api_key: "your-api-key-here"
   model_groups:
-    # Flash 组: 用于 #chat, #draw 等指令
     flash:
       chat_models:
         - "gemini-2.5-flash"
       draw_models:
         - "gemini-2.5-flash-image"
 
-    # Pro 组: 用于 #prochat 指令
     pro:
       chat_models:
         - "gemini-2.5-pro"
       draw_models: []
 
-    # Ultra 组: 用于 #ultrachat, #ultradraw 等指令
     ultra:
       chat_models:
         - "gemini-3-pro"

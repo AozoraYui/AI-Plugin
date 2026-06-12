@@ -113,20 +113,24 @@ export class AiClient {
         return successRate * 0.7 + latencyScore * 0.3
     }
 
-    /** 智能排序模型池：分高者优先，排除熔断模型 */
+    /** 智能排序模型池：先按 provider priority 分组，同组内按得分排序 */
     _sortModelPool(pool) {
         const now = Date.now()
         const scored = pool.map(item => {
             const key = `${item.provider.id}-${item.modelId}`
             if (!this.modelStatus[key]) this._initModelStatusEntry(key)
-            return { ...item, score: this._getModelScore(this.modelStatus[key]) }
+            const priority = item.provider.priority ?? 1
+            return { ...item, score: this._getModelScore(this.modelStatus[key]), priority }
         })
 
-        // 按得分降序排列
-        scored.sort((a, b) => b.score - a.score)
+        // 按 priority 升序 → 得分降序
+        scored.sort((a, b) => {
+            if (a.priority !== b.priority) return a.priority - b.priority
+            return b.score - a.score
+        })
 
         const logging = scored.map(s =>
-            `${s.provider.name}(${s.modelId}) 得分:${s.score.toFixed(2)}`
+            `${s.provider.name}(${s.modelId}) [P${s.priority}] 得分:${s.score.toFixed(2)}`
         ).join(', ')
         logger.debug(`[AI-Plugin] 模型排序: ${logging}`)
 
