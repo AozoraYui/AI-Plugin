@@ -352,7 +352,7 @@ export class ChatHandler extends plugin {
             }
 
             // Vision Relay：非多模态主模型时，先用 Vision 模型描述图片
-            if (allImages.length > 0 && this.client.enableVisionRelay) {
+            if (allImages.length > 0 && this.client.enableVisionRelay && this.client._checkModelGroupNeedsVisionRelay(modelGroupKey)) {
                 const visionModels = this.client.visionModels
                 logger.info(`[AI-Plugin] Vision Relay: 检测到 ${allImages.length} 张图片，开始转述，共 ${visionModels.length} 个 Vision 模型`)
                 let description = ''

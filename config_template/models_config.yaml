@@ -6,6 +6,8 @@
 #             同优先级内按模型得分（成功率+延迟）排序
 #             高优先级组全部失败后自动降级到下一组
 #             例：priority 1 为主力，priority 2 为备用
+#   multimodal: 是否为多模态（支持识图），默认 true
+#             设为 false 表示纯文本模型，有图片时会自动启用 Vision Relay
 #   base_url: API 基础地址
 #   api_key: API 密钥
 #   model_groups: 模型组配置

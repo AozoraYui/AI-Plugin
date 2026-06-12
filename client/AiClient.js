@@ -51,6 +51,13 @@ export class AiClient {
         return []
     }
 
+    /** 检查当前模型组是否所有对话模型都来自非多模态 provider（需要 Vision Relay） */
+    _checkModelGroupNeedsVisionRelay(modelGroupKey) {
+        const pool = this.activeModelPools[modelGroupKey]?.chat
+        if (!pool || pool.length === 0) return true  // 无模型，保守启用
+        return pool.every(item => !item.provider.multimodal)
+    }
+
     /** 对话指令关键词 */
     get chatCommand() {
         return this.commandConfig?.CHAT_COMMAND || 'chat'
