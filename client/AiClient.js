@@ -4,6 +4,11 @@ import yaml from 'yaml'
 import { Config, MODELS_CONFIG_FILE, MODEL_STATUS_FILE, DISABLED_MODELS_FILE, TEMPLATE_DIR_EXPORT } from '../utils/config.js'
 import { fetchWithProxy } from '../utils/common.js'
 
+// 熔断常量
+const CONSECUTIVE_FAILS_THRESHOLD = 3    // 连续失败 N 次后熔断
+const COOLDOWN_DURATION_MS = 30000        // 熔断冷却 30 秒
+const LATENCY_SAMPLE_WEIGHT = 0.3         // 新延迟占 30% 加权（平滑指数）
+
 export class AiClient {
     constructor() {
         this.modelsConfig = []
@@ -27,6 +32,105 @@ export class AiClient {
     /** Vision 模型配置 */
     get visionModel() {
         return this.visionRelayConfig?.vision_model || null
+    }
+
+    /** 初始化模型状态条目（兼容旧格式） */
+    _initModelStatusEntry(key) {
+        const entry = this.modelStatus[key]
+        if (!entry) {
+            this.modelStatus[key] = {
+                status: 'unknown',
+                success_count: 0,
+                fail_count: 0,
+                avg_latency_ms: 0,
+                last_used: 0,
+                consecutive_fails: 0,
+                cooldown_until: 0
+            }
+            return
+        }
+        // 兼容旧格式：补充缺失字段
+        if (entry.success_count === undefined) entry.success_count = 0
+        if (entry.fail_count === undefined) entry.fail_count = 0
+        if (entry.avg_latency_ms === undefined) entry.avg_latency_ms = 0
+        if (entry.last_used === undefined) entry.last_used = 0
+        if (entry.consecutive_fails === undefined) entry.consecutive_fails = 0
+        if (entry.cooldown_until === undefined) entry.cooldown_until = 0
+    }
+
+    /** 记录模型请求成功 */
+    _recordModelSuccess(key, elapsedMs) {
+        const entry = this.modelStatus[key]
+        if (!entry) return
+        entry.status = 'ok'
+        entry.success_count = (entry.success_count || 0) + 1
+        entry.consecutive_fails = 0
+        entry.cooldown_until = 0
+        entry.last_used = Date.now()
+        // 平滑加权计算平均延迟
+        if (entry.avg_latency_ms) {
+            entry.avg_latency_ms = Math.round(
+                entry.avg_latency_ms * (1 - LATENCY_SAMPLE_WEIGHT) + elapsedMs * LATENCY_SAMPLE_WEIGHT
+            )
+        } else {
+            entry.avg_latency_ms = elapsedMs
+        }
+    }
+
+    /** 记录模型请求失败，超过阈值触发熔断 */
+    _recordModelFail(key) {
+        const entry = this.modelStatus[key]
+        if (!entry) return
+        entry.status = 'failed'
+        entry.fail_count = (entry.fail_count || 0) + 1
+        entry.consecutive_fails = (entry.consecutive_fails || 0) + 1
+        entry.last_used = Date.now()
+        if (entry.consecutive_fails >= CONSECUTIVE_FAILS_THRESHOLD) {
+            entry.cooldown_until = Date.now() + COOLDOWN_DURATION_MS
+            logger.warn(`[AI-Plugin] 模型 ${key} 连续失败 ${entry.consecutive_fails} 次，进入 ${COOLDOWN_DURATION_MS / 1000}s 熔断`)
+        }
+    }
+
+    /** 检查模型是否在熔断期 */
+    _isInCooldown(entry) {
+        if (!entry?.cooldown_until) return false
+        return Date.now() < entry.cooldown_until
+    }
+
+    /** 计算模型得分（越高越好） */
+    _getModelScore(entry) {
+        // 在熔断期直接返回 -1（排除）
+        if (this._isInCooldown(entry)) return -1
+
+        const total = (entry.success_count || 0) + (entry.fail_count || 0)
+        if (total === 0) return 0 // 新模型，放中间
+
+        const successRate = (entry.success_count || 0) / total
+        // 成功率权重 70%，延迟权重 30%
+        const latencyScore = entry.avg_latency_ms
+            ? Math.max(0, 1 - entry.avg_latency_ms / 30000)
+            : 0.5
+        return successRate * 0.7 + latencyScore * 0.3
+    }
+
+    /** 智能排序模型池：分高者优先，排除熔断模型 */
+    _sortModelPool(pool) {
+        const now = Date.now()
+        const scored = pool.map(item => {
+            const key = `${item.provider.id}-${item.modelId}`
+            if (!this.modelStatus[key]) this._initModelStatusEntry(key)
+            return { ...item, score: this._getModelScore(this.modelStatus[key]) }
+        })
+
+        // 按得分降序排列
+        scored.sort((a, b) => b.score - a.score)
+
+        const logging = scored.map(s =>
+            `${s.provider.name}(${s.modelId}) 得分:${s.score.toFixed(2)}`
+        ).join(', ')
+        logger.debug(`[AI-Plugin] 模型排序: ${logging}`)
+
+        return scored
     }
 
     loadModelsConfig() {
@@ -170,6 +274,7 @@ export class AiClient {
                 if (group.chat_models) {
                     for (const modelId of group.chat_models) {
                         const statusKey = `${provider.id}-${modelId}`
+                        this._initModelStatusEntry(statusKey)
                         if (this.modelStatus[statusKey]?.status === 'ok') {
                             this.activeModelPools[groupName].chat.push({ provider, modelId })
                         }
@@ -178,6 +283,7 @@ export class AiClient {
                 if (group.draw_models) {
                     for (const modelId of group.draw_models) {
                         const statusKey = `${provider.id}-${modelId}`
+                        this._initModelStatusEntry(statusKey)
                         if (this.modelStatus[statusKey]?.status === 'ok') {
                             this.activeModelPools[groupName].image.push({ provider, modelId })
                         }
@@ -193,6 +299,8 @@ export class AiClient {
             logMsg += `\n  - 分组 [${groupName}]: 对话 ${chatCount} 个, 绘图 ${drawCount} 个`
         }
         logger.debug(logMsg)
+        // 持久化可能的旧格式升级
+        this.saveModelStatus()
     }
 
     buildRequest(type, payload, providerConfig, modelId, maxTokens = 8192) {
@@ -392,17 +500,36 @@ export class AiClient {
         let lastError = `模型组 [${modelGroupKey}] 中没有可用的 [${taskTypeName}] 模型。`
 
         if (modelPool && modelPool.length > 0) {
-            logger.debug(`[AI-Plugin] 将从 [${modelGroupKey}] 模型组的 [${taskTypeName}] 池中（共 ${modelPool.length} 个模型）依次尝试...`)
+            // 智能排序模型池
+            const sortedPool = this._sortModelPool(modelPool)
+
+            const cooldownCount = sortedPool.filter(s => s.score < 0).length
+            const availableCount = sortedPool.filter(s => s.score >= 0).length
+            logger.debug(`[AI-Plugin] 模型池: 共 ${sortedPool.length} 个, 可用 ${availableCount} 个, 熔断 ${cooldownCount} 个`)
+
+            // 如果全部熔断，强行全部放出来
+            const poolToTry = availableCount > 0
+                ? sortedPool.filter(s => s.score >= 0)
+                : sortedPool.map(s => ({ ...s, score: 0 }))
+
             lastError = ''
-            for (const { provider, modelId } of modelPool) {
+            for (const { provider, modelId, score } of poolToTry) {
+                const statusKey = `${provider.id}-${modelId}`
                 const startTime = Date.now()
                 const result = await this.attemptRequest(type, payload, provider, modelId, maxTokens)
-                const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
+                const elapsedMs = Date.now() - startTime
+                const elapsed = (elapsedMs / 1000).toFixed(2)
+
                 if (result.success) {
-                    logger.debug(`[AI-Plugin] 请求成功: ${provider.name} (${modelId})，耗时 ${elapsed}s`)
+                    this._recordModelSuccess(statusKey, elapsedMs)
+                    this.saveModelStatus()
+                    logger.debug(`[AI-Plugin] 请求成功: ${provider.name} (${modelId})，耗时 ${elapsed}s, 得分:${score?.toFixed(2)}`)
                     return result
                 }
-                logger.debug(`[AI-Plugin] 请求失败: ${provider.name} (${modelId})，耗时 ${elapsed}s，错误: ${result.error}`)
+
+                this._recordModelFail(statusKey)
+                this.saveModelStatus()
+                logger.debug(`[AI-Plugin] 请求失败: ${provider.name} (${modelId})，耗时 ${elapsed}s，得分:${score?.toFixed(2)}, 错误: ${result.error}`)
                 lastError += `[${provider.name}-${modelId}]: ${result.error}\n`
             }
 
@@ -457,7 +584,9 @@ export class AiClient {
 
             const responseTime = Date.now() - startTime
 
+            this._initModelStatusEntry(statusKey)
             this.modelStatus[statusKey] = {
+                ...this.modelStatus[statusKey],
                 status: 'ok',
                 responseTime,
                 usage: data.usage || null,
@@ -467,7 +596,9 @@ export class AiClient {
             return { success: true }
         } catch (error) {
             const responseTime = Date.now() - startTime
+            this._initModelStatusEntry(statusKey)
             this.modelStatus[statusKey] = {
+                ...this.modelStatus[statusKey],
                 status: 'failed',
                 error: error.message,
                 responseTime,
@@ -547,12 +678,6 @@ export class AiClient {
 
         let count = 0
         const now = new Date().toISOString()
-        const pseudoSuccessStatus = {
-            status: 'ok',
-            responseTime: null,
-            usage: null,
-            lastTested: now
-        }
 
         for (const provider of this.modelsConfig) {
             for (const groupName in provider.model_groups) {
@@ -565,7 +690,9 @@ export class AiClient {
                 for (const modelId of allModelsInGroup) {
                     const statusKey = `${provider.id}-${modelId}`
 
-                    this.modelStatus[statusKey] = pseudoSuccessStatus
+                    this._initModelStatusEntry(statusKey)
+                    this.modelStatus[statusKey].status = 'ok'
+                    this.modelStatus[statusKey].lastTested = now
 
                     if (this.disabledModels.has(statusKey)) {
                         this.disabledModels.delete(statusKey)
@@ -625,13 +752,9 @@ export class AiClient {
             this.disabledModels.delete(statusKey)
             this.saveDisabledModels()
 
-            const pseudoSuccessStatus = {
-                status: 'ok',
-                responseTime: null,
-                usage: null,
-                lastTested: new Date().toISOString()
-            }
-            this.modelStatus[statusKey] = pseudoSuccessStatus
+            this._initModelStatusEntry(statusKey)
+            this.modelStatus[statusKey].status = 'ok'
+            this.modelStatus[statusKey].lastTested = new Date().toISOString()
             this.saveModelStatus()
             this._buildActiveModelPools()
 

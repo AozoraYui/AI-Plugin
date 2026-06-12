@@ -190,6 +190,16 @@ export class ManagementHandler extends plugin {
                     const icon = status.status === 'ok' ? '✅' : '❌'
                     const time = status.responseTime ? `${status.responseTime}ms` : 'N/A'
                     
+                    let extraInfo = time
+                    // 如果有运行统计，显示成功率和延迟
+                    if (status.success_count !== undefined && (status.success_count > 0 || status.fail_count > 0)) {
+                        const total = status.success_count + (status.fail_count || 0)
+                        const rate = total > 0 ? Math.round(status.success_count / total * 100) : 0
+                        extraInfo = `成功率${rate}%`
+                        if (status.avg_latency_ms) extraInfo += ` | 延迟${Math.round(status.avg_latency_ms / 1000)}s`
+                        if (status.consecutive_fails >= 3) extraInfo += ` | 🔥熔断`
+                    }
+                    
                     let tokenInfo = ''
                     if (status.status === 'ok' && status.usage) {
                         if (status.usage.prompt_tokens !== undefined && status.usage.completion_tokens !== undefined) {
@@ -198,7 +208,7 @@ export class ManagementHandler extends plugin {
                             tokenInfo = ` | Total: ${status.usage.total_tokens} Tokens`
                         }
                     }
-                    return ` ${icon} ${time}${tokenInfo}`
+                    return ` ${icon} ${extraInfo}${tokenInfo}`
                 }
 
                 if (group.chat_models) {
