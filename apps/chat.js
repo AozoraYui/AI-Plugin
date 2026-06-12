@@ -7,6 +7,7 @@ import { ConversationManager } from '../model/conversation.js'
 import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
+import { toolRegistry } from '../tools/index.js'
 
 function extractCardInfo(data) {
     const lines = []
@@ -316,6 +317,20 @@ export class ChatHandler extends plugin {
             if (currentImages.length > 0) allImages = allImages.concat(currentImages)
 
             if (!userMessage && allImages.length === 0) return e.reply('请输入内容或发送图片呀', true)
+
+            // 工具调用：检测搜索意图
+            const toolIntent = toolRegistry.detectToolIntent(userMessage)
+            if (toolIntent) {
+                logger.info(`[AI-Plugin] 检测到搜索意图，调用工具: ${toolIntent.tool}`)
+                const toolResult = await toolRegistry.execute(toolIntent.tool, toolIntent.args)
+                if (toolResult.success) {
+                    const formattedResult = toolRegistry.formatToolResult(toolIntent.tool, toolResult.data)
+                    userMessage = userMessage + formattedResult
+                    logger.info(`[AI-Plugin] 搜索工具执行成功，结果已注入提示词`)
+                } else {
+                    logger.warn(`[AI-Plugin] 搜索工具执行失败: ${toolResult.error}`)
+                }
+            }
 
             const isSingleMode = e._singleMode === true
             const userId = e.user_id
