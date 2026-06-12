@@ -1,6 +1,6 @@
 /**
- * 本地文件只读工具
- * 允许 AI 读取用户指定的文件（仅限白名单目录）
+ * 本地文件只读 & 目录浏览工具
+ * 允许 AI 读取白名单目录下的文件和目录列表（只读）
  */
 
 import { toolRegistry } from './registry.js'
@@ -31,6 +31,67 @@ function checkPathAllowed(filePath) {
     return { allowed: false, reason: `路径不在白名单内: ${realPath}` }
 }
 
+/**
+ * 列出目录内容
+ * @param {string} dirPath - 目录绝对路径
+ * @returns {string} 格式化的目录列表
+ */
+function readLocalDir(dirPath) {
+    try {
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true })
+
+        // 分类排序：目录优先，然后按名称排序
+        const dirs = []
+        const files = []
+        for (const entry of entries) {
+            if (entry.isDirectory()) {
+                dirs.push({ name: entry.name, type: 'dir', path: path.join(dirPath, entry.name) })
+            } else if (entry.isFile()) {
+                try {
+                    const fileStat = fs.statSync(path.join(dirPath, entry.name))
+                    files.push({ name: entry.name, type: 'file', path: path.join(dirPath, entry.name), size: fileStat.size })
+                } catch {
+                    files.push({ name: entry.name, type: 'file', path: path.join(dirPath, entry.name), size: 0 })
+                }
+            } else {
+                files.push({ name: entry.name, type: 'other', path: path.join(dirPath, entry.name), size: 0 })
+            }
+        }
+
+        dirs.sort((a, b) => a.name.localeCompare(b.name))
+        files.sort((a, b) => a.name.localeCompare(b.name))
+
+        const total = entries.length
+        const dirCount = dirs.length
+        const fileCount = files.length
+
+        let output = `\n\n【目录「${path.basename(dirPath)}」(路径: ${dirPath}) 的内容：共 ${total} 项 (${dirCount} 个目录, ${fileCount} 个文件)】\n\n`
+
+        if (dirs.length > 0) {
+            output += `📁 目录:\n`
+            for (const d of dirs) {
+                output += `  [目录] ${d.name}/\n`
+            }
+            output += `\n`
+        }
+
+        if (files.length > 0) {
+            output += `📄 文件:\n`
+            for (const f of files) {
+                const sizeKB = (f.size / 1024).toFixed(1)
+                output += `  [文件] ${f.name}  (${sizeKB}KB)\n`
+            }
+        }
+
+        output += `\n【目录内容结束】\n`
+        logger.info(`[AI-Plugin] DirRead: ${dirPath} (${total} 项)`)
+        return output
+    } catch (err) {
+        logger.warn(`[AI-Plugin] DirRead 读取失败: ${dirPath} - ${err.message}`)
+        return `\n\n【目录读取失败】${err.message}\n`
+    }
+}
+
 async function readLocalFile(filePath) {
     if (!filePath || typeof filePath !== 'string' || !filePath.trim()) {
         return '\n\n【文件读取失败】未指定文件路径。\n'
@@ -51,10 +112,16 @@ async function readLocalFile(filePath) {
         return `\n\n【文件读取失败】文件不存在: ${realPath}\n`
     }
 
-    // 类型检查（只读文件，拒绝目录）
+    // 类型检查：文件或目录
     const stat = fs.statSync(realPath)
+
+    // 目录：列出内容
+    if (stat.isDirectory()) {
+        return readLocalDir(realPath)
+    }
+
     if (!stat.isFile()) {
-        return `\n\n【文件读取失败】路径不是文件: ${realPath}\n`
+        return `\n\n【文件读取失败】路径既不是文件也不是目录: ${realPath}\n`
     }
 
     // 大小检查
@@ -76,19 +143,51 @@ async function readLocalFile(filePath) {
 
 export const fileReadTool = {
     name: 'file_read',
-    description: '读取本地文件内容。仅限白名单目录，只读不写。',
+    description: '读取本地文件或目录内容。仅限白名单目录，只读不写。',
 
     functionSchema: {
         type: 'function',
         function: {
             name: 'file_read',
-            description: '读取本地文件内容（仅限白名单目录，只读）',
+            description: '读取本地文件内容或列出目录（仅限白名单目录，只读）',
             parameters: {
                 type: 'object',
                 properties: {
                     path: {
                         type: 'string',
-                        description: '文件的绝对路径'
+                        description: '文件或目录的绝对路径'
+                    }
+                },
+                required: ['path']
+            }
+        }
+    },
+
+    async execute(args) {
+        const content = await readLocalFile(args.path)
+        return content
+    },
+
+    formatResult(data) {
+        return data
+    }
+}
+
+export const dirReadTool = {
+    name: 'dir_read',
+    description: '列出指定目录下的文件和子目录（仅限白名单目录，只读）',
+
+    functionSchema: {
+        type: 'function',
+        function: {
+            name: 'dir_read',
+            description: '列出指定目录下的文件和子目录列表（仅限白名单目录，只读）',
+            parameters: {
+                type: 'object',
+                properties: {
+                    path: {
+                        type: 'string',
+                        description: '目录的绝对路径'
                     }
                 },
                 required: ['path']
@@ -108,3 +207,4 @@ export const fileReadTool = {
 
 // 自动注册
 toolRegistry.register(fileReadTool)
+toolRegistry.register(dirReadTool)
