@@ -16,6 +16,8 @@ export class HelpHandler extends plugin {
 
     async showHelp(e) {
         const aiName = Config.AI_NAME
+        const chatCmd = Config.CHAT_COMMAND
+        const drawCmd = Config.DRAW_COMMAND
         const msg1_header = `
 你好，欢迎使用 AI 插件
 这里是${aiName}，你的多模型智能助手`
@@ -25,23 +27,23 @@ export class HelpHandler extends plugin {
 💬 智能对话 (${aiName})
 - - - - - - - - - - - - - - - - -
 ✨ 三档模型组，随心切换 ✨
-> #chat [内容]
+> #${chatCmd} [内容]
   使用 Flash 模型组，速度快，适合日常聊天。
-> #pchat [内容] / #prochat [内容]
+> #p${chatCmd} [内容] / #pro${chatCmd} [内容]
   使用 Pro 模型组，更聪明，适合复杂问题。
-> #uchat [内容] / #ultrachat [内容]
+> #u${chatCmd} [内容] / #ultra${chatCmd} [内容]
   使用 Ultra 模型组，旗舰性能！
 
-> #schat [内容]
+> #s${chatCmd} [内容]
   单次对话模式（Flash），不保存历史记录。
-> #pschat [内容] / #proschat [内容]
+> #ps${chatCmd} [内容] / #pros${chatCmd} [内容]
   单次对话模式（Pro），不保存历史记录。
-> #uschat [内容] / #ultraschat [内容]
+> #us${chatCmd} [内容] / #ultras${chatCmd} [内容]
   单次对话模式（Ultra），不保存历史记录。
 
 > 💡 所有对话指令都支持发送图片哦！
-  > 示例: #chat 你好呀！
-  > 示例: #pchat 这张图里是什么？ [图片]
+  > 示例: #${chatCmd} 你好呀！
+  > 示例: #p${chatCmd} 这张图里是什么？ [图片]
 
 > #导出${aiName}记忆
   导出该用户的对话记忆。
@@ -65,13 +67,13 @@ export class HelpHandler extends plugin {
 > 示例: #二次元 帮我画一只猫
 
 --- 自定义作图 ---
-> #draw [...]
+> #${drawCmd} [...]
   使用 Flash 模型组，性价比高。
-> #pdraw [...] / #prodraw [...]
+> #p${drawCmd} [...] / #pro${drawCmd} [...]
   使用 Pro 模型组。
-> #udraw [...] / #ultradraw [...]
+> #u${drawCmd} [...] / #ultra${drawCmd} [...]
   使用 Ultra 模型组，效果更佳！
-  > 示例: #udraw 一个女孩在星空下看书
+  > 示例: #u${drawCmd} 一个女孩在星空下看书
 
 --- 预设管理 (主人专用) ---
 > #画图预设列表pro

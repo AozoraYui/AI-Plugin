@@ -49,7 +49,6 @@
 
 1. **克隆插件到 plugins 目录**
 ```bash
-cd /path/to/Yunzai-Bot/plugins
 git clone https://github.com/AozoraYui/AI-Plugin.git
 ```
 

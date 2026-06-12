@@ -169,14 +169,15 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
 
 export class ChatHandler extends plugin {
     constructor() {
+        const chatCmd = Config.CHAT_COMMAND
         super({
             name: 'AI对话',
             dsc: '与AI进行智能对话',
             event: 'message',
             priority: -9101,
             rule: [
-                { reg: /^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)chat([\s\S]*)$/i, fnc: 'handleSingleChat' },
-                { reg: /^#([a-zA-Z0-9]*)chat([\s\S]*)$/i, fnc: 'handleChat' },
+                { reg: new RegExp(`^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)${chatCmd}([\\s\\S]*)$`, 'i'), fnc: 'handleSingleChat' },
+                { reg: new RegExp(`^#([a-zA-Z0-9]*)${chatCmd}([\\s\\S]*)$`, 'i'), fnc: 'handleChat' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}记忆$`, 'i'), fnc: 'exportMyMemory' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'), fnc: 'exportMemoryByDate' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆$`, 'i'), fnc: 'exportAllMemory', permission: 'master' },
@@ -191,7 +192,8 @@ export class ChatHandler extends plugin {
     async handleSingleChat(e) {
         if (!await checkAccess(e)) return true
 
-        const match = e.msg.match(/^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)chat([\s\S]*)/i)
+        const chatCmd = Config.CHAT_COMMAND
+        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)${chatCmd}([\\s\\S]*)`, 'i'))
         if (!match) return
 
         e._singleMode = true
@@ -203,14 +205,15 @@ export class ChatHandler extends plugin {
         if (resolveModelGroup(prefix1) !== 'flash') modelPrefix = prefix1
         if (resolveModelGroup(prefix2) !== 'flash') modelPrefix = prefix2
 
-        e.msg = `#${modelPrefix}chat${match[3]}`
+        e.msg = `#${modelPrefix}${chatCmd}${match[3]}`
         return this.handleChat(e)
     }
 
     async handleChat(e) {
         if (!await checkAccess(e)) return true
 
-        const match = e.msg.match(/^#([a-zA-Z0-9]*)chat([\s\S]*)/i)
+        const chatCmd = Config.CHAT_COMMAND
+        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)${chatCmd}([\\s\\S]*)`, 'i'))
         if (!match) return
 
         const prefix = match[1].toLowerCase()

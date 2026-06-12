@@ -13,13 +13,14 @@ import { PRESETS_FILE } from '../utils/config.js'
 
 export class ImageHandler extends plugin {
     constructor() {
+        const drawCmd = Config.DRAW_COMMAND
         super({
             name: 'AI作图',
             dsc: '使用AI生成图片',
             event: 'message',
             priority: -9101,
             rule: [
-                { reg: /^#([a-zA-Z0-9]*)draw([\s\S]*)$/i, fnc: 'generateImage', key: 'drawCommand' },
+                { reg: new RegExp(`^#([a-zA-Z0-9]*)${drawCmd}([\\s\\S]*)$`, 'i'), fnc: 'generateImage', key: 'drawCommand' },
                 { reg: /^#画图预设(列表|list)$/i, fnc: 'listPresets' },
                 { reg: /^#画图预设列表(pro|Pro)$/i, fnc: 'listPresetsPro' },
                 { reg: /^#画图预设重载$/i, fnc: 'reloadPresets', permission: 'master' },
@@ -68,7 +69,8 @@ export class ImageHandler extends plugin {
         let command = ''
         let match
 
-        const drawMatch = e.msg.match(/^#([a-zA-Z0-9]*)draw([\s\S]*)/i)
+        const drawCmd = Config.DRAW_COMMAND
+        const drawMatch = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)${drawCmd}([\\s\\S]*)`, 'i'))
         if (drawMatch) {
             match = drawMatch
             isCustomCommand = true
