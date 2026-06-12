@@ -82,11 +82,7 @@ const defaultConfig = {
     // 使用场景: utils/common.js, utils/scheduler.js 中每日摘要降级处理
     FALLBACK_DAILY_SUMMARY_MAX_LENGTH: 500,
     // ========== 文件读取工具配置 ==========
-    // 允许 AI/用户读取的目录白名单（绝对路径），不在名单内的路径拒绝读取
-    // 使用场景: tools/file_read.js
-    FILE_ROOTS: [],
-    // 单次读取文件最大大小（字节），默认 1MB，防止读取超大文件
-    // 使用场景: tools/file_read.js
+    // 单次读取文件最大大小（字节），默认 4MB
     FILE_MAX_SIZE: 4194304,
     version: 'v1.0.0'
 }
@@ -120,6 +116,7 @@ export const CHECKPOINT_DIR = path.join(DATA_DIR, 'memory_checkpoints')
 export const HISTORY_DIR = path.join(DATA_DIR, 'user_histories')
 export const AI_NAME_FILE = path.join(DATA_DIR, 'ai_name.yaml')
 export const TRUSTED_GROUPS_FILE = path.join(DATA_DIR, 'trusted_groups.yaml')
+export const FILE_ROOTS_FILE = path.join(DATA_DIR, 'file_roots.yaml')
 export const PROMPTS_FILE = path.join(DATA_DIR, 'ai_prompt.yaml')
 export const TEMPLATE_DIR_EXPORT = TEMPLATE_DIR
 
@@ -216,6 +213,26 @@ function saveTrustedGroups(groups) {
     }
 }
 
+function loadFileRoots() {
+    try {
+        if (!fs.existsSync(FILE_ROOTS_FILE)) {
+            logger.info(`[AI-Plugin] 未找到文件读取白名单配置，将从模板创建。`)
+            ensureDataDir()
+            copyFromTemplate('file_roots.yaml', FILE_ROOTS_FILE, '文件读取白名单')
+        }
+        const fileContent = fs.readFileSync(FILE_ROOTS_FILE, 'utf8')
+        const data = yaml.parse(fileContent)
+        if (data && Array.isArray(data.paths)) {
+            logger.info(`[AI-Plugin] 已加载 ${data.paths.length} 个文件读取白名单路径`)
+            return data.paths
+        }
+        return []
+    } catch (error) {
+        logger.error(`[AI-Plugin] 加载文件读取白名单失败: ${error.message}`)
+        return []
+    }
+}
+
 function loadPrompts() {
     ensureDataDir()
     try {
@@ -235,6 +252,7 @@ let config = {}
 const presets = loadPresetsSync()
 const loadedAIName = loadAIName()
 const loadedTrustedGroups = loadTrustedGroups()
+const loadedFileRoots = loadFileRoots()
 const loadedPrompts = loadPrompts()
 
 export const Config = {
@@ -306,7 +324,7 @@ export const Config = {
     set FALLBACK_CHUNK_MAX_LENGTH(val) { config.FALLBACK_CHUNK_MAX_LENGTH = val },
     get FALLBACK_DAILY_SUMMARY_MAX_LENGTH() { return config.FALLBACK_DAILY_SUMMARY_MAX_LENGTH ?? defaultConfig.FALLBACK_DAILY_SUMMARY_MAX_LENGTH },
     set FALLBACK_DAILY_SUMMARY_MAX_LENGTH(val) { config.FALLBACK_DAILY_SUMMARY_MAX_LENGTH = val },
-    get FILE_ROOTS() { return config.FILE_ROOTS ?? defaultConfig.FILE_ROOTS },
+    get FILE_ROOTS() { return loadedFileRoots ?? defaultConfig.FILE_ROOTS },
     get FILE_MAX_SIZE() { return config.FILE_MAX_SIZE ?? defaultConfig.FILE_MAX_SIZE },
     presets,
     reloadPresets() {
