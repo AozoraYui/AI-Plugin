@@ -48,7 +48,8 @@ async function getSystemInfo() {
 
     // CPU 温度 (需要 lm-sensors)
     const sensorsRaw = safeExec("sensors 2>/dev/null | grep -E '(Core|Package|temp|Tdie|Tctl|Composite)' | head -10 || echo N/A")
-    info.temperature = sensorsRaw !== '(无输出)' ? sensorsRaw : '(未安装 sensors 或传感器不可用)'
+    info.temperature = (sensorsRaw.includes('(命令失败') || sensorsRaw === 'N/A')
+        ? '(未安装 sensors 或传感器不可用)' : sensorsRaw
 
     // CPU 当前频率
     info.cpu_freq = safeExec("cat /proc/cpuinfo 2>/dev/null | grep 'cpu MHz' | head -4 | awk '{print $4}' | xargs -I{} echo '{} MHz' || lscpu 2>/dev/null | grep 'CPU MHz' || echo N/A")
@@ -56,22 +57,37 @@ async function getSystemInfo() {
     // 进程数
     info.processes = safeExec("ps aux --no-headers 2>/dev/null | wc -l || echo N/A")
 
-    // 网络流量（简化）
-    info.network = safeExec("ip -s link show 2>/dev/null | grep -A1 'state UP' | grep -v '^--$' || echo N/A")
+    // fastfetch / neofetch（优先 fastfetch，其次 neofetch，降级为纯文本）
+    const fastfetchRaw = safeExec('fastfetch --pipe 2>/dev/null || neofetch --stdout 2>/dev/null')
+    info.fastfetch = fastfetchRaw.includes('(命令失败') ? '' : fastfetchRaw
 
     // 格式化为文本
     let text = '\n\n【以下是从服务器获取到的实时系统状态信息：】\n'
-    text += `\n🖥️ 主机名: ${info.hostname}`
-    text += `\n📋 系统版本: ${info.os_version}`
-    text += `\n\n⏱️ 运行时间与负载:\n${info.uptime}`
-    text += `\n负载: ${info.loadavg}`
-    text += `\n\n🧠 CPU: ${info.cpu_model}`
-    text += `\n核心数: ${info.cpu_cores}`
-    text += `\n频率: ${info.cpu_freq}`
-    text += `\n\n🌡️ 温度:\n${info.temperature}`
-    text += `\n\n💾 内存:\n${info.memory}`
-    text += `\n📀 磁盘:\n${info.disk}`
-    text += `\n🔢 进程数: ${info.processes}`
+
+    // fastfetch/neofetch 优先展示（信息最全）
+    if (info.fastfetch) {
+        text += `\n\`\`\`\n${info.fastfetch}\n\`\`\`\n`
+        // 补充 fastfetch 没有覆盖的信息
+        if (info.temperature && !info.temperature.includes('不可用')) {
+            text += `\n🌡️ 温度:\n${info.temperature}\n`
+        }
+        if (info.processes && info.processes !== 'N/A') {
+            text += `\n🔢 进程数: ${info.processes}`
+        }
+    } else {
+        // 降级：传统格式
+        text += `\n🖥️ 主机名: ${info.hostname}`
+        text += `\n📋 系统版本: ${info.os_version}`
+        text += `\n\n⏱️ 运行时间与负载:\n${info.uptime}`
+        text += `\n负载: ${info.loadavg}`
+        text += `\n\n🧠 CPU: ${info.cpu_model}`
+        text += `\n核心数: ${info.cpu_cores}`
+        text += `\n频率: ${info.cpu_freq}`
+        text += `\n\n🌡️ 温度:\n${info.temperature}`
+        text += `\n\n💾 内存:\n${info.memory}`
+        text += `\n📀 磁盘:\n${info.disk}`
+        text += `\n🔢 进程数: ${info.processes}`
+    }
     text += `\n【系统信息结束】\n`
 
     return text
