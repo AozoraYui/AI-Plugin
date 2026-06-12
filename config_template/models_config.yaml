@@ -36,3 +36,16 @@
       chat_models:
         - "gemini-3-pro"
       draw_models: []
+
+---
+# ================================================
+# 图文转述（Vision Relay）配置
+# 当主模型不支持多模态（无法识图）时，启用此功能后，
+# 插件会先用 Vision 模型描述图片，再将描述文本喂给主模型。
+# 适用于纯文本模型间接"看图"。
+# ================================================
+enable_vision_relay: false
+
+vision_model:
+  provider_id: "your-provider-id"
+  model_id: "gemini-2.5-flash"

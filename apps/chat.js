@@ -8,6 +8,7 @@ import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
 import { toolRegistry } from '../tools/index.js'
+import { relayImagesToVision } from '../tools/index.js'
 
 function extractCardInfo(data) {
     const lines = []
@@ -344,6 +345,21 @@ export class ChatHandler extends plugin {
                     logger.info(`[AI-Plugin] 搜索完成，共 ${uniqueResults.length} 条唯一结果已注入提示词`)
                 } else {
                     logger.warn('[AI-Plugin] 所有搜索关键词均无结果')
+                }
+            }
+
+            // Vision Relay：非多模态主模型时，先用 Vision 模型描述图片
+            if (allImages.length > 0 && this.client.enableVisionRelay) {
+                logger.info(`[AI-Plugin] Vision Relay: 检测到 ${allImages.length} 张图片，开始转述`)
+                const visionConfig = this.client.visionModel
+                const description = await relayImagesToVision(allImages, userMessage, this.client, visionConfig)
+                if (description) {
+                    const relayHeader = '\n\n【以下是对用户发送图片的详细描述，请基于此描述理解图片内容：】\n'
+                    userMessage = (userMessage || '') + relayHeader + description + '\n【图片描述结束】\n'
+                    allImages = []  // 不再传图片给非多模态主模型
+                    logger.info(`[AI-Plugin] Vision Relay: 转述完成，图片已替换为文本描述`)
+                } else {
+                    logger.warn('[AI-Plugin] Vision Relay: 转述失败，保留原始图片发送给主模型')
                 }
             }
 

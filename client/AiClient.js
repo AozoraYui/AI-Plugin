@@ -10,14 +10,28 @@ export class AiClient {
         this.modelStatus = {}
         this.disabledModels = new Set()
         this.activeModelPools = {}
+        this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
         this.loadModelsConfig()
         this.loadModelStatus()
         this.loadDisabledModels()
         this._buildActiveModelPools()
     }
 
+    /** 是否启用图文转述 */
+    get enableVisionRelay() {
+        return this.visionRelayConfig?.enable_vision_relay === true &&
+               !!this.visionRelayConfig?.vision_model?.provider_id &&
+               !!this.visionRelayConfig?.vision_model?.model_id
+    }
+
+    /** Vision 模型配置 */
+    get visionModel() {
+        return this.visionRelayConfig?.vision_model || null
+    }
+
     loadModelsConfig() {
         this.modelsConfig = []
+        this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
         if (!fs.existsSync(MODELS_CONFIG_FILE)) {
             logger.info(`[AI-Plugin] 未找到模型配置文件，将从模板创建。`)
             const templatePath = path.join(TEMPLATE_DIR_EXPORT, 'models_config.yaml')
@@ -30,18 +44,39 @@ export class AiClient {
 
         try {
             const fileContent = fs.readFileSync(MODELS_CONFIG_FILE, 'utf8')
-            const configs = yaml.parse(fileContent)
-            if (Array.isArray(configs)) {
-                for (const provider of configs) {
-                    if (!provider.model_groups || typeof provider.model_groups !== 'object') {
-                        logger.error(`[AI-Plugin] 供应商 ${provider.id} 的配置缺少 'model_groups'，已跳过。`)
-                        continue
+            // 支持多文档 YAML：第一个文档为供应商列表，第二个为 Vision Relay 配置
+            const allDocs = yaml.parseAllDocuments(fileContent)
+            const providersDoc = allDocs[0]
+            const visionDoc = allDocs[1]
+
+            if (providersDoc) {
+                const configs = providersDoc.toJS()
+                if (Array.isArray(configs)) {
+                    for (const provider of configs) {
+                        if (!provider.model_groups || typeof provider.model_groups !== 'object') {
+                            logger.error(`[AI-Plugin] 供应商 ${provider.id} 的配置缺少 'model_groups'，已跳过。`)
+                            continue
+                        }
+                        this.modelsConfig.push(provider)
                     }
-                    this.modelsConfig.push(provider)
+                    logger.debug(`[AI-Plugin] 成功加载 ${this.modelsConfig.length} 个供应商配置。`)
+                } else {
+                    throw new Error("模型配置文件格式不正确，第一个文档应为YAML数组。")
                 }
-                logger.debug(`[AI-Plugin] 成功加载 ${this.modelsConfig.length} 个供应商配置。`)
             } else {
-                throw new Error("模型配置文件格式不正确，应为YAML数组。")
+                throw new Error("模型配置文件为空或格式不正确。")
+            }
+
+            if (visionDoc) {
+                const visionConfig = visionDoc.toJS()
+                if (visionConfig && typeof visionConfig === 'object') {
+                    this.visionRelayConfig = visionConfig
+                    if (this.enableVisionRelay) {
+                        logger.info(`[AI-Plugin] Vision Relay 已启用: ${visionConfig.vision_model.provider_id}/${visionConfig.vision_model.model_id}`)
+                    } else {
+                        logger.debug('[AI-Plugin] Vision Relay 未启用或配置不完整')
+                    }
+                }
             }
         } catch (error) {
             logger.error(`[AI-Plugin] 加载模型配置文件失败: ${error.message}`)
