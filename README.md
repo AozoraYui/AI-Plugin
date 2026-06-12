@@ -77,40 +77,44 @@ pnpm install
 
 在 `plugins/AI-Plugin/config/` 目录下创建或编辑以下文件（请根据模型能力以及响应速度综合评估后手动排序归类，此排序归类与模型名称无直接关联）：
 
-**`models_config.yaml`** - 模型供应商配置
+**`models_config.yaml`** - 模型供应商配置（YAML 多文档格式，用 `---` 分隔）
+
 ```yaml
-# 自定义指令关键词（可选，默认 chat/draw）
-chat_command: chat    # 可改为 c 等，用 #c 代替 #chat
-draw_command: draw    # 可改为 d 等，用 #d 代替 #draw
-
-# Vision Relay 图文转述（可选）
-enable_vision_relay: true   # 启用后非多模态模型也能"看图"
-vision_models:              # Vision 模型列表（自动故障转移）
-  - provider_id: provider1
-    model_id: gemini-2.5-flash
-
 # 模型供应商列表
-providers:
-  - id: provider1
-    name: 供应商名称
-    base_url: https://api.example.com/v1
-    api_key: your-api-key-here
-    priority: 1          # 优先级分组（数字越小越优先，同优先级按得分排序）
-    model_groups:
-      flash:
-        chat_models:
-          - gemini-2.5-flash
-        draw_models:
-          - gemini-2.5-flash-image
-      pro:
-        chat_models:
-          - gemini-2.5-pro
-        draw_models: []
-      ultra:
-        chat_models:
-          - gemini-3-pro
-        draw_models:
-          - gemini-3-flash-image
+- id: "provider1"
+  name: "供应商名称"
+  priority: 1          # 优先级分组（数字越小越优先）
+  base_url: "https://api.example.com/v1"
+  api_key: "your-api-key-here"
+  model_groups:
+    flash:
+      chat_models:
+        - "gemini-2.5-flash"
+      draw_models:
+        - "gemini-2.5-flash-image"
+    pro:
+      chat_models:
+        - "gemini-2.5-pro"
+      draw_models: []
+    ultra:
+      chat_models:
+        - "gemini-3-pro"
+      draw_models:
+        - "gemini-3-flash-image"
+
+---
+# 自定义指令关键词（可选，默认 chat/draw）
+# 例: 设为 "c" 后 → #c, #pc, #uc
+CHAT_COMMAND: chat
+DRAW_COMMAND: draw
+
+---
+# 图文转述（Vision Relay）配置（可选）
+enable_vision_relay: false  # 启用后非多模态模型也能"看图"
+
+vision_model:
+  provider_id: "provider1"
+  model_id: "gemini-2.5-flash"
 ```
 
 **`draw_presets.yaml`** - 作图预设配置
@@ -195,22 +199,18 @@ name: 诺亚
 
 > 💡 记忆命令同样支持模型组前缀：`#pai`/`#proai` → Pro，`#uai`/`#ultrai` → Ultra
 
-### 工具调用
+### 🔍 工具调用（对话中自动触发）
 
-AI 在对话中会自动识别意图并调用工具，以下也支持直接指令触发：
+AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单独指令**：
 
-| 指令 | 说明 |
-|------|------|
-| `#ai系统信息` / `#ai服务器状态` | 查看服务器 CPU、内存、温度等系统信息 |
-| `#ai文件读取 [路径]` | 读取白名单目录下的文件内容 |
-| `#ai目录浏览 [路径]` | 列出白名单目录下的文件和子目录 |
+| 工具能力 | 触发方式 | 说明 |
+|---------|---------|------|
+| 服务器状态查询 | 在对话中询问服务器状态（如`#chat 服务器状态怎么样`） | 返回 CPU、内存、温度、磁盘等信息，支持 fastfetch/neofetch |
+| 本地文件读取 | 在对话中提到文件路径（如`#chat 读一下 /etc/nginx/nginx.conf`） | 只读，仅限白名单目录，最大 4MB |
+| 目录浏览 | 在对话中提到目录路径（如`#chat 列出 /var/log 目录`） | 列出文件和子目录，同样受白名单限制 |
+| 联网搜索 | AI 自动判断是否需要搜索 | 注入搜索结果辅助回答，无需手动触发 |
 
-> 💡 **提示**：
-> - 工具调用同样受白名单限制，仅读取无法写入
-> - 文件读取白名单在 `config/file_roots.yaml` 中单独配置
-> - 文件最大读取大小为 4MB
-> - 系统信息查询支持 fastfetch / neofetch（自动检测）
-> - 联网搜索由 AI 自动判断是否需要，无需手动触发
+> 💡 文件读取白名单在 `config/file_roots.yaml` 中单独配置，AI 只能读取无法写入修改。
 
 ### 管理功能（管理员）
 | 指令 | 说明 |
