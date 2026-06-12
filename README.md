@@ -30,12 +30,27 @@
 - 支持导出个人/全部记忆
 - SQLite 数据库存储，按 QQ 号隔离用户
 
-### ⚙️ 管理功能
-- 多模型供应商支持
+### 🔍 工具调用
+- **服务器状态查询**：AI 可查看服务器 CPU、内存、温度等系统信息
+- **本地文件只读**：AI 可读取白名单目录下的文件内容（最大 4MB）
+- **目录浏览**：AI 可列出白名单目录下的文件和子目录，支持逐层深入浏览
+- **联网搜索**：AI 自动判断是否需要联网搜索，注入搜索结果辅助回答
+
+### 🖼️ Vision Relay（图文转述）
+- 非多模态模型可配置 Vision 模型做图片描述，间接获得"看图"能力
+- 支持配置多个 Vision 模型自动故障转移
+
+### ⚙️ 模型管理
+- 多模型供应商支持，通过 `provider_id + model_id` 唯一标识模型
+- 模型优先级分组与智能排序（基于成功率与响应速度）
+- 模型熔断机制：连续失败 3 次后熔断 30 秒，全部熔断时无视冷却强制尝试
 - 模型自动测试与状态管理
+- 模型启用/禁用管理
+
+### 🛡️ 其他管理功能
 - 白名单/黑名单权限控制
 - 思考过程显示开关
-- 模型启用/禁用管理
+- 自定义对话/绘图指令关键词（chat/draw 可配置为 c/d 等）
 - 插件一键更新（git pull / 强制更新）
 
 ## 📦 部署方法
@@ -64,25 +79,38 @@ pnpm install
 
 **`models_config.yaml`** - 模型供应商配置
 ```yaml
-- id: provider1
-  name: 供应商名称
-  base_url: https://api.example.com/v1
-  api_key: your-api-key-here
-  model_groups:
-    flash:
-      chat_models:
-        - gemini-2.5-flash
-      draw_models:
-        - gemini-2.5-flash-image
-    pro:
-      chat_models:
-        - gemini-2.5-pro
-      draw_models: []
-    ultra:
-      chat_models:
-        - gemini-3-pro
-      draw_models:
-        - gemini-3-flash-image
+# 自定义指令关键词（可选，默认 chat/draw）
+chat_command: chat    # 可改为 c 等，用 #c 代替 #chat
+draw_command: draw    # 可改为 d 等，用 #d 代替 #draw
+
+# Vision Relay 图文转述（可选）
+enable_vision_relay: true   # 启用后非多模态模型也能"看图"
+vision_models:              # Vision 模型列表（自动故障转移）
+  - provider_id: provider1
+    model_id: gemini-2.5-flash
+
+# 模型供应商列表
+providers:
+  - id: provider1
+    name: 供应商名称
+    base_url: https://api.example.com/v1
+    api_key: your-api-key-here
+    priority: 1          # 优先级分组（数字越小越优先，同优先级按得分排序）
+    model_groups:
+      flash:
+        chat_models:
+          - gemini-2.5-flash
+        draw_models:
+          - gemini-2.5-flash-image
+      pro:
+        chat_models:
+          - gemini-2.5-pro
+        draw_models: []
+      ultra:
+        chat_models:
+          - gemini-3-pro
+        draw_models:
+          - gemini-3-flash-image
 ```
 
 **`draw_presets.yaml`** - 作图预设配置
@@ -167,6 +195,23 @@ name: 诺亚
 
 > 💡 记忆命令同样支持模型组前缀：`#pai`/`#proai` → Pro，`#uai`/`#ultrai` → Ultra
 
+### 工具调用
+
+AI 在对话中会自动识别意图并调用工具，以下也支持直接指令触发：
+
+| 指令 | 说明 |
+|------|------|
+| `#ai系统信息` / `#ai服务器状态` | 查看服务器 CPU、内存、温度等系统信息 |
+| `#ai文件读取 [路径]` | 读取白名单目录下的文件内容 |
+| `#ai目录浏览 [路径]` | 列出白名单目录下的文件和子目录 |
+
+> 💡 **提示**：
+> - 工具调用同样受白名单限制，仅读取无法写入
+> - 文件读取白名单在 `config/file_roots.yaml` 中单独配置
+> - 文件最大读取大小为 4MB
+> - 系统信息查询支持 fastfetch / neofetch（自动检测）
+> - 联网搜索由 AI 自动判断是否需要，无需手动触发
+
 ### 管理功能（管理员）
 | 指令 | 说明 |
 |------|------|
@@ -210,6 +255,11 @@ AI-Plugin/
 │   └── AiClient.js         # AI API 客户端
 ├── model/                   # 数据模型
 │   └── conversation.js     # 对话历史管理
+├── tools/                   # 工具系统
+│   ├── registry.js         # 工具注册表（注册、意图检测等）
+│   ├── file_read.js        # 本地文件读取 & 目录浏览
+│   ├── system_info.js      # 服务器系统信息查询
+│   └── web_search.js       # 联网搜索
 ├── utils/                   # 工具函数
 │   ├── config.js           # 配置管理
 │   ├── scheduler.js        # 定时任务（全量/增量总结）
@@ -230,11 +280,12 @@ AI-Plugin/
 |------|------|
 | `ai_name.yaml` | AI 名称配置（可选，不创建则使用默认值"诺亚"） |
 | `trusted_groups.yaml` | 信任群聊列表（通过 `#ai信任群添加` 命令自动管理） |
-| `models_config.yaml` | 模型供应商配置 |
+| `models_config.yaml` | 模型供应商配置（含 Vision Relay、指令关键词等） |
 | `model_status.json` | 模型测试状态 |
 | `disabled_models.json` | 禁用的模型列表 |
 | `draw_presets.yaml` | 作图预设配置 |
 | `access_control.yaml` | 权限控制配置 |
+| `file_roots.yaml` | 文件读取白名单配置（AI 只能读取这些目录下的文件） |
 | `ai_plugin.db` | SQLite 数据库（对话历史、记忆锚点、摘要缓存） |
 
 ### 数据存储
@@ -268,6 +319,10 @@ AI-Plugin/
 8. **全量总结分块**：对话记录超过 128 条时自动分块总结再合并，避免超长上下文导致 API 失败
 9. **Token 统计**：全量/增量总结会在日志中记录 Token 消耗，对话回复底部显示 Token 用量
 10. **插件更新**：使用 `#ai插件更新` 一键 git pull，`#ai插件强制更新` 强制覆盖本地修改
+11. **模型熔断**：连续失败 3 次自动熔断 30 秒，全部熔断时无视冷却强制尝试，确保服务可用
+12. **Vision Relay**：非多模态模型通过 Vision 模型描述图片后间接理解图片内容
+13. **文件读取安全**：AI 只能读取 `file_roots.yaml` 白名单目录下的文件，无法写入、修改或删除
+14. **指令自定义**：可在 `models_config.yaml` 中修改 `chat_command`/`draw_command` 缩短指令
 
 ## 🤝 贡献
 
