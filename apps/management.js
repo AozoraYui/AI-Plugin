@@ -78,18 +78,19 @@ export class ManagementHandler extends plugin {
 
     async modifyAccess(e) {
         const textMatch = e.msg.match(/^#ai权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(\d+)$/i)
+        let action, typeKeyword, id
         if (!textMatch) {
             const atMatch = e.msg.match(/^#ai权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*$/i)
             if (!atMatch) return
             const atSeg = e.message?.find(m => m.type === 'at')
             if (!atSeg?.qq) return
-            var action = atMatch[1]
-            var typeKeyword = atMatch[2]
-            var id = String(atSeg.qq)
+            action = atMatch[1]
+            typeKeyword = atMatch[2]
+            id = String(atSeg.qq)
         } else {
-            var action = textMatch[1]
-            var typeKeyword = textMatch[2]
-            var id = textMatch[3]
+            action = textMatch[1]
+            typeKeyword = textMatch[2]
+            id = textMatch[3]
         }
 
         // 输入验证

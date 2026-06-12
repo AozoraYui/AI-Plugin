@@ -126,7 +126,6 @@ export class AiClient {
 
     /** 智能排序模型池：先按 provider priority 分组，同组内按得分排序 */
     _sortModelPool(pool) {
-        const now = Date.now()
         const scored = pool.map(item => {
             const key = `${item.provider.id}-${item.modelId}`
             if (!this.modelStatus[key]) this._initModelStatusEntry(key)

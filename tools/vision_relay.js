@@ -21,6 +21,7 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
     if (!visionModelConfig?.provider_id || !visionModelConfig?.model_id) return ''
 
     logger.info(`[AI-Plugin] Vision Relay: 开始转述 ${imageUrls.length} 张图片`)
+    const startTime = Date.now()
 
     try {
         // 处理图片为 inline_data 格式
@@ -59,6 +60,8 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
 
         if (!response.ok) {
             const errBody = await response.text().catch(() => '')
+            client._recordModelFail(`${visionModelConfig.provider_id}-${visionModelConfig.model_id}`)
+            client.saveModelStatus()
             logger.warn(`[AI-Plugin] Vision Relay: API 返回 ${response.status}: ${errBody.slice(0, 300)}`)
             return ''
         }
@@ -67,9 +70,13 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
         const description = client.parseResponse(data, 'chat')
 
         if (description.success && description.data) {
+            client._recordModelSuccess(`${visionModelConfig.provider_id}-${visionModelConfig.model_id}`, Date.now() - startTime)
+            client.saveModelStatus()
             logger.info(`[AI-Plugin] Vision Relay: 转述成功 (${description.data.length} 字符)`)
             return description.data
         } else {
+            client._recordModelFail(`${visionModelConfig.provider_id}-${visionModelConfig.model_id}`)
+            client.saveModelStatus()
             logger.warn(`[AI-Plugin] Vision Relay: 解析失败: ${description.error || '未知'}`)
             return ''
         }
