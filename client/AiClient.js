@@ -15,6 +15,7 @@ export class AiClient {
         this.modelStatus = {}
         this.disabledModels = new Set()
         this.activeModelPools = {}
+        this.commandConfig = {}
         this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
         this.loadModelsConfig()
         this.loadModelStatus()
@@ -32,6 +33,16 @@ export class AiClient {
     /** Vision 模型配置 */
     get visionModel() {
         return this.visionRelayConfig?.vision_model || null
+    }
+
+    /** 对话指令关键词 */
+    get chatCommand() {
+        return this.commandConfig?.CHAT_COMMAND || 'chat'
+    }
+
+    /** 绘图指令关键词 */
+    get drawCommand() {
+        return this.commandConfig?.DRAW_COMMAND || 'draw'
     }
 
     /** 初始化模型状态条目（兼容旧格式） */
@@ -139,6 +150,7 @@ export class AiClient {
 
     loadModelsConfig() {
         this.modelsConfig = []
+        this.commandConfig = {}
         this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
         if (!fs.existsSync(MODELS_CONFIG_FILE)) {
             logger.info(`[AI-Plugin] 未找到模型配置文件，将从模板创建。`)
@@ -152,10 +164,11 @@ export class AiClient {
 
         try {
             const fileContent = fs.readFileSync(MODELS_CONFIG_FILE, 'utf8')
-            // 支持多文档 YAML：第一个文档为供应商列表，第二个为 Vision Relay 配置
+            // 支持多文档 YAML：doc0=供应商列表, doc1=指令自定义, doc2=Vision Relay
             const allDocs = yaml.parseAllDocuments(fileContent)
             const providersDoc = allDocs[0]
-            const visionDoc = allDocs[1]
+            const commandDoc = allDocs[1]
+            const visionDoc = allDocs[2] || allDocs[1]  // 兼容旧格式（只有2个文档时，doc1=vision）
 
             if (providersDoc) {
                 const configs = providersDoc.toJS()
@@ -177,13 +190,37 @@ export class AiClient {
 
             if (visionDoc) {
                 const visionConfig = visionDoc.toJS()
-                if (visionConfig && typeof visionConfig === 'object') {
-                    this.visionRelayConfig = visionConfig
-                    if (this.enableVisionRelay) {
-                        logger.info(`[AI-Plugin] Vision Relay 已启用: ${visionConfig.vision_model.provider_id}/${visionConfig.vision_model.model_id}`)
-                    } else {
-                        logger.debug('[AI-Plugin] Vision Relay 未启用或配置不完整')
+                const cmdConfig = commandDoc?.toJS() || {}
+
+                // 检测旧格式：如果 doc1 没有 CHAT_COMMAND/DRAW_COMMAND 但有 enable_vision_relay，则是旧格式
+                const isLegacyFormat = allDocs.length === 2 &&
+                    !(cmdConfig?.hasOwnProperty?.('CHAT_COMMAND') || cmdConfig?.hasOwnProperty?.('DRAW_COMMAND'))
+
+                if (isLegacyFormat) {
+                    // 旧格式：doc1 就是 vision relay
+                    if (cmdConfig && typeof cmdConfig === 'object' && cmdConfig.hasOwnProperty?.('enable_vision_relay')) {
+                        this.visionRelayConfig = cmdConfig
                     }
+                } else {
+                    // 新格式：doc1=指令, doc2=vision
+                    if (visionConfig && typeof visionConfig === 'object' && visionConfig.hasOwnProperty?.('enable_vision_relay')) {
+                        this.visionRelayConfig = visionConfig
+                    }
+                }
+
+                // 解析指令配置
+                if (cmdConfig && typeof cmdConfig === 'object' && (cmdConfig.CHAT_COMMAND || cmdConfig.DRAW_COMMAND)) {
+                    this.commandConfig = cmdConfig
+                    if (this.chatCommand !== 'chat' || this.drawCommand !== 'draw') {
+                        logger.info(`[AI-Plugin] 指令已自定义: chat=${this.chatCommand}, draw=${this.drawCommand}`)
+                    }
+                }
+
+                if (this.enableVisionRelay) {
+                    const vc = this.visionRelayConfig
+                    logger.info(`[AI-Plugin] Vision Relay 已启用: ${vc.vision_model.provider_id}/${vc.vision_model.model_id}`)
+                } else {
+                    logger.debug('[AI-Plugin] Vision Relay 未启用或配置不完整')
                 }
             }
         } catch (error) {
