@@ -318,17 +318,32 @@ export class ChatHandler extends plugin {
 
             if (!userMessage && allImages.length === 0) return e.reply('请输入内容或发送图片呀', true)
 
-            // 工具调用：检测搜索意图
-            const toolIntent = toolRegistry.detectToolIntent(userMessage)
-            if (toolIntent) {
-                logger.info(`[AI-Plugin] 检测到搜索意图，调用工具: ${toolIntent.tool}`)
-                const toolResult = await toolRegistry.execute(toolIntent.tool, toolIntent.args)
-                if (toolResult.success) {
-                    const formattedResult = toolRegistry.formatToolResult(toolIntent.tool, toolResult.data)
+            // 工具调用：LLM 分析是否需要联网搜索
+            const searchIntent = await toolRegistry.analyzeSearchIntent(userMessage, this.client)
+            if (searchIntent?.needsSearch && searchIntent.queries.length > 0) {
+                logger.info(`[AI-Plugin] LLM判断需要搜索，关键词: ${JSON.stringify(searchIntent.queries)}`)
+                const allSearchResults = []
+                for (const query of searchIntent.queries) {
+                    const toolResult = await toolRegistry.execute('web_search', { query, count: 5 })
+                    if (toolResult.success && toolResult.data?.length > 0) {
+                        allSearchResults.push(...toolResult.data)
+                    } else {
+                        logger.warn(`[AI-Plugin] 搜索 "${query}" 无结果或失败`)
+                    }
+                }
+                if (allSearchResults.length > 0) {
+                    // 去重
+                    const seenUrls = new Set()
+                    const uniqueResults = allSearchResults.filter(item => {
+                        if (seenUrls.has(item.url)) return false
+                        seenUrls.add(item.url)
+                        return true
+                    }).slice(0, 10)
+                    const formattedResult = toolRegistry.formatToolResult('web_search', uniqueResults)
                     userMessage = userMessage + formattedResult
-                    logger.info(`[AI-Plugin] 搜索工具执行成功，结果已注入提示词`)
+                    logger.info(`[AI-Plugin] 搜索完成，共 ${uniqueResults.length} 条唯一结果已注入提示词`)
                 } else {
-                    logger.warn(`[AI-Plugin] 搜索工具执行失败: ${toolResult.error}`)
+                    logger.warn('[AI-Plugin] 所有搜索关键词均无结果')
                 }
             }
 
