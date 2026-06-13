@@ -80,10 +80,11 @@ vision_model:
 ---
 # ================================================
 # 联网搜索配置
-# enabled: 是否启用联网搜索功能（默认 true）
+# enable_web_search: 是否启用联网搜索功能（默认 true）
 # intent_model: 搜索意图分析专用模型（支持多模型故障转移）
 #   如果不配置 intent_model，则使用 Flash 模型组做意图分析
 #   配置独立模型可大幅加快分析速度，推荐使用轻量模型
+#   注意：intent_model 必须与 enable_web_search 平级（不要缩进！）
 #   例:
 #   intent_model:
 #     - provider_id: "provider1"

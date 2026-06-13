@@ -104,7 +104,12 @@ export class AiClient {
 
     /** 搜索意图分析专用模型列表 */
     get webSearchIntentModels() {
-        const models = this.webSearchConfig?.intent_model
+        let models = this.webSearchConfig?.intent_model
+        // 兼容缩进嵌套：如果 intent_model 被误缩进到 enable_web_search 下，
+        // YAML 会把 enable_web_search 解析成对象，此时从嵌套对象中提取
+        if (!models && this.webSearchConfig?.enable_web_search && typeof this.webSearchConfig.enable_web_search === 'object') {
+            models = this.webSearchConfig.enable_web_search.intent_model
+        }
         if (!models || !Array.isArray(models)) return []
         return models.filter(m => m.provider_id && m.model_id)
     }
