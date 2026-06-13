@@ -295,9 +295,15 @@ export class AiClient {
                 // 兼容两种格式：带 web_search 包裹或不带
                 rawConfig = rawConfig.web_search || rawConfig
                 // 兼容缩进嵌套：如果 intent_model 被误缩进到 enable_web_search 下，
-                // YAML 会把 enable_web_search 解析成对象，此时提升子属性到顶层
+                // YAML 会把 "true" 和 "intent_model" 合并成一个 key，如 "true intent_model"
                 if (rawConfig.enable_web_search && typeof rawConfig.enable_web_search === 'object') {
-                    rawConfig = { ...rawConfig.enable_web_search, enable_web_search: true }
+                    const nested = rawConfig.enable_web_search
+                    const intentKey = Object.keys(nested).find(k => k.includes('intent_model'))
+                    if (intentKey) {
+                        rawConfig = { intent_model: nested[intentKey], enable_web_search: true }
+                    } else {
+                        rawConfig = { ...nested, enable_web_search: true }
+                    }
                 }
                 this.webSearchConfig = rawConfig
                 if (this.enableWebSearch) {
