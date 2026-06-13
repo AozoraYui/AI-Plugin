@@ -104,12 +104,7 @@ export class AiClient {
 
     /** 搜索意图分析专用模型列表 */
     get webSearchIntentModels() {
-        let models = this.webSearchConfig?.intent_model
-        // 兼容缩进嵌套：如果 intent_model 被误缩进到 enable_web_search 下，
-        // YAML 会把 enable_web_search 解析成对象，此时从嵌套对象中提取
-        if (!models && this.webSearchConfig?.enable_web_search && typeof this.webSearchConfig.enable_web_search === 'object') {
-            models = this.webSearchConfig.enable_web_search.intent_model
-        }
+        const models = this.webSearchConfig?.intent_model
         if (!models || !Array.isArray(models)) return []
         return models.filter(m => m.provider_id && m.model_id)
     }
@@ -296,9 +291,15 @@ export class AiClient {
 
             // 解析 web_search 配置
             if (webSearchDoc) {
-                const rawConfig = webSearchDoc.toJS()
+                let rawConfig = webSearchDoc.toJS()
                 // 兼容两种格式：带 web_search 包裹或不带
-                this.webSearchConfig = rawConfig.web_search || rawConfig
+                rawConfig = rawConfig.web_search || rawConfig
+                // 兼容缩进嵌套：如果 intent_model 被误缩进到 enable_web_search 下，
+                // YAML 会把 enable_web_search 解析成对象，此时提升子属性到顶层
+                if (rawConfig.enable_web_search && typeof rawConfig.enable_web_search === 'object') {
+                    rawConfig = { ...rawConfig.enable_web_search, enable_web_search: true }
+                }
+                this.webSearchConfig = rawConfig
                 if (this.enableWebSearch) {
                     const intentModels = this.webSearchIntentModels
                     if (intentModels.length > 0) {
