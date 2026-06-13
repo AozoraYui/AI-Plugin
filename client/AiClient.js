@@ -291,7 +291,9 @@ export class AiClient {
 
             // 解析 web_search 配置
             if (webSearchDoc) {
-                this.webSearchConfig = webSearchDoc.toJS()
+                const rawConfig = webSearchDoc.toJS()
+                // 兼容两种格式：带 web_search 包裹或不带
+                this.webSearchConfig = rawConfig.web_search || rawConfig
                 if (this.enableWebSearch) {
                     const intentModels = this.webSearchIntentModels
                     if (intentModels.length > 0) {

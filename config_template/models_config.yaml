@@ -91,6 +91,5 @@ vision_model:
 #     - provider_id: "provider2"
 #       model_id: "qwen-turbo"
 # ================================================
-web_search:
-  enabled: true
-  # intent_model: []
+enabled: true
+# intent_model: []
