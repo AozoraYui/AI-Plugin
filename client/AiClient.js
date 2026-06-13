@@ -99,7 +99,7 @@ export class AiClient {
 
     /** 是否启用联网搜索 */
     get enableWebSearch() {
-        return this.webSearchConfig?.enabled !== false
+        return (this.webSearchConfig?.enable_web_search ?? this.webSearchConfig?.enabled) !== false
     }
 
     /** 搜索意图分析专用模型列表 */
