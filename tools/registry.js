@@ -169,7 +169,8 @@ class ToolRegistry {
             }
 
             const analysisText = result.data.trim()
-            logger.info(`[AI-Plugin] 搜索意图分析 模型返回: "${analysisText.slice(0, 200)}"`)
+            const modelInfo = result.platform ? ` [${result.platform}]` : ''
+            logger.info(`[AI-Plugin] 搜索意图分析${modelInfo} 返回: "${analysisText.slice(0, 200)}"`)
 
             const jsonMatch = analysisText.match(/\{[\s\S]*\}/)
             if (!jsonMatch) {
