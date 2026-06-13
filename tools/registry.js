@@ -148,8 +148,21 @@ class ToolRegistry {
                 ]
             }
 
-            // 使用 flash 模型组做快速分析
-            const result = await client.makeRequest('chat', analysisPayload, 'flash', 512)
+            let result = null
+
+            // 优先使用配置的意图分析专用模型（绕过模型池，直接调用，15s 超时）
+            if (client.webSearchIntentModels.length > 0) {
+                result = await client.quickIntentRequest(analysisPayload)
+                if (!result?.success) {
+                    logger.warn('[AI-Plugin] 专用意图分析模型均失败，降级到 Flash 模型组')
+                }
+            }
+
+            // 降级：使用 Flash 模型组做意图分析
+            if (!result?.success) {
+                result = await client.makeRequest('chat', analysisPayload, 'flash', 256)
+            }
+
             if (!result.success || !result.data) {
                 logger.warn('[AI-Plugin] 搜索意图分析 LLM 调用失败')
                 return null

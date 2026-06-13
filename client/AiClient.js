@@ -17,6 +17,7 @@ export class AiClient {
         this.activeModelPools = {}
         this.commandConfig = {}
         this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
+        this.webSearchConfig = { enabled: true, intent_model: null }
         this.loadModelsConfig()
         this.loadModelStatus()
         this.loadDisabledModels()
@@ -58,6 +59,34 @@ export class AiClient {
         return pool.every(item => !item.provider.multimodal)
     }
 
+    /**
+     * 快捷意图分析请求：直接用配置的意图分析模型尝试，绕过模型池排序
+     * 用于联网搜索意图分析等轻量任务，大幅减少延迟
+     * @param {object} payload - 请求体
+     * @returns {object|null} 成功返回 { success, data, platform }，失败返回 null
+     */
+    async quickIntentRequest(payload) {
+        const intentModels = this.webSearchIntentModels
+        if (intentModels.length === 0) return null
+
+        for (const modelConfig of intentModels) {
+            const provider = this.modelsConfig.find(p => p.id === modelConfig.provider_id)
+            if (!provider) {
+                logger.warn(`[AI-Plugin] 意图分析模型供应商不存在: ${modelConfig.provider_id}`)
+                continue
+            }
+            const startTime = Date.now()
+            const result = await this.attemptRequest('chat', payload, provider, modelConfig.model_id, 256, 15000)
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
+            if (result.success) {
+                logger.info(`[AI-Plugin] 意图分析成功: ${provider.name}/${modelConfig.model_id}, 耗时 ${elapsed}s`)
+                return result
+            }
+            logger.warn(`[AI-Plugin] 意图分析失败: ${provider.name}/${modelConfig.model_id}, 耗时 ${elapsed}s, 错误: ${result.error}`)
+        }
+        return null
+    }
+
     /** 对话指令关键词 */
     get chatCommand() {
         return this.commandConfig?.CHAT_COMMAND || 'chat'
@@ -66,6 +95,18 @@ export class AiClient {
     /** 绘图指令关键词 */
     get drawCommand() {
         return this.commandConfig?.DRAW_COMMAND || 'draw'
+    }
+
+    /** 是否启用联网搜索 */
+    get enableWebSearch() {
+        return this.webSearchConfig?.enabled !== false
+    }
+
+    /** 搜索意图分析专用模型列表 */
+    get webSearchIntentModels() {
+        const models = this.webSearchConfig?.intent_model
+        if (!models || !Array.isArray(models)) return []
+        return models.filter(m => m.provider_id && m.model_id)
     }
 
     /** 初始化模型状态条目（兼容旧格式） */
@@ -191,6 +232,7 @@ export class AiClient {
             const providersDoc = allDocs[0]
             const commandDoc = allDocs[1]
             const visionDoc = allDocs[2] || allDocs[1]  // 兼容旧格式（只有2个文档时，doc1=vision）
+            const webSearchDoc = allDocs[3]               // web_search 配置（第4个文档）
 
             if (providersDoc) {
                 const configs = providersDoc.toJS()
@@ -244,6 +286,22 @@ export class AiClient {
                     logger.info(`[AI-Plugin] Vision Relay 已启用: ${models.length} 个模型 (${names})`)
                 } else {
                     logger.debug('[AI-Plugin] Vision Relay 未启用或配置不完整')
+                }
+            }
+
+            // 解析 web_search 配置
+            if (webSearchDoc) {
+                this.webSearchConfig = webSearchDoc.toJS()
+                if (this.enableWebSearch) {
+                    const intentModels = this.webSearchIntentModels
+                    if (intentModels.length > 0) {
+                        const names = intentModels.map(m => `${m.provider_id}/${m.model_id}`).join(', ')
+                        logger.info(`[AI-Plugin] 联网搜索已启用: ${intentModels.length} 个意图分析模型 (${names})`)
+                    } else {
+                        logger.info('[AI-Plugin] 联网搜索已启用（使用 Flash 模型组做意图分析）')
+                    }
+                } else {
+                    logger.info('[AI-Plugin] 联网搜索已禁用')
                 }
             }
         } catch (error) {
@@ -506,9 +564,10 @@ export class AiClient {
         }
     }
 
-    async attemptRequest(type, payload, provider, modelId, maxTokens = 8192) {
+    async attemptRequest(type, payload, provider, modelId, maxTokens = 8192, timeout = 0) {
         try {
             const { url, options } = this.buildRequest(type, payload, provider, modelId, maxTokens)
+            if (timeout > 0) options.timeout = timeout
             
             // 检查请求体大小，防止 413 错误
             const bodySize = Buffer.byteLength(options.body, 'utf8')

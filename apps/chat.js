@@ -323,31 +323,33 @@ export class ChatHandler extends plugin {
             if (!userMessage && allImages.length === 0) return e.reply('请输入内容或发送图片呀', true)
 
             // 工具调用：LLM 分析是否需要联网搜索
-            const searchIntent = await toolRegistry.analyzeSearchIntent(userMessage, this.client)
-            if (searchIntent?.needsSearch && searchIntent.queries.length > 0) {
-                logger.info(`[AI-Plugin] LLM判断需要搜索，关键词: ${JSON.stringify(searchIntent.queries)}`)
-                const allSearchResults = []
-                for (const query of searchIntent.queries) {
-                    const toolResult = await toolRegistry.execute('web_search', { query, count: 5 })
-                    if (toolResult.success && toolResult.data?.length > 0) {
-                        allSearchResults.push(...toolResult.data)
-                    } else {
-                        logger.warn(`[AI-Plugin] 搜索 "${query}" 无结果或失败`)
+            if (this.client.enableWebSearch) {
+                const searchIntent = await toolRegistry.analyzeSearchIntent(userMessage, this.client)
+                if (searchIntent?.needsSearch && searchIntent.queries.length > 0) {
+                    logger.info(`[AI-Plugin] LLM判断需要搜索，关键词: ${JSON.stringify(searchIntent.queries)}`)
+                    const allSearchResults = []
+                    for (const query of searchIntent.queries) {
+                        const toolResult = await toolRegistry.execute('web_search', { query, count: 5 })
+                        if (toolResult.success && toolResult.data?.length > 0) {
+                            allSearchResults.push(...toolResult.data)
+                        } else {
+                            logger.warn(`[AI-Plugin] 搜索 "${query}" 无结果或失败`)
+                        }
                     }
-                }
-                if (allSearchResults.length > 0) {
-                    // 去重
-                    const seenUrls = new Set()
-                    const uniqueResults = allSearchResults.filter(item => {
-                        if (seenUrls.has(item.url)) return false
-                        seenUrls.add(item.url)
-                        return true
-                    }).slice(0, 10)
-                    const formattedResult = toolRegistry.formatToolResult('web_search', uniqueResults)
-                    userMessage = userMessage + formattedResult
-                    logger.info(`[AI-Plugin] 搜索完成，共 ${uniqueResults.length} 条唯一结果已注入提示词`)
-                } else {
-                    logger.warn('[AI-Plugin] 所有搜索关键词均无结果')
+                    if (allSearchResults.length > 0) {
+                        // 去重
+                        const seenUrls = new Set()
+                        const uniqueResults = allSearchResults.filter(item => {
+                            if (seenUrls.has(item.url)) return false
+                            seenUrls.add(item.url)
+                            return true
+                        }).slice(0, 10)
+                        const formattedResult = toolRegistry.formatToolResult('web_search', uniqueResults)
+                        userMessage = userMessage + formattedResult
+                        logger.info(`[AI-Plugin] 搜索完成，共 ${uniqueResults.length} 条唯一结果已注入提示词`)
+                    } else {
+                        logger.warn('[AI-Plugin] 所有搜索关键词均无结果')
+                    }
                 }
             }
 

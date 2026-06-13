@@ -44,6 +44,7 @@ export async function setMsgEmojiLike(e, emojiID) {
 
 export async function fetchWithProxy(url, options = {}) {
     const agent = Config.USE_PROXY ? new HttpsProxyAgent(Config.PROXY_URL) : null
+    const requestTimeout = options.timeout || 600000
     return new Promise((resolve, reject) => {
         const urlObj = new URL(url)
         const httpModule = urlObj.protocol === 'https:' ? https : http
@@ -54,7 +55,7 @@ export async function fetchWithProxy(url, options = {}) {
             method: options.method || 'GET',
             headers: options.headers || {},
             agent: agent,
-            timeout: 600000
+            timeout: requestTimeout
         }
         const req = httpModule.request(requestOptions, (res) => {
             const chunks = []

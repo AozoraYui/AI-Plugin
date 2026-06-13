@@ -115,6 +115,14 @@ enable_vision_relay: false  # 启用后非多模态模型也能"看图"
 vision_model:
   provider_id: "provider1"
   model_id: "gemini-2.5-flash"
+
+---
+# 联网搜索配置（可选）
+web_search:
+  enabled: true            # 是否启用联网搜索（默认 true）
+  # intent_model:          # 搜索意图分析专用模型（可选，不配则用 Flash 组）
+  #   - provider_id: "provider1"
+  #     model_id: "gemini-2.5-flash"
 ```
 
 **`draw_presets.yaml`** - 作图预设配置
@@ -211,6 +219,7 @@ AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单
 | 联网搜索 | AI 自动判断是否需要搜索 | 注入搜索结果辅助回答，无需手动触发 |
 
 > 💡 文件读取白名单在 `config/file_roots.yaml` 中单独配置，AI 只能读取无法写入修改。
+> 💡 联网搜索可在 `models_config.yaml` 的 `web_search` 段配置：开关、专用意图分析模型（推荐配置轻量模型加速）。
 
 ### 管理功能（管理员）
 | 指令 | 说明 |
@@ -280,7 +289,7 @@ AI-Plugin/
 |------|------|
 | `ai_name.yaml` | AI 名称配置（可选，不创建则使用默认值"诺亚"） |
 | `trusted_groups.yaml` | 信任群聊列表（通过 `#ai信任群添加` 命令自动管理） |
-| `models_config.yaml` | 模型供应商配置（含 Vision Relay、指令关键词等） |
+| `models_config.yaml` | 模型供应商配置（含 Vision Relay、指令关键词、联网搜索等） |
 | `model_status.json` | 模型测试状态 |
 | `disabled_models.json` | 禁用的模型列表 |
 | `draw_presets.yaml` | 作图预设配置 |
