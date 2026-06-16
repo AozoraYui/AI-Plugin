@@ -193,7 +193,7 @@ export class ChatHandler extends plugin {
         if (!await checkAccess(e)) return true
 
         const chatCmd = Config.CHAT_COMMAND
-        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)${chatCmd}([vn]*)([\\s\\S]*)`, 'i'))
+        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)${chatCmd}([vnw]*)([\\s\\S]*)`, 'i'))
         if (!match) return
 
         e._singleMode = true
@@ -203,14 +203,15 @@ export class ChatHandler extends plugin {
         const flags = match[3].toLowerCase()
         const content = match[4]
 
-        // 从所有位置提取 v/n flag（可能在 prefix1, prefix2, 或 flags group 中）
+        // 从所有位置提取 v/n/w flag（可能在 prefix1, prefix2, 或 flags group 中）
         const allFlags = prefix1 + prefix2 + flags
         e._visionFlag = allFlags.includes('v')
         e._netFlag = allFlags.includes('n')
+        e._webFetchFlag = allFlags.includes('w')
 
-        // 剥离 v/n 后再解析模型组
-        const clean1 = prefix1.replace(/[vn]/gi, '')
-        const clean2 = prefix2.replace(/[vn]/gi, '')
+        // 剥离 v/n/w 后再解析模型组
+        const clean1 = prefix1.replace(/[vnw]/gi, '')
+        const clean2 = prefix2.replace(/[vnw]/gi, '')
 
         let modelPrefix = ''
         if (resolveModelGroup(clean1) !== 'flash') modelPrefix = clean1
@@ -224,20 +225,21 @@ export class ChatHandler extends plugin {
         if (!await checkAccess(e)) return true
 
         const chatCmd = Config.CHAT_COMMAND
-        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)${chatCmd}([vn]*)([\\s\\S]*)`, 'i'))
+        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)${chatCmd}([vnw]*)([\\s\\S]*)`, 'i'))
         if (!match) return
 
         const prefix = match[1].toLowerCase()
         const flags = match[2].toLowerCase()
         let userMessage = match[3].trim()
 
-        // 从 prefix 和 flags 中提取 v/n flag（handleSingleChat 可能已设置）
+        // 从 prefix 和 flags 中提取 v/n/w flag（handleSingleChat 可能已设置）
         const allFlags = prefix + flags
         if (e._visionFlag === undefined) e._visionFlag = /v/i.test(allFlags)
         if (e._netFlag === undefined) e._netFlag = /n/i.test(allFlags)
+        if (e._webFetchFlag === undefined) e._webFetchFlag = /w/i.test(allFlags)
 
-        // 剥离 v/n 后再解析模型组
-        const cleanPrefix = prefix.replace(/[vn]/gi, '')
+        // 剥离 v/n/w 后再解析模型组
+        const cleanPrefix = prefix.replace(/[vnw]/gi, '')
         const modelGroupKey = resolveModelGroup(cleanPrefix)
         const modelDisplay = resolveModelDisplay(modelGroupKey)
 
@@ -426,16 +428,19 @@ export class ChatHandler extends plugin {
                 }
             }
 
-            // 网页抓取
-            const webFetchIntent = toolRegistry.detectWebFetchIntent(userMessage)
-            if (webFetchIntent) {
-                logger.info(`[AI-Plugin] 检测到网页抓取意图: ${webFetchIntent.url}`)
-                const fetchResult = await toolRegistry.execute('web_fetch', { url: webFetchIntent.url })
-                if (fetchResult.success) {
-                    userMessage = userMessage + fetchResult.data
-                    logger.info('[AI-Plugin] 网页抓取完成，结果已注入提示词')
-                } else {
-                    logger.warn(`[AI-Plugin] 网页抓取失败: ${fetchResult.error}`)
+            // 网页抓取（flag w 启用，默认不启用）
+            const useWebFetch = e._webFetchFlag
+            if (useWebFetch) {
+                const urlMatch = userMessage.match(/https?:\/\/[^\s\u4e00-\u9fff]+/)
+                if (urlMatch) {
+                    logger.info(`[AI-Plugin] WebFetch flag 触发，抓取: ${urlMatch[0]}`)
+                    const fetchResult = await toolRegistry.execute('web_fetch', { url: urlMatch[0] })
+                    if (fetchResult.success) {
+                        userMessage = userMessage + fetchResult.data
+                        logger.info('[AI-Plugin] 网页抓取完成，结果已注入提示词')
+                    } else {
+                        logger.warn(`[AI-Plugin] 网页抓取失败: ${fetchResult.error}`)
+                    }
                 }
             }
 
