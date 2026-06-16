@@ -428,8 +428,8 @@ export class ChatHandler extends plugin {
                 }
             }
 
-            // 网页抓取（flag w 启用，默认不启用）
-            const useWebFetch = e._webFetchFlag
+            // 网页抓取（flag w 优先，否则按全局配置，默认不启用）
+            const useWebFetch = e._webFetchFlag || this.client.enableWebFetch
             if (useWebFetch) {
                 const urlMatch = userMessage.match(/https?:\/\/[^\s\u4e00-\u9fff]+/)
                 if (urlMatch) {

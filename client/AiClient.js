@@ -18,6 +18,7 @@ export class AiClient {
         this.commandConfig = {}
         this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
         this.webSearchConfig = { enabled: false, intent_model: null }
+        this.webFetchConfig = { enabled: false }
         this.loadModelsConfig()
         this.loadModelStatus()
         this.loadDisabledModels()
@@ -100,6 +101,11 @@ export class AiClient {
     /** 是否启用联网搜索 */
     get enableWebSearch() {
         return (this.webSearchConfig?.enable_web_search ?? this.webSearchConfig?.enabled) !== false
+    }
+
+    /** 是否启用网页抓取 */
+    get enableWebFetch() {
+        return (this.webFetchConfig?.enable_web_fetch ?? this.webFetchConfig?.enabled) === true
     }
 
     /** 搜索意图分析专用模型列表 */
@@ -216,6 +222,7 @@ export class AiClient {
         this.commandConfig = {}
         this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
         this.webSearchConfig = { enabled: false, intent_model: null }
+        this.webFetchConfig = { enabled: false }
         if (!fs.existsSync(MODELS_CONFIG_FILE)) {
             logger.info(`[AI-Plugin] 未找到模型配置文件，将从模板创建。`)
             const templatePath = path.join(TEMPLATE_DIR_EXPORT, 'models_config.yaml')
@@ -320,6 +327,14 @@ export class AiClient {
                     }
                 } else {
                     logger.info('[AI-Plugin] 联网搜索已禁用')
+                }
+
+                // 提取 enable_web_fetch（与 web_search 同文档）
+                this.webFetchConfig = { enabled: rawConfig.enable_web_fetch === true }
+                if (this.enableWebFetch) {
+                    logger.info('[AI-Plugin] 网页抓取已启用')
+                } else {
+                    logger.debug('[AI-Plugin] 网页抓取未启用')
                 }
             }
         } catch (error) {
