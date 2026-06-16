@@ -216,23 +216,17 @@ class ToolRegistry {
     detectWebFetchIntent(msg) {
         if (!msg || !msg.trim()) return null
 
-        // 先提取 URL
-        const urlMatch = msg.match(/https?:\/\/[^\s\u4e00-\u9fff]+/)
-        if (!urlMatch) return null
-
-        // 有 URL 时检查是否有浏览/抓取意图
-        const intentPatterns = [
-            // 显式意图：抓取网页/打开链接/访问网站 等
-            /(?:抓取|访问|打开|读取|fetch|open|浏览).*(?:网页|链接|网站|页面|url)/i,
-            /(?:网页|链接|网站|页面).*(?:抓取|访问|打开|读取)/i,
-            // 自然语言：看看/看一下/瞧瞧/查查 + URL
-            /(?:看看|看一下|瞧瞧|瞅瞅|瞅一眼|读一下|读读|查查|查一下|打开|访问|抓取|浏览).*(?:https?:\/\/)/i,
-            // 帮我/给/来/那/再/去 + 动词 + URL
-            /(?:帮我|给|来|请|那|再|去|就|想).*(?:看看|看一下|抓取|打开|访问|读取|查查|查一下|瞧瞧).*(?:https?:\/\/)/i,
+        const urlPatterns = [
+            /(?:抓取|访问|打开|帮我看看|帮我查|看看这个|读取|fetch|open).*(?:这个|一下|这个)?(?:网页|链接|网站|页面|url)/i,
+            /(?:网页|链接|网站|页面).*(?:抓取|访问|打开|看看|读取)/i,
+            /(?:帮我|给|来|请).*(?:抓取|打开|访问|看看|读取).*(?:https?:\/\/[^\s]+)/i,
         ]
 
-        const hasFetchIntent = intentPatterns.some(p => p.test(msg))
-        if (hasFetchIntent) return { url: urlMatch[0] }
+        const hasFetchIntent = urlPatterns.some(p => p.test(msg))
+        if (!hasFetchIntent) return null
+
+        const urlMatch = msg.match(/https?:\/\/[^\s\u4e00-\u9fff]+/)
+        if (urlMatch) return { url: urlMatch[0] }
 
         return null
     }
