@@ -367,6 +367,21 @@ export class ChatHandler extends plugin {
                         const formattedResult = toolRegistry.formatToolResult('web_search', uniqueResults)
                         userMessage = userMessage + formattedResult
                         logger.info(`[AI-Plugin] 搜索完成，共 ${uniqueResults.length} 条唯一结果已注入提示词`)
+
+                        // 自动抓取搜索结果中第一名网页的完整内容
+                        if (uniqueResults.length > 0) {
+                            try {
+                                const topUrl = uniqueResults[0].url
+                                logger.info(`[AI-Plugin] 自动抓取搜索结果首条网页: ${topUrl}`)
+                                const fetchResult = await toolRegistry.execute('web_fetch', { url: topUrl, max_chars: 6000 })
+                                if (fetchResult.success) {
+                                    userMessage = userMessage + fetchResult.data
+                                    logger.info('[AI-Plugin] 搜索结果首条网页抓取完成，已注入提示词')
+                                }
+                            } catch (err) {
+                                logger.warn(`[AI-Plugin] 自动抓取网页失败: ${err.message}`)
+                            }
+                        }
                     } else {
                         logger.warn('[AI-Plugin] 所有搜索关键词均无结果')
                     }
@@ -408,6 +423,19 @@ export class ChatHandler extends plugin {
                     logger.info('[AI-Plugin] 目录浏览完成，结果已注入提示词')
                 } else {
                     logger.warn(`[AI-Plugin] 目录浏览失败: ${dirResult.error}`)
+                }
+            }
+
+            // 网页抓取
+            const webFetchIntent = toolRegistry.detectWebFetchIntent(userMessage)
+            if (webFetchIntent) {
+                logger.info(`[AI-Plugin] 检测到网页抓取意图: ${webFetchIntent.url}`)
+                const fetchResult = await toolRegistry.execute('web_fetch', { url: webFetchIntent.url })
+                if (fetchResult.success) {
+                    userMessage = userMessage + fetchResult.data
+                    logger.info('[AI-Plugin] 网页抓取完成，结果已注入提示词')
+                } else {
+                    logger.warn(`[AI-Plugin] 网页抓取失败: ${fetchResult.error}`)
                 }
             }
 

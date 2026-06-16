@@ -208,6 +208,28 @@ class ToolRegistry {
             return null
         }
     }
+
+    /**
+     * 检测用户是否想抓取网页
+     * @returns {{ url: string } | null}
+     */
+    detectWebFetchIntent(msg) {
+        if (!msg || !msg.trim()) return null
+
+        const urlPatterns = [
+            /(?:抓取|访问|打开|帮我看看|帮我查|看看这个|读取|fetch|open).*(?:这个|一下|这个)?(?:网页|链接|网站|页面|url)/i,
+            /(?:网页|链接|网站|页面).*(?:抓取|访问|打开|看看|读取)/i,
+            /(?:帮我|给|来|请).*(?:抓取|打开|访问|看看|读取).*(?:https?:\/\/[^\s]+)/i,
+        ]
+
+        const hasFetchIntent = urlPatterns.some(p => p.test(msg))
+        if (!hasFetchIntent) return null
+
+        const urlMatch = msg.match(/https?:\/\/[^\s\u4e00-\u9fff]+/)
+        if (urlMatch) return { url: urlMatch[0] }
+
+        return null
+    }
 }
 
 export const toolRegistry = new ToolRegistry()
