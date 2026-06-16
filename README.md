@@ -34,11 +34,12 @@
 - **服务器状态查询**：AI 可查看服务器 CPU、内存、温度等系统信息
 - **本地文件只读**：AI 可读取白名单目录下的文件内容（最大 4MB）
 - **目录浏览**：AI 可列出白名单目录下的文件和子目录，支持逐层深入浏览
-- **联网搜索**：AI 自动判断是否需要联网搜索，注入搜索结果辅助回答
+- **联网搜索**：AI 自动判断是否需要联网搜索，注入搜索结果辅助回答。默认关闭，使用 `#cn` 临时启用
 
 ### 🖼️ Vision Relay（图文转述）
 - 非多模态模型可配置 Vision 模型做图片描述，间接获得"看图"能力
 - 支持配置多个 Vision 模型自动故障转移
+- 默认关闭，使用 `#cv` 临时强制启用
 
 ### ⚙️ 模型管理
 - 多模型供应商支持，通过 `provider_id + model_id` 唯一标识模型
@@ -110,7 +111,7 @@ DRAW_COMMAND: draw
 
 ---
 # 图文转述（Vision Relay）配置（可选）
-enable_vision_relay: false  # 启用后非多模态模型也能"看图"
+enable_vision_relay: false  # 默认关闭，使用 #cv 临时强制启用
 
 vision_model:
   provider_id: "provider1"
@@ -118,11 +119,10 @@ vision_model:
 
 ---
 # 联网搜索配置（可选）
-web_search:
-  enabled: true            # 是否启用联网搜索（默认 true）
-  # intent_model:          # 搜索意图分析专用模型（可选，不配则用 Flash 组）
-  #   - provider_id: "provider1"
-  #     model_id: "gemini-2.5-flash"
+enable_web_search: false   # 默认关闭，使用 #cn 临时启用
+# intent_model:            # 搜索意图分析专用模型（可选，不配则用 Flash 组）
+#   - provider_id: "provider1"
+#     model_id: "gemini-2.5-flash"
 ```
 
 **`draw_presets.yaml`** - 作图预设配置
@@ -216,10 +216,10 @@ AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单
 | 服务器状态查询 | 在对话中询问服务器状态（如`#chat 服务器状态怎么样`） | 返回 CPU、内存、温度、磁盘等信息，支持 fastfetch/neofetch |
 | 本地文件读取 | 在对话中提到文件路径（如`#chat 读一下 /etc/nginx/nginx.conf`） | 只读，仅限白名单目录，最大 4MB |
 | 目录浏览 | 在对话中提到目录路径（如`#chat 列出 /var/log 目录`） | 列出文件和子目录，同样受白名单限制 |
-| 联网搜索 | AI 自动判断是否需要搜索 | 注入搜索结果辅助回答，无需手动触发 |
+| 联网搜索 | 使用 `#cn` 临时启用，AI 自动判断是否需要搜索 | 注入搜索结果辅助回答，无需手动触发 |
 
 > 💡 文件读取白名单在 `config/file_roots.yaml` 中单独配置，AI 只能读取无法写入修改。
-> 💡 联网搜索可在 `models_config.yaml` 的 `web_search` 段配置：开关、专用意图分析模型（推荐配置轻量模型加速）。
+> 💡 联网搜索默认关闭，可使用 `#cn` 临时启用，或在 `models_config.yaml` 中设置 `enable_web_search: true` 全局开启。推荐配置专用意图分析模型以加速。
 
 ### 管理功能（管理员）
 | 指令 | 说明 |

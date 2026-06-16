@@ -45,6 +45,15 @@ export class HelpHandler extends plugin {
   > 示例: #${chatCmd} 你好呀！
   > 示例: #p${chatCmd} 这张图里是什么？ [图片]
 
+> 🌐 临时功能开关（默认关闭，按需启用）
+> #${chatCmd}v [内容]
+  临时启用图文转述（Vision Relay），强制用 Vision 模型描述图片。
+> #${chatCmd}n [内容]
+  临时启用联网搜索，AI 自动判断是否搜索并注入结果。
+> #${chatCmd}vn [内容]
+  同时启用图文转述和联网搜索。
+> 💡 开关可组合，如 #pv${chatCmd}、#us${chatCmd}n、#s${chatCmd}vn 等。
+
 > #导出${aiName}记忆
   导出该用户的对话记忆。
 > #导出${aiName}记忆 [日期]
@@ -181,6 +190,12 @@ export class HelpHandler extends plugin {
 - - - - - - - - - - - - - - - - -
 > 📷 图片支持
   所有对话指令都支持发送图片，支持引用消息、合并转发展开。
+> 🌐 临时开关
+  默认关闭联网搜索和图文转述，避免无意义的 Token 消耗。
+  需要时添加 v (Vision) 或 n (Net) 开关临时启用：
+  #cv 你好 → 启用图文转述
+  #cn 查天气 → 启用联网搜索
+  #cvn 这是个啥 → 同时启用两者
 
 > 🎨 作图技巧
   - 预设命令加模型组前缀切换模型（#p手办化 / #u手办化）
