@@ -58,6 +58,7 @@
 # 当主模型不支持多模态（无法识图）时，启用此功能后，
 # 插件会先用 Vision 模型描述图片，再将描述文本喂给主模型。
 # 适用于纯文本模型间接"看图"。
+# 默认关闭，可使用 #cv 临时强制启用图文转述
 #
 # vision_model: 支持配置多个 Vision 模型，按顺序依次尝试
 #   单模型（兼容旧格式）:
@@ -80,7 +81,7 @@ vision_model:
 ---
 # ================================================
 # 联网搜索配置
-# enable_web_search: 是否启用联网搜索功能（默认 true）
+# enable_web_search: 是否启用联网搜索功能（默认 false，使用 #cn 临时启用）
 # intent_model: 搜索意图分析专用模型（支持多模型故障转移）
 #   如果不配置 intent_model，则使用 Flash 模型组做意图分析
 #   配置独立模型可大幅加快分析速度，推荐使用轻量模型
@@ -92,5 +93,5 @@ vision_model:
 #     - provider_id: "provider2"
 #       model_id: "qwen-turbo"
 # ================================================
-enable_web_search: true
+enable_web_search: false
 # intent_model: []

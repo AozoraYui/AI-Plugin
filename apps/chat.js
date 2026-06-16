@@ -193,19 +193,30 @@ export class ChatHandler extends plugin {
         if (!await checkAccess(e)) return true
 
         const chatCmd = Config.CHAT_COMMAND
-        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)${chatCmd}([\\s\\S]*)`, 'i'))
+        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)${chatCmd}([vn]*)([\\s\\S]*)`, 'i'))
         if (!match) return
 
         e._singleMode = true
 
         const prefix1 = match[1].toLowerCase()
         const prefix2 = match[2].toLowerCase()
+        const flags = match[3].toLowerCase()
+        const content = match[4]
+
+        // 从所有位置提取 v/n flag（可能在 prefix1, prefix2, 或 flags group 中）
+        const allFlags = prefix1 + prefix2 + flags
+        e._visionFlag = allFlags.includes('v')
+        e._netFlag = allFlags.includes('n')
+
+        // 剥离 v/n 后再解析模型组
+        const clean1 = prefix1.replace(/[vn]/gi, '')
+        const clean2 = prefix2.replace(/[vn]/gi, '')
 
         let modelPrefix = ''
-        if (resolveModelGroup(prefix1) !== 'flash') modelPrefix = prefix1
-        if (resolveModelGroup(prefix2) !== 'flash') modelPrefix = prefix2
+        if (resolveModelGroup(clean1) !== 'flash') modelPrefix = clean1
+        if (resolveModelGroup(clean2) !== 'flash') modelPrefix = clean2
 
-        e.msg = `#${modelPrefix}${chatCmd}${match[3]}`
+        e.msg = `#${modelPrefix}${chatCmd}${content}`
         return this.handleChat(e)
     }
 
@@ -213,13 +224,21 @@ export class ChatHandler extends plugin {
         if (!await checkAccess(e)) return true
 
         const chatCmd = Config.CHAT_COMMAND
-        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)${chatCmd}([\\s\\S]*)`, 'i'))
+        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)${chatCmd}([vn]*)([\\s\\S]*)`, 'i'))
         if (!match) return
 
         const prefix = match[1].toLowerCase()
-        let userMessage = match[2].trim()
+        const flags = match[2].toLowerCase()
+        let userMessage = match[3].trim()
 
-        const modelGroupKey = resolveModelGroup(prefix)
+        // 从 prefix 和 flags 中提取 v/n flag（handleSingleChat 可能已设置）
+        const allFlags = prefix + flags
+        if (e._visionFlag === undefined) e._visionFlag = /v/i.test(allFlags)
+        if (e._netFlag === undefined) e._netFlag = /n/i.test(allFlags)
+
+        // 剥离 v/n 后再解析模型组
+        const cleanPrefix = prefix.replace(/[vn]/gi, '')
+        const modelGroupKey = resolveModelGroup(cleanPrefix)
         const modelDisplay = resolveModelDisplay(modelGroupKey)
 
         const startTime = Date.now()
@@ -322,8 +341,9 @@ export class ChatHandler extends plugin {
 
             if (!userMessage && allImages.length === 0) return e.reply('请输入内容或发送图片呀', true)
 
-            // 工具调用：LLM 分析是否需要联网搜索
-            if (this.client.enableWebSearch) {
+            // 工具调用：LLM 分析是否需要联网搜索（flag n 优先于全局配置）
+            const useWebSearch = e._netFlag || this.client.enableWebSearch
+            if (useWebSearch) {
                 const searchIntent = await toolRegistry.analyzeSearchIntent(userMessage, this.client)
                 if (searchIntent?.needsSearch && searchIntent.queries.length > 0) {
                     logger.info(`[AI-Plugin] LLM判断需要搜索，关键词: ${JSON.stringify(searchIntent.queries)}`)
@@ -391,8 +411,9 @@ export class ChatHandler extends plugin {
                 }
             }
 
-            // Vision Relay：非多模态主模型时，先用 Vision 模型描述图片
-            if (allImages.length > 0 && this.client.enableVisionRelay && this.client._checkModelGroupNeedsVisionRelay(modelGroupKey)) {
+            // Vision Relay：flag v 强制启用，否则按全局配置 + 模型是否需要转述
+            const useVisionRelay = e._visionFlag || (this.client.enableVisionRelay && this.client._checkModelGroupNeedsVisionRelay(modelGroupKey))
+            if (allImages.length > 0 && useVisionRelay) {
                 const visionModels = this.client.visionModels
                 logger.info(`[AI-Plugin] Vision Relay: 检测到 ${allImages.length} 张图片，开始转述，共 ${visionModels.length} 个 Vision 模型`)
                 let description = ''
