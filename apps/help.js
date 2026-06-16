@@ -50,9 +50,9 @@ export class HelpHandler extends plugin {
   临时启用图文转述（Vision Relay），强制用 Vision 模型描述图片。
 > #${chatCmd}n [内容]
   临时启用联网搜索，AI 自动判断是否搜索并注入结果。
-> #${chatCmd}vn [内容]
-  同时启用图文转述和联网搜索。
-> 💡 开关可组合，如 #pv${chatCmd}、#us${chatCmd}n、#s${chatCmd}vn 等。
+> #${chatCmd}w [URL]
+  临时启用网页抓取，自动提取消息中的 URL 并抓取网页内容。
+> 开关可组合，如 #pv${chatCmd}、#us${chatCmd}n、#s${chatCmd}w、#${chatCmd}vnw 等。
 
 > #导出${aiName}记忆
   导出该用户的对话记忆。

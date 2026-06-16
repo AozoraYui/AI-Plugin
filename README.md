@@ -144,6 +144,7 @@ vision_model:
 #       model_id: "qwen-turbo"
 enable_web_search: false
 # intent_model: []
+enable_web_fetch: false
 ```
 
 **`draw_presets.yaml`** - 作图预设配置
@@ -246,6 +247,7 @@ AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单
 
 > 💡 文件读取白名单在 `config/file_roots.yaml` 中单独配置，AI 只能读取无法写入修改。
 > 💡 联网搜索默认关闭，可使用 `#cn` 临时启用，或在 `models_config.yaml` 中设置 `enable_web_search: true` 全局开启。推荐配置专用意图分析模型以加速。
+> 💡 网页抓取默认关闭，可使用 `#cw` 临时启用，或在 `models_config.yaml` 中设置 `enable_web_fetch: true` 全局开启。消息中包含 URL 时自动抓取网页内容。
 
 ### 管理功能（管理员）
 | 指令 | 说明 |
