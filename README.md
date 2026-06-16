@@ -111,7 +111,20 @@ DRAW_COMMAND: draw
 
 ---
 # 图文转述（Vision Relay）配置（可选）
-enable_vision_relay: false  # 默认关闭，使用 #cv 临时强制启用
+# 当主模型不支持多模态时，Vision 模型先描述图片再喂给主模型
+# 默认关闭，可使用 #cv 临时强制启用图文转述
+# vision_model 支持多模型故障转移（按顺序依次尝试）：
+#   单模型:
+#     vision_model:
+#       provider_id: "xxx"
+#       model_id: "gemini-2.5-flash"
+#   多模型:
+#     vision_model:
+#       - provider_id: "xxx"
+#         model_id: "gemini-2.5-flash"
+#       - provider_id: "yyy"
+#         model_id: "gemini-3-flash"
+enable_vision_relay: false
 
 vision_model:
   provider_id: "provider1"
@@ -119,10 +132,18 @@ vision_model:
 
 ---
 # 联网搜索配置（可选）
-enable_web_search: false   # 默认关闭，使用 #cn 临时启用
-# intent_model:            # 搜索意图分析专用模型（可选，不配则用 Flash 组）
-#   - provider_id: "provider1"
-#     model_id: "gemini-2.5-flash"
+# 默认关闭，可使用 #cn 临时启用
+# intent_model: 搜索意图分析专用模型（可选，不配则用 Flash 组）
+#   配置独立模型可大幅加快分析速度，推荐使用轻量模型
+#   注意：intent_model 必须与 enable_web_search 平级（不要缩进！）
+#   例:
+#   intent_model:
+#     - provider_id: "provider1"
+#       model_id: "gemini-2.5-flash"
+#     - provider_id: "provider2"
+#       model_id: "qwen-turbo"
+enable_web_search: false
+# intent_model: []
 ```
 
 **`draw_presets.yaml`** - 作图预设配置
@@ -180,6 +201,9 @@ name: 诺亚
 > - 单次对话模式适合临时提问，不会污染上下文记忆
 > - 多轮对话模式会自动加载历史记忆和锚点总结
 > - 短命令 `pchat`/`uchat` 和完整命令 `prochat`/`ultrachat` 等效
+> - **临时开关**：`#cv` 启用图文转述，`#cn` 启用联网搜索，`#cvn` 同时启用
+>   - 开关可组合，如 `#scv`、`#pcn`、`#usvn` 等
+>   - `v`/`n` 仅识别紧跟指令后的字符，对话内容中的 `v`/`n` 不会误触发
 
 ### 作图功能
 | 指令 | 模型组 | 说明 |
@@ -215,7 +239,8 @@ AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单
 |---------|---------|------|
 | 服务器状态查询 | 在对话中询问服务器状态（如`#chat 服务器状态怎么样`） | 返回 CPU、内存、温度、磁盘等信息，支持 fastfetch/neofetch |
 | 本地文件读取 | 在对话中提到文件路径（如`#chat 读一下 /etc/nginx/nginx.conf`） | 只读，仅限白名单目录，最大 4MB |
-| 目录浏览 | 在对话中提到目录路径（如`#chat 列出 /var/log 目录`） | 列出文件和子目录，同样受白名单限制 |
+| 目录浏览 | 在对话中提到目录路径（如`#chat 列出 /var/log 目录`） | 列出文件和子目录，受白名单限制 |
+| 目录+文件全读 | 要求读取所有文件（如`#chat 帮我看看 /etc/nginx 所有配置`） | 列出目录并读取全部文本文件内容，自动跳过二进制和超大文件 |
 | 联网搜索 | 使用 `#cn` 临时启用，AI 自动判断是否需要搜索 | 注入搜索结果辅助回答，无需手动触发 |
 
 > 💡 文件读取白名单在 `config/file_roots.yaml` 中单独配置，AI 只能读取无法写入修改。
