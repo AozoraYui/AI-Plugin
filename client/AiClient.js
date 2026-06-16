@@ -300,10 +300,13 @@ export class AiClient {
                 if (rawConfig.enable_web_search && typeof rawConfig.enable_web_search === 'object') {
                     const nested = rawConfig.enable_web_search
                     const intentKey = Object.keys(nested).find(k => k.includes('intent_model'))
+                    // 从合并的 key 中提取原始 boolean 值（如 "false intent_model" → false）
+                    const wasFalse = Object.keys(nested).some(k => /^(false|no|off|0)$/i.test(k))
+                    const enableValue = !wasFalse
                     if (intentKey) {
-                        rawConfig = { intent_model: nested[intentKey], enable_web_search: true }
+                        rawConfig = { intent_model: nested[intentKey], enable_web_search: enableValue }
                     } else {
-                        rawConfig = { ...nested, enable_web_search: true }
+                        rawConfig = { ...nested, enable_web_search: enableValue }
                     }
                 }
                 this.webSearchConfig = rawConfig
