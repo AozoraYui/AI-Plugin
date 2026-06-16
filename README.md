@@ -293,17 +293,22 @@ AI-Plugin/
 ├── model/                   # 数据模型
 │   └── conversation.js     # 对话历史管理
 ├── tools/                   # 工具系统
+│   ├── index.js            # 工具注册入口
 │   ├── registry.js         # 工具注册表（注册、意图检测等）
 │   ├── file_read.js        # 本地文件读取 & 目录浏览
 │   ├── system_info.js      # 服务器系统信息查询
-│   └── web_search.js       # 联网搜索
+│   ├── search.js           # 联网搜索
+│   ├── web_fetch.js        # 网页抓取
+│   └── vision_relay.js     # 图文转述
 ├── utils/                   # 工具函数
 │   ├── config.js           # 配置管理
 │   ├── scheduler.js        # 定时任务（全量/增量总结）
 │   ├── session.js          # 会话管理
 │   ├── access.js           # 权限控制
 │   ├── database.js         # SQLite 数据库操作
-│   └── common.js           # 通用工具
+│   ├── common.js           # 通用工具
+│   ├── image.js            # 图片处理
+│   └── summarizer.js       # 摘要生成
 ├── index.js                 # 入口文件
 └── package.json             # 依赖配置
 ```
@@ -316,8 +321,9 @@ AI-Plugin/
 | 文件 | 说明 |
 |------|------|
 | `ai_name.yaml` | AI 名称配置（可选，不创建则使用默认值"诺亚"） |
+| `ai_prompt.yaml` | AI 提示词与人设配置（可选，自定义 AI 行为与风格） |
 | `trusted_groups.yaml` | 信任群聊列表（通过 `#ai信任群添加` 命令自动管理） |
-| `models_config.yaml` | 模型供应商配置（含 Vision Relay、指令关键词、联网搜索等） |
+| `models_config.yaml` | 模型供应商配置（含 Vision Relay、指令关键词、联网搜索、网页抓取等） |
 | `model_status.json` | 模型测试状态 |
 | `disabled_models.json` | 禁用的模型列表 |
 | `draw_presets.yaml` | 作图预设配置 |
