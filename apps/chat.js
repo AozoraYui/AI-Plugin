@@ -388,8 +388,8 @@ export class ChatHandler extends plugin {
             // 本地文件读取
             const fileReadIntent = toolRegistry.detectFileReadIntent(userMessage)
             if (fileReadIntent) {
-                logger.info(`[AI-Plugin] 检测到文件读取意图: ${fileReadIntent.path}`)
-                const fileResult = await toolRegistry.execute('file_read', { path: fileReadIntent.path })
+                logger.info(`[AI-Plugin] 检测到文件读取意图: ${fileReadIntent.path} (readAll=${fileReadIntent.readAll})`)
+                const fileResult = await toolRegistry.execute('file_read', { path: fileReadIntent.path, read_all: fileReadIntent.readAll })
                 if (fileResult.success) {
                     userMessage = userMessage + fileResult.data
                     logger.info('[AI-Plugin] 文件读取完成，结果已注入提示词')
@@ -401,8 +401,8 @@ export class ChatHandler extends plugin {
             // 本地目录浏览
             const dirReadIntent = toolRegistry.detectDirReadIntent(userMessage)
             if (dirReadIntent) {
-                logger.info(`[AI-Plugin] 检测到目录浏览意图: ${dirReadIntent.path}`)
-                const dirResult = await toolRegistry.execute('dir_read', { path: dirReadIntent.path })
+                logger.info(`[AI-Plugin] 检测到目录浏览意图: ${dirReadIntent.path} (readAll=${dirReadIntent.readAll})`)
+                const dirResult = await toolRegistry.execute('dir_read', { path: dirReadIntent.path, read_all: dirReadIntent.readAll })
                 if (dirResult.success) {
                     userMessage = userMessage + dirResult.data
                     logger.info('[AI-Plugin] 目录浏览完成，结果已注入提示词')

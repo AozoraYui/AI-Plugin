@@ -32,11 +32,48 @@ function checkPathAllowed(filePath) {
 }
 
 /**
+ * 判断文件是否为文本文件（非二进制）
+ * 基于常见二进制扩展名 + 读取前 512 字节检测 null 字符
+ */
+function isTextFile(filePath) {
+    const binaryExts = new Set([
+        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.ico', '.svg',
+        '.mp3', '.mp4', '.avi', '.mov', '.mkv', '.wav', '.flac', '.ogg',
+        '.zip', '.tar', '.gz', '.bz2', '.xz', '.7z', '.rar',
+        '.exe', '.dll', '.so', '.bin', '.dat', '.db', '.sqlite', '.sqlite3',
+        '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+        '.ttf', '.otf', '.woff', '.woff2', '.eot',
+        '.pyc', '.class', '.o', '.a', '.lib',
+    ])
+    const ext = path.extname(filePath).toLowerCase()
+    if (binaryExts.has(ext)) return false
+
+    // 检测 null 字节（二进制特征）
+    try {
+        const buf = Buffer.alloc(512)
+        const fd = fs.openSync(filePath, 'r')
+        const bytesRead = fs.readSync(fd, buf, 0, 512, 0)
+        fs.closeSync(fd)
+        for (let i = 0; i < bytesRead; i++) {
+            if (buf[i] === 0) return false
+        }
+    } catch {
+        return false
+    }
+    return true
+}
+
+/**
  * 列出目录内容
  * @param {string} dirPath - 目录绝对路径
+ * @param {object} options
+ * @param {boolean} [options.readAll=false] - 是否读取所有文本文件内容
+ * @param {number} [options.maxTotalSize=524288] - readAll 时全部文件总大小上限（默认 512KB）
  * @returns {string} 格式化的目录列表
  */
-function readLocalDir(dirPath) {
+function readLocalDir(dirPath, options = {}) {
+    const { readAll = false, maxTotalSize = Config.FILE_READ_ALL_MAX_TOTAL || 524288 } = options
+
     try {
         const entries = fs.readdirSync(dirPath, { withFileTypes: true })
 
@@ -84,7 +121,65 @@ function readLocalDir(dirPath) {
         }
 
         output += `\n【目录内容结束】\n`
-        logger.info(`[AI-Plugin] DirRead: ${dirPath} (${total} 项)`)
+
+        // readAll：读取所有文本文件内容
+        if (readAll && files.length > 0) {
+            let totalRead = 0
+            let fileContents = ''
+            let skippedBinary = 0
+            let skippedSize = 0
+
+            const maxSingleSize = Config.FILE_MAX_SIZE || 4194304 // 单文件最大 4MB
+
+            for (const f of files) {
+                // 跳过过大文件
+                if (f.size > maxSingleSize) {
+                    skippedSize++
+                    continue
+                }
+
+                // 跳过二进制文件
+                if (!isTextFile(f.path)) {
+                    skippedBinary++
+                    continue
+                }
+
+                // 总大小超限则停止
+                if (totalRead + f.size > maxTotalSize) {
+                    const remaining = files.length - files.indexOf(f) - skippedBinary - skippedSize
+                    if (remaining > 0) {
+                        output += `\n【文件内容读取】已达到总大小上限 (${(maxTotalSize / 1024).toFixed(0)}KB)，剩余 ${remaining} 个文件未读取\n`
+                    }
+                    break
+                }
+
+                try {
+                    const content = fs.readFileSync(f.path, 'utf-8')
+                    const sizeKB = (f.size / 1024).toFixed(1)
+                    fileContents += `\n--- 文件: ${f.name} (${sizeKB}KB) ---\n${content}\n`
+                    totalRead += f.size
+                } catch (err) {
+                    fileContents += `\n--- 文件: ${f.name} 读取失败: ${err.message} ---\n`
+                }
+            }
+
+            if (fileContents) {
+                const totalKB = (totalRead / 1024).toFixed(1)
+                output += `\n【以下是该目录下所有文本文件的内容（共 ${totalKB}KB）：】\n${fileContents}\n【文件内容结束】\n`
+            }
+
+            if (skippedBinary > 0) {
+                output += `\n(已跳过 ${skippedBinary} 个二进制文件)\n`
+            }
+            if (skippedSize > 0) {
+                output += `\n(已跳过 ${skippedSize} 个超大文件)\n`
+            }
+
+            logger.info(`[AI-Plugin] DirRead(readAll): ${dirPath} (${total} 项, 读取 ${(totalRead / 1024).toFixed(1)}KB)`)
+        } else {
+            logger.info(`[AI-Plugin] DirRead: ${dirPath} (${total} 项)`)
+        }
+
         return output
     } catch (err) {
         logger.warn(`[AI-Plugin] DirRead 读取失败: ${dirPath} - ${err.message}`)
@@ -92,7 +187,7 @@ function readLocalDir(dirPath) {
     }
 }
 
-async function readLocalFile(filePath) {
+async function readLocalFile(filePath, options = {}) {
     if (!filePath || typeof filePath !== 'string' || !filePath.trim()) {
         return '\n\n【文件读取失败】未指定文件路径。\n'
     }
@@ -117,7 +212,7 @@ async function readLocalFile(filePath) {
 
     // 目录：列出内容
     if (stat.isDirectory()) {
-        return readLocalDir(realPath)
+        return readLocalDir(realPath, options)
     }
 
     if (!stat.isFile()) {
@@ -164,7 +259,8 @@ export const fileReadTool = {
     },
 
     async execute(args) {
-        const content = await readLocalFile(args.path)
+        const readAll = args.read_all === true
+        const content = await readLocalFile(args.path, { readAll })
         return content
     },
 
@@ -175,19 +271,23 @@ export const fileReadTool = {
 
 export const dirReadTool = {
     name: 'dir_read',
-    description: '列出指定目录下的文件和子目录（仅限白名单目录，只读）',
+    description: '列出指定目录下的文件和子目录（仅限白名单目录，只读），支持读取目录下所有文本文件内容',
 
     functionSchema: {
         type: 'function',
         function: {
             name: 'dir_read',
-            description: '列出指定目录下的文件和子目录列表（仅限白名单目录，只读）',
+            description: '列出指定目录下的文件和子目录列表（仅限白名单目录，只读）。支持 read_all 参数读取目录下所有文本文件内容。',
             parameters: {
                 type: 'object',
                 properties: {
                     path: {
                         type: 'string',
                         description: '目录的绝对路径'
+                    },
+                    read_all: {
+                        type: 'boolean',
+                        description: '是否读取该目录下所有文本文件的内容（默认 false）。开启后会自动跳过二进制文件和超大文件。'
                     }
                 },
                 required: ['path']
@@ -196,7 +296,8 @@ export const dirReadTool = {
     },
 
     async execute(args) {
-        const content = await readLocalFile(args.path)
+        const readAll = args.read_all === true
+        const content = await readLocalFile(args.path, { readAll })
         return content
     },
 

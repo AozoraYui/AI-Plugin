@@ -77,10 +77,18 @@ class ToolRegistry {
 
     /**
      * 检测并提取文件读取意图（关键词匹配 + 路径提取）
-     * @returns {{ path: string } | null}
+     * @returns {{ path: string, readAll: boolean } | null}
      */
     detectFileReadIntent(msg) {
         if (!msg || !msg.trim()) return null
+
+        // 检测是否需要读取全部文件内容
+        const readAllPatterns = [
+            /(?:读|读取|查看|看看|帮我看看|帮我读).*(?:所有|全部|所有文件|全部文件).*(?:内容|配置|文件)/,
+            /(?:所有|全部).*(?:配置|文件|内容).*(?:读|读取|查看|看看)/,
+        ]
+        const readAll = readAllPatterns.some(p => p.test(msg))
+
         const patterns = [
             /(?:帮我|请|给|来)?(?:读|读取|查看|看看|打开)(?:一下)?(?:这个|文件)?\s*(?:\/[\w\.\-\/]+)/,
             /文件\s*(?:\/[\w\.\-\/]+)/,
@@ -89,7 +97,7 @@ class ToolRegistry {
             const match = msg.match(p)
             if (match) {
                 const pathMatch = msg.match(/(\/[\w\.\-\/]+)/)
-                if (pathMatch) return { path: pathMatch[1] }
+                if (pathMatch) return { path: pathMatch[1], readAll }
             }
         }
         return null
@@ -97,10 +105,19 @@ class ToolRegistry {
 
     /**
      * 检测并提取目录读取意图（关键词匹配 + 路径提取）
-     * @returns {{ path: string } | null}
+     * @returns {{ path: string, readAll: boolean } | null}
      */
     detectDirReadIntent(msg) {
         if (!msg || !msg.trim()) return null
+
+        // 检测是否需要读取全部文件内容
+        const readAllPatterns = [
+            /(?:读|读取|查看|看看|帮我看看|帮我读).*(?:所有|全部|所有文件|全部文件).*(?:内容|文件)/,
+            /(?:所有|全部).*(?:配置|文件|内容).*(?:读|读取|查看|看看)/,
+            /(?:看看|查看).*(?:里面|里边|目录).*(?:有什么|有什么文件|内容)/,
+        ]
+        const readAll = readAllPatterns.some(p => p.test(msg))
+
         const patterns = [
             /(?:帮我|请|给|来)?(?:列出|浏览|看看|查看)(?:一下)?(?:目录|文件夹|里面的东西|里面有什么)\s*(?:\/[\w\.\-\/]+)/,
             /(?:列出|浏览)(?:目录)?\s*(?:\/[\w\.\-\/]+)/,
@@ -110,7 +127,7 @@ class ToolRegistry {
             const match = msg.match(p)
             if (match) {
                 const pathMatch = msg.match(/(\/[\w\.\-\/]+)/)
-                if (pathMatch) return { path: pathMatch[1] }
+                if (pathMatch) return { path: pathMatch[1], readAll }
             }
         }
         return null
