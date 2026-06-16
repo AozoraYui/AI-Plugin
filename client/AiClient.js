@@ -17,7 +17,7 @@ export class AiClient {
         this.activeModelPools = {}
         this.commandConfig = {}
         this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
-        this.webSearchConfig = { enabled: true, intent_model: null }
+        this.webSearchConfig = { enabled: false, intent_model: null }
         this.loadModelsConfig()
         this.loadModelStatus()
         this.loadDisabledModels()
@@ -215,6 +215,7 @@ export class AiClient {
         this.modelsConfig = []
         this.commandConfig = {}
         this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
+        this.webSearchConfig = { enabled: false, intent_model: null }
         if (!fs.existsSync(MODELS_CONFIG_FILE)) {
             logger.info(`[AI-Plugin] 未找到模型配置文件，将从模板创建。`)
             const templatePath = path.join(TEMPLATE_DIR_EXPORT, 'models_config.yaml')
