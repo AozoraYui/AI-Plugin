@@ -36,6 +36,16 @@ export class UpdateHandler extends plugin {
         }
     }
 
+    /** 获取 HEAD..origin/main 的提交日志 */
+    _getChangelog() {
+        const result = this._runGit(
+            'git log --format="[%ad] %s" --date=format:"%Y-%m-%d %H:%M" HEAD..origin/main'
+        )
+        if (!result.success || !result.output || result.output === '(无输出)') return null
+        const lines = result.output.split('\n').filter(Boolean)
+        return lines
+    }
+
     async gitPull(e) {
         if (!await checkAccess(e)) return true
 
@@ -53,11 +63,23 @@ export class UpdateHandler extends plugin {
             return e.reply(`✅ 已是最新版本\n本地: ${localHash.output.slice(0, 7)}\n远程: ${remoteHash.output.slice(0, 7)}`)
         }
 
+        // 获取更新日志
+        const changelog = this._getChangelog()
+
         const pullResult = this._runGit('git pull origin main')
         if (pullResult.success) {
             const newHash = this._runGit('git rev-parse HEAD')
             const hashStr = newHash.success ? newHash.output.slice(0, 7) : 'unknown'
-            return e.reply(`✅ 更新成功！\n当前版本: ${hashStr}\n\n更新内容:\n${pullResult.output}`)
+
+            let msg = ''
+            if (changelog && changelog.length > 0) {
+                msg += `AI-Plugin 更新日志，共 ${changelog.length} 条\n\n`
+                msg += changelog.join('\n')
+                msg += `\n\n`
+            }
+            msg += `✅ 更新成功！\n当前版本: ${hashStr}\n\n更新内容:\n${pullResult.output}`
+
+            return e.reply(msg)
         } else {
             return e.reply(`❌ 更新失败:\n${pullResult.output}`)
         }
@@ -75,6 +97,15 @@ export class UpdateHandler extends plugin {
 
         await e.reply('⚠️ 正在强制更新（将丢弃本地修改）...')
 
+        // 先 fetch 获取远程信息
+        const fetchResult = this._runGit('git fetch origin')
+        if (!fetchResult.success) {
+            return e.reply(`❌ git fetch 失败:\n${fetchResult.output}`)
+        }
+
+        // 获取更新日志（reset 之前）
+        const changelog = this._getChangelog()
+
         const resetResult = this._runGit('git reset --hard origin/main')
         if (!resetResult.success) {
             return e.reply(`❌ git reset 失败:\n${resetResult.output}`)
@@ -84,7 +115,16 @@ export class UpdateHandler extends plugin {
         if (pullResult.success) {
             const newHash = this._runGit('git rev-parse HEAD')
             const hashStr = newHash.success ? newHash.output.slice(0, 7) : 'unknown'
-            return e.reply(`✅ 强制更新成功！\n当前版本: ${hashStr}\n\n${pullResult.output}`)
+
+            let msg = ''
+            if (changelog && changelog.length > 0) {
+                msg += `AI-Plugin 更新日志，共 ${changelog.length} 条\n\n`
+                msg += changelog.join('\n')
+                msg += `\n\n`
+            }
+            msg += `✅ 强制更新成功！\n当前版本: ${hashStr}\n\n${pullResult.output}`
+
+            return e.reply(msg)
         } else {
             return e.reply(`❌ 强制更新失败:\n${pullResult.output}`)
         }
