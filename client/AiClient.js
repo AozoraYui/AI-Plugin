@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import yaml from 'yaml'
-import { Config, MODELS_CONFIG_FILE, MODEL_STATUS_FILE, DISABLED_MODELS_FILE, TEMPLATE_DIR_EXPORT } from '../utils/config.js'
+import { MODELS_CONFIG_FILE, MODEL_STATUS_FILE, DISABLED_MODELS_FILE, TEMPLATE_DIR_EXPORT } from '../utils/config.js'
 import { fetchWithProxy } from '../utils/common.js'
 
 // 熔断常量
@@ -126,7 +126,6 @@ export class AiClient {
         const entry = this.modelStatus[key]
         if (!entry) {
             this.modelStatus[key] = {
-                status: 'unknown',
                 success_count: 0,
                 fail_count: 0,
                 avg_latency_ms: 0,
@@ -149,7 +148,6 @@ export class AiClient {
     _recordModelSuccess(key, elapsedMs) {
         const entry = this.modelStatus[key]
         if (!entry) return
-        entry.status = 'ok'
         entry.success_count = (entry.success_count || 0) + 1
         entry.consecutive_fails = 0
         entry.cooldown_until = 0
@@ -168,7 +166,6 @@ export class AiClient {
     _recordModelFail(key) {
         const entry = this.modelStatus[key]
         if (!entry) return
-        entry.status = 'failed'
         entry.fail_count = (entry.fail_count || 0) + 1
         entry.consecutive_fails = (entry.consecutive_fails || 0) + 1
         entry.last_used = Date.now()
@@ -432,11 +429,6 @@ export class AiClient {
             }
         }
 
-        if (!this.modelStatus || Object.keys(this.modelStatus).length === 0) {
-            logger.warn('[AI-Plugin] 未找到模型测试状态，可用模型池为空。')
-            return
-        }
-
         for (const provider of this.modelsConfig) {
             for (const groupName in provider.model_groups) {
                 const group = provider.model_groups[groupName]
@@ -444,19 +436,19 @@ export class AiClient {
                 if (group.chat_models) {
                     for (const modelId of group.chat_models) {
                         const statusKey = `${provider.id}-${modelId}`
+                        // 跳过手动禁用的模型
+                        if (this.disabledModels.has(statusKey)) continue
                         this._initModelStatusEntry(statusKey)
-                        if (this.modelStatus[statusKey]?.status === 'ok') {
-                            this.activeModelPools[groupName].chat.push({ provider, modelId })
-                        }
+                        this.activeModelPools[groupName].chat.push({ provider, modelId })
                     }
                 }
                 if (group.draw_models) {
                     for (const modelId of group.draw_models) {
                         const statusKey = `${provider.id}-${modelId}`
+                        // 跳过手动禁用的模型
+                        if (this.disabledModels.has(statusKey)) continue
                         this._initModelStatusEntry(statusKey)
-                        if (this.modelStatus[statusKey]?.status === 'ok') {
-                            this.activeModelPools[groupName].image.push({ provider, modelId })
-                        }
+                        this.activeModelPools[groupName].image.push({ provider, modelId })
                     }
                 }
             }
@@ -761,179 +753,16 @@ export class AiClient {
 
             const errorMessage = `模型组 [${modelGroupKey}] 中的所有可用模型均尝试失败。\n具体错误:\n${lastError.trim()}`
             logger.error(`[AI-Plugin] ${errorMessage}`)
-            return { success: false, error: `${errorMessage}\n建议运行 #ai模型测试。` }
+            return { success: false, error: `${errorMessage}` }
         } else {
             if (modelGroupKey !== 'flash') {
                 lastError = `模型组 [${modelGroupKey}] 中没有可用的 [${taskTypeName}] 模型。请检查 models_config.yaml 配置或使用其他指令。`
             } else {
-                lastError = `[默认] 模型组中也找不到可用的 [${taskTypeName}] 类型模型。请运行 #ai模型测试 来更新可用模型列表。`
+                lastError = `[默认] 模型组中也找不到可用的 [${taskTypeName}] 类型模型。请检查配置文件中的模型列表。`
             }
             logger.error(`[AI-Plugin] ${lastError}`)
             return { success: false, error: lastError }
         }
-    }
-
-    async testSingleModel(provider, modelId, type) {
-        const startTime = Date.now()
-        const statusKey = `${provider.id}-${modelId}`
-
-        const testPrompt = "This is an API connectivity test. Please reply with 'OK' in text only, and do not generate any images."
-        const payload = { "contents": [{ "role": "user", "parts": [{ "text": testPrompt }] }] }
-
-        try {
-            const { url, options } = this.buildRequest(type, payload, provider, modelId)
-            const bodyObj = JSON.parse(options.body)
-            bodyObj.stream = false
-            options.body = JSON.stringify(bodyObj)
-
-            const res = await fetchWithProxy(url, { ...options, timeout: 64000 })
-
-            if (!res.ok) throw new Error(`HTTP状态码: ${res.status}`)
-
-            let data
-            try {
-                data = await res.json()
-                if (data.error) {
-                    throw new Error(data.error.message || 'API返回了错误信息')
-                }
-            } catch (e) {
-                const responseText = await res.text()
-                const hasError = /"error"/.test(responseText)
-                const hasDoneSignal = /data: \[DONE\]/.test(responseText) || /"finish_reason":"stop"/.test(responseText)
-
-                if (hasError || !hasDoneSignal) {
-                    const errorMessage = e.message.includes('Invalid JSON') ? responseText : e.message
-                    throw new Error(`流式响应异常或包含错误: ${errorMessage.slice(0, 200)}...`)
-                }
-                data = {}
-            }
-
-            const responseTime = Date.now() - startTime
-
-            this._initModelStatusEntry(statusKey)
-            this.modelStatus[statusKey] = {
-                ...this.modelStatus[statusKey],
-                status: 'ok',
-                responseTime,
-                usage: data.usage || null,
-                lastTested: new Date().toISOString()
-            }
-
-            return { success: true }
-        } catch (error) {
-            const responseTime = Date.now() - startTime
-            this._initModelStatusEntry(statusKey)
-            this.modelStatus[statusKey] = {
-                ...this.modelStatus[statusKey],
-                status: 'failed',
-                error: error.message,
-                responseTime,
-                lastTested: new Date().toISOString()
-            }
-            logger.warn(`[AI-Plugin] 测试模型 [${provider.name}] ${modelId} 失败: ${error.message}`)
-            return { success: false }
-        }
-    }
-
-    async testAllModels() {
-        this.modelStatus = {}
-        const testPromises = []
-        let totalModels = 0
-        let skippedCount = 0
-
-        for (const provider of this.modelsConfig) {
-            for (const groupName in provider.model_groups) {
-                const group = provider.model_groups[groupName]
-
-                const modelsToTest = [
-                    ...(group.chat_models || []).map(modelId => ({ modelId, type: 'chat' })),
-                    ...(group.draw_models || []).map(modelId => ({ modelId, type: 'image' }))
-                ]
-
-                for (const { modelId, type } of modelsToTest) {
-                    totalModels++
-                    const statusKey = `${provider.id}-${modelId}`
-
-                    if (this.disabledModels.has(statusKey)) {
-                        skippedCount++
-                        continue
-                    }
-
-                    testPromises.push(this.testSingleModel(provider, modelId, type))
-                }
-            }
-        }
-
-        if (totalModels === 0) {
-            return { total: 0, success: 0, failed: 0, skipped: 0 }
-        }
-
-        if (testPromises.length > 0) {
-            const CONCURRENCY_LIMIT = Config.TEST_CONCURRENCY_LIMIT
-            logger.info(`[AI-Plugin] 开始测试 ${testPromises.length} 个模型，每批并发 ${CONCURRENCY_LIMIT} 个`)
-            const startTime = Date.now()
-            for (let i = 0; i < testPromises.length; i += CONCURRENCY_LIMIT) {
-                const batch = testPromises.slice(i, i + CONCURRENCY_LIMIT)
-                await Promise.all(batch)
-            }
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-            logger.info(`[AI-Plugin] 模型测试完成，耗时 ${elapsed}s`)
-        }
-
-        let successCount = 0
-        for (const status of Object.values(this.modelStatus)) {
-            if (status.status === 'ok') {
-                successCount++
-            }
-        }
-        this.saveModelStatus()
-        this._buildActiveModelPools()
-
-        return {
-            total: totalModels,
-            success: successCount,
-            failed: testPromises.length - successCount,
-            skipped: skippedCount
-        }
-    }
-
-    enableAllModels() {
-        if (!this.modelsConfig || this.modelsConfig.length === 0) {
-            return { success: false, message: "尚未加载任何模型配置" }
-        }
-
-        let count = 0
-        const now = new Date().toISOString()
-
-        for (const provider of this.modelsConfig) {
-            for (const groupName in provider.model_groups) {
-                const group = provider.model_groups[groupName]
-                const allModelsInGroup = [
-                    ...(group.chat_models || []),
-                    ...(group.draw_models || [])
-                ]
-
-                for (const modelId of allModelsInGroup) {
-                    const statusKey = `${provider.id}-${modelId}`
-
-                    this._initModelStatusEntry(statusKey)
-                    this.modelStatus[statusKey].status = 'ok'
-                    this.modelStatus[statusKey].lastTested = now
-
-                    if (this.disabledModels.has(statusKey)) {
-                        this.disabledModels.delete(statusKey)
-                    }
-
-                    count++
-                }
-            }
-        }
-
-        this.saveModelStatus()
-        this.saveDisabledModels()
-        this._buildActiveModelPools()
-
-        return { success: true, count, message: `已成功将 ${count} 个模型全部设为"可用"状态！` }
     }
 
     toggleModelDisabled(action, modelId) {
@@ -965,10 +794,6 @@ export class AiClient {
             }
             this.disabledModels.add(statusKey)
             this.saveDisabledModels()
-            if (this.modelStatus[statusKey]?.status === 'ok') {
-                delete this.modelStatus[statusKey]
-                this.saveModelStatus()
-            }
             this._buildActiveModelPools()
             return { success: true, message: `模型 ${statusKey} 已被禁用，并已从可用模型池中移除。` }
         } else {
@@ -977,11 +802,6 @@ export class AiClient {
             }
             this.disabledModels.delete(statusKey)
             this.saveDisabledModels()
-
-            this._initModelStatusEntry(statusKey)
-            this.modelStatus[statusKey].status = 'ok'
-            this.modelStatus[statusKey].lastTested = new Date().toISOString()
-            this.saveModelStatus()
             this._buildActiveModelPools()
 
             return { success: true, message: `模型 ${statusKey} 已被启用并立即激活！` }

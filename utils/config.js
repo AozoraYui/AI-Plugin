@@ -60,9 +60,6 @@ const defaultConfig = {
     // 使用场景: apps/memory.js 中分段显示总结内容
     CHECKPOINT_DISPLAY_MAX_LENGTH: 3500,
     // ========== 并发控制配置 ==========
-    // 模型测试时每批并发数量，防止大量并发请求导致 API 限流
-    // 使用场景: client/AiClient.js 中 testAllModels 分批并发
-    TEST_CONCURRENCY_LIMIT: 5,
     // 图片处理时每批并发数量，避免大量图片同时处理导致内存峰值
     // 使用场景: apps/chat.js 中图片分批处理
     IMAGE_PROCESSING_BATCH_SIZE: 10,

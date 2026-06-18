@@ -18,8 +18,6 @@ export class ManagementHandler extends plugin {
             priority: 1140,
             rule: [
                 { reg: /^#ai模型列表$/i, fnc: 'listModels', permission: 'master' },
-                { reg: /^#ai模型测试$/i, fnc: 'testAllModels', permission: 'master' },
-                { reg: /^#ai启用全部模型$/i, fnc: 'enableAllModels', permission: 'master' },
                 { reg: /^#ai(禁用|启用)\s*(.+)$/i, fnc: 'toggleModelDisabledState', permission: 'master' },
                 { reg: /^#ai权限模式\s*(whitelist|blacklist)$/i, fnc: 'switchAccessMode', permission: 'master' },
                 { reg: /^#ai权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(\d+)$/i, fnc: 'modifyAccess', permission: 'master' },
@@ -32,18 +30,6 @@ export class ManagementHandler extends plugin {
         })
         this.client = global.AIPluginClient
         this.conversationManager = global.AIPluginConversationManager
-    }
-
-    async testAllModels(e) {
-        await e.reply("🧪 开始测试所有模型，这可能需要几分钟...")
-        const result = await this.client.testAllModels()
-        const message = `✅ 模型测试完成！\n总计: ${result.total} 个\n成功: ${result.success} 个\n失败: ${result.failed} 个\n跳过: ${result.skipped} 个`
-        await e.reply(message)
-    }
-
-    async enableAllModels(e) {
-        const result = this.client.enableAllModels()
-        await e.reply(result.message)
     }
 
     async toggleModelDisabledState(e) {
@@ -186,30 +172,18 @@ export class ManagementHandler extends plugin {
                         return " (⚪️ 已禁用)"
                     }
 
-                    if (!status) return " (未测试)"
+                    if (!status) return " (🆕 未使用)"
+                    
+                    const total = (status.success_count || 0) + (status.fail_count || 0)
+                    if (total === 0) return " (🆕 未使用)"
 
-                    const icon = status.status === 'ok' ? '✅' : '❌'
-                    const time = status.responseTime ? `${status.responseTime}ms` : 'N/A'
+                    const rate = Math.round((status.success_count || 0) / total * 100)
+                    let extraInfo = `成功率${rate}%`
+                    if (status.avg_latency_ms) extraInfo += ` | 延迟${Math.round(status.avg_latency_ms / 1000)}s`
+                    if (status.consecutive_fails >= 3) extraInfo += ` | 🔥熔断`
                     
-                    let extraInfo = time
-                    // 如果有运行统计，显示成功率和延迟
-                    if (status.success_count !== undefined && (status.success_count > 0 || status.fail_count > 0)) {
-                        const total = status.success_count + (status.fail_count || 0)
-                        const rate = total > 0 ? Math.round(status.success_count / total * 100) : 0
-                        extraInfo = `成功率${rate}%`
-                        if (status.avg_latency_ms) extraInfo += ` | 延迟${Math.round(status.avg_latency_ms / 1000)}s`
-                        if (status.consecutive_fails >= 3) extraInfo += ` | 🔥熔断`
-                    }
-                    
-                    let tokenInfo = ''
-                    if (status.status === 'ok' && status.usage) {
-                        if (status.usage.prompt_tokens !== undefined && status.usage.completion_tokens !== undefined) {
-                            tokenInfo = ` | In: ${status.usage.prompt_tokens} | Out: ${status.usage.completion_tokens}`
-                        } else if (status.usage.total_tokens) {
-                            tokenInfo = ` | Total: ${status.usage.total_tokens} Tokens`
-                        }
-                    }
-                    return ` ${icon} ${extraInfo}${tokenInfo}`
+                    const icon = status.consecutive_fails >= 3 ? '❌' : (rate >= 50 ? '✅' : '⚠️')
+                    return ` ${icon} ${extraInfo}`
                 }
 
                 if (group.chat_models) {
