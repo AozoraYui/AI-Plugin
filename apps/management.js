@@ -180,9 +180,10 @@ export class ManagementHandler extends plugin {
                     const rate = Math.round((status.success_count || 0) / total * 100)
                     let extraInfo = `成功率${rate}%`
                     if (status.avg_latency_ms) extraInfo += ` | 延迟${Math.round(status.avg_latency_ms / 1000)}s`
-                    if (status.consecutive_fails >= 3) extraInfo += ` | 🔥熔断`
+                    const inCooldown = this.client._isInCooldown(status)
+                    if (inCooldown) extraInfo += ` | 🔥熔断`
                     
-                    const icon = status.consecutive_fails >= 3 ? '❌' : (rate >= 50 ? '✅' : '⚠️')
+                    const icon = inCooldown ? '❌' : (rate >= 50 ? '✅' : '⚠️')
                     return ` ${icon} ${extraInfo}`
                 }
 
