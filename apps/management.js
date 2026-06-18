@@ -149,68 +149,79 @@ export class ManagementHandler extends plugin {
             message: `🧠 思考过程显示: ${thinkingStatus}`
         }]
         
-        const showProviderName = this.client.modelsConfig.length > 1
-
+        // 按优先级排序供应商
+        const sortedProviders = [...this.client.modelsConfig].sort((a, b) => (a.priority ?? 1) - (b.priority ?? 1))
+        
+        // 收集所有模型组
         const allGroups = new Set()
-        this.client.modelsConfig.forEach(p => Object.keys(p.model_groups).forEach(g => allGroups.add(g)))
+        sortedProviders.forEach(p => Object.keys(p.model_groups).forEach(g => allGroups.add(g)))
+        const sortedGroups = Array.from(allGroups).sort()
+        
+        const buildStatusText = (status, statusKey) => {
+            if (this.client.disabledModels.has(statusKey)) {
+                return " (⚪️ 已禁用)"
+            }
 
-        for (const groupName of Array.from(allGroups).sort()) {
-            let groupMsg = `\n--- 模型组: [${groupName}] ---\n`
-            let chatMsg = `\n💬 对话模型 (按优先级)`
-            let drawMsg = `\n🎨 绘图模型 (按优先级)`
-            let chatCount = 0
-            let drawCount = 0
+            if (!status) return " (🆕 未使用)"
+            
+            const total = (status.success_count || 0) + (status.fail_count || 0)
+            if (total === 0) return " (🆕 未使用)"
 
-            for (const provider of [...this.client.modelsConfig].sort((a, b) => (a.priority ?? 1) - (b.priority ?? 1))) {
+            const rate = Math.round((status.success_count || 0) / total * 100)
+            let extraInfo = `成功率${rate}%`
+            if (status.avg_latency_ms) extraInfo += ` | 延迟${Math.round(status.avg_latency_ms / 1000)}s`
+            const inCooldown = this.client._isInCooldown(status)
+            if (inCooldown) extraInfo += ` | 🔥熔断`
+            
+            const icon = inCooldown ? '❌' : (rate >= 50 ? '✅' : '⚠️')
+            return ` ${icon} ${extraInfo}`
+        }
+
+        for (const provider of sortedProviders) {
+            const groupsWithModels = []
+            for (const groupName of sortedGroups) {
                 const group = provider.model_groups[groupName]
                 if (!group) continue
-
-                const prefix = showProviderName ? `[${provider.name}] ` : ''
-
-                const buildStatusText = (status, statusKey) => {
-                    if (this.client.disabledModels.has(statusKey)) {
-                        return " (⚪️ 已禁用)"
-                    }
-
-                    if (!status) return " (🆕 未使用)"
-                    
-                    const total = (status.success_count || 0) + (status.fail_count || 0)
-                    if (total === 0) return " (🆕 未使用)"
-
-                    const rate = Math.round((status.success_count || 0) / total * 100)
-                    let extraInfo = `成功率${rate}%`
-                    if (status.avg_latency_ms) extraInfo += ` | 延迟${Math.round(status.avg_latency_ms / 1000)}s`
-                    const inCooldown = this.client._isInCooldown(status)
-                    if (inCooldown) extraInfo += ` | 🔥熔断`
-                    
-                    const icon = inCooldown ? '❌' : (rate >= 50 ? '✅' : '⚠️')
-                    return ` ${icon} ${extraInfo}`
-                }
-
+                
+                const models = []
                 if (group.chat_models) {
                     for (const modelId of group.chat_models) {
-                        chatCount++
                         const statusKey = `${provider.id}-${modelId}`
-                        const status = this.client.modelStatus[statusKey]
-                        chatMsg += `\n${chatCount}. ${prefix}${modelId}${buildStatusText(status, statusKey)}`
+                        models.push({ type: '💬', modelId, status: this.client.modelStatus[statusKey], statusKey })
                     }
                 }
                 if (group.draw_models) {
                     for (const modelId of group.draw_models) {
-                        drawCount++
                         const statusKey = `${provider.id}-${modelId}`
-                        const status = this.client.modelStatus[statusKey]
-                        drawMsg += `\n${drawCount}. ${prefix}${modelId}${buildStatusText(status, statusKey)}`
+                        models.push({ type: '🎨', modelId, status: this.client.modelStatus[statusKey], statusKey })
                     }
+                }
+                if (models.length > 0) {
+                    groupsWithModels.push({ groupName, models })
                 }
             }
             
-            if (chatCount > 0) groupMsg += chatMsg
-            if (drawCount > 0) groupMsg += drawMsg
+            if (groupsWithModels.length === 0) continue
+
+            let providerMsg = `📦 [${provider.name}] ⭐ 优先级 ${provider.priority ?? 1}\n`
             
-            if (chatCount > 0 || drawCount > 0) {
-                forwardMsgNodes.push({ user_id: Bot.uin, nickname: Config.AI_NAME, message: groupMsg })
+            for (let gi = 0; gi < groupsWithModels.length; gi++) {
+                const { groupName, models } = groupsWithModels[gi]
+                const isLastGroup = gi === groupsWithModels.length - 1
+                const groupPrefix = isLastGroup ? '└─ ' : '├─ '
+                const childIndent = isLastGroup ? '   ' : '│  '
+                
+                providerMsg += `${groupPrefix}${groupName}\n`
+                
+                for (let mi = 0; mi < models.length; mi++) {
+                    const { type, modelId, status, statusKey } = models[mi]
+                    const isLastModel = mi === models.length - 1
+                    const modelPrefix = isLastModel ? '└─ ' : '├─ '
+                    providerMsg += `${childIndent}${modelPrefix}${type} ${modelId}${buildStatusText(status, statusKey)}\n`
+                }
             }
+            
+            forwardMsgNodes.push({ user_id: Bot.uin, nickname: Config.AI_NAME, message: providerMsg.trimEnd() })
         }
 
         return await Bot.makeForwardMsg(forwardMsgNodes)
