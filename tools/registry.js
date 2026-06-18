@@ -50,7 +50,8 @@ class ToolRegistry {
     async execute(name, args, isMaster = false) {
         const tool = this.tools.get(name)
         if (!tool) {
-            throw new Error(`未知工具: ${name}`)
+            logger.warn(`[AI-Plugin] 未知工具: ${name}`)
+            return { success: false, error: `未知工具: ${name}` }
         }
 
         // 权限检查：permission 为 'master' 的工具仅主人可调用
@@ -85,10 +86,10 @@ class ToolRegistry {
      * @param {string} userMessage - 用户消息文本
      * @param {object} client - AiClient 实例
      * @param {string[]} enabledTools - 当前可用的工具名列表
-     * @returns {Array<{name: string, args: object}>} 工具调用列表
+     * @returns {Promise<{intent: string, tools: Array<{name: string, args: object}>}>} 意图和工具调用列表
      */
     async analyzeToolIntent(userMessage, client, enabledTools = []) {
-        if (!userMessage || !userMessage.trim() || enabledTools.length === 0) return []
+        if (!userMessage || !userMessage.trim() || enabledTools.length === 0) return { intent: '', tools: [] }
 
         const now = new Date()
 

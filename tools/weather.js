@@ -84,6 +84,23 @@ async function queryWeather(city, amapKey, owmKey = null) {
                     text += `\n【天气数据结束】\n`
                     return text
                 }
+                // all 成功但无预报数据，直接降级 base
+                logger.warn(`[AI-Plugin] 天气查询 高德all返回空预报，降级到 base`)
+                const baseUrl = `https://restapi.amap.com/v3/weather/weatherInfo?key=${amapKey}&city=${encodeURIComponent(cityName)}&extensions=base`
+                const baseRes = await fetch(baseUrl, { signal: AbortSignal.timeout(10000) })
+                const baseData = await baseRes.json()
+                if (baseData.status === '1' && baseData.lives && baseData.lives.length > 0) {
+                    const live = baseData.lives[0]
+                    let text2 = `\n\n【以下是从高德地图获取的实时天气数据：】\n\n`
+                    text2 += `📍 城市：${live.city}（${live.province}）\n`
+                    text2 += `   🌡️ 温度：${live.temperature}℃（湿度 ${live.humidity}%）\n`
+                    text2 += `   🌤️ 天气：${live.weather}\n`
+                    text2 += `   💨 风向风力：${live.winddirection}风 ${live.windpower}级\n`
+                    text2 += `   🕐 更新时间：${live.reporttime}\n`
+                    text2 += `\n【天气数据结束】\n`
+                    return text2
+                }
+                logger.warn(`[AI-Plugin] 天气查询 高德base也失败: ${baseData.info}`)
             }
 
             // Step 2: 地理编码获取 adcode 后重试
