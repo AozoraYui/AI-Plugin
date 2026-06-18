@@ -68,102 +68,44 @@ class ToolRegistry {
     }
 
     /**
-     * 检测用户消息是否询问服务器系统状态（关键词匹配）
-     */
-    detectSystemInfoIntent(msg) {
-        if (!msg || !msg.trim()) return false
-        const patterns = [
-            /服务器.*(状态|信息|情况|怎么样|好不好|还行吗)/,
-            /(查看|看看|查一下|帮我看看|帮我查).*(服务器|机器|主机)/,
-            /(CPU|内存|温度|负载|硬盘|磁盘|运行时间|频率|进程).*(多少|怎么样|如何)/,
-            /(温度|散热).*(高不高|多少|怎么样)/,
-            /(系统|服务器).*(信息|状态|负载|健康)/,
-        ]
-        return patterns.some(p => p.test(msg))
-    }
-
-    /**
-     * 检测并提取文件读取意图（关键词匹配 + 路径提取）
-     * @returns {{ path: string, readAll: boolean } | null}
-     */
-    detectFileReadIntent(msg) {
-        if (!msg || !msg.trim()) return null
-
-        // 检测是否需要读取全部文件内容
-        const readAllPatterns = [
-            /(?:读|读取|查看|看看|帮我看看|帮我读).*(?:所有|全部|所有文件|全部文件).*(?:内容|配置|文件)/,
-            /(?:所有|全部).*(?:配置|文件|内容).*(?:读|读取|查看|看看)/,
-        ]
-        const readAll = readAllPatterns.some(p => p.test(msg))
-
-        const patterns = [
-            /(?:帮我|请|给|来)?(?:读|读取|查看|看看|打开)(?:一下)?(?:这个|文件)?\s*(?:\/[\w\.\-\/]+)/,
-            /文件\s*(?:\/[\w\.\-\/]+)/,
-        ]
-        for (const p of patterns) {
-            const match = msg.match(p)
-            if (match) {
-                const pathMatch = msg.match(/(\/[\w\.\-\/]+)/)
-                if (pathMatch) return { path: pathMatch[1], readAll }
-            }
-        }
-        return null
-    }
-
-    /**
-     * 检测并提取目录读取意图（关键词匹配 + 路径提取）
-     * @returns {{ path: string, readAll: boolean } | null}
-     */
-    detectDirReadIntent(msg) {
-        if (!msg || !msg.trim()) return null
-
-        // 检测是否需要读取全部文件内容
-        const readAllPatterns = [
-            /(?:读|读取|查看|看看|帮我看看|帮我读).*(?:所有|全部|所有文件|全部文件).*(?:内容|文件)/,
-            /(?:所有|全部).*(?:配置|文件|内容).*(?:读|读取|查看|看看)/,
-            /(?:看看|查看).*(?:里面|里边|目录).*(?:有什么|有什么文件|内容)/,
-        ]
-        const readAll = readAllPatterns.some(p => p.test(msg))
-
-        const patterns = [
-            /(?:帮我|请|给|来)?(?:列出|浏览|看看|查看)(?:一下)?(?:目录|文件夹|里面的东西|里面有什么)\s*(?:\/[\w\.\-\/]+)/,
-            /(?:列出|浏览)(?:目录)?\s*(?:\/[\w\.\-\/]+)/,
-            /目录\s*(?:\/[\w\.\-\/]+)/,
-        ]
-        for (const p of patterns) {
-            const match = msg.match(p)
-            if (match) {
-                const pathMatch = msg.match(/(\/[\w\.\-\/]+)/)
-                if (pathMatch) return { path: pathMatch[1], readAll }
-            }
-        }
-        return null
-    }
-
-    /**
-     * 用轻量 LLM 分析用户消息是否需要搜索
+     * LLM 工具路由：统一分析用户消息，决定需要调用哪些工具
+     * 替代原有的关键词匹配意图检测，用 deepseek-v4-flash 做智能路由
      * @param {string} userMessage - 用户消息文本
      * @param {object} client - AiClient 实例
-     * @returns {{ needsSearch: boolean, queries: string[] } | null}
+     * @param {string[]} enabledTools - 当前可用的工具名列表
+     * @returns {Array<{name: string, args: object}>} 工具调用列表
      */
-    async analyzeSearchIntent(userMessage, client) {
-        if (!userMessage || !userMessage.trim()) return null
+    async analyzeToolIntent(userMessage, client, enabledTools = []) {
+        if (!userMessage || !userMessage.trim() || enabledTools.length === 0) return []
 
         const now = new Date()
-        const currentYear = now.getFullYear()
-        const currentMonth = now.getMonth() + 1
 
-        const analysisPrompt = `当前时间是${currentYear}年${currentMonth}月。你是一个搜索策略分析助手。请分析用户的消息，判断是否需要通过搜索引擎获取额外信息。
+        // 构建工具描述
+        const toolDescriptions = []
+        for (const name of enabledTools) {
+            const tool = this.tools.get(name)
+            if (!tool) continue
+            const permNote = tool.permission === 'master' ? ' (仅主人)' : ''
+            toolDescriptions.push(`- ${tool.name}${permNote}: ${tool.description || ''}`)
+        }
 
-        分析规则：
-        - 如果内容是常识性问题、日常闲聊、情感倾诉或无需联网即可回答的问题，设置 needsSearch 为 false
-        - 如果内容涉及近期事件、新闻、具体实时数据、事实核查等需要查证的信息，设置 needsSearch 为 true
-        - 每个搜索关键词不超过30个字
-        - 最多提供3个搜索关键词
-        - 如果消息中提到"最近"、"近期"等时间词，请替换为"${currentYear}年${currentMonth}月"
+        const analysisPrompt = `当前时间：${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日。你是一个工具路由助手。根据用户消息，判断需要调用哪些工具。
 
-        请严格按以下JSON格式输出，不要输出其他任何内容：
-        {"needsSearch": true或false, "queries": ["关键词1", "关键词2"]}`
+可用工具：
+${toolDescriptions.join('\n')}
+
+各工具参数格式：
+- web_search: {"query": "搜索关键词"}
+- system_info: {}
+- file_read: {"path": "/绝对路径", "read_all": true或false}
+- dir_read: {"path": "/绝对路径", "read_all": true或false}
+- web_fetch: {"url": "完整URL"}
+
+规则：
+- 如果用户消息不需要任何工具，返回空列表
+- 只使用上述"可用工具"列表中列出的工具，不要调用未列出的工具
+- 路径必须是绝对路径，从用户消息中提取
+- 搜索关键词要求精确、简洁，不超过30字`
 
         try {
             const analysisPayload = {
@@ -174,68 +116,52 @@ class ToolRegistry {
 
             let result = null
 
-            // 优先使用配置的意图分析专用模型（绕过模型池，直接调用，15s 超时）
+            // 优先使用配置的意图分析专用模型（deepseek-v4-flash 等）
             if (client.webSearchIntentModels.length > 0) {
                 result = await client.quickIntentRequest(analysisPayload)
                 if (!result?.success) {
-                    logger.warn('[AI-Plugin] 专用意图分析模型均失败，降级到 Flash 模型组')
+                    logger.warn('[AI-Plugin] 工具路由专用模型均失败，降级到 Flash 模型组')
                 }
             }
 
-            // 降级：使用 Flash 模型组做意图分析
+            // 降级：使用 Flash 模型组
             if (!result?.success) {
                 result = await client.makeRequest('chat', analysisPayload, 'flash', 256)
             }
 
             if (!result.success || !result.data) {
-                logger.warn('[AI-Plugin] 搜索意图分析 LLM 调用失败')
-                return null
+                logger.warn('[AI-Plugin] 工具路由 LLM 调用失败')
+                return []
             }
 
             const analysisText = result.data.trim()
             const modelInfo = result.platform ? ` [${result.platform}]` : ''
-            logger.info(`[AI-Plugin] 搜索意图分析${modelInfo} 返回: "${analysisText.slice(0, 200)}"`)
+            logger.info(`[AI-Plugin] 工具路由${modelInfo} 返回: "${analysisText.slice(0, 300)}"`)
 
             const jsonMatch = analysisText.match(/\{[\s\S]*\}/)
             if (!jsonMatch) {
-                logger.warn('[AI-Plugin] 搜索意图分析 未找到JSON')
-                return null
+                logger.warn('[AI-Plugin] 工具路由 未找到JSON')
+                return []
             }
 
             const parsed = JSON.parse(jsonMatch[0])
-            const needsSearch = parsed.needsSearch === true
-            const queries = Array.isArray(parsed.queries)
-                ? parsed.queries.filter(q => q && q.trim()).slice(0, 3)
-                : []
+            const tools = Array.isArray(parsed.tools) ? parsed.tools : []
 
-            logger.info(`[AI-Plugin] 搜索意图分析 needsSearch=${needsSearch}, queries=${JSON.stringify(queries)}`)
-            return { needsSearch, queries }
+            // 过滤非法工具调用
+            const validCalls = tools.filter(t => {
+                if (!t.name || !enabledTools.includes(t.name)) {
+                    logger.warn(`[AI-Plugin] 工具路由 忽略非法工具: ${t.name}`)
+                    return false
+                }
+                return true
+            })
+
+            logger.info(`[AI-Plugin] 工具路由 决定调用 ${validCalls.length} 个工具: ${validCalls.map(t => t.name).join(', ')}`)
+            return validCalls
         } catch (err) {
-            logger.warn('[AI-Plugin] 搜索意图分析 失败:', err)
-            return null
+            logger.warn('[AI-Plugin] 工具路由 失败:', err)
+            return []
         }
-    }
-
-    /**
-     * 检测用户是否想抓取网页
-     * @returns {{ url: string } | null}
-     */
-    detectWebFetchIntent(msg) {
-        if (!msg || !msg.trim()) return null
-
-        const urlPatterns = [
-            /(?:抓取|访问|打开|帮我看看|帮我查|看看这个|读取|fetch|open).*(?:这个|一下|这个)?(?:网页|链接|网站|页面|url)/i,
-            /(?:网页|链接|网站|页面).*(?:抓取|访问|打开|看看|读取)/i,
-            /(?:帮我|给|来|请).*(?:抓取|打开|访问|看看|读取).*(?:https?:\/\/[^\s]+)/i,
-        ]
-
-        const hasFetchIntent = urlPatterns.some(p => p.test(msg))
-        if (!hasFetchIntent) return null
-
-        const urlMatch = msg.match(/https?:\/\/[^\s\u4e00-\u9fff]+/)
-        if (urlMatch) return { url: urlMatch[0] }
-
-        return null
     }
 }
 

@@ -345,136 +345,63 @@ export class ChatHandler extends plugin {
 
             if (!userMessage && allImages.length === 0) return e.reply('请输入内容或发送图片呀', true)
 
-            // 工具调用：LLM 分析是否需要联网搜索（flag n 优先于全局配置）
-            const useWebSearch = e._netFlag || this.client.enableWebSearch
-            if (useWebSearch) {
-                const searchIntent = await toolRegistry.analyzeSearchIntent(userMessage, this.client)
-                if (searchIntent?.needsSearch && searchIntent.queries.length > 0) {
-                    logger.info(`[AI-Plugin] LLM判断需要搜索，关键词: ${JSON.stringify(searchIntent.queries)}`)
-                    const allSearchResults = []
-                    for (const query of searchIntent.queries) {
-                        const toolResult = await toolRegistry.execute('web_search', { query, count: 5 }, e.isMaster)
-                        if (toolResult.success && toolResult.data?.length > 0) {
-                            allSearchResults.push(...toolResult.data)
-                        } else {
-                            logger.warn(`[AI-Plugin] 搜索 "${query}" 无结果或失败`)
-                        }
-                    }
-                    if (allSearchResults.length > 0) {
-                        // 去重
-                        const seenUrls = new Set()
-                        const uniqueResults = allSearchResults.filter(item => {
-                            if (seenUrls.has(item.url)) return false
-                            seenUrls.add(item.url)
-                            return true
-                        }).slice(0, 10)
-                        const formattedResult = toolRegistry.formatToolResult('web_search', uniqueResults)
-                        userMessage = userMessage + formattedResult
-                        logger.info(`[AI-Plugin] 搜索完成，共 ${uniqueResults.length} 条唯一结果已注入提示词`)
+            // 工具调用：LLM 统一路由（deepseek-v4-flash 分析意图，决定调用哪些工具）
+            const enabledTools = []
+            if (e._netFlag || this.client.enableWebSearch) {
+                enabledTools.push('web_search')
+                enabledTools.push('web_fetch') // 搜索时允许抓取
+            }
+            if (e._webFetchFlag || this.client.enableWebFetch) {
+                if (!enabledTools.includes('web_fetch')) enabledTools.push('web_fetch')
+            }
+            if (e.isMaster) {
+                enabledTools.push('system_info')
+            }
+            if (e._fileReadFlag || this.client.enableFileRead) {
+                enabledTools.push('file_read')
+                enabledTools.push('dir_read')
+            }
 
-                        // 自动抓取搜索结果中第一名网页的完整内容
-                        if (uniqueResults.length > 0) {
-                            try {
-                                const topUrl = uniqueResults[0].url
-                                logger.info(`[AI-Plugin] 自动抓取搜索结果首条网页: ${topUrl}`)
-                                const fetchResult = await toolRegistry.execute('web_fetch', { url: topUrl, max_chars: 6000 }, e.isMaster)
-                                if (fetchResult.success) {
-                                    userMessage = userMessage + fetchResult.data
-                                    logger.info('[AI-Plugin] 搜索结果首条网页抓取完成，已注入提示词')
+            if (enabledTools.length > 0) {
+                const toolCalls = await toolRegistry.analyzeToolIntent(userMessage, this.client, enabledTools)
+                for (const call of toolCalls) {
+                    const result = await toolRegistry.execute(call.name, call.args, e.isMaster)
+                    if (result.success) {
+                        if (call.name === 'web_search') {
+                            // 搜索：将结果注入提示词
+                            const results = result.data || []
+                            if (results.length > 0) {
+                                const seenUrls = new Set()
+                                const uniqueResults = results.filter(item => {
+                                    if (seenUrls.has(item.url)) return false
+                                    seenUrls.add(item.url)
+                                    return true
+                                }).slice(0, 10)
+                                const formattedResult = toolRegistry.formatToolResult('web_search', uniqueResults)
+                                userMessage = userMessage + formattedResult
+                                logger.info(`[AI-Plugin] 搜索完成，${uniqueResults.length} 条结果已注入`)
+
+                                // 自动抓取搜索结果中第一名网页
+                                try {
+                                    const topUrl = uniqueResults[0].url
+                                    logger.info(`[AI-Plugin] 自动抓取搜索结果首条: ${topUrl}`)
+                                    const fetchResult = await toolRegistry.execute('web_fetch', { url: topUrl, max_chars: 6000 }, e.isMaster)
+                                    if (fetchResult.success) {
+                                        userMessage = userMessage + fetchResult.data
+                                    }
+                                } catch (err) {
+                                    logger.warn(`[AI-Plugin] 自动抓取失败: ${err.message}`)
                                 }
-                            } catch (err) {
-                                logger.warn(`[AI-Plugin] 自动抓取网页失败: ${err.message}`)
                             }
-                        }
-                    } else {
-                        logger.warn('[AI-Plugin] 所有搜索关键词均无结果')
-                    }
-                }
-            }
-
-            // 系统信息查询
-            if (toolRegistry.detectSystemInfoIntent(userMessage)) {
-                logger.info('[AI-Plugin] 检测到系统信息查询意图')
-                const sysResult = await toolRegistry.execute('system_info', {}, e.isMaster)
-                if (sysResult.success) {
-                    userMessage = userMessage + sysResult.data
-                    logger.info('[AI-Plugin] 系统信息查询完成，结果已注入提示词')
-                } else {
-                    logger.warn(`[AI-Plugin] 系统信息查询失败: ${sysResult.error}`)
-                }
-            }
-
-            // 本地文件/目录读取（flag f 强制触发，否则需全局开关+意图检测）
-            const fileReadIntent = toolRegistry.detectFileReadIntent(userMessage)
-            const dirReadIntent = toolRegistry.detectDirReadIntent(userMessage)
-            const useFileRead = e._fileReadFlag || (this.client.enableFileRead && (fileReadIntent || dirReadIntent))
-            if (useFileRead) {
-                const pathMatch = userMessage.match(/(\/[\w\.\-\/]+)/)
-                if (pathMatch) {
-                    const targetPath = pathMatch[1]
-                    // 判断是文件还是目录：有扩展名或 intent 检测为文件 → file_read，否则 dir_read
-                    const fileIntent = toolRegistry.detectFileReadIntent(userMessage)
-                    const dirIntent = toolRegistry.detectDirReadIntent(userMessage)
-                    const hasExtension = /\.[\w]+$/.test(targetPath)
-                    const useFile = fileIntent || (hasExtension && !dirIntent)
-
-                    if (useFile) {
-                        logger.info(`[AI-Plugin] f flag 触发文件读取: ${targetPath}`)
-                        const fileResult = await toolRegistry.execute('file_read', { path: targetPath, read_all: true }, e.isMaster)
-                        if (fileResult.success) {
-                            userMessage = userMessage + '\n\n【重要指令】以上为服务器实际文件内容。请严格按照实际内容回答，不要总结、不要遗漏、不要编造。列出所有文件和目录，包括隐藏文件（如.git、.gitignore）和数据库文件（如.db、.db-shm、.db-wal）。' + fileResult.data
-                            logger.info('[AI-Plugin] 文件读取完成，结果已注入提示词')
+                        } else if (call.name === 'file_read' || call.name === 'dir_read') {
+                            userMessage = userMessage + '\n\n【重要指令】以上为服务器实际文件内容。请严格按照实际内容回答，不要总结、不要遗漏、不要编造。列出所有文件和目录，包括隐藏文件（如.git、.gitignore）和数据库文件（如.db、.db-shm、.db-wal）。' + result.data
+                            logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else {
-                            logger.warn(`[AI-Plugin] 文件读取失败: ${fileResult.error}`)
+                            userMessage = userMessage + result.data
+                            logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         }
                     } else {
-                        logger.info(`[AI-Plugin] f flag 触发目录浏览: ${targetPath}`)
-                        const dirResult = await toolRegistry.execute('dir_read', { path: targetPath, read_all: true }, e.isMaster)
-                        if (dirResult.success) {
-                            userMessage = userMessage + '\n\n【重要指令】以上为服务器实际文件内容。请严格按照实际内容回答，不要总结、不要遗漏、不要编造。列出所有文件和目录，包括隐藏文件（如.git、.gitignore）和数据库文件（如.db、.db-shm、.db-wal）。' + dirResult.data
-                            logger.info('[AI-Plugin] 目录浏览完成，结果已注入提示词')
-                        } else {
-                            logger.warn(`[AI-Plugin] 目录浏览失败: ${dirResult.error}`)
-                        }
-                    }
-                }
-            } else {
-                // 原有逻辑：按意图检测分别触发
-                if (fileReadIntent) {
-                    logger.info(`[AI-Plugin] 检测到文件读取意图: ${fileReadIntent.path} (readAll=${fileReadIntent.readAll})`)
-                    const fileResult = await toolRegistry.execute('file_read', { path: fileReadIntent.path, read_all: fileReadIntent.readAll }, e.isMaster)
-                    if (fileResult.success) {
-                        userMessage = userMessage + fileResult.data
-                        logger.info('[AI-Plugin] 文件读取完成，结果已注入提示词')
-                    } else {
-                        logger.warn(`[AI-Plugin] 文件读取失败: ${fileResult.error}`)
-                    }
-                }
-
-                if (dirReadIntent) {
-                    logger.info(`[AI-Plugin] 检测到目录浏览意图: ${dirReadIntent.path} (readAll=${dirReadIntent.readAll})`)
-                    const dirResult = await toolRegistry.execute('dir_read', { path: dirReadIntent.path, read_all: dirReadIntent.readAll }, e.isMaster)
-                    if (dirResult.success) {
-                        userMessage = userMessage + dirResult.data
-                        logger.info('[AI-Plugin] 目录浏览完成，结果已注入提示词')
-                    } else {
-                        logger.warn(`[AI-Plugin] 目录浏览失败: ${dirResult.error}`)
-                    }
-                }
-            }
-
-            // 网页抓取（flag w 优先，否则按全局配置，默认不启用）
-            const useWebFetch = e._webFetchFlag || this.client.enableWebFetch
-            if (useWebFetch) {
-                const urlMatch = userMessage.match(/https?:\/\/[^\s\u4e00-\u9fff]+/)
-                if (urlMatch) {
-                    logger.info(`[AI-Plugin] WebFetch flag 触发，抓取: ${urlMatch[0]}`)
-                    const fetchResult = await toolRegistry.execute('web_fetch', { url: urlMatch[0] }, e.isMaster)
-                    if (fetchResult.success) {
-                        userMessage = userMessage + fetchResult.data
-                        logger.info('[AI-Plugin] 网页抓取完成，结果已注入提示词')
-                    } else {
-                        logger.warn(`[AI-Plugin] 网页抓取失败: ${fetchResult.error}`)
+                        logger.warn(`[AI-Plugin] ${call.name} 失败: ${result.error}`)
                     }
                 }
             }
