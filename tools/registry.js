@@ -145,15 +145,18 @@ ${toolDescriptions.join('\n')}
             const modelInfo = result.platform ? ` [${result.platform}]` : ''
             logger.info(`[AI-Plugin] 工具路由${modelInfo} 返回: "${analysisText.slice(0, 300)}"`)
 
-            // 兼容两种 JSON 格式：对象 {tools: [...]} 或数组 [{...}]
+            // 兼容两种 JSON 格式：数组 [{...}] 或对象 {tools: [...]}
+            // 注意：必须先匹配数组再匹配对象，否则 [{...}] 中的内层 {} 会被先捕获
             let parsed = null
-            const objMatch = analysisText.match(/\{[\s\S]*\}/)
             const arrMatch = analysisText.match(/\[[\s\S]*\]/)
-            if (objMatch) {
-                try { parsed = JSON.parse(objMatch[0]) } catch (_) { /* 继续尝试数组 */ }
+            if (arrMatch) {
+                try { parsed = JSON.parse(arrMatch[0]) } catch (_) { /* 继续尝试对象 */ }
             }
-            if (!parsed && arrMatch) {
-                try { parsed = JSON.parse(arrMatch[0]) } catch (_) { /* 失败 */ }
+            if (!parsed) {
+                const objMatch = analysisText.match(/\{[\s\S]*\}/)
+                if (objMatch) {
+                    try { parsed = JSON.parse(objMatch[0]) } catch (_) { /* 失败 */ }
+                }
             }
             if (!parsed) {
                 logger.warn('[AI-Plugin] 工具路由 JSON 解析失败')
