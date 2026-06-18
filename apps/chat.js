@@ -201,7 +201,17 @@ export class ChatHandler extends plugin {
         const prefix1 = match[1].toLowerCase()
         const prefix2 = match[2].toLowerCase()
         const flags = match[3].toLowerCase()
-        const content = match[4]
+        let content = match[4]
+
+        // 处理 #sc3你好 格式：content 开头的数字作为供应商优先匹配
+        const contentDigitMatch = content.match(/^(\d+)(.*)/)
+        if (contentDigitMatch) {
+            const num = resolveProviderPriority(contentDigitMatch[1])
+            if (num) {
+                e._providerPriority = num
+                content = contentDigitMatch[2]
+            }
+        }
 
         // 从所有位置提取 v/n/w flag（可能在 prefix1, prefix2, 或 flags group 中）
         const allFlags = prefix1 + prefix2 + flags
@@ -238,6 +248,16 @@ export class ChatHandler extends plugin {
         const prefix = match[1].toLowerCase()
         const flags = match[2].toLowerCase()
         let userMessage = match[3].trim()
+
+        // 处理 #c3你好 格式：消息开头的数字作为供应商优先匹配
+        const msgDigitMatch = userMessage.match(/^(\d+)(.*)/)
+        if (msgDigitMatch) {
+            const num = resolveProviderPriority(msgDigitMatch[1])
+            if (num) {
+                e._providerPriority = num
+                userMessage = msgDigitMatch[2].trim()
+            }
+        }
 
         // 从 prefix 和 flags 中提取 v/n/w/f flag（handleSingleChat 可能已设置）
         const allFlags = prefix + flags
