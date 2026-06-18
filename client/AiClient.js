@@ -3,6 +3,7 @@ import path from 'node:path'
 import yaml from 'yaml'
 import { MODELS_CONFIG_FILE, MODEL_STATUS_FILE, DISABLED_MODELS_FILE, TEMPLATE_DIR_EXPORT } from '../utils/config.js'
 import { fetchWithProxy } from '../utils/common.js'
+import { toolRegistry } from '../tools/index.js'
 
 // 熔断常量
 const CONSECUTIVE_FAILS_THRESHOLD = 3    // 连续失败 N 次后熔断
@@ -20,7 +21,9 @@ export class AiClient {
         this.webSearchConfig = { enabled: false, intent_model: null }
         this.webFetchConfig = { enabled: false }
         this.fileReadConfig = { enabled: false }
+        this.weatherApiKey = null
         this.loadModelsConfig()
+        toolRegistry.setWeatherApiKey(this.weatherApiKey)
         this.loadModelStatus()
         this.loadDisabledModels()
         this._buildActiveModelPools()
@@ -227,6 +230,7 @@ export class AiClient {
         this.webSearchConfig = { enabled: false, intent_model: null }
         this.webFetchConfig = { enabled: false }
         this.fileReadConfig = { enabled: false }
+        this.weatherApiKey = null
         if (!fs.existsSync(MODELS_CONFIG_FILE)) {
             logger.info(`[AI-Plugin] 未找到模型配置文件，将从模板创建。`)
             const templatePath = path.join(TEMPLATE_DIR_EXPORT, 'models_config.yaml')
@@ -347,6 +351,12 @@ export class AiClient {
                     logger.info('[AI-Plugin] 本地文件读取已启用')
                 } else {
                     logger.debug('[AI-Plugin] 本地文件读取未启用（可通过 #cf/#scf 临时调用）')
+                }
+
+                // 提取 weather_api_key（高德地图天气查询）
+                this.weatherApiKey = rawConfig.weather_api_key || null
+                if (this.weatherApiKey) {
+                    logger.info('[AI-Plugin] 天气查询已配置 API Key')
                 }
             }
         } catch (error) {
@@ -823,6 +833,7 @@ export class AiClient {
 
     reload() {
         this.loadModelsConfig()
+        toolRegistry.setWeatherApiKey(this.weatherApiKey)
         this.loadModelStatus()
         this.loadDisabledModels()
         this._buildActiveModelPools()

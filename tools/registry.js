@@ -6,6 +6,12 @@
 class ToolRegistry {
     constructor() {
         this.tools = new Map()
+        this.weatherApiKey = null
+    }
+
+    /** 设置天气 API Key（由 AiClient 初始化时调用） */
+    setWeatherApiKey(apiKey) {
+        this.weatherApiKey = apiKey
     }
 
     /** 注册一个工具 */
@@ -97,6 +103,7 @@ ${toolDescriptions.join('\n')}
 各工具参数格式：
 - web_search: {"query": "搜索关键词"}
 - system_info: {}
+- weather: {"city": "城市名"}
 - file_read: {"path": "/绝对路径", "read_all": true或false}
 - dir_read: {"path": "/绝对路径", "read_all": true或false}
 - web_fetch: {"url": "完整URL"}

@@ -357,6 +357,7 @@ export class ChatHandler extends plugin {
             if (e.isMaster) {
                 enabledTools.push('system_info')
             }
+            enabledTools.push('weather') // 天气查询，所有用户可用
             if (e._fileReadFlag || this.client.enableFileRead) {
                 enabledTools.push('file_read')
                 enabledTools.push('dir_read')
