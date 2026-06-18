@@ -654,6 +654,11 @@ export class AiClient {
                 if (type === 'image' && res.status === 503) {
                     const errBody = await res.text().catch(() => '')
                     if (/\/images\/generations|\/images\/edits/.test(errBody)) {
+                        // /images/generations 端点只支持纯文本生图，不支持图片参考
+                        const hasImages = payload.contents?.[0]?.parts?.some(p => p.inline_data)
+                        if (hasImages) {
+                            throw new Error('该模型不支持图片参考生图，请换用支持多模态的模型组（如 #p命令 或 #u命令）')
+                        }
                         logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 需要 /images/generations，自动重试`)
                         try {
                             return await this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout)
@@ -691,6 +696,10 @@ export class AiClient {
             } else {
                 // 绘图请求：如果错误提示需要 /images/generations，自动重试
                 if (type === 'image' && /\/images\/generations|\/images\/edits/.test(result.error || '')) {
+                    const hasImages = payload.contents?.[0]?.parts?.some(p => p.inline_data)
+                    if (hasImages) {
+                        throw new Error('该模型不支持图片参考生图，请换用支持多模态的模型组（如 #p命令 或 #u命令）')
+                    }
                     logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 需要 /images/generations，自动重试`)
                     try {
                         return await this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout)
