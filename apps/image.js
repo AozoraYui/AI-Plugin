@@ -137,6 +137,13 @@ export class ImageHandler extends plugin {
             }
 
             const processedImages = await processImagesInBatches(imagesToProcess)
+
+            // 检查：有图片URL但全部处理失败，说明下载/转换出了问题
+            if (imagesToProcess.length > 0 && processedImages.length === 0) {
+                await setMsgEmojiLike(e, 10)
+                return e.reply("❌ 图片获取失败，请检查图片来源是否可访问，或稍后重试。")
+            }
+
             parts.push(...processedImages)
 
             if (isCustomCommand) {

@@ -710,17 +710,107 @@ export class AiClient {
         }
     }
 
-    /** 用 /images/generations 端点重试绘图请求 */
+    /**
+     * 构建 multipart/form-data 请求体（用于 /images/edits 图生图）
+     * @param {Array<{name:string, value:string}>} fields - 普通表单字段
+     * @param {Array<{name:string, buffer:Buffer, filename:string, contentType:string}>} files - 文件字段
+     * @returns {{ headers: object, body: Buffer }}
+     */
+    _buildMultipartForm(fields, files) {
+        const boundary = `----aiplugin-form-${Date.now()}-${Math.random().toString(16).slice(2)}`
+        const chunks = []
+        const push = (val) => chunks.push(Buffer.isBuffer(val) ? val : Buffer.from(String(val), 'utf8'))
+
+        for (const { name, value } of fields) {
+            push(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`)
+        }
+        for (const { name, buffer, filename, contentType } of files) {
+            push(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`)
+            push(buffer)
+            push('\r\n')
+        }
+        push(`--${boundary}--\r\n`)
+
+        const body = Buffer.concat(chunks)
+        return {
+            headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': String(body.length) },
+            body
+        }
+    }
+
+    /** 从 inline_data 中提取图片 buffer 和 mime type */
+    _extractImageBuffers(parts) {
+        const images = []
+        for (const part of parts) {
+            if (!part.inline_data?.data) continue
+            const mimeType = part.inline_data.mime_type || 'image/png'
+            const buffer = Buffer.from(part.inline_data.data, 'base64')
+            images.push({ buffer, mimeType })
+        }
+        return images
+    }
+
+    /** 用 images/generations 或 images/edits 端点重试绘图请求 */
     async _retryWithImageEndpoint(payload, provider, modelId, _maxTokens, timeout) {
-        const prompt = payload.contents?.[0]?.parts?.map(p => p.text).filter(Boolean).join('\n') || ''
+        const parts = payload.contents?.[0]?.parts || []
+        const prompt = parts.map(p => p.text).filter(Boolean).join('\n') || ''
+        const images = this._extractImageBuffers(parts)
+
+        if (images.length > 0) {
+            // 有参考图 → /images/edits + multipart
+            const url = `${provider.base_url}/images/edits`
+            const fields = [
+                { name: 'model', value: modelId },
+                { name: 'prompt', value: prompt },
+                { name: 'n', value: '1' }
+            ]
+            const files = images.map((img, i) => ({
+                name: 'image',
+                buffer: img.buffer,
+                filename: `reference_${i + 1}.${img.mimeType.split('/')[1] || 'png'}`,
+                contentType: img.mimeType
+            }))
+            const { headers, body } = this._buildMultipartForm(fields, files)
+            const options = {
+                method: 'POST',
+                headers: {
+                    ...headers,
+                    'Authorization': `Bearer ${provider.api_key}`,
+                    'HTTP-Referer': 'https://yuzubot.com',
+                    'X-Title': 'Yuzu-Bot'
+                },
+                body
+            }
+            if (timeout > 0) options.timeout = timeout
+
+            logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 使用 /images/edits（${images.length} 张参考图）`)
+            const res = await fetchWithProxy(url, options)
+            if (!res.ok) throw new Error(`HTTP状态码: ${res.status}`)
+
+            const responseText = await res.text()
+            let data
+            try {
+                data = JSON.parse(responseText)
+            } catch {
+                throw new Error(`无法解析的响应: ${responseText.slice(0, 200)}...`)
+            }
+
+            const result = this.parseResponse(data, 'image')
+            if (result.success) {
+                return { success: true, data: result.data, platform: `${provider.name} (${modelId})`, usage: result.usage }
+            }
+            throw new Error(`API业务错误: ${result.error}`)
+        }
+
+        // 无参考图 → /images/generations + JSON（保持原有逻辑）
         const url = `${provider.base_url}/images/generations`
         const options = {
-            method: "POST",
+            method: 'POST',
             headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${provider.api_key}`,
-                "HTTP-Referer": "https://yuzubot.com",
-                "X-Title": "Yuzu-Bot"
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${provider.api_key}`,
+                'HTTP-Referer': 'https://yuzubot.com',
+                'X-Title': 'Yuzu-Bot'
             },
             body: JSON.stringify({ model: modelId, prompt, n: 1 })
         }
