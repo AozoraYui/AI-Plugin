@@ -404,8 +404,10 @@ export class ChatHandler extends plugin {
                 }
             }
 
-            // 本地文件/目录读取（flag f 强制触发，否则按意图检测）
-            const useFileRead = e._fileReadFlag || toolRegistry.detectFileReadIntent(userMessage) || toolRegistry.detectDirReadIntent(userMessage)
+            // 本地文件/目录读取（flag f 强制触发，否则需全局开关+意图检测）
+            const fileReadIntent = toolRegistry.detectFileReadIntent(userMessage)
+            const dirReadIntent = toolRegistry.detectDirReadIntent(userMessage)
+            const useFileRead = e._fileReadFlag || (this.client.enableFileRead && (fileReadIntent || dirReadIntent))
             if (useFileRead) {
                 const pathMatch = userMessage.match(/(\/[\w\.\-\/]+)/)
                 if (pathMatch) {
@@ -438,7 +440,6 @@ export class ChatHandler extends plugin {
                 }
             } else {
                 // 原有逻辑：按意图检测分别触发
-                const fileReadIntent = toolRegistry.detectFileReadIntent(userMessage)
                 if (fileReadIntent) {
                     logger.info(`[AI-Plugin] 检测到文件读取意图: ${fileReadIntent.path} (readAll=${fileReadIntent.readAll})`)
                     const fileResult = await toolRegistry.execute('file_read', { path: fileReadIntent.path, read_all: fileReadIntent.readAll })
@@ -450,7 +451,6 @@ export class ChatHandler extends plugin {
                     }
                 }
 
-                const dirReadIntent = toolRegistry.detectDirReadIntent(userMessage)
                 if (dirReadIntent) {
                     logger.info(`[AI-Plugin] 检测到目录浏览意图: ${dirReadIntent.path} (readAll=${dirReadIntent.readAll})`)
                     const dirResult = await toolRegistry.execute('dir_read', { path: dirReadIntent.path, read_all: dirReadIntent.readAll })

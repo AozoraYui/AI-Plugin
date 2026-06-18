@@ -19,6 +19,7 @@ export class AiClient {
         this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
         this.webSearchConfig = { enabled: false, intent_model: null }
         this.webFetchConfig = { enabled: false }
+        this.fileReadConfig = { enabled: false }
         this.loadModelsConfig()
         this.loadModelStatus()
         this.loadDisabledModels()
@@ -106,6 +107,11 @@ export class AiClient {
     /** 是否启用网页抓取 */
     get enableWebFetch() {
         return (this.webFetchConfig?.enable_web_fetch ?? this.webFetchConfig?.enabled) === true
+    }
+
+    /** 是否启用本地文件读取（默认关闭，需配置明确启用） */
+    get enableFileRead() {
+        return this.fileReadConfig?.enable_file_read === true
     }
 
     /** 搜索意图分析专用模型列表 */
@@ -223,6 +229,7 @@ export class AiClient {
         this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
         this.webSearchConfig = { enabled: false, intent_model: null }
         this.webFetchConfig = { enabled: false }
+        this.fileReadConfig = { enabled: false }
         if (!fs.existsSync(MODELS_CONFIG_FILE)) {
             logger.info(`[AI-Plugin] 未找到模型配置文件，将从模板创建。`)
             const templatePath = path.join(TEMPLATE_DIR_EXPORT, 'models_config.yaml')
@@ -335,6 +342,14 @@ export class AiClient {
                     logger.info('[AI-Plugin] 网页抓取已启用')
                 } else {
                     logger.debug('[AI-Plugin] 网页抓取未启用')
+                }
+
+                // 提取 enable_file_read（默认关闭）
+                this.fileReadConfig = { enabled: rawConfig.enable_file_read === true }
+                if (this.enableFileRead) {
+                    logger.info('[AI-Plugin] 本地文件读取已启用')
+                } else {
+                    logger.debug('[AI-Plugin] 本地文件读取未启用（可通过 #cf/#scf 临时调用）')
                 }
             }
         } catch (error) {
