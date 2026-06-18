@@ -459,6 +459,53 @@ export class AiClient {
     }
 
     buildRequest(type, payload, providerConfig, modelId, maxTokens = 8192) {
+        if (type === 'image') {
+            const prompt = payload.contents?.[0]?.parts?.map(p => p.text).filter(Boolean).join('\n') || ''
+            // 根据模型配置决定请求端点：image → /images/generations，chat → /chat/completions
+            const modelEntry = this._findDrawModelEntry(providerConfig, modelId)
+            const requestType = modelEntry?.request_type || 'chat'
+
+            if (requestType === 'image') {
+                return {
+                    url: `${providerConfig.base_url}/images/generations`,
+                    options: {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Authorization": `Bearer ${providerConfig.api_key}`,
+                            "HTTP-Referer": "https://yuzubot.com",
+                            "X-Title": "Yuzu-Bot"
+                        },
+                        body: JSON.stringify({
+                            model: modelId,
+                            prompt,
+                            n: 1,
+                        })
+                    }
+                }
+            }
+
+            // 默认走 chat/completions（gemini 系列绘图模型）
+            return {
+                url: `${providerConfig.base_url}/chat/completions`,
+                options: {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${providerConfig.api_key}`,
+                        "HTTP-Referer": "https://yuzubot.com",
+                        "X-Title": "Yuzu-Bot"
+                    },
+                    body: JSON.stringify({
+                        model: modelId,
+                        messages: this.convertToOpenAIMessages(payload),
+                        max_tokens: maxTokens,
+                        stream: false,
+                    })
+                }
+            }
+        }
+
         const url = `${providerConfig.base_url}/chat/completions`
         const options = {
             method: "POST",
@@ -476,6 +523,21 @@ export class AiClient {
             })
         }
         return { url, options }
+    }
+
+    /** 查找 draw_models 中的模型条目（支持字符串和对象格式） */
+    _findDrawModelEntry(providerConfig, modelId) {
+        for (const group of Object.values(providerConfig.model_groups || {})) {
+            if (!group.draw_models) continue
+            for (const entry of group.draw_models) {
+                if (typeof entry === 'string') {
+                    if (entry === modelId) return { id: entry }
+                } else if (entry?.id === modelId) {
+                    return entry
+                }
+            }
+        }
+        return null
     }
 
     convertToOpenAIMessages(requestPayload) {

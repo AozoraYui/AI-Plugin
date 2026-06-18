@@ -17,6 +17,11 @@
 #   每个模型组包含：
 #     chat_models: 对话模型列表
 #     draw_models: 绘图模型列表
+#       支持两种格式：
+#       - 字符串: "model-name"（默认走 /chat/completions）
+#       - 对象: { id: "model-name", request_type: "image" }
+#         request_type: "image" 表示走 /images/generations（如 gpt-image-2）
+#         request_type: "chat" 或不填表示走 /chat/completions（如 gemini 绘图模型）
 
 - id: "your-provider-id"
   name: "供应商名称"
