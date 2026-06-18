@@ -422,7 +422,7 @@ export class ChatHandler extends plugin {
                         logger.info(`[AI-Plugin] f flag 触发文件读取: ${targetPath}`)
                         const fileResult = await toolRegistry.execute('file_read', { path: targetPath, read_all: true })
                         if (fileResult.success) {
-                            userMessage = userMessage + fileResult.data
+                            userMessage = userMessage + '\n\n【重要指令】以上为服务器实际文件内容。请严格按照实际内容回答，不要总结、不要遗漏、不要编造。列出所有文件和目录，包括隐藏文件（如.git、.gitignore）和数据库文件（如.db、.db-shm、.db-wal）。' + fileResult.data
                             logger.info('[AI-Plugin] 文件读取完成，结果已注入提示词')
                         } else {
                             logger.warn(`[AI-Plugin] 文件读取失败: ${fileResult.error}`)
@@ -431,7 +431,7 @@ export class ChatHandler extends plugin {
                         logger.info(`[AI-Plugin] f flag 触发目录浏览: ${targetPath}`)
                         const dirResult = await toolRegistry.execute('dir_read', { path: targetPath, read_all: true })
                         if (dirResult.success) {
-                            userMessage = userMessage + dirResult.data
+                            userMessage = userMessage + '\n\n【重要指令】以上为服务器实际文件内容。请严格按照实际内容回答，不要总结、不要遗漏、不要编造。列出所有文件和目录，包括隐藏文件（如.git、.gitignore）和数据库文件（如.db、.db-shm、.db-wal）。' + dirResult.data
                             logger.info('[AI-Plugin] 目录浏览完成，结果已注入提示词')
                         } else {
                             logger.warn(`[AI-Plugin] 目录浏览失败: ${dirResult.error}`)
