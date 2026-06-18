@@ -209,25 +209,17 @@ export class ManagementHandler extends plugin {
             
             for (let gi = 0; gi < groupsWithModels.length; gi++) {
                 const { groupName, sections } = groupsWithModels[gi]
-                const isLastGroup = gi === groupsWithModels.length - 1
-                const gPrefix = isLastGroup ? '└─ ' : '├─ '
-                const gIndent = isLastGroup ? '   ' : '│  '
                 
-                providerMsg += `${gPrefix}${groupName}\n`
+                providerMsg += `  ${groupName}\n`
                 
                 for (let si = 0; si < sections.length; si++) {
                     const { label, models } = sections[si]
-                    const isLastSection = si === sections.length - 1
-                    const sPrefix = isLastSection ? '└─ ' : '├─ '
-                    const sIndent = isLastSection ? '   ' : '│  '
                     
-                    providerMsg += `${gIndent}${sPrefix}${label}\n`
+                    providerMsg += `    ${label}\n`
                     
                     for (let mi = 0; mi < models.length; mi++) {
                         const { modelId, status, statusKey } = models[mi]
-                        const isLastModel = mi === models.length - 1
-                        const mPrefix = isLastModel ? '└─ ' : '├─ '
-                        providerMsg += `${gIndent}${sIndent}${mPrefix}${modelId}${buildStatusText(status, statusKey)}\n`
+                        providerMsg += `      ${modelId}${buildStatusText(status, statusKey)}\n`
                     }
                 }
             }
