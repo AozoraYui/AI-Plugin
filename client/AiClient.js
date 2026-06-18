@@ -616,7 +616,11 @@ export class AiClient {
                     const errBody = await res.text().catch(() => '')
                     if (/\/images\/generations|\/images\/edits/.test(errBody)) {
                         logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 需要 /images/generations，自动重试`)
-                        return this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout)
+                        try {
+                            return await this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout)
+                        } catch (retryErr) {
+                            throw new Error(`自动重试失败: ${retryErr.message}`)
+                        }
                     }
                 }
                 throw new Error(`HTTP状态码: ${res.status}`)
@@ -649,7 +653,11 @@ export class AiClient {
                 // 绘图请求：如果错误提示需要 /images/generations，自动重试
                 if (type === 'image' && /\/images\/generations|\/images\/edits/.test(result.error || '')) {
                     logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 需要 /images/generations，自动重试`)
-                    return this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout)
+                    try {
+                        return await this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout)
+                    } catch (retryErr) {
+                        throw new Error(`自动重试失败: ${retryErr.message}`)
+                    }
                 }
                 // 当错误信息为空或极短时，打印原始响应以便排查
                 if (!result.error || result.error.length < 5) {
