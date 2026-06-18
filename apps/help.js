@@ -52,7 +52,10 @@ export class HelpHandler extends plugin {
   临时启用联网搜索，AI 自动判断是否搜索并注入结果。
 > #${chatCmd}w [URL]
   临时启用网页抓取，自动提取消息中的 URL 并抓取网页内容。
-> 开关可组合，如 #pv${chatCmd}、#us${chatCmd}n、#s${chatCmd}w、#${chatCmd}vnw 等。
+> #${chatCmd}f [路径]
+  临时启用本地文件读取，强制读取指定路径的文件/目录内容。
+  目录会递归读取所有子目录（跳过 .git 和 node_modules）。
+> 开关可组合，如 #pv${chatCmd}、#us${chatCmd}n、#s${chatCmd}wf、#${chatCmd}vnwf 等。
 
 > #导出${aiName}记忆
   导出该用户的对话记忆。
@@ -191,10 +194,11 @@ export class HelpHandler extends plugin {
 > 📷 图片支持
   所有对话指令都支持发送图片，支持引用消息、合并转发展开。
 > 🌐 临时开关
-  默认关闭联网搜索和图文转述，避免无意义的 Token 消耗。
-  需要时添加 v (Vision) 或 n (Net) 开关临时启用：
+  默认关闭联网搜索、网页抓取和文件读取，避免无意义的 Token 消耗。
+  需要时添加 v (Vision)、n (Net)、w (Web)、f (File) 开关临时启用：
   #cv 你好 → 启用图文转述
   #cn 查天气 → 启用联网搜索
+  #cf /root/Yunzai/plugins/AI-Plugin → 读取本地文件/目录
   #cvn 这是个啥 → 同时启用两者
 
 > 🎨 作图技巧
