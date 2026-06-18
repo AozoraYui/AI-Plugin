@@ -208,7 +208,8 @@ export async function takeSourceMsg(e, { img } = {}) {
 
 export function resolveModelGroup(prefix) {
     if (!prefix) return 'flash'
-    const p = prefix.toLowerCase()
+    // 剥离前导数字（数字用于临时指定供应商优先级，如 #2p手办化）
+    const p = prefix.toLowerCase().replace(/^\d+/, '')
     if (p === 'pro' || p === 'p') return 'pro'
     if (p === 'ultra' || p === 'u') return 'ultra'
     return 'flash'
