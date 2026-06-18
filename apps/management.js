@@ -175,7 +175,7 @@ export class ManagementHandler extends plugin {
             let chatCount = 0
             let drawCount = 0
 
-            for (const provider of this.client.modelsConfig) {
+            for (const provider of [...this.client.modelsConfig].sort((a, b) => (a.priority ?? 1) - (b.priority ?? 1))) {
                 const group = provider.model_groups[groupName]
                 if (!group) continue
 
