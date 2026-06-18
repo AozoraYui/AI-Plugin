@@ -744,10 +744,22 @@ export class AiClient {
         throw new Error(`API业务错误: ${result.error}`)
     }
 
-    async makeRequest(type, payload, modelGroupKey = 'flash', maxTokens = 8192) {
-        const modelPool = this.activeModelPools[modelGroupKey]?.[type]
+    async makeRequest(type, payload, modelGroupKey = 'flash', maxTokens = 8192, providerFilter = null) {
+        let modelPool = this.activeModelPools[modelGroupKey]?.[type]
         const taskTypeName = type === 'image' ? '绘图' : '对话'
         let lastError = `模型组 [${modelGroupKey}] 中没有可用的 [${taskTypeName}] 模型。`
+
+        // 数字优先级过滤：临时指定某家供应商
+        if (providerFilter !== null && modelPool && modelPool.length > 0) {
+            const providerName = modelPool.find(m => m.provider.priority === providerFilter)?.provider?.name || `P${providerFilter}`
+            const filtered = modelPool.filter(m => m.provider.priority === providerFilter)
+            if (filtered.length > 0) {
+                modelPool = filtered
+                logger.info(`[AI-Plugin] 数字优先级过滤: 仅使用 ${providerName}(${filtered.length}个模型)`)
+            } else {
+                logger.warn(`[AI-Plugin] 数字优先级 ${providerFilter} 无匹配供应商，回退到完整模型池`)
+            }
+        }
 
         if (modelPool && modelPool.length > 0) {
             // 智能排序模型池

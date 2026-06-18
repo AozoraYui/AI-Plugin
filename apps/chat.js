@@ -5,7 +5,7 @@ import { Config, expandPrompt } from '../utils/config.js'
 import { AiClient } from '../client/AiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
-import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
+import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, resolveModelGroup, resolveModelDisplay, resolveProviderPriority } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
 import { toolRegistry } from '../tools/index.js'
 import { relayImagesToVision } from '../tools/index.js'
@@ -214,6 +214,12 @@ export class ChatHandler extends plugin {
         const clean1 = prefix1.replace(/[vnwf]/gi, '')
         const clean2 = prefix2.replace(/[vnwf]/gi, '')
 
+        // 从 prefix1 和 prefix2 解析数字优先匹配（临时指定供应商）
+        const numericPriority = resolveProviderPriority(clean1) || resolveProviderPriority(clean2)
+        if (numericPriority) {
+            e._providerPriority = numericPriority
+        }
+
         let modelPrefix = ''
         if (resolveModelGroup(clean1) !== 'flash') modelPrefix = clean1
         if (resolveModelGroup(clean2) !== 'flash') modelPrefix = clean2
@@ -244,6 +250,9 @@ export class ChatHandler extends plugin {
         const cleanPrefix = prefix.replace(/[vnwf]/gi, '')
         const modelGroupKey = resolveModelGroup(cleanPrefix)
         const modelDisplay = resolveModelDisplay(modelGroupKey)
+
+        // 数字优先匹配：临时指定供应商（优先级高于 handleSingleChat 传递的）
+        const providerFilter = resolveProviderPriority(cleanPrefix) || e._providerPriority || null
 
         const startTime = Date.now()
         let allImages = []
@@ -557,7 +566,7 @@ export class ChatHandler extends plugin {
                 logger.info(`[AI-Plugin] 请求体已裁剪至 ${currentSizeMB.toFixed(2)}MB`)
             }
             
-            const result = await this.client.makeRequest('chat', currentPayload, modelGroupKey)
+            const result = await this.client.makeRequest('chat', currentPayload, modelGroupKey, 8192, providerFilter)
 
             if (result.success) {
                 let rawResponseText = result.data.trim()

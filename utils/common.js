@@ -214,6 +214,19 @@ export function resolveModelGroup(prefix) {
     return 'flash'
 }
 
+/**
+ * 解析数字前缀为供应商优先级
+ * 例如 prefix="3" → 3，用于临时指定某家供应商
+ * @param {string} prefix - 前缀文本
+ * @returns {number|null} 供应商优先级，或 null
+ */
+export function resolveProviderPriority(prefix) {
+    if (!prefix) return null
+    const num = parseInt(prefix, 10)
+    if (isNaN(num) || num < 1 || num > 9) return null
+    return num
+}
+
 export function resolveModelDisplay(modelGroupKey) {
     if (modelGroupKey === 'pro') return 'Pro'
     if (modelGroupKey === 'ultra') return 'Ultra'
