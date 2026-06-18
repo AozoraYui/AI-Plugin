@@ -57,8 +57,8 @@ async function getSystemInfo() {
     // 进程数
     info.processes = safeExec("ps aux --no-headers 2>/dev/null | wc -l || echo N/A")
 
-    // fastfetch / neofetch（优先 fastfetch，其次 neofetch，降级为纯文本）
-    const fastfetchRaw = safeExec('fastfetch --pipe 2>/dev/null || neofetch --stdout 2>/dev/null')
+    // fastfetch 综合信息，失败则降级为逐项文本
+    const fastfetchRaw = safeExec('fastfetch --pipe 2>/dev/null')
     info.fastfetch = fastfetchRaw.includes('(命令失败') ? '' : fastfetchRaw
 
     // 格式化为文本
