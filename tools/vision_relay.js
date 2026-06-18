@@ -88,6 +88,7 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
 
 export const visionRelayTool = {
     name: 'vision_relay',
+    permission: 'all',
     description: '使用 Vision 模型描述图片，再将描述文本传递给主模型。用于非多模态模型间接"看图"。',
 
     /**

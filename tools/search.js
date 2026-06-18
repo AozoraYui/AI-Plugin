@@ -123,6 +123,7 @@ async function searchBing(query, count = 5) {
 
 export const webSearchTool = {
     name: 'web_search',
+    permission: 'all',
     description: '联网搜索实时信息，获取最新数据和事实。当你需要查询最新的新闻、事件、数据或不确定的信息时使用。',
 
     functionSchema: {

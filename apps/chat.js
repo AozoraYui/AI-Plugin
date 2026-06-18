@@ -353,7 +353,7 @@ export class ChatHandler extends plugin {
                     logger.info(`[AI-Plugin] LLM判断需要搜索，关键词: ${JSON.stringify(searchIntent.queries)}`)
                     const allSearchResults = []
                     for (const query of searchIntent.queries) {
-                        const toolResult = await toolRegistry.execute('web_search', { query, count: 5 })
+                        const toolResult = await toolRegistry.execute('web_search', { query, count: 5 }, e.isMaster)
                         if (toolResult.success && toolResult.data?.length > 0) {
                             allSearchResults.push(...toolResult.data)
                         } else {
@@ -377,7 +377,7 @@ export class ChatHandler extends plugin {
                             try {
                                 const topUrl = uniqueResults[0].url
                                 logger.info(`[AI-Plugin] 自动抓取搜索结果首条网页: ${topUrl}`)
-                                const fetchResult = await toolRegistry.execute('web_fetch', { url: topUrl, max_chars: 6000 })
+                                const fetchResult = await toolRegistry.execute('web_fetch', { url: topUrl, max_chars: 6000 }, e.isMaster)
                                 if (fetchResult.success) {
                                     userMessage = userMessage + fetchResult.data
                                     logger.info('[AI-Plugin] 搜索结果首条网页抓取完成，已注入提示词')
@@ -395,7 +395,7 @@ export class ChatHandler extends plugin {
             // 系统信息查询
             if (toolRegistry.detectSystemInfoIntent(userMessage)) {
                 logger.info('[AI-Plugin] 检测到系统信息查询意图')
-                const sysResult = await toolRegistry.execute('system_info', {})
+                const sysResult = await toolRegistry.execute('system_info', {}, e.isMaster)
                 if (sysResult.success) {
                     userMessage = userMessage + sysResult.data
                     logger.info('[AI-Plugin] 系统信息查询完成，结果已注入提示词')
@@ -420,7 +420,7 @@ export class ChatHandler extends plugin {
 
                     if (useFile) {
                         logger.info(`[AI-Plugin] f flag 触发文件读取: ${targetPath}`)
-                        const fileResult = await toolRegistry.execute('file_read', { path: targetPath, read_all: true })
+                        const fileResult = await toolRegistry.execute('file_read', { path: targetPath, read_all: true }, e.isMaster)
                         if (fileResult.success) {
                             userMessage = userMessage + '\n\n【重要指令】以上为服务器实际文件内容。请严格按照实际内容回答，不要总结、不要遗漏、不要编造。列出所有文件和目录，包括隐藏文件（如.git、.gitignore）和数据库文件（如.db、.db-shm、.db-wal）。' + fileResult.data
                             logger.info('[AI-Plugin] 文件读取完成，结果已注入提示词')
@@ -429,7 +429,7 @@ export class ChatHandler extends plugin {
                         }
                     } else {
                         logger.info(`[AI-Plugin] f flag 触发目录浏览: ${targetPath}`)
-                        const dirResult = await toolRegistry.execute('dir_read', { path: targetPath, read_all: true })
+                        const dirResult = await toolRegistry.execute('dir_read', { path: targetPath, read_all: true }, e.isMaster)
                         if (dirResult.success) {
                             userMessage = userMessage + '\n\n【重要指令】以上为服务器实际文件内容。请严格按照实际内容回答，不要总结、不要遗漏、不要编造。列出所有文件和目录，包括隐藏文件（如.git、.gitignore）和数据库文件（如.db、.db-shm、.db-wal）。' + dirResult.data
                             logger.info('[AI-Plugin] 目录浏览完成，结果已注入提示词')
@@ -442,7 +442,7 @@ export class ChatHandler extends plugin {
                 // 原有逻辑：按意图检测分别触发
                 if (fileReadIntent) {
                     logger.info(`[AI-Plugin] 检测到文件读取意图: ${fileReadIntent.path} (readAll=${fileReadIntent.readAll})`)
-                    const fileResult = await toolRegistry.execute('file_read', { path: fileReadIntent.path, read_all: fileReadIntent.readAll })
+                    const fileResult = await toolRegistry.execute('file_read', { path: fileReadIntent.path, read_all: fileReadIntent.readAll }, e.isMaster)
                     if (fileResult.success) {
                         userMessage = userMessage + fileResult.data
                         logger.info('[AI-Plugin] 文件读取完成，结果已注入提示词')
@@ -453,7 +453,7 @@ export class ChatHandler extends plugin {
 
                 if (dirReadIntent) {
                     logger.info(`[AI-Plugin] 检测到目录浏览意图: ${dirReadIntent.path} (readAll=${dirReadIntent.readAll})`)
-                    const dirResult = await toolRegistry.execute('dir_read', { path: dirReadIntent.path, read_all: dirReadIntent.readAll })
+                    const dirResult = await toolRegistry.execute('dir_read', { path: dirReadIntent.path, read_all: dirReadIntent.readAll }, e.isMaster)
                     if (dirResult.success) {
                         userMessage = userMessage + dirResult.data
                         logger.info('[AI-Plugin] 目录浏览完成，结果已注入提示词')
@@ -469,7 +469,7 @@ export class ChatHandler extends plugin {
                 const urlMatch = userMessage.match(/https?:\/\/[^\s\u4e00-\u9fff]+/)
                 if (urlMatch) {
                     logger.info(`[AI-Plugin] WebFetch flag 触发，抓取: ${urlMatch[0]}`)
-                    const fetchResult = await toolRegistry.execute('web_fetch', { url: urlMatch[0] })
+                    const fetchResult = await toolRegistry.execute('web_fetch', { url: urlMatch[0] }, e.isMaster)
                     if (fetchResult.success) {
                         userMessage = userMessage + fetchResult.data
                         logger.info('[AI-Plugin] 网页抓取完成，结果已注入提示词')

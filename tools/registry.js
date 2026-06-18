@@ -35,11 +35,18 @@ class ToolRegistry {
     }
 
     /** 执行工具调用 */
-    async execute(name, args) {
+    async execute(name, args, isMaster = false) {
         const tool = this.tools.get(name)
         if (!tool) {
             throw new Error(`未知工具: ${name}`)
         }
+
+        // 权限检查：permission 为 'master' 的工具仅主人可调用
+        if (tool.permission === 'master' && !isMaster) {
+            logger.warn(`[AI-Plugin] 工具 ${name} 权限不足：非主人尝试调用`)
+            return { success: false, error: '权限不足：此工具仅限机器人主人使用' }
+        }
+
         logger.info(`[AI-Plugin] 调用工具: ${name}, 参数: ${JSON.stringify(args)}`)
         try {
             const result = await tool.execute(args)

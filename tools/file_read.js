@@ -256,6 +256,7 @@ async function readLocalFile(filePath, options = {}) {
 
 export const fileReadTool = {
     name: 'file_read',
+    permission: 'master',
     description: '读取本地文件或目录内容。仅限白名单目录，只读不写。',
 
     functionSchema: {
@@ -289,6 +290,7 @@ export const fileReadTool = {
 
 export const dirReadTool = {
     name: 'dir_read',
+    permission: 'master',
     description: '列出指定目录下的文件和子目录（仅限白名单目录，只读），支持读取目录下所有文本文件内容',
 
     functionSchema: {

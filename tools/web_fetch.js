@@ -141,7 +141,8 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS) {
 
 export const webFetchTool = {
     name: 'web_fetch',
-    description: '抓取指定网页 URL 并提取可读文本内容，用于获取网页详细信息。',
+    permission: 'master',
+    description: '抓取指定网页的文本内容，用于获取网页详细信息。',
 
     functionSchema: {
         type: 'function',

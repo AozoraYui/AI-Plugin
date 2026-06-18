@@ -95,6 +95,7 @@ async function getSystemInfo() {
 
 export const systemInfoTool = {
     name: 'system_info',
+    permission: 'master',
     description: '查询服务器系统状态：CPU、内存、温度、磁盘、负载等。当用户询问服务器状态或系统信息时使用。',
 
     functionSchema: {
