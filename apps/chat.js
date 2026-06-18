@@ -193,7 +193,7 @@ export class ChatHandler extends plugin {
         if (!await checkAccess(e)) return true
 
         const chatCmd = Config.CHAT_COMMAND
-        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)${chatCmd}([vnw]*)([\\s\\S]*)`, 'i'))
+        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)${chatCmd}([vnwf]*)([\\s\\S]*)`, 'i'))
         if (!match) return
 
         e._singleMode = true
