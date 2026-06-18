@@ -654,10 +654,12 @@ export class AiClient {
                 if (type === 'image' && res.status === 503) {
                     const errBody = await res.text().catch(() => '')
                     if (/\/images\/generations|\/images\/edits/.test(errBody)) {
-                        // /images/generations 端点只支持纯文本生图，不支持图片参考
                         const hasImages = payload.contents?.[0]?.parts?.some(p => p.inline_data)
                         if (hasImages) {
-                            throw new Error('该模型不支持图片参考生图，请换用支持多模态的模型组（如 #p命令 或 #u命令）')
+                            // /images/generations 端点只支持纯文本生图，不支持图片参考
+                            // 不重试，让调用方尝试模型池中的其他模型
+                            logger.warn(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 需要通过 /images/generations 端点使用，但请求包含图片，跳过重试`)
+                            throw new Error(`HTTP状态码: ${res.status}`)
                         }
                         logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 需要 /images/generations，自动重试`)
                         try {
@@ -698,7 +700,10 @@ export class AiClient {
                 if (type === 'image' && /\/images\/generations|\/images\/edits/.test(result.error || '')) {
                     const hasImages = payload.contents?.[0]?.parts?.some(p => p.inline_data)
                     if (hasImages) {
-                        throw new Error('该模型不支持图片参考生图，请换用支持多模态的模型组（如 #p命令 或 #u命令）')
+                        // /images/generations 端点只支持纯文本生图，不支持图片参考
+                        // 不重试，让调用方尝试模型池中的其他模型
+                        logger.warn(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 需要通过 /images/generations 端点使用，但请求包含图片，跳过重试`)
+                        throw new Error(`HTTP状态码: ${(result.error || '503')}`)
                     }
                     logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 需要 /images/generations，自动重试`)
                     try {
