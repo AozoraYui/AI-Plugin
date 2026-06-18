@@ -479,6 +479,16 @@ export class ChatHandler extends plugin {
                 }
             }
 
+            // 图片编号替换：将文本中的 [图片] 替换为 [图片#N]，让AI能对应图片和发送者
+            // 必须在 Vision Relay 之前执行，确保转述时文本已有编号
+            if (allImages.length > 0) {
+                let imgIndex = 0
+                userMessage = userMessage.replace(/\[图片\]/g, () => {
+                    imgIndex++
+                    return `[图片#${imgIndex}]`
+                })
+            }
+
             // Vision Relay：flag v 强制启用，否则按全局配置 + 模型是否需要转述
             const useVisionRelay = e._visionFlag || (this.client.enableVisionRelay && this.client._checkModelGroupNeedsVisionRelay(modelGroupKey))
             if (allImages.length > 0 && useVisionRelay) {
@@ -530,15 +540,6 @@ export class ChatHandler extends plugin {
             }
 
             const currentUserTurnParts = []
-
-            if (allImages.length > 0) {
-                // 图片编号替换：将文本中的 [图片] 替换为 [图片#N]，让AI能对应图片和发送者
-                let imgIndex = 0
-                userMessage = userMessage.replace(/\[图片\]/g, () => {
-                    imgIndex++
-                    return `[图片#${imgIndex}]`
-                })
-            }
 
             if (allImages.length > 0) {
                 const validImages = await processImagesInBatches(allImages)
