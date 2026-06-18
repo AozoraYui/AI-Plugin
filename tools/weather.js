@@ -22,8 +22,26 @@ async function queryWeather(city, apiKey) {
         const res = await fetch(url, { signal: AbortSignal.timeout(10000) })
         const data = await res.json()
 
+        // extensions=all 失败时降级到 base（实时天气）
         if (data.status !== '1' || !data.forecasts || data.forecasts.length === 0) {
-            return `\n\n【天气查询失败】未能查询到 "${city}" 的天气信息，请检查城市名称是否正确。（${data.info || '无有效数据'}）\n`
+            logger.warn(`[AI-Plugin] 天气查询 extensions=all 失败: ${data.info}，降级到 base`)
+            const baseUrl = `https://restapi.amap.com/v3/weather/weatherInfo?key=${apiKey}&city=${encodeURIComponent(city)}&extensions=base`
+            const baseRes = await fetch(baseUrl, { signal: AbortSignal.timeout(10000) })
+            const baseData = await baseRes.json()
+
+            if (baseData.status !== '1' || !baseData.lives || baseData.lives.length === 0) {
+                return `\n\n【天气查询失败】未能查询到 "${city}" 的天气信息，请检查城市名称是否正确。（${baseData.info || '无有效数据'}）\n`
+            }
+
+            const live = baseData.lives[0]
+            let text = `\n\n【以下是从高德地图获取的实时天气数据（预报接口暂不可用）：】\n\n`
+            text += `📍 城市：${live.city}（${live.province}）\n`
+            text += `   🌡️ 温度：${live.temperature}℃（体感湿度 ${live.humidity}%）\n`
+            text += `   🌤️ 天气：${live.weather}\n`
+            text += `   💨 风向风力：${live.winddirection}风 ${live.windpower}级\n`
+            text += `   🕐 更新时间：${live.reporttime}\n`
+            text += `\n【天气数据结束】\n`
+            return text
         }
 
         const forecasts = data.forecasts[0]
