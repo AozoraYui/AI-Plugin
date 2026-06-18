@@ -183,21 +183,23 @@ export class ManagementHandler extends plugin {
                 const group = provider.model_groups[groupName]
                 if (!group) continue
                 
-                const models = []
+                const sections = []
                 if (group.chat_models) {
-                    for (const modelId of group.chat_models) {
+                    const chatModels = group.chat_models.map(modelId => {
                         const statusKey = `${provider.id}-${modelId}`
-                        models.push({ type: '💬', modelId, status: this.client.modelStatus[statusKey], statusKey })
-                    }
+                        return { modelId, status: this.client.modelStatus[statusKey], statusKey }
+                    })
+                    if (chatModels.length > 0) sections.push({ type: 'chat', label: '💬 chat', models: chatModels })
                 }
                 if (group.draw_models) {
-                    for (const modelId of group.draw_models) {
+                    const drawModels = group.draw_models.map(modelId => {
                         const statusKey = `${provider.id}-${modelId}`
-                        models.push({ type: '🎨', modelId, status: this.client.modelStatus[statusKey], statusKey })
-                    }
+                        return { modelId, status: this.client.modelStatus[statusKey], statusKey }
+                    })
+                    if (drawModels.length > 0) sections.push({ type: 'draw', label: '🎨 draw', models: drawModels })
                 }
-                if (models.length > 0) {
-                    groupsWithModels.push({ groupName, models })
+                if (sections.length > 0) {
+                    groupsWithModels.push({ groupName, sections })
                 }
             }
             
@@ -206,18 +208,27 @@ export class ManagementHandler extends plugin {
             let providerMsg = `📦 [${provider.name}] ⭐ 优先级 ${provider.priority ?? 1}\n`
             
             for (let gi = 0; gi < groupsWithModels.length; gi++) {
-                const { groupName, models } = groupsWithModels[gi]
+                const { groupName, sections } = groupsWithModels[gi]
                 const isLastGroup = gi === groupsWithModels.length - 1
-                const groupPrefix = isLastGroup ? '└─ ' : '├─ '
-                const childIndent = isLastGroup ? '   ' : '│  '
+                const gPrefix = isLastGroup ? '└─ ' : '├─ '
+                const gIndent = isLastGroup ? '   ' : '│  '
                 
-                providerMsg += `${groupPrefix}${groupName}\n`
+                providerMsg += `${gPrefix}${groupName}\n`
                 
-                for (let mi = 0; mi < models.length; mi++) {
-                    const { type, modelId, status, statusKey } = models[mi]
-                    const isLastModel = mi === models.length - 1
-                    const modelPrefix = isLastModel ? '└─ ' : '├─ '
-                    providerMsg += `${childIndent}${modelPrefix}${type} ${modelId}${buildStatusText(status, statusKey)}\n`
+                for (let si = 0; si < sections.length; si++) {
+                    const { label, models } = sections[si]
+                    const isLastSection = si === sections.length - 1
+                    const sPrefix = isLastSection ? '└─ ' : '├─ '
+                    const sIndent = isLastSection ? '   ' : '│  '
+                    
+                    providerMsg += `${gIndent}${sPrefix}${label}\n`
+                    
+                    for (let mi = 0; mi < models.length; mi++) {
+                        const { modelId, status, statusKey } = models[mi]
+                        const isLastModel = mi === models.length - 1
+                        const mPrefix = isLastModel ? '└─ ' : '├─ '
+                        providerMsg += `${gIndent}${sIndent}${mPrefix}${modelId}${buildStatusText(status, statusKey)}\n`
+                    }
                 }
             }
             
