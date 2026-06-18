@@ -122,44 +122,65 @@ function readLocalDir(dirPath, options = {}) {
 
         output += `\n【目录内容结束】\n`
 
-        // readAll：读取所有文本文件内容
-        if (readAll && files.length > 0) {
+        // readAll：递归读取所有子目录的文本文件内容
+        if (readAll) {
             let totalRead = 0
             let fileContents = ''
             let skippedBinary = 0
             let skippedSize = 0
+            let skippedDir = 0
 
             const maxSingleSize = Config.FILE_MAX_SIZE || 4194304 // 单文件最大 4MB
 
-            for (const f of files) {
-                // 跳过过大文件
+            // 递归收集所有文件
+            const allFiles = []
+            function collectFiles(dir) {
+                try {
+                    const entries = fs.readdirSync(dir, { withFileTypes: true })
+                    for (const entry of entries) {
+                        const fullPath = path.join(dir, entry.name)
+                        if (entry.isDirectory()) {
+                            // 跳过 .git 和 node_modules
+                            if (entry.name === '.git' || entry.name === 'node_modules') {
+                                skippedDir++
+                                continue
+                            }
+                            collectFiles(fullPath)
+                        } else if (entry.isFile()) {
+                            try {
+                                const stat = fs.statSync(fullPath)
+                                allFiles.push({ path: fullPath, size: stat.size })
+                            } catch { /* ignore */ }
+                        }
+                    }
+                } catch { /* ignore */ }
+            }
+            collectFiles(dirPath)
+
+            // 按路径排序
+            allFiles.sort((a, b) => a.path.localeCompare(b.path))
+
+            for (const f of allFiles) {
                 if (f.size > maxSingleSize) {
                     skippedSize++
                     continue
                 }
-
-                // 跳过二进制文件
                 if (!isTextFile(f.path)) {
                     skippedBinary++
                     continue
                 }
-
-                // 总大小超限则停止
                 if (totalRead + f.size > maxTotalSize) {
-                    const remaining = files.length - files.indexOf(f) - skippedBinary - skippedSize
-                    if (remaining > 0) {
-                        output += `\n【文件内容读取】已达到总大小上限 (${(maxTotalSize / 1024).toFixed(0)}KB)，剩余 ${remaining} 个文件未读取\n`
-                    }
+                    output += `\n【文件内容读取】已达到总大小上限 (${(maxTotalSize / 1024).toFixed(0)}KB)，剩余文件未读取\n`
                     break
                 }
-
                 try {
                     const content = fs.readFileSync(f.path, 'utf-8')
+                    const relPath = path.relative(dirPath, f.path)
                     const sizeKB = (f.size / 1024).toFixed(1)
-                    fileContents += `\n--- 文件: ${f.name} (${sizeKB}KB) ---\n${content}\n`
+                    fileContents += `\n--- 文件: ${relPath} (${sizeKB}KB) ---\n${content}\n`
                     totalRead += f.size
                 } catch (err) {
-                    fileContents += `\n--- 文件: ${f.name} 读取失败: ${err.message} ---\n`
+                    fileContents += `\n--- 文件: ${path.relative(dirPath, f.path)} 读取失败: ${err.message} ---\n`
                 }
             }
 
@@ -168,14 +189,11 @@ function readLocalDir(dirPath, options = {}) {
                 output += `\n【以下是该目录下所有文本文件的内容（共 ${totalKB}KB）：】\n${fileContents}\n【文件内容结束】\n`
             }
 
-            if (skippedBinary > 0) {
-                output += `\n(已跳过 ${skippedBinary} 个二进制文件)\n`
-            }
-            if (skippedSize > 0) {
-                output += `\n(已跳过 ${skippedSize} 个超大文件)\n`
-            }
+            if (skippedBinary > 0) output += `\n(已跳过 ${skippedBinary} 个二进制文件)\n`
+            if (skippedSize > 0) output += `\n(已跳过 ${skippedSize} 个超大文件)\n`
+            if (skippedDir > 0) output += `\n(已跳过 ${skippedDir} 个目录: .git, node_modules)\n`
 
-            logger.info(`[AI-Plugin] DirRead(readAll): ${dirPath} (${total} 项, 读取 ${(totalRead / 1024).toFixed(1)}KB)`)
+            logger.info(`[AI-Plugin] DirRead(readAll): ${dirPath} (递归, 读取 ${(totalRead / 1024).toFixed(1)}KB)`)
         } else {
             logger.info(`[AI-Plugin] DirRead: ${dirPath} (${total} 项)`)
         }

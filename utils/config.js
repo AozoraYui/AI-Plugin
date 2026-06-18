@@ -84,6 +84,8 @@ const defaultConfig = {
     // ========== 文件读取工具配置 ==========
     // 单次读取文件最大大小（字节），默认 4MB
     FILE_MAX_SIZE: 4194304,
+    // readAll 模式下所有文件总大小上限（字节），默认 2MB
+    FILE_READ_ALL_MAX_TOTAL: 2097152,
     version: 'v1.0.0'
 }
 
@@ -326,6 +328,7 @@ export const Config = {
     set FALLBACK_DAILY_SUMMARY_MAX_LENGTH(val) { config.FALLBACK_DAILY_SUMMARY_MAX_LENGTH = val },
     get FILE_ROOTS() { return loadedFileRoots ?? defaultConfig.FILE_ROOTS },
     get FILE_MAX_SIZE() { return config.FILE_MAX_SIZE ?? defaultConfig.FILE_MAX_SIZE },
+    get FILE_READ_ALL_MAX_TOTAL() { return config.FILE_READ_ALL_MAX_TOTAL ?? defaultConfig.FILE_READ_ALL_MAX_TOTAL },
     presets,
     reloadPresets() {
         this.presets = loadPresetsSync()
