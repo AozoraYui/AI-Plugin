@@ -164,7 +164,11 @@ ${toolDescriptions.join('\n')}
             }
 
             // 标准化：数组直接作为工具列表，对象取 .tools 字段
+            // 如果 parsed 是单个工具对象（如 {"tool": "weather", "params": {...}}），包装为数组
             let tools = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.tools) ? parsed.tools : [])
+            if (tools.length === 0 && parsed && typeof parsed === 'object' && (parsed.tool || parsed.name)) {
+                tools = [parsed]
+            }
 
             // 标准化字段名：兼容 tool→name, params→args
             tools = tools.map(t => ({
