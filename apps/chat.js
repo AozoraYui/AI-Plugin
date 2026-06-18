@@ -418,7 +418,7 @@ export class ChatHandler extends plugin {
 
                     if (useFile) {
                         logger.info(`[AI-Plugin] f flag 触发文件读取: ${targetPath}`)
-                        const fileResult = await toolRegistry.execute('file_read', { path: targetPath, read_all: fileIntent?.readAll || false })
+                        const fileResult = await toolRegistry.execute('file_read', { path: targetPath, read_all: true })
                         if (fileResult.success) {
                             userMessage = userMessage + fileResult.data
                             logger.info('[AI-Plugin] 文件读取完成，结果已注入提示词')
@@ -427,7 +427,7 @@ export class ChatHandler extends plugin {
                         }
                     } else {
                         logger.info(`[AI-Plugin] f flag 触发目录浏览: ${targetPath}`)
-                        const dirResult = await toolRegistry.execute('dir_read', { path: targetPath, read_all: dirIntent?.readAll || false })
+                        const dirResult = await toolRegistry.execute('dir_read', { path: targetPath, read_all: true })
                         if (dirResult.success) {
                             userMessage = userMessage + dirResult.data
                             logger.info('[AI-Plugin] 目录浏览完成，结果已注入提示词')
