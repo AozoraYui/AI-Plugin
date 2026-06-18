@@ -458,54 +458,7 @@ export class AiClient {
         this.saveModelStatus()
     }
 
-    buildRequest(type, payload, providerConfig, modelId, maxTokens = 8192) {
-        if (type === 'image') {
-            const prompt = payload.contents?.[0]?.parts?.map(p => p.text).filter(Boolean).join('\n') || ''
-            // 根据模型配置决定请求端点：image → /images/generations，chat → /chat/completions
-            const modelEntry = this._findDrawModelEntry(providerConfig, modelId)
-            const requestType = modelEntry?.request_type || 'chat'
-
-            if (requestType === 'image') {
-                return {
-                    url: `${providerConfig.base_url}/images/generations`,
-                    options: {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            "Authorization": `Bearer ${providerConfig.api_key}`,
-                            "HTTP-Referer": "https://yuzubot.com",
-                            "X-Title": "Yuzu-Bot"
-                        },
-                        body: JSON.stringify({
-                            model: modelId,
-                            prompt,
-                            n: 1,
-                        })
-                    }
-                }
-            }
-
-            // 默认走 chat/completions（gemini 系列绘图模型）
-            return {
-                url: `${providerConfig.base_url}/chat/completions`,
-                options: {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${providerConfig.api_key}`,
-                        "HTTP-Referer": "https://yuzubot.com",
-                        "X-Title": "Yuzu-Bot"
-                    },
-                    body: JSON.stringify({
-                        model: modelId,
-                        messages: this.convertToOpenAIMessages(payload),
-                        max_tokens: maxTokens,
-                        stream: false,
-                    })
-                }
-            }
-        }
-
+    buildRequest(_type, payload, providerConfig, modelId, maxTokens = 8192) {
         const url = `${providerConfig.base_url}/chat/completions`
         const options = {
             method: "POST",
@@ -523,21 +476,6 @@ export class AiClient {
             })
         }
         return { url, options }
-    }
-
-    /** 查找 draw_models 中的模型条目（支持字符串和对象格式） */
-    _findDrawModelEntry(providerConfig, modelId) {
-        for (const group of Object.values(providerConfig.model_groups || {})) {
-            if (!group.draw_models) continue
-            for (const entry of group.draw_models) {
-                if (typeof entry === 'string') {
-                    if (entry === modelId) return { id: entry }
-                } else if (entry?.id === modelId) {
-                    return entry
-                }
-            }
-        }
-        return null
     }
 
     convertToOpenAIMessages(requestPayload) {
@@ -673,6 +611,14 @@ export class AiClient {
             const res = await fetchWithProxy(url, options)
 
             if (!res.ok) {
+                // 绘图请求：如果 503 且提示需要 /images/generations，自动重试
+                if (type === 'image' && res.status === 503) {
+                    const errBody = await res.text().catch(() => '')
+                    if (/\/images\/generations|\/images\/edits/.test(errBody)) {
+                        logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 需要 /images/generations，自动重试`)
+                        return this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout)
+                    }
+                }
                 throw new Error(`HTTP状态码: ${res.status}`)
             }
 
@@ -700,6 +646,11 @@ export class AiClient {
                     usage: result.usage
                 }
             } else {
+                // 绘图请求：如果错误提示需要 /images/generations，自动重试
+                if (type === 'image' && /\/images\/generations|\/images\/edits/.test(result.error || '')) {
+                    logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 需要 /images/generations，自动重试`)
+                    return this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout)
+                }
                 // 当错误信息为空或极短时，打印原始响应以便排查
                 if (!result.error || result.error.length < 5) {
                     logger.warn(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 返回空错误，原始响应: ${responseText.slice(0, 500)}`)
@@ -710,6 +661,40 @@ export class AiClient {
             logger.error(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 请求失败: ${err.message}`)
             return { success: false, error: err.message }
         }
+    }
+
+    /** 用 /images/generations 端点重试绘图请求 */
+    async _retryWithImageEndpoint(payload, provider, modelId, _maxTokens, timeout) {
+        const prompt = payload.contents?.[0]?.parts?.map(p => p.text).filter(Boolean).join('\n') || ''
+        const url = `${provider.base_url}/images/generations`
+        const options = {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${provider.api_key}`,
+                "HTTP-Referer": "https://yuzubot.com",
+                "X-Title": "Yuzu-Bot"
+            },
+            body: JSON.stringify({ model: modelId, prompt, n: 1 })
+        }
+        if (timeout > 0) options.timeout = timeout
+
+        const res = await fetchWithProxy(url, options)
+        if (!res.ok) throw new Error(`HTTP状态码: ${res.status}`)
+
+        const responseText = await res.text()
+        let data
+        try {
+            data = JSON.parse(responseText)
+        } catch {
+            throw new Error(`无法解析的响应: ${responseText.slice(0, 200)}...`)
+        }
+
+        const result = this.parseResponse(data, 'image')
+        if (result.success) {
+            return { success: true, data: result.data, platform: `${provider.name} (${modelId})`, usage: result.usage }
+        }
+        throw new Error(`API业务错误: ${result.error}`)
     }
 
     async makeRequest(type, payload, modelGroupKey = 'flash', maxTokens = 8192) {
