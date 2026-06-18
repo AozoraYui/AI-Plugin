@@ -7,11 +7,17 @@ class ToolRegistry {
     constructor() {
         this.tools = new Map()
         this.weatherApiKey = null
+        this.openWeatherMapApiKey = null
     }
 
     /** 设置天气 API Key（由 AiClient 初始化时调用） */
     setWeatherApiKey(apiKey) {
         this.weatherApiKey = apiKey
+    }
+
+    /** 设置 OpenWeatherMap API Key */
+    setOpenWeatherMapApiKey(apiKey) {
+        this.openWeatherMapApiKey = apiKey
     }
 
     /** 注册一个工具 */

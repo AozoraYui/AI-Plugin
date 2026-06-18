@@ -22,8 +22,10 @@ export class AiClient {
         this.webFetchConfig = { enabled: false }
         this.fileReadConfig = { enabled: false }
         this.weatherApiKey = null
+        this.openWeatherMapApiKey = null
         this.loadModelsConfig()
         toolRegistry.setWeatherApiKey(this.weatherApiKey)
+        toolRegistry.setOpenWeatherMapApiKey(this.openWeatherMapApiKey)
         this.loadModelStatus()
         this.loadDisabledModels()
         this._buildActiveModelPools()
@@ -231,6 +233,7 @@ export class AiClient {
         this.webFetchConfig = { enabled: false }
         this.fileReadConfig = { enabled: false }
         this.weatherApiKey = null
+        this.openWeatherMapApiKey = null
         if (!fs.existsSync(MODELS_CONFIG_FILE)) {
             logger.info(`[AI-Plugin] 未找到模型配置文件，将从模板创建。`)
             const templatePath = path.join(TEMPLATE_DIR_EXPORT, 'models_config.yaml')
@@ -356,7 +359,13 @@ export class AiClient {
                 // 提取 weather_api_key（高德地图天气查询）
                 this.weatherApiKey = rawConfig.weather_api_key || null
                 if (this.weatherApiKey) {
-                    logger.info('[AI-Plugin] 天气查询已配置 API Key')
+                    logger.info('[AI-Plugin] 天气查询已配置高德 API Key')
+                }
+
+                // 提取 openweathermap_api_key
+                this.openWeatherMapApiKey = rawConfig.openweathermap_api_key || null
+                if (this.openWeatherMapApiKey) {
+                    logger.info('[AI-Plugin] 天气查询已配置 OpenWeatherMap API Key')
                 }
             }
         } catch (error) {
@@ -834,6 +843,7 @@ export class AiClient {
     reload() {
         this.loadModelsConfig()
         toolRegistry.setWeatherApiKey(this.weatherApiKey)
+        toolRegistry.setOpenWeatherMapApiKey(this.openWeatherMapApiKey)
         this.loadModelStatus()
         this.loadDisabledModels()
         this._buildActiveModelPools()

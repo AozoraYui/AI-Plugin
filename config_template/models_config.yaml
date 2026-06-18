@@ -121,3 +121,12 @@ enable_web_fetch: false
 #   不配置则天气查询功能不可用
 # ================================================
 # weather_api_key: ''
+
+# ================================================
+# 天气查询（国际降级）配置
+# openweathermap_api_key: OpenWeatherMap API Key
+#   高德查不到时自动降级使用，支持国际城市
+#   获取方式：https://openweathermap.org/api 注册后获取免费 Key
+#   不配置则仅使用高德
+# ================================================
+# openweathermap_api_key: ''
