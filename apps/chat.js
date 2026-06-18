@@ -208,10 +208,11 @@ export class ChatHandler extends plugin {
         e._visionFlag = allFlags.includes('v')
         e._netFlag = allFlags.includes('n')
         e._webFetchFlag = allFlags.includes('w')
+        e._fileReadFlag = allFlags.includes('f')
 
-        // 剥离 v/n/w 后再解析模型组
-        const clean1 = prefix1.replace(/[vnw]/gi, '')
-        const clean2 = prefix2.replace(/[vnw]/gi, '')
+        // 剥离 v/n/w/f 后再解析模型组
+        const clean1 = prefix1.replace(/[vnwf]/gi, '')
+        const clean2 = prefix2.replace(/[vnwf]/gi, '')
 
         let modelPrefix = ''
         if (resolveModelGroup(clean1) !== 'flash') modelPrefix = clean1
@@ -225,21 +226,22 @@ export class ChatHandler extends plugin {
         if (!await checkAccess(e)) return true
 
         const chatCmd = Config.CHAT_COMMAND
-        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)${chatCmd}([vnw]*)([\\s\\S]*)`, 'i'))
+        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)${chatCmd}([vnwf]*)([\\s\\S]*)`, 'i'))
         if (!match) return
 
         const prefix = match[1].toLowerCase()
         const flags = match[2].toLowerCase()
         let userMessage = match[3].trim()
 
-        // 从 prefix 和 flags 中提取 v/n/w flag（handleSingleChat 可能已设置）
+        // 从 prefix 和 flags 中提取 v/n/w/f flag（handleSingleChat 可能已设置）
         const allFlags = prefix + flags
         if (e._visionFlag === undefined) e._visionFlag = /v/i.test(allFlags)
         if (e._netFlag === undefined) e._netFlag = /n/i.test(allFlags)
         if (e._webFetchFlag === undefined) e._webFetchFlag = /w/i.test(allFlags)
+        if (e._fileReadFlag === undefined) e._fileReadFlag = /f/i.test(allFlags)
 
-        // 剥离 v/n/w 后再解析模型组
-        const cleanPrefix = prefix.replace(/[vnw]/gi, '')
+        // 剥离 v/n/w/f 后再解析模型组
+        const cleanPrefix = prefix.replace(/[vnwf]/gi, '')
         const modelGroupKey = resolveModelGroup(cleanPrefix)
         const modelDisplay = resolveModelDisplay(modelGroupKey)
 
@@ -402,29 +404,62 @@ export class ChatHandler extends plugin {
                 }
             }
 
-            // 本地文件读取
-            const fileReadIntent = toolRegistry.detectFileReadIntent(userMessage)
-            if (fileReadIntent) {
-                logger.info(`[AI-Plugin] 检测到文件读取意图: ${fileReadIntent.path} (readAll=${fileReadIntent.readAll})`)
-                const fileResult = await toolRegistry.execute('file_read', { path: fileReadIntent.path, read_all: fileReadIntent.readAll })
-                if (fileResult.success) {
-                    userMessage = userMessage + fileResult.data
-                    logger.info('[AI-Plugin] 文件读取完成，结果已注入提示词')
-                } else {
-                    logger.warn(`[AI-Plugin] 文件读取失败: ${fileResult.error}`)
-                }
-            }
+            // 本地文件/目录读取（flag f 强制触发，否则按意图检测）
+            const useFileRead = e._fileReadFlag || toolRegistry.detectFileReadIntent(userMessage) || toolRegistry.detectDirReadIntent(userMessage)
+            if (useFileRead) {
+                const pathMatch = userMessage.match(/(\/[\w\.\-\/]+)/)
+                if (pathMatch) {
+                    const targetPath = pathMatch[1]
+                    // 判断是文件还是目录：有扩展名或 intent 检测为文件 → file_read，否则 dir_read
+                    const fileIntent = toolRegistry.detectFileReadIntent(userMessage)
+                    const dirIntent = toolRegistry.detectDirReadIntent(userMessage)
+                    const hasExtension = /\.[\w]+$/.test(targetPath)
+                    const useFile = fileIntent || (hasExtension && !dirIntent)
 
-            // 本地目录浏览
-            const dirReadIntent = toolRegistry.detectDirReadIntent(userMessage)
-            if (dirReadIntent) {
-                logger.info(`[AI-Plugin] 检测到目录浏览意图: ${dirReadIntent.path} (readAll=${dirReadIntent.readAll})`)
-                const dirResult = await toolRegistry.execute('dir_read', { path: dirReadIntent.path, read_all: dirReadIntent.readAll })
-                if (dirResult.success) {
-                    userMessage = userMessage + dirResult.data
-                    logger.info('[AI-Plugin] 目录浏览完成，结果已注入提示词')
-                } else {
-                    logger.warn(`[AI-Plugin] 目录浏览失败: ${dirResult.error}`)
+                    if (useFile) {
+                        logger.info(`[AI-Plugin] f flag 触发文件读取: ${targetPath}`)
+                        const fileResult = await toolRegistry.execute('file_read', { path: targetPath, read_all: fileIntent?.readAll || false })
+                        if (fileResult.success) {
+                            userMessage = userMessage + fileResult.data
+                            logger.info('[AI-Plugin] 文件读取完成，结果已注入提示词')
+                        } else {
+                            logger.warn(`[AI-Plugin] 文件读取失败: ${fileResult.error}`)
+                        }
+                    } else {
+                        logger.info(`[AI-Plugin] f flag 触发目录浏览: ${targetPath}`)
+                        const dirResult = await toolRegistry.execute('dir_read', { path: targetPath, read_all: dirIntent?.readAll || false })
+                        if (dirResult.success) {
+                            userMessage = userMessage + dirResult.data
+                            logger.info('[AI-Plugin] 目录浏览完成，结果已注入提示词')
+                        } else {
+                            logger.warn(`[AI-Plugin] 目录浏览失败: ${dirResult.error}`)
+                        }
+                    }
+                }
+            } else {
+                // 原有逻辑：按意图检测分别触发
+                const fileReadIntent = toolRegistry.detectFileReadIntent(userMessage)
+                if (fileReadIntent) {
+                    logger.info(`[AI-Plugin] 检测到文件读取意图: ${fileReadIntent.path} (readAll=${fileReadIntent.readAll})`)
+                    const fileResult = await toolRegistry.execute('file_read', { path: fileReadIntent.path, read_all: fileReadIntent.readAll })
+                    if (fileResult.success) {
+                        userMessage = userMessage + fileResult.data
+                        logger.info('[AI-Plugin] 文件读取完成，结果已注入提示词')
+                    } else {
+                        logger.warn(`[AI-Plugin] 文件读取失败: ${fileResult.error}`)
+                    }
+                }
+
+                const dirReadIntent = toolRegistry.detectDirReadIntent(userMessage)
+                if (dirReadIntent) {
+                    logger.info(`[AI-Plugin] 检测到目录浏览意图: ${dirReadIntent.path} (readAll=${dirReadIntent.readAll})`)
+                    const dirResult = await toolRegistry.execute('dir_read', { path: dirReadIntent.path, read_all: dirReadIntent.readAll })
+                    if (dirResult.success) {
+                        userMessage = userMessage + dirResult.data
+                        logger.info('[AI-Plugin] 目录浏览完成，结果已注入提示词')
+                    } else {
+                        logger.warn(`[AI-Plugin] 目录浏览失败: ${dirResult.error}`)
+                    }
                 }
             }
 
