@@ -532,6 +532,15 @@ export class ChatHandler extends plugin {
             const currentUserTurnParts = []
 
             if (allImages.length > 0) {
+                // 图片编号替换：将文本中的 [图片] 替换为 [图片#N]，让AI能对应图片和发送者
+                let imgIndex = 0
+                userMessage = userMessage.replace(/\[图片\]/g, () => {
+                    imgIndex++
+                    return `[图片#${imgIndex}]`
+                })
+            }
+
+            if (allImages.length > 0) {
                 const validImages = await processImagesInBatches(allImages)
                 currentUserTurnParts.push(...validImages)
             }
