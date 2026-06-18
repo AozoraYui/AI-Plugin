@@ -359,6 +359,19 @@ export class AiClient {
             try {
                 const data = fs.readFileSync(MODEL_STATUS_FILE, 'utf8')
                 this.modelStatus = JSON.parse(data)
+                // 迁移：删除旧格式中的 status 字段
+                let migrated = false
+                for (const key of Object.keys(this.modelStatus)) {
+                    if (key.startsWith('_')) continue
+                    if (this.modelStatus[key]?.status !== undefined) {
+                        delete this.modelStatus[key].status
+                        migrated = true
+                    }
+                }
+                if (migrated) {
+                    logger.info('[AI-Plugin] 已迁移旧格式模型状态，删除 status 字段')
+                    this.saveModelStatus()
+                }
             } catch (error) {
                 logger.error('[AI-Plugin] 加载模型状态文件失败:', error)
                 this.modelStatus = {}
