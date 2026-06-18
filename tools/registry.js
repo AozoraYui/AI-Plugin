@@ -173,7 +173,7 @@ ${toolDescriptions.join('\n')}
             // 标准化字段名：兼容 tool→name, params→args
             tools = tools.map(t => ({
                 name: t.name || t.tool,
-                args: t.args || t.params || t.arguments || {}
+                args: t.args || t.params || t.parameters || t.arguments || {}
             }))
 
             // 过滤非法工具调用
