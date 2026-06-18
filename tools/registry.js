@@ -95,7 +95,7 @@ class ToolRegistry {
             toolDescriptions.push(`- ${tool.name}${permNote}: ${tool.description || ''}`)
         }
 
-        const analysisPrompt = `当前时间：${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日。你是一个工具路由助手。根据用户消息，判断需要调用哪些工具。
+        const analysisPrompt = `当前时间：${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日。你是一个意图分析助手。分析用户消息，输出意图分析和需要调用的工具。
 
 可用工具：
 ${toolDescriptions.join('\n')}
@@ -108,8 +108,12 @@ ${toolDescriptions.join('\n')}
 - dir_read: {"path": "/绝对路径", "read_all": true或false}
 - web_fetch: {"url": "完整URL"}
 
+请严格按以下JSON格式输出，不要输出其他任何内容：
+{"intent": "用户意图分析（一句话概括用户想做什么、隐含需求等）", "tools": [{"tool": "工具名", "params": {...}}]}
+
 规则：
-- 如果用户消息不需要任何工具，返回空列表
+- 如果用户消息不需要任何工具，tools 返回空数组 []
+- intent 字段必填，简要分析用户意图
 - 只使用上述"可用工具"列表中列出的工具，不要调用未列出的工具
 - 路径必须是绝对路径，从用户消息中提取
 - 搜索关键词要求精确、简洁，不超过30字`
@@ -176,6 +180,9 @@ ${toolDescriptions.join('\n')}
                 args: t.args || t.params || t.parameters || t.arguments || {}
             }))
 
+            // 提取意图分析
+            const intent = parsed.intent || ''
+
             // 过滤非法工具调用
             const validCalls = tools.filter(t => {
                 if (!t.name || !enabledTools.includes(t.name)) {
@@ -186,10 +193,10 @@ ${toolDescriptions.join('\n')}
             })
 
             logger.info(`[AI-Plugin] 工具路由 决定调用 ${validCalls.length} 个工具: ${validCalls.map(t => t.name).join(', ')}`)
-            return validCalls
+            return { intent, tools: validCalls }
         } catch (err) {
             logger.warn('[AI-Plugin] 工具路由 失败:', err)
-            return []
+            return { intent: '', tools: [] }
         }
     }
 }
