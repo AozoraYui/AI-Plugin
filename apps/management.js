@@ -1,13 +1,6 @@
 import plugin from '../../../lib/plugins/plugin.js'
-import { Config, MODELS_CONFIG_FILE, MODEL_STATUS_FILE, DISABLED_MODELS_FILE, PRESETS_FILE } from '../utils/config.js'
-import { AiClient } from '../client/AiClient.js'
-import { ConversationManager } from '../model/conversation.js'
-import { checkAccess } from '../utils/access.js'
+import { Config } from '../utils/config.js'
 import { getAccessConfig, saveAccessConfig } from '../utils/access.js'
-import { sessionManager } from '../utils/session.js'
-import { setMsgEmojiLike, getTodayDateStr } from '../utils/common.js'
-import fs from 'node:fs'
-import yaml from 'yaml'
 
 export class ManagementHandler extends plugin {
     constructor() {
@@ -258,7 +251,7 @@ export class ManagementHandler extends plugin {
                 '🔮 可用模型池',
                 `  - 对话模型: ${activeChatModels} 个可用`,
                 `  - 绘图模型: ${activeImageModels} 个可用`,
-                '  (提示: 可用模型池基于上次 #ai模型测试 结果)',
+                '  (模型配置后直接可用，异常模型由熔断机制自动处理)',
                 '',
                 '🔑 权限与模式',
                 `  - 权限控制: ${accessMode}`,
