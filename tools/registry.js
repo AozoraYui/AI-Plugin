@@ -138,14 +138,29 @@ ${toolDescriptions.join('\n')}
             const modelInfo = result.platform ? ` [${result.platform}]` : ''
             logger.info(`[AI-Plugin] 工具路由${modelInfo} 返回: "${analysisText.slice(0, 300)}"`)
 
-            const jsonMatch = analysisText.match(/\{[\s\S]*\}/)
-            if (!jsonMatch) {
-                logger.warn('[AI-Plugin] 工具路由 未找到JSON')
+            // 兼容两种 JSON 格式：对象 {tools: [...]} 或数组 [{...}]
+            let parsed = null
+            const objMatch = analysisText.match(/\{[\s\S]*\}/)
+            const arrMatch = analysisText.match(/\[[\s\S]*\]/)
+            if (objMatch) {
+                try { parsed = JSON.parse(objMatch[0]) } catch (_) { /* 继续尝试数组 */ }
+            }
+            if (!parsed && arrMatch) {
+                try { parsed = JSON.parse(arrMatch[0]) } catch (_) { /* 失败 */ }
+            }
+            if (!parsed) {
+                logger.warn('[AI-Plugin] 工具路由 JSON 解析失败')
                 return []
             }
 
-            const parsed = JSON.parse(jsonMatch[0])
-            const tools = Array.isArray(parsed.tools) ? parsed.tools : []
+            // 标准化：数组直接作为工具列表，对象取 .tools 字段
+            let tools = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.tools) ? parsed.tools : [])
+
+            // 标准化字段名：兼容 tool→name, params→args
+            tools = tools.map(t => ({
+                name: t.name || t.tool,
+                args: t.args || t.params || t.arguments || {}
+            }))
 
             // 过滤非法工具调用
             const validCalls = tools.filter(t => {
