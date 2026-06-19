@@ -436,7 +436,7 @@ export class ChatHandler extends plugin {
             }
 
             // Vision Relay：flag v 强制启用，否则按全局配置 + 模型是否需要转述
-            const useVisionRelay = e._visionFlag || (this.client.enableVisionRelay && this.client._checkModelGroupNeedsVisionRelay(modelGroupKey))
+            const useVisionRelay = e._visionFlag || (this.client.enableVisionRelay && this.client._checkModelGroupNeedsVisionRelay(modelGroupKey, providerFilter))
             if (allImages.length > 0) {
                 // 图片编号替换：将文本中的 [图片] 替换为 [图片#N]，让AI能对应图片和发送者
                 let imgIndex = 0

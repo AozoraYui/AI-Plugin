@@ -59,11 +59,31 @@ export class AiClient {
         return []
     }
 
+    /** 检查 payload 是否包含图片 */
+    _payloadHasImages(payload) {
+        return payload?.contents?.some(content =>
+            content.parts?.some(part => part.inline_data?.data)
+        ) === true
+    }
+
+    /** 检查当前模型组是否有可用多模态对话模型 */
+    _modelGroupHasMultimodalChatModel(modelGroupKey, providerFilter = null) {
+        let pool = this.activeModelPools[modelGroupKey]?.chat || []
+        if (providerFilter !== null) {
+            pool = pool.filter(item => item.provider.priority === providerFilter)
+        }
+        return pool.some(item => item.provider.multimodal)
+    }
+
     /** 检查当前模型组是否所有对话模型都来自非多模态 provider（需要 Vision Relay） */
-    _checkModelGroupNeedsVisionRelay(modelGroupKey) {
+    _checkModelGroupNeedsVisionRelay(modelGroupKey, providerFilter = null) {
         const pool = this.activeModelPools[modelGroupKey]?.chat
         if (!pool || pool.length === 0) return true  // 无模型，保守启用
-        return pool.every(item => !item.provider.multimodal)
+        const scopedPool = providerFilter !== null
+            ? pool.filter(item => item.provider.priority === providerFilter)
+            : pool
+        if (scopedPool.length === 0) return true
+        return scopedPool.every(item => !item.provider.multimodal)
     }
 
     /**
@@ -848,6 +868,19 @@ export class AiClient {
                 logger.info(`[AI-Plugin] 数字优先级过滤: 仅使用 ${providerName}(${filtered.length}个模型)`)
             } else {
                 logger.warn(`[AI-Plugin] 数字优先级 ${providerFilter} 无匹配供应商，回退到完整模型池`)
+            }
+        }
+
+        // 有图片的对话请求只交给多模态模型，避免纯文本模型接收图片导致失败
+        if (type === 'chat' && this._payloadHasImages(payload) && modelPool && modelPool.length > 0) {
+            const multimodalPool = modelPool.filter(item => item.provider.multimodal)
+            if (multimodalPool.length > 0) {
+                modelPool = multimodalPool
+                logger.info(`[AI-Plugin] 检测到图片输入，仅使用 ${multimodalPool.length} 个多模态对话模型`)
+            } else {
+                lastError = `模型组 [${modelGroupKey}] 当前筛选范围内没有可用的多模态对话模型，无法直接处理图片。请启用 Vision Relay 或选择多模态供应商。`
+                logger.error(`[AI-Plugin] ${lastError}`)
+                return { success: false, error: lastError }
             }
         }
 

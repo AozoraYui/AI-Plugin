@@ -55,12 +55,14 @@ export class HelpHandler extends plugin {
 > 🌐 临时功能开关（默认关闭，按需启用）
 > #${chatCmd}v [内容]
   临时启用图文转述（Vision Relay），强制用 Vision 模型描述图片。
+  全局开启后，仅当前模型组/指定供应商没有可用多模态模型时自动启用；有图请求会优先使用多模态模型。
 > #${chatCmd}n [内容]
   临时启用联网搜索，AI 自动判断是否搜索并注入结果。
 > #${chatCmd}w [URL]
   临时启用网页抓取，自动提取消息中的 URL 并抓取网页内容。
 > #${chatCmd}f [路径]
   临时启用本地文件读取，强制读取指定路径的文件/目录内容。
+  支持“日志/配置/模型配置/插件目录/data目录”等别名、相对路径、文件名片段和“上次那个目录”。
   目录会递归读取所有子目录（跳过 .git 和 node_modules）。
 > 开关可组合，如 #pv${chatCmd}、#us${chatCmd}n、#s${chatCmd}wf、#${chatCmd}vnwf 等。
 
