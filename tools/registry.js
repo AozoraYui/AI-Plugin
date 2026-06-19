@@ -88,7 +88,7 @@ class ToolRegistry {
      * @param {string[]} enabledTools - 当前可用的工具名列表
      * @returns {Promise<{intent: string, tools: Array<{name: string, args: object}>}>} 意图和工具调用列表
      */
-    async analyzeToolIntent(userMessage, client, enabledTools = []) {
+    async analyzeToolIntent(userMessage, client, enabledTools = [], recentHistory = [], memorySummary = '') {
         if (!userMessage || !userMessage.trim() || enabledTools.length === 0) return { intent: '', tools: [] }
 
         const now = new Date()
@@ -100,6 +100,31 @@ class ToolRegistry {
             if (!tool) continue
             const permNote = tool.permission === 'master' ? ' (仅主人)' : ''
             toolDescriptions.push(`- ${tool.name}${permNote}: ${tool.description || ''}`)
+        }
+
+        // 构建最近对话上下文（只提取文本，忽略图片）
+        let contextBlock = ''
+        if (recentHistory.length > 0) {
+            const contextLines = []
+            for (const turn of recentHistory) {
+                const role = turn.role === 'model' ? 'AI' : '用户'
+                const texts = (turn.parts || [])
+                    .filter(p => p.text)
+                    .map(p => p.text.slice(0, 200))  // 每段最多200字，控制token
+                if (texts.length > 0) {
+                    contextLines.push(`${role}: ${texts.join(' ')}`)
+                }
+            }
+            if (contextLines.length > 0) {
+                contextBlock = `\n\n最近对话上下文（帮助你理解用户当前意图，注意指代关系）：\n${contextLines.join('\n')}\n`
+            }
+        }
+
+        // 构建记忆总结上下文（增量总结，截取前500字控制token）
+        let summaryBlock = ''
+        if (memorySummary) {
+            const trimmed = memorySummary.slice(0, 500)
+            summaryBlock = `\n\n用户与AI的历史记忆摘要（帮助理解长期上下文，如提到过的话题、偏好、路径等）：\n${trimmed}\n`
         }
 
         const analysisPrompt = `当前时间：${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日。你是一个意图分析助手。分析用户消息，输出意图分析和需要调用的工具。
@@ -129,7 +154,7 @@ ${toolDescriptions.join('\n')}
         try {
             const analysisPayload = {
                 contents: [
-                    { role: "user", parts: [{ text: analysisPrompt + `\n\n用户消息：\n${userMessage}` }] }
+                    { role: "user", parts: [{ text: analysisPrompt + summaryBlock + contextBlock + `\n\n用户消息：\n${userMessage}` }] }
                 ]
             }
 

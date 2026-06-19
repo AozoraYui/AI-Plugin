@@ -373,7 +373,19 @@ export class ChatHandler extends plugin {
             }
 
             if (enabledTools.length > 0) {
-                const toolAnalysis = await toolRegistry.analyzeToolIntent(userMessage, this.client, enabledTools)
+                // 为意图分析提供最近对话上下文（最多8轮 + 增量总结，仅非单次模式）
+                let recentHistory = []
+                let memorySummary = ''
+                if (!e._singleMode) {
+                    try {
+                        const memData = await this.conversationManager.getUserHistoryWithCheckpoint(e.user_id)
+                        recentHistory = (memData.history || []).slice(-8)
+                        memorySummary = memData.incrementalCheckpoint || ''
+                    } catch (err) {
+                        logger.warn(`[AI-Plugin] 加载意图分析上下文失败: ${err.message}`)
+                    }
+                }
+                const toolAnalysis = await toolRegistry.analyzeToolIntent(userMessage, this.client, enabledTools, recentHistory, memorySummary)
                 const intent = toolAnalysis?.intent || ''
                 const toolCalls = Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools : []
                 // 意图分析注入
