@@ -47,7 +47,7 @@ class ToolRegistry {
     }
 
     /** 执行工具调用 */
-    async execute(name, args, isMaster = false) {
+    async execute(name, args, isMaster = false, context = {}) {
         const tool = this.tools.get(name)
         if (!tool) {
             logger.warn(`[AI-Plugin] 未知工具: ${name}`)
@@ -62,7 +62,7 @@ class ToolRegistry {
 
         logger.info(`[AI-Plugin] 调用工具: ${name}, 参数: ${JSON.stringify(args)}`)
         try {
-            const result = await tool.execute(args)
+            const result = await tool.execute(args, context)
             logger.info(`[AI-Plugin] 工具 ${name} 执行成功`)
             return { success: true, data: result }
         } catch (err) {
@@ -88,7 +88,7 @@ class ToolRegistry {
      * @param {string[]} enabledTools - 当前可用的工具名列表
      * @returns {Promise<{intent: string, tools: Array<{name: string, args: object}>}>} 意图和工具调用列表
      */
-    async analyzeToolIntent(userMessage, client, enabledTools = [], recentHistory = [], memorySummary = '') {
+    async analyzeToolIntent(userMessage, client, enabledTools = [], recentHistory = [], memorySummary = '', candidateUrls = []) {
         if (!userMessage || !userMessage.trim() || enabledTools.length === 0) return { intent: '', tools: [] }
 
         const now = new Date()
@@ -127,6 +127,13 @@ class ToolRegistry {
             summaryBlock = `\n\n用户与AI的历史记忆摘要（帮助理解长期上下文，如提到过的话题、偏好、路径等）：\n${trimmed}\n`
         }
 
+        // 构建候选链接上下文（来自当前消息、引用消息、合并转发及嵌套合并转发）
+        let candidateUrlBlock = ''
+        if (Array.isArray(candidateUrls) && candidateUrls.length > 0) {
+            const urls = [...new Set(candidateUrls)].slice(0, 5)
+            candidateUrlBlock = `\n\n当前消息/引用/合并转发中发现的候选链接（仅当用户明确需要查看、总结、分析网页内容时才调用 web_fetch）：\n${urls.map((url, index) => `${index + 1}. ${url}`).join('\n')}\n`
+        }
+
         const analysisPrompt = `当前时间：${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日。你是一个意图分析助手。分析用户消息，输出意图分析和需要调用的工具。
 
 可用工具：
@@ -143,6 +150,8 @@ ${toolDescriptions.join('\n')}
   - 用户给出相对路径、文件名片段，或说“上次那个文件/那个目录”时，也可以填入对应片段或原话，工具会结合最近成功路径与白名单目录尝试定位。
   - 如果完全无法判断目标文件/目录，不要编造路径，tools 返回空数组，并在 intent 中说明需要向用户追问目标范围。
 - web_fetch: {"url": "完整URL"}
+  - 网页抓取要求：当用户明确要求查看、总结、解释、分析链接内容时，可以优先使用候选链接中的 URL 调用 web_fetch。
+  - 如果消息或引用/转发里只是出现链接，但用户没有阅读网页内容的需求，不要仅因为有链接就调用 web_fetch。
 
 请严格按以下JSON格式输出，不要输出其他任何内容：
 {"intent": "用户意图分析（一句话概括用户想做什么、隐含需求等）", "tools": [{"tool": "工具名", "params": {...}}]}
@@ -157,7 +166,7 @@ ${toolDescriptions.join('\n')}
         try {
             const analysisPayload = {
                 contents: [
-                    { role: "user", parts: [{ text: analysisPrompt + summaryBlock + contextBlock + `\n\n用户消息：\n${userMessage}` }] }
+                    { role: "user", parts: [{ text: analysisPrompt + summaryBlock + contextBlock + candidateUrlBlock + `\n\n用户消息：\n${userMessage}` }] }
                 ]
             }
 
@@ -178,7 +187,7 @@ ${toolDescriptions.join('\n')}
 
             if (!result.success || !result.data) {
                 logger.warn('[AI-Plugin] 工具路由 LLM 调用失败')
-                return []
+                return { intent: '', tools: [] }
             }
 
             const analysisText = result.data.trim()

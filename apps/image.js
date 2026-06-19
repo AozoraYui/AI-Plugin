@@ -13,6 +13,10 @@ import { PRESETS_FILE } from '../utils/config.js'
 
 const DRAW_PREFIX_PATTERN = '((?:[1-9])?(?:pro|p|ultra|u)?)'
 
+function escapeRegex(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 export class ImageHandler extends plugin {
     constructor() {
         const drawCmd = Config.DRAW_COMMAND
@@ -39,7 +43,7 @@ export class ImageHandler extends plugin {
     }
 
     generateCommandRegex(presets) {
-        const allCommands = presets.flatMap(p => [p.command, ...(p.aliases || [])]).filter(Boolean)
+        const allCommands = presets.flatMap(p => [p.command, ...(p.aliases || [])]).filter(Boolean).map(escapeRegex)
         return allCommands.length > 0 ? `^#${DRAW_PREFIX_PATTERN}(${allCommands.join('|')})(?:\\s+(.*))?$` : `^#无任何作图预设$`
     }
 
@@ -84,7 +88,7 @@ export class ImageHandler extends plugin {
         } else {
             const dynamicRule = this.rule.find(r => r.key === 'dynamicImageCommand')
             if (dynamicRule) {
-                const regex = new RegExp(dynamicRule.reg)
+                const regex = new RegExp(dynamicRule.reg, 'i')
                 const presetMatch = regex.exec(e.msg)
                 if (presetMatch) {
                     match = presetMatch

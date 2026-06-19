@@ -17,16 +17,33 @@ const COMMON_PATH_ALIASES = [
     { keywords: ['云崽data', 'yunzai data', 'data目录'], paths: [path.join(process.cwd(), 'data'), '/root/Yunzai/data'] },
 ]
 
-let lastResolvedPath = null
+const lastResolvedPaths = new Map()
+
+function getContextKey(context = {}) {
+    if (context.userId) {
+        return context.groupId ? `${context.groupId}:${context.userId}` : String(context.userId)
+    }
+    return 'global'
+}
+
+function getLastResolvedPath(context = {}) {
+    return lastResolvedPaths.get(getContextKey(context)) || null
+}
+
+function setLastResolvedPath(context = {}, filePath) {
+    if (filePath) lastResolvedPaths.set(getContextKey(context), filePath)
+}
 
 /**
  * 将用户输入的自然语言路径、别名或相对路径解析为候选路径
  */
-function resolvePathInput(inputPath) {
+function resolvePathInput(inputPath, context = {}) {
     if (!inputPath || typeof inputPath !== 'string') return inputPath
 
     const raw = inputPath.trim()
     if (!raw) return raw
+
+    const lastResolvedPath = getLastResolvedPath(context)
 
     // 支持「上次那个文件/刚才的目录」等指代
     if (lastResolvedPath && /(上次|刚才|之前|那个|这个|它)/.test(raw)) {
@@ -38,11 +55,9 @@ function resolvePathInput(inputPath) {
     if (matchedAlias) {
         const existingPath = matchedAlias.paths.find(p => fs.existsSync(p))
         if (existingPath) {
-            lastResolvedPath = existingPath
             return existingPath
         }
         if (matchedAlias.paths.length > 0) {
-            lastResolvedPath = matchedAlias.paths[0]
             return matchedAlias.paths[0]
         }
     }
@@ -55,17 +70,13 @@ function resolvePathInput(inputPath) {
                 : path.dirname(lastResolvedPath)
             const fromLast = path.resolve(baseDir, raw)
             if (fs.existsSync(fromLast)) {
-                lastResolvedPath = fromLast
                 return fromLast
             }
         }
 
-        const fromCwd = path.resolve(process.cwd(), raw)
-        lastResolvedPath = fromCwd
-        return fromCwd
+        return path.resolve(process.cwd(), raw)
     }
 
-    lastResolvedPath = raw
     return raw
 }
 
@@ -163,12 +174,22 @@ function checkPathAllowed(filePath) {
         return { allowed: false, reason: '未配置文件读取白名单(FILE_ROOTS)' }
     }
 
-    const realPath = path.resolve(filePath)
+    let realPath
+    try {
+        realPath = fs.realpathSync(filePath)
+    } catch (err) {
+        return { allowed: false, reason: `无法解析真实路径: ${err.message}` }
+    }
 
     for (const root of roots) {
-        const realRoot = path.resolve(root)
+        let realRoot
+        try {
+            realRoot = fs.realpathSync(root)
+        } catch {
+            continue
+        }
         if (realPath === realRoot || realPath.startsWith(realRoot + path.sep)) {
-            return { allowed: true }
+            return { allowed: true, realPath }
         }
     }
 
@@ -349,20 +370,24 @@ function readLocalDir(dirPath, options = {}) {
     }
 }
 
-async function readLocalFile(filePath, options = {}) {
+async function readLocalFile(filePath, options = {}, context = {}) {
     if (!filePath || typeof filePath !== 'string' || !filePath.trim()) {
         return '\n\n【文件读取失败】未指定文件路径。\n'
     }
 
-    let realPath = path.resolve(resolvePathInput(filePath))
+    let realPath = path.resolve(resolvePathInput(filePath, context))
 
     if (!fs.existsSync(realPath)) {
         const fuzzyPath = findFuzzyPathInAllowedRoots(filePath)
         if (fuzzyPath) {
             realPath = path.resolve(fuzzyPath)
-            lastResolvedPath = realPath
             logger.info(`[AI-Plugin] FileRead 模糊匹配: ${filePath} -> ${realPath}`)
         }
+    }
+
+    // 存在检查
+    if (!fs.existsSync(realPath)) {
+        return `\n\n【文件读取失败】文件不存在: ${realPath}\n`
     }
 
     // 安全检查
@@ -372,18 +397,14 @@ async function readLocalFile(filePath, options = {}) {
         logger.warn(`[AI-Plugin] FileRead 拒绝: ${realPath} - ${check.reason}`)
         return msg
     }
-
-    // 存在检查
-    if (!fs.existsSync(realPath)) {
-        return `\n\n【文件读取失败】文件不存在: ${realPath}\n`
-    }
+    realPath = check.realPath
 
     // 类型检查：文件或目录
     const stat = fs.statSync(realPath)
 
     // 目录：列出内容
     if (stat.isDirectory()) {
-        lastResolvedPath = realPath
+        setLastResolvedPath(context, realPath)
         return readLocalDir(realPath, options)
     }
 
@@ -399,7 +420,7 @@ async function readLocalFile(filePath, options = {}) {
 
     try {
         const content = fs.readFileSync(realPath, 'utf-8')
-        lastResolvedPath = realPath
+        setLastResolvedPath(context, realPath)
         const sizeKB = (stat.size / 1024).toFixed(1)
         logger.info(`[AI-Plugin] FileRead: ${realPath} (${sizeKB}KB)`)
         return `\n\n【以下是文件「${path.basename(realPath)}」(路径: ${realPath}, 大小: ${sizeKB}KB) 的内容：】\n\`\`\`\n${content}\n\`\`\`\n【文件内容结束】\n`
@@ -432,9 +453,9 @@ export const fileReadTool = {
         }
     },
 
-    async execute(args) {
+    async execute(args, context = {}) {
         const readAll = args.read_all === true
-        const content = await readLocalFile(args.path, { readAll })
+        const content = await readLocalFile(args.path, { readAll }, context)
         return content
     },
 
@@ -470,9 +491,9 @@ export const dirReadTool = {
         }
     },
 
-    async execute(args) {
+    async execute(args, context = {}) {
         const readAll = args.read_all === true
-        const content = await readLocalFile(args.path, { readAll })
+        const content = await readLocalFile(args.path, { readAll }, context)
         return content
     },
 

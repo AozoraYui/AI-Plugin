@@ -167,6 +167,25 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
     return { text: textParts.join('\n'), images }
 }
 
+const CHAT_PREFIX_PATTERN = '((?:[1-9])?(?:pro|p|ultra|u)?[vnwf]*)'
+
+function extractUrlsFromText(text, limit = 5) {
+    if (!text || typeof text !== 'string') return []
+
+    const urls = []
+    const seen = new Set()
+    const urlRegex = /https?:\/\/[^\s<>'"，。！？、]+/gi
+    let match
+    while ((match = urlRegex.exec(text)) !== null && urls.length < limit) {
+        const url = match[0].replace(/[)\]}.,，。!?！？;；:：]+$/g, '')
+        if (!seen.has(url)) {
+            seen.add(url)
+            urls.push(url)
+        }
+    }
+    return urls
+}
+
 export class ChatHandler extends plugin {
     constructor() {
         const chatCmd = Config.CHAT_COMMAND
@@ -176,8 +195,8 @@ export class ChatHandler extends plugin {
             event: 'message',
             priority: -9101,
             rule: [
-                { reg: new RegExp(`^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)${chatCmd}([\\s\\S]*)$`, 'i'), fnc: 'handleSingleChat' },
-                { reg: new RegExp(`^#([a-zA-Z0-9]*)${chatCmd}([\\s\\S]*)$`, 'i'), fnc: 'handleChat' },
+                { reg: new RegExp(`^#${CHAT_PREFIX_PATTERN}s${CHAT_PREFIX_PATTERN}${chatCmd}([vnwf]*)([\\s\\S]*)$`, 'i'), fnc: 'handleSingleChat' },
+                { reg: new RegExp(`^#${CHAT_PREFIX_PATTERN}${chatCmd}([vnwf]*)([\\s\\S]*)$`, 'i'), fnc: 'handleChat' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}记忆$`, 'i'), fnc: 'exportMyMemory' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'), fnc: 'exportMemoryByDate' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆$`, 'i'), fnc: 'exportAllMemory', permission: 'master' },
@@ -193,7 +212,7 @@ export class ChatHandler extends plugin {
         if (!await checkAccess(e)) return true
 
         const chatCmd = Config.CHAT_COMMAND
-        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)s([a-zA-Z0-9]*)${chatCmd}([vnwf]*)([\\s\\S]*)`, 'i'))
+        const match = e.msg.match(new RegExp(`^#${CHAT_PREFIX_PATTERN}s${CHAT_PREFIX_PATTERN}${chatCmd}([vnwf]*)([\\s\\S]*)$`, 'i'))
         if (!match) return
 
         e._singleMode = true
@@ -232,7 +251,7 @@ export class ChatHandler extends plugin {
         if (!await checkAccess(e)) return true
 
         const chatCmd = Config.CHAT_COMMAND
-        const match = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)${chatCmd}([vnwf]*)([\\s\\S]*)`, 'i'))
+        const match = e.msg.match(new RegExp(`^#${CHAT_PREFIX_PATTERN}${chatCmd}([vnwf]*)([\\s\\S]*)$`, 'i'))
         if (!match) return
 
         const prefix = match[1].toLowerCase()
@@ -385,7 +404,8 @@ export class ChatHandler extends plugin {
                         logger.warn(`[AI-Plugin] 加载意图分析上下文失败: ${err.message}`)
                     }
                 }
-                const toolAnalysis = await toolRegistry.analyzeToolIntent(userMessage, this.client, enabledTools, recentHistory, memorySummary)
+                const candidateUrls = extractUrlsFromText(userMessage, 5)
+                const toolAnalysis = await toolRegistry.analyzeToolIntent(userMessage, this.client, enabledTools, recentHistory, memorySummary, candidateUrls)
                 const intent = toolAnalysis?.intent || ''
                 const toolCalls = Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools : []
                 // 意图分析注入
@@ -394,7 +414,8 @@ export class ChatHandler extends plugin {
                     logger.info(`[AI-Plugin] 意图分析: ${intent}`)
                 }
                 for (const call of toolCalls) {
-                    const result = await toolRegistry.execute(call.name, call.args, e.isMaster)
+                    const toolContext = { userId: e.user_id, groupId: e.group_id }
+                    const result = await toolRegistry.execute(call.name, call.args, e.isMaster, toolContext)
                     if (result.success) {
                         if (call.name === 'web_search') {
                             // 搜索：将结果注入提示词
