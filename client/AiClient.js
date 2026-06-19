@@ -83,7 +83,7 @@ export class AiClient {
                 continue
             }
             const startTime = Date.now()
-            const result = await this.attemptRequest('chat', payload, provider, modelConfig.model_id, 256, 15000)
+            const result = await this.attemptRequest('chat', payload, provider, modelConfig.model_id, 512, 15000)
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
             if (result.success) {
                 logger.info(`[AI-Plugin] 意图分析成功: ${provider.name}/${modelConfig.model_id}, 耗时 ${elapsed}s`)

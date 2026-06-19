@@ -145,7 +145,7 @@ ${toolDescriptions.join('\n')}
 
             // 降级：使用 Flash 模型组
             if (!result?.success) {
-                result = await client.makeRequest('chat', analysisPayload, 'flash', 256)
+                result = await client.makeRequest('chat', analysisPayload, 'flash', 512)
             }
 
             if (!result.success || !result.data) {
@@ -172,7 +172,7 @@ ${toolDescriptions.join('\n')}
             }
             if (!parsed) {
                 logger.warn('[AI-Plugin] 工具路由 JSON 解析失败')
-                return []
+                return { intent: '', tools: [] }
             }
 
             // 标准化：数组直接作为工具列表，对象取 .tools 字段

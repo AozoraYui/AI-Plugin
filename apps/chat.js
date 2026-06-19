@@ -373,7 +373,9 @@ export class ChatHandler extends plugin {
             }
 
             if (enabledTools.length > 0) {
-                const { intent, tools: toolCalls } = await toolRegistry.analyzeToolIntent(userMessage, this.client, enabledTools)
+                const toolAnalysis = await toolRegistry.analyzeToolIntent(userMessage, this.client, enabledTools)
+                const intent = toolAnalysis?.intent || ''
+                const toolCalls = Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools : []
                 // 意图分析注入
                 if (intent) {
                     userMessage = userMessage + `\n\n【意图分析】${intent}`
