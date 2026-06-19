@@ -137,8 +137,11 @@ ${toolDescriptions.join('\n')}
 - system_info: {}
 - weather: {"city": "城市名"}
   - 天气工具参数要求：如果用户查询的是国外城市，或使用中文外文地名（如纽约、伦敦、巴黎、东京、洛杉矶），请尽量转换为 OpenWeatherMap 可识别的英文城市名（如 New York、London、Paris、Tokyo、Los Angeles）后填入 city。
-- file_read: {"path": "/绝对路径", "read_all": true或false}
-- dir_read: {"path": "/绝对路径", "read_all": true或false}
+- file_read: {"path": "文件/目录路径或别名", "read_all": true或false}
+- dir_read: {"path": "目录路径或别名", "read_all": true或false}
+  - 文件工具参数要求：用户给出绝对路径时直接使用；用户说“日志/配置/模型配置/插件目录/云崽data/data目录”等常用说法时，可直接把这些自然语言关键词填入 path，工具会在白名单内解析。
+  - 用户给出相对路径、文件名片段，或说“上次那个文件/那个目录”时，也可以填入对应片段或原话，工具会结合最近成功路径与白名单目录尝试定位。
+  - 如果完全无法判断目标文件/目录，不要编造路径，tools 返回空数组，并在 intent 中说明需要向用户追问目标范围。
 - web_fetch: {"url": "完整URL"}
 
 请严格按以下JSON格式输出，不要输出其他任何内容：
@@ -148,7 +151,7 @@ ${toolDescriptions.join('\n')}
 - 如果用户消息不需要任何工具，tools 返回空数组 []
 - intent 字段必填，简要分析用户意图
 - 只使用上述"可用工具"列表中列出的工具，不要调用未列出的工具
-- 路径必须是绝对路径，从用户消息中提取
+- 文件/目录工具不强制要求用户提供绝对路径；可使用用户原话中的路径、别名、相对路径或文件名片段，由工具在白名单内解析
 - 搜索关键词要求精确、简洁，不超过128字`
 
         try {

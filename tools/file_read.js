@@ -8,6 +8,150 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { Config } from '../utils/config.js'
 
+const COMMON_PATH_ALIASES = [
+    { keywords: ['日志', 'log', '控制台日志'], paths: [path.join(process.cwd(), 'log.txt'), path.resolve(process.cwd(), '..', 'log.txt')] },
+    { keywords: ['插件目录', '当前插件', 'ai-plugin', 'AI-Plugin'], paths: [path.join(process.cwd(), 'plugins', 'AI-Plugin'), process.cwd()] },
+    { keywords: ['配置', '配置文件', 'config'], paths: [path.join(process.cwd(), 'plugins', 'AI-Plugin', 'config'), path.join(process.cwd(), 'config')] },
+    { keywords: ['模型配置', 'models_config'], paths: [path.join(process.cwd(), 'plugins', 'AI-Plugin', 'config', 'models_config.yaml'), path.join(process.cwd(), 'config', 'models_config.yaml')] },
+    { keywords: ['白名单', 'file_roots'], paths: [path.join(process.cwd(), 'plugins', 'AI-Plugin', 'config', 'file_roots.yaml'), path.join(process.cwd(), 'config', 'file_roots.yaml')] },
+    { keywords: ['云崽data', 'yunzai data', 'data目录'], paths: [path.join(process.cwd(), 'data'), '/root/Yunzai/data'] },
+]
+
+let lastResolvedPath = null
+
+/**
+ * 将用户输入的自然语言路径、别名或相对路径解析为候选路径
+ */
+function resolvePathInput(inputPath) {
+    if (!inputPath || typeof inputPath !== 'string') return inputPath
+
+    const raw = inputPath.trim()
+    if (!raw) return raw
+
+    // 支持「上次那个文件/刚才的目录」等指代
+    if (lastResolvedPath && /(上次|刚才|之前|那个|这个|它)/.test(raw)) {
+        return lastResolvedPath
+    }
+
+    // 支持常用语义别名，例如「日志」「插件目录」「配置文件」等
+    const matchedAlias = COMMON_PATH_ALIASES.find(alias => alias.keywords.some(keyword => raw.includes(keyword)))
+    if (matchedAlias) {
+        const existingPath = matchedAlias.paths.find(p => fs.existsSync(p))
+        if (existingPath) {
+            lastResolvedPath = existingPath
+            return existingPath
+        }
+        if (matchedAlias.paths.length > 0) {
+            lastResolvedPath = matchedAlias.paths[0]
+            return matchedAlias.paths[0]
+        }
+    }
+
+    // 支持相对路径：优先相对上一次解析到的目录，其次相对当前工作目录
+    if (!path.isAbsolute(raw)) {
+        if (lastResolvedPath) {
+            const baseDir = fs.existsSync(lastResolvedPath) && fs.statSync(lastResolvedPath).isDirectory()
+                ? lastResolvedPath
+                : path.dirname(lastResolvedPath)
+            const fromLast = path.resolve(baseDir, raw)
+            if (fs.existsSync(fromLast)) {
+                lastResolvedPath = fromLast
+                return fromLast
+            }
+        }
+
+        const fromCwd = path.resolve(process.cwd(), raw)
+        lastResolvedPath = fromCwd
+        return fromCwd
+    }
+
+    lastResolvedPath = raw
+    return raw
+}
+
+/**
+ * 在白名单根目录下按文件名进行模糊查找
+ * @param {string} inputPath - 用户输入的文件名或路径片段
+ * @returns {string|null} 匹配到的绝对路径
+ */
+function findFuzzyPathInAllowedRoots(inputPath) {
+    if (!inputPath || typeof inputPath !== 'string') return null
+
+    const query = path.basename(inputPath.trim()).toLowerCase().replace(/(目录|文件)$/g, '')
+    if (!query) return null
+
+    const roots = Config.FILE_ROOTS
+    if (!Array.isArray(roots) || roots.length === 0) return null
+
+    const ignoredDirs = new Set(['.git', 'node_modules'])
+    const maxDepth = Config.FILE_FUZZY_SEARCH_MAX_DEPTH || 5
+    const maxVisited = Config.FILE_FUZZY_SEARCH_MAX_VISITED || 3000
+
+    let visited = 0
+    let exactMatch = null
+    let fuzzyMatch = null
+
+    function walk(dir, depth = 0) {
+        if (visited >= maxVisited || depth > maxDepth || exactMatch) return
+
+        let entries
+        try {
+            entries = fs.readdirSync(dir, { withFileTypes: true })
+        } catch {
+            return
+        }
+
+        for (const entry of entries) {
+            if (visited >= maxVisited || exactMatch) return
+
+            const fullPath = path.join(dir, entry.name)
+            const name = entry.name.toLowerCase()
+
+            if (entry.isFile()) {
+                visited++
+                if (name === query) {
+                    exactMatch = fullPath
+                    return
+                }
+                if (!fuzzyMatch && name.includes(query)) {
+                    fuzzyMatch = fullPath
+                }
+            } else if (entry.isDirectory()) {
+                if (ignoredDirs.has(entry.name)) continue
+                visited++
+                if (name === query) {
+                    exactMatch = fullPath
+                    return
+                }
+                if (!fuzzyMatch && name.includes(query)) {
+                    fuzzyMatch = fullPath
+                }
+                walk(fullPath, depth + 1)
+            }
+        }
+    }
+
+    for (const root of roots) {
+        const realRoot = path.resolve(root)
+        if (!fs.existsSync(realRoot)) continue
+
+        try {
+            const stat = fs.statSync(realRoot)
+            if (stat.isFile()) {
+                const name = path.basename(realRoot).toLowerCase()
+                if (name === query) return realRoot
+                if (!fuzzyMatch && name.includes(query)) fuzzyMatch = realRoot
+            } else if (stat.isDirectory()) {
+                walk(realRoot)
+            }
+        } catch { /* ignore */ }
+
+        if (exactMatch) return exactMatch
+    }
+
+    return exactMatch || fuzzyMatch
+}
+
 /**
  * 检查文件路径是否在白名单内
  * @param {string} filePath - 绝对路径
@@ -210,7 +354,16 @@ async function readLocalFile(filePath, options = {}) {
         return '\n\n【文件读取失败】未指定文件路径。\n'
     }
 
-    const realPath = path.resolve(filePath.trim())
+    let realPath = path.resolve(resolvePathInput(filePath))
+
+    if (!fs.existsSync(realPath)) {
+        const fuzzyPath = findFuzzyPathInAllowedRoots(filePath)
+        if (fuzzyPath) {
+            realPath = path.resolve(fuzzyPath)
+            lastResolvedPath = realPath
+            logger.info(`[AI-Plugin] FileRead 模糊匹配: ${filePath} -> ${realPath}`)
+        }
+    }
 
     // 安全检查
     const check = checkPathAllowed(realPath)
@@ -230,6 +383,7 @@ async function readLocalFile(filePath, options = {}) {
 
     // 目录：列出内容
     if (stat.isDirectory()) {
+        lastResolvedPath = realPath
         return readLocalDir(realPath, options)
     }
 
@@ -245,6 +399,7 @@ async function readLocalFile(filePath, options = {}) {
 
     try {
         const content = fs.readFileSync(realPath, 'utf-8')
+        lastResolvedPath = realPath
         const sizeKB = (stat.size / 1024).toFixed(1)
         logger.info(`[AI-Plugin] FileRead: ${realPath} (${sizeKB}KB)`)
         return `\n\n【以下是文件「${path.basename(realPath)}」(路径: ${realPath}, 大小: ${sizeKB}KB) 的内容：】\n\`\`\`\n${content}\n\`\`\`\n【文件内容结束】\n`
@@ -269,7 +424,7 @@ export const fileReadTool = {
                 properties: {
                     path: {
                         type: 'string',
-                        description: '文件或目录的绝对路径'
+                        description: '文件/目录路径，支持绝对路径、相对路径、常用别名（如 日志、配置、插件目录、模型配置）或文件名片段'
                     }
                 },
                 required: ['path']
@@ -303,7 +458,7 @@ export const dirReadTool = {
                 properties: {
                     path: {
                         type: 'string',
-                        description: '目录的绝对路径'
+                        description: '目录路径，支持绝对路径、相对路径、常用别名（如 日志、配置、插件目录、云崽data）或目录名片段'
                     },
                     read_all: {
                         type: 'boolean',

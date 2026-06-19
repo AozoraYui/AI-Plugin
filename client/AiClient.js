@@ -116,7 +116,7 @@ export class AiClient {
 
     /** 是否启用本地文件读取（默认关闭，需配置明确启用） */
     get enableFileRead() {
-        return this.fileReadConfig?.enable_file_read === true
+        return (this.fileReadConfig?.enable_file_read ?? this.fileReadConfig?.enabled) === true
     }
 
     /** 搜索意图分析专用模型列表 */
