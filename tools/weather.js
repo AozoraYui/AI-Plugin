@@ -6,6 +6,15 @@
 import { toolRegistry } from './registry.js'
 
 /**
+ * 判断是否为英文/国际城市名称。
+ * 这类城市优先使用 OpenWeatherMap，避免高德地图对英文地名误匹配到国内城市。
+ */
+function isLatinCityName(city) {
+    const name = (city || '').trim()
+    return /[a-zA-Z]/.test(name) && /^[a-zA-Z\s,.'-]+$/.test(name)
+}
+
+/**
  * OpenWeatherMap 天气查询
  */
 async function queryOpenWeatherMap(city, apiKey) {
@@ -63,6 +72,12 @@ async function queryWeather(city, amapKey, owmKey = null) {
     }
 
     const cityName = city.trim()
+
+    // 英文/国际城市优先使用 OpenWeatherMap，避免高德误匹配国内城市
+    if (owmKey && isLatinCityName(cityName)) {
+        logger.info(`[AI-Plugin] 天气查询 检测到英文/国际城市 "${cityName}"，优先使用 OpenWeatherMap`)
+        return await queryOpenWeatherMap(cityName, owmKey)
+    }
 
     // Step 1: 高德 extensions=all（城市名）
     if (amapKey) {
@@ -167,19 +182,19 @@ async function queryWeather(city, amapKey, owmKey = null) {
 export const weatherTool = {
     name: 'weather',
     permission: 'all',
-    description: '查询指定城市的实时天气和未来几天预报（温度、天气状况、风力风向等）。当用户询问天气时使用。',
+    description: '查询指定城市的实时天气和未来几天预报（温度、天气状况、风力风向等）。当用户询问天气时使用；国际/英文城市会优先使用 OpenWeatherMap。',
 
     functionSchema: {
         type: 'function',
         function: {
             name: 'weather',
-            description: '查询指定城市的实时天气和未来几天预报',
+            description: '查询指定城市的实时天气和未来几天预报；国际城市请优先传入英文城市名',
             parameters: {
                 type: 'object',
                 properties: {
                     city: {
                         type: 'string',
-                        description: '城市名称，如"北京"、"中山"、"深圳"、"Tokyo"'
+                        description: '城市名称。国内城市可用中文，如"北京"、"中山"、"深圳"；国际城市请优先使用英文名，如"New York"、"Tokyo"、"London"'
                     }
                 },
                 required: ['city']

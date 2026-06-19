@@ -111,6 +111,7 @@ ${toolDescriptions.join('\n')}
 - web_search: {"query": "搜索关键词"}
 - system_info: {}
 - weather: {"city": "城市名"}
+  - 天气工具参数要求：如果用户查询的是国外城市，或使用中文外文地名（如纽约、伦敦、巴黎、东京、洛杉矶），请尽量转换为 OpenWeatherMap 可识别的英文城市名（如 New York、London、Paris、Tokyo、Los Angeles）后填入 city。
 - file_read: {"path": "/绝对路径", "read_all": true或false}
 - dir_read: {"path": "/绝对路径", "read_all": true或false}
 - web_fetch: {"url": "完整URL"}
@@ -123,7 +124,7 @@ ${toolDescriptions.join('\n')}
 - intent 字段必填，简要分析用户意图
 - 只使用上述"可用工具"列表中列出的工具，不要调用未列出的工具
 - 路径必须是绝对路径，从用户消息中提取
-- 搜索关键词要求精确、简洁，不超过30字`
+- 搜索关键词要求精确、简洁，不超过128字`
 
         try {
             const analysisPayload = {
