@@ -11,6 +11,8 @@ import yaml from 'yaml'
 import sharp from 'sharp'
 import { PRESETS_FILE } from '../utils/config.js'
 
+const DRAW_PREFIX_PATTERN = '((?:[1-9])?(?:pro|p|ultra|u)?)'
+
 export class ImageHandler extends plugin {
     constructor() {
         const drawCmd = Config.DRAW_COMMAND
@@ -20,7 +22,7 @@ export class ImageHandler extends plugin {
             event: 'message',
             priority: -9101,
             rule: [
-                { reg: new RegExp(`^#([a-zA-Z0-9]*)${drawCmd}([\\s\\S]*)$`, 'i'), fnc: 'generateImage', key: 'drawCommand' },
+                { reg: new RegExp(`^#${DRAW_PREFIX_PATTERN}${drawCmd}([\\s\\S]*)$`, 'i'), fnc: 'generateImage', key: 'drawCommand' },
                 { reg: /^#画图预设(列表|list)$/i, fnc: 'listPresets' },
                 { reg: /^#画图预设列表(pro|Pro)$/i, fnc: 'listPresetsPro' },
                 { reg: /^#画图预设重载$/i, fnc: 'reloadPresets', permission: 'master' },
@@ -38,7 +40,7 @@ export class ImageHandler extends plugin {
 
     generateCommandRegex(presets) {
         const allCommands = presets.flatMap(p => [p.command, ...(p.aliases || [])]).filter(Boolean)
-        return allCommands.length > 0 ? `^#([a-zA-Z0-9]*)(${allCommands.join('|')})(?:\\s+(.*))?$` : `^#无任何作图预设$`
+        return allCommands.length > 0 ? `^#${DRAW_PREFIX_PATTERN}(${allCommands.join('|')})(?:\\s+(.*))?$` : `^#无任何作图预设$`
     }
 
     updateDynamicRule() {
@@ -71,7 +73,7 @@ export class ImageHandler extends plugin {
         let match
 
         const drawCmd = Config.DRAW_COMMAND
-        const drawMatch = e.msg.match(new RegExp(`^#([a-zA-Z0-9]*)${drawCmd}([\\s\\S]*)`, 'i'))
+        const drawMatch = e.msg.match(new RegExp(`^#${DRAW_PREFIX_PATTERN}${drawCmd}([\\s\\S]*)$`, 'i'))
         if (drawMatch) {
             match = drawMatch
             isCustomCommand = true
