@@ -384,8 +384,9 @@ AI-Plugin/
 10. **插件更新**：使用 `#ai插件更新` 一键 git pull，`#ai插件强制更新` 强制覆盖本地修改
 11. **模型熔断**：连续失败 3 次自动熔断 30 秒，全部熔断时无视冷却强制尝试，确保服务可用
 12. **Vision Relay**：非多模态模型通过 Vision 模型描述图片后间接理解图片内容
-13. **文件读取安全**：AI 只能读取 `file_roots.yaml` 白名单目录下的文件，无法写入、修改或删除
-14. **指令自定义**：可在 `models_config.yaml` 中修改 `chat_command`/`draw_command` 缩短指令
+13. **作图兼容**：chat/completions 不支持图片时自动重试 `/images/edits`（multipart 传图）或 `/images/generations`（纯文本）
+14. **文件读取安全**：AI 只能读取 `file_roots.yaml` 白名单目录下的文件，无法写入、修改或删除
+15. **指令自定义**：可在 `models_config.yaml` 中修改 `chat_command`/`draw_command` 缩短指令
 
 ## 🤝 贡献
 
