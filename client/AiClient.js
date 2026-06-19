@@ -517,7 +517,11 @@ export class AiClient {
         this.saveModelStatus()
     }
 
-    buildRequest(_type, payload, providerConfig, modelId, maxTokens = 8192) {
+    buildRequest(type, payload, providerConfig, modelId, maxTokens = 8192) {
+        if (type === 'image' && this._isOpenAIImageModel(modelId)) {
+            return this._buildDirectImageRequest(payload, providerConfig, modelId)
+        }
+
         const url = `${providerConfig.base_url}/chat/completions`
         const options = {
             method: "POST",
@@ -535,6 +539,51 @@ export class AiClient {
             })
         }
         return { url, options }
+    }
+
+    /** gpt-image 系列直接使用 OpenAI images API，避免先请求 chat/completions 再重试 */
+    _isOpenAIImageModel(modelId) {
+        return /^gpt-image(?:-|$)/i.test(modelId || '')
+    }
+
+    _buildDirectImageRequest(payload, providerConfig, modelId) {
+        const parts = payload.contents?.[0]?.parts || []
+        const prompt = parts.map(p => p.text).filter(Boolean).join('\n') || ''
+        const images = this._extractImageBuffers(parts)
+        const commonHeaders = {
+            'Authorization': `Bearer ${providerConfig.api_key}`,
+            'HTTP-Referer': 'https://yuzubot.com',
+            'X-Title': 'Yuzu-Bot'
+        }
+
+        if (images.length > 0) {
+            const url = `${providerConfig.base_url}/images/edits`
+            const fields = [
+                { name: 'model', value: modelId },
+                { name: 'prompt', value: prompt },
+                { name: 'n', value: '1' }
+            ]
+            const files = images.map((img, i) => ({
+                name: 'image',
+                buffer: img.buffer,
+                filename: `reference_${i + 1}.${img.mimeType.split('/')[1] || 'png'}`,
+                contentType: img.mimeType
+            }))
+            const { headers, body } = this._buildMultipartForm(fields, files)
+            logger.info(`[AI-Plugin] 模型 [${providerConfig.name} - ${modelId}] 直接使用 /images/edits（${images.length} 张参考图）`)
+            return { url, options: { method: 'POST', headers: { ...headers, ...commonHeaders }, body } }
+        }
+
+        const url = `${providerConfig.base_url}/images/generations`
+        logger.info(`[AI-Plugin] 模型 [${providerConfig.name} - ${modelId}] 直接使用 /images/generations`)
+        return {
+            url,
+            options: {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...commonHeaders },
+                body: JSON.stringify({ model: modelId, prompt, n: 1 })
+            }
+        }
     }
 
     convertToOpenAIMessages(requestPayload) {
@@ -563,13 +612,37 @@ export class AiClient {
         return messages
     }
 
+    _normalizeUsage(usage) {
+        if (!usage) return null
+        const normalized = { ...usage }
+        if (normalized.prompt_tokens === undefined && normalized.input_tokens !== undefined) {
+            normalized.prompt_tokens = normalized.input_tokens
+        }
+        if (normalized.completion_tokens === undefined && normalized.output_tokens !== undefined) {
+            normalized.completion_tokens = normalized.output_tokens
+        }
+        if (normalized.completion_tokens === undefined && normalized.image_tokens !== undefined) {
+            normalized.completion_tokens = normalized.image_tokens
+        }
+        if (normalized.completion_tokens === undefined && normalized.total_tokens !== undefined && normalized.prompt_tokens !== undefined) {
+            normalized.completion_tokens = normalized.total_tokens - normalized.prompt_tokens
+        }
+        if (normalized.prompt_tokens === undefined && normalized.total_tokens !== undefined && normalized.completion_tokens !== undefined) {
+            normalized.prompt_tokens = normalized.total_tokens - normalized.completion_tokens
+        }
+        if (normalized.total_tokens === undefined && normalized.prompt_tokens !== undefined && normalized.completion_tokens !== undefined) {
+            normalized.total_tokens = normalized.prompt_tokens + normalized.completion_tokens
+        }
+        return normalized
+    }
+
     parseResponse(data, type) {
         if (data.error) {
             const errorMsg = data.error.message || data.error || '未知错误'
             return { success: false, error: typeof errorMsg === 'string' ? errorMsg : JSON.stringify(errorMsg) }
         }
 
-        const usage = data.usage || null
+        const usage = this._normalizeUsage(data.usage)
 
         if (type === 'chat') {
             const text = data.choices?.[0]?.message?.content
