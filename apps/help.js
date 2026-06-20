@@ -68,6 +68,15 @@ export class HelpHandler extends plugin {
   需在 models_config.yaml 开启 enable_shell_exec: true（独立开关，无需 enable_file_read）。
   开启后 AI 可根据你的意图执行服务器 Shell 命令，例如 grep/rg 查文件、查看日志、诊断服务状态。
   注意：Shell 具备完整服务器权限，不会被 #f 临时开关单独启用。
+> 📤 文件收发（主人专用）
+  需在 models_config.yaml 开启 enable_file_transfer: true（独立开关）。
+  上传：让 AI 把白名单目录内的文件/文件夹发到当前会话（文件夹自动打包为 tar.gz）。
+  下载：让 AI 把当前消息或引用消息里的图片/视频/语音/文件保存到白名单目录。
+  路径受 file_roots.yaml 白名单约束，仅主人可用。
+> 🎨 AI 对话画图
+  需在 models_config.yaml 开启 enable_ai_draw: true（独立开关）。
+  开启后所有人可在对话中用自然语言让 AI 画图（等同 #draw）。
+  支持参考图（带图/引用图/@成员头像）与预设风格名，生成图直接发送到会话。
 > 开关可组合，如 #pv${chatCmd}、#us${chatCmd}n、#s${chatCmd}wf、#${chatCmd}vnwf 等。
 
 > #导出${aiName}记忆

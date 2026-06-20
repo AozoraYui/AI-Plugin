@@ -520,6 +520,15 @@ export class ChatHandler extends plugin {
             if (shellEnabled) {
                 enabledTools.push('shell_exec')
             }
+            // 文件收发：主人开启 enable_file_transfer 后可上传白名单文件到会话 / 下载会话媒体到白名单目录
+            if (e.isMaster && this.client.enableFileTransfer) {
+                enabledTools.push('file_send')
+                enabledTools.push('file_download')
+            }
+            // AI 对话画图：开启 enable_ai_draw 后，所有人可在对话中按意图触发画图
+            if (this.client.enableAiDraw) {
+                enabledTools.push('draw_image')
+            }
 
             if (enabledTools.length > 0) {
                 // 为意图分析提供最近对话上下文（最多8轮 + 增量总结，仅非单次模式）
@@ -547,7 +556,7 @@ export class ChatHandler extends plugin {
                     logger.info(`[AI-Plugin] 意图分析: ${intent}`)
                 }
                 for (const call of toolCalls) {
-                    const toolContext = { userId: e.user_id, groupId: e.group_id }
+                    const toolContext = { userId: e.user_id, groupId: e.group_id, event: e }
                     const result = await toolRegistry.execute(call.name, call.args, e.isMaster, toolContext)
                     if (result.success) {
                         if (call.name === 'web_search') {
@@ -586,6 +595,14 @@ export class ChatHandler extends plugin {
                             userMessage = userMessage + '\n\n【重要指令】以上为服务器 Shell 命令的实际执行结果。请严格基于 stdout/stderr/退出码回答，不要编造未执行的结果。' + formattedResult
                             executedShellCommands.push(normalizeShellCommand(result.data?.command || call.args?.command))
                             logger.warn(`[AI-Plugin] shell_exec 完成，结果已注入`)
+                        } else if (call.name === 'file_send' || call.name === 'file_download') {
+                            const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
+                            userMessage = userMessage + '\n\n【重要指令】以上为文件收发工具的实际执行结果，请如实告知主人操作结果，不要编造。' + formattedResult
+                            logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
+                        } else if (call.name === 'draw_image') {
+                            const formattedResult = toolRegistry.formatToolResult('draw_image', result.data)
+                            userMessage = userMessage + '\n\n【重要指令】画图工具已执行并把图片直接发送到会话。' + formattedResult + '请用一句简短自然的话回应用户（如"画好啦~"），不要重复描述图片细节，也不要声称自己不能画图。'
+                            logger.info(`[AI-Plugin] draw_image 完成，结果已注入`)
                         } else {
                             userMessage = userMessage + result.data
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
@@ -596,7 +613,7 @@ export class ChatHandler extends plugin {
                 }
 
                 if (e.isMaster && enabledTools.includes('shell_exec') && executedShellCommands.length > 0) {
-                    const toolContext = { userId: e.user_id, groupId: e.group_id }
+                    const toolContext = { userId: e.user_id, groupId: e.group_id, event: e }
                     const seenCommands = new Set(executedShellCommands.filter(Boolean))
                     // 翻页续读使用 "命令@offset" 作为去重键，允许同命令不同分页继续
                     const seenPagedKeys = new Set()

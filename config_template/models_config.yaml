@@ -145,10 +145,24 @@ enable_web_fetch: false
 #   SHELL_EXEC_MAX_OUTPUT_CHARS      单页输出截断字符数（默认 24000，超长按游标分页不丢数据）
 #   SHELL_EXEC_FOLLOWUP_MAX_ROUNDS   多轮补查最大轮数（默认 5，含大数据翻页续读）
 #   SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS 补查时回传给模型的上下文字符数（默认 24000）
+#
+# enable_file_transfer: 是否启用文件收发（默认 false）
+#   仅主人可用；开启后 AI 可按意图：
+#     · 上传：把白名单目录内的文件/文件夹发送到当前会话（文件夹自动打包为 tar.gz）
+#     · 下载：把当前消息或引用消息里的图片/视频/语音/文件保存到白名单目录
+#   路径同样受 file_roots.yaml 白名单约束，与文件读取一致
+#   非主人无论如何都无法触发
+#
+# enable_ai_draw: 是否启用 AI 对话联动画图（默认 false）
+#   开启后所有人都可在对话中用自然语言让 AI 画图（等同调用 #draw）
+#   支持参考图（带图/引用图/@成员头像）与预设风格名识别
+#   生成的图片由工具直接发送到会话
 # 注意：以上开关均与 enable_web_search 平级（不要缩进！）
 # ================================================
 # enable_file_read: false
 # enable_shell_exec: false
+# enable_file_transfer: false
+# enable_ai_draw: false
 # SHELL_EXEC_TIMEOUT_MS: 60000
 # SHELL_EXEC_MAX_TIMEOUT_MS: 240000
 # SHELL_EXEC_MAX_OUTPUT_CHARS: 24000

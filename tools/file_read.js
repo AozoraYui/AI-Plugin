@@ -505,3 +505,6 @@ export const dirReadTool = {
 // 自动注册
 toolRegistry.register(fileReadTool)
 toolRegistry.register(dirReadTool)
+
+// 导出白名单校验与模糊查找，供文件上传/下载工具复用，保持安全策略一致
+export { checkPathAllowed, findFuzzyPathInAllowedRoots, resolvePathInput }

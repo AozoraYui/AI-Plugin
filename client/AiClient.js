@@ -154,6 +154,16 @@ export class AiClient {
         return this.shellExecConfig?.enabled === true
     }
 
+    /** 是否启用文件收发（上传服务器文件到会话 / 下载会话媒体到服务器，仅主人） */
+    get enableFileTransfer() {
+        return this.fileTransferConfig?.enabled === true
+    }
+
+    /** 是否启用 AI 对话联动画图（在对话中按意图调用插件画图能力） */
+    get enableAiDraw() {
+        return this.aiDrawConfig?.enabled === true
+    }
+
     /** 搜索意图分析专用模型列表 */
     get webSearchIntentModels() {
         const models = this.webSearchConfig?.intent_model
@@ -394,6 +404,8 @@ export class AiClient {
                 // 提取 enable_file_read（默认关闭）
                 this.fileReadConfig = { enabled: rawConfig.enable_file_read === true }
                 this.shellExecConfig = { enabled: rawConfig.enable_shell_exec === true }
+                this.fileTransferConfig = { enabled: rawConfig.enable_file_transfer === true }
+                this.aiDrawConfig = { enabled: rawConfig.enable_ai_draw === true }
                 for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_FOLLOWUP_MAX_ROUNDS', 'SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS', 'SHELL_EXEC_MAX_BUFFER']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
@@ -404,6 +416,12 @@ export class AiClient {
                 }
                 if (this.enableShellExec) {
                     logger.warn('[AI-Plugin] Shell 执行工具已启用：AI 可在主人请求下执行服务器命令（含文件读取）')
+                }
+                if (this.enableFileTransfer) {
+                    logger.info('[AI-Plugin] 文件收发已启用：主人可让 AI 上传白名单文件到会话、下载会话媒体到白名单目录')
+                }
+                if (this.enableAiDraw) {
+                    logger.info('[AI-Plugin] AI 对话画图已启用：可在对话中按意图调用插件画图能力')
                 }
 
                 // 提取 weather_api_key（高德地图天气查询）

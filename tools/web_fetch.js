@@ -10,6 +10,48 @@ const REQUEST_TIMEOUT_MS = 30000
 const MAX_RESPONSE_SIZE = 10 * 1024 * 1024 // 10MB
 
 /**
+ * 还原 B站短链（b23.tv / bili2233.cn）为完整 bilibili.com 链接
+ * 短链是 302 跳转，跟随重定向即可拿到真实地址，方便后续抓取/解析。
+ * @returns {Promise<string>} 还原后的 URL，失败则原样返回
+ */
+async function resolveBiliShortLink(rawUrl) {
+    let u
+    try {
+        u = new URL(rawUrl)
+    } catch {
+        return rawUrl
+    }
+    if (u.hostname !== 'b23.tv' && u.hostname !== 'bili2233.cn') return rawUrl
+
+    try {
+        const res = await fetch(rawUrl, {
+            method: 'GET',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+            },
+            redirect: 'follow',
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+        })
+        // res.url 为跟随重定向后的最终地址；去掉跟踪参数保持干净
+        const finalUrl = res.url || rawUrl
+        try {
+            const fu = new URL(finalUrl)
+            // 仅保留路径，剥离 spm_id_from 等跟踪 query
+            if (fu.hostname.includes('bilibili.com')) {
+                return `${fu.origin}${fu.pathname}`
+            }
+            return finalUrl
+        } catch {
+            return finalUrl
+        }
+    } catch (err) {
+        logger.warn(`[AI-Plugin] B站短链还原失败: ${rawUrl} - ${err.message}`)
+        return rawUrl
+    }
+}
+
+
+/**
  * 将 GitHub 网页 URL 转换为 GitHub API 请求
  * 直接爬取 github.com 网页易触发 secondary rate limit（防爬，偶发 429）；
  * 改走 api.github.com 限额更高、返回干净 JSON，更稳定。
@@ -274,18 +316,24 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS) {
         return `\n\n【网页抓取失败】不支持的协议，仅允许 http/https: ${targetUrl}\n`
     }
 
-    // GitHub 网页易触发 secondary rate limit（429），自动改走 GitHub API/raw，更稳定且返回干净数据
-    const gh = resolveGitHubApi(targetUrl)
-    if (gh) {
-        logger.info(`[AI-Plugin] WebFetch: GitHub 链接改走 API (${gh.kind}) -> ${gh.apiUrl}`)
-        return await fetchGitHubApi(gh, targetUrl, maxChars)
+    // B站短链先还原为完整链接，便于后续抓取/识别
+    let resolvedUrl = await resolveBiliShortLink(targetUrl)
+    if (resolvedUrl !== targetUrl) {
+        logger.info(`[AI-Plugin] WebFetch: B站短链还原 ${targetUrl} -> ${resolvedUrl}`)
     }
 
-    logger.info(`[AI-Plugin] WebFetch: 开始抓取 ${targetUrl}`)
+    // GitHub 网页易触发 secondary rate limit（429），自动改走 GitHub API/raw，更稳定且返回干净数据
+    const gh = resolveGitHubApi(resolvedUrl)
+    if (gh) {
+        logger.info(`[AI-Plugin] WebFetch: GitHub 链接改走 API (${gh.kind}) -> ${gh.apiUrl}`)
+        return await fetchGitHubApi(gh, resolvedUrl, maxChars)
+    }
+
+    logger.info(`[AI-Plugin] WebFetch: 开始抓取 ${resolvedUrl}`)
 
     let res
     try {
-        res = await fetch(targetUrl, {
+        res = await fetch(resolvedUrl, {
             method: 'GET',
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
