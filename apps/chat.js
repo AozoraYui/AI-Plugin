@@ -516,7 +516,9 @@ export class ChatHandler extends plugin {
 
             // 工具调用：LLM 统一路由（deepseek-v4-flash 分析意图，决定调用哪些工具）
             const enabledTools = []
-            let drawImageDone = false
+            // drawImageAttempted：本轮是否调用过画图工具（无论成败，工具内已发过"🎨正在生成"进度提示），
+            // 用于跳过后续"思考中"占位，避免重复刷屏。
+            let drawImageAttempted = false
             if (e._netFlag || this.client.enableWebSearch) {
                 enabledTools.push('web_search')
                 if (e.isMaster) enabledTools.push('web_fetch') // 搜索时主人允许抓取
@@ -599,14 +601,16 @@ export class ChatHandler extends plugin {
                     const result = await toolRegistry.execute(call.name, call.args, e.isMaster, toolContext)
                     if (result.success) {
                         if (call.name === 'draw_image') {
+                            // 无论成败，画图工具内部都已发过"🎨正在生成"进度提示，
+                            // 故标记 attempted 以跳过后续"思考中"占位，避免重复刷屏。
+                            drawImageAttempted = true
                             // 画图工具成功时返回对象 {ok:true,...}；失败/模型返回文本时返回字符串。
-                            // 只有真正成功（已发出图片）才设 drawImageDone 并让主模型说"画好啦"，
+                            // 只有真正成功（已发出图片）才让主模型说"画好啦"，
                             // 否则如实告知失败，避免明明没画出来却谎称已发送。
                             const drawSucceeded = result.data && typeof result.data === 'object' && result.data.ok === true
                             if (drawSucceeded) {
                                 // 画图工具已把图片直接发到会话并显示了"🎨正在生成"进度，无需再发"思考中"占位；
                                 // 但仍让主模型用人设口吻收尾回复（如"画好啦~"）
-                                drawImageDone = true
                                 const formattedResult = toolRegistry.formatToolResult('draw_image', result.data)
                                 userMessage = userMessage + '\n\n【重要指令】画图工具已执行并把图片直接发送到会话。' + formattedResult + '请用一句简短自然的话回应用户（如"画好啦~"），不要重复描述图片细节，也不要声称自己不能画图。'
                                 logger.info('[AI-Plugin] draw_image 完成，图片已直接发送，结果已注入')
@@ -760,8 +764,8 @@ export class ChatHandler extends plugin {
             const isSingleMode = e._singleMode === true
             const userId = e.user_id
 
-            // 画图场景工具已发过"🎨正在生成"进度提示，跳过"思考中"占位避免重复
-            if (!drawImageDone) {
+            // 画图场景工具已发过"🎨正在生成"进度提示（无论成败），跳过"思考中"占位避免重复
+            if (!drawImageAttempted) {
                 if (!isSingleMode) {
                     await e.reply(`${Config.AI_NAME}思考中 (使用 ${modelDisplay} 模型组)…`, true)
                 } else {
