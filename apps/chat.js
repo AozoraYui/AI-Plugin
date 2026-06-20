@@ -498,6 +498,7 @@ export class ChatHandler extends plugin {
 
             // 工具调用：LLM 统一路由（deepseek-v4-flash 分析意图，决定调用哪些工具）
             const enabledTools = []
+            let drawImageDone = false
             if (e._netFlag || this.client.enableWebSearch) {
                 enabledTools.push('web_search')
                 if (e.isMaster) enabledTools.push('web_fetch') // 搜索时主人允许抓取
@@ -570,7 +571,6 @@ export class ChatHandler extends plugin {
                 const intent = toolAnalysis?.intent || ''
                 const toolCalls = Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools : []
                 const executedShellCommands = []
-                let drawImageDone = false
                 // 意图分析注入
                 if (intent) {
                     userMessage = userMessage + `\n\n【意图分析】${intent}`
@@ -581,9 +581,12 @@ export class ChatHandler extends plugin {
                     const result = await toolRegistry.execute(call.name, call.args, e.isMaster, toolContext)
                     if (result.success) {
                         if (call.name === 'draw_image') {
-                            // 画图工具已把图片+完成提示直接发到会话，标记后跳过主模型收尾，避免重复的"思考中→画好啦"
+                            // 画图工具已把图片直接发到会话并显示了"🎨正在生成"进度，无需再发"思考中"占位；
+                            // 但仍让主模型用人设口吻收尾回复（如"画好啦~"）
                             drawImageDone = true
-                            logger.info('[AI-Plugin] draw_image 完成，图片已直接发送，跳过主模型回复')
+                            const formattedResult = toolRegistry.formatToolResult('draw_image', result.data)
+                            userMessage = userMessage + '\n\n【重要指令】画图工具已执行并把图片直接发送到会话。' + formattedResult + '请用一句简短自然的话回应用户（如"画好啦~"），不要重复描述图片细节，也不要声称自己不能画图。'
+                            logger.info('[AI-Plugin] draw_image 完成，图片已直接发送，结果已注入')
                         } else if (call.name === 'web_search') {
                             // 搜索：将结果注入提示词
                             const results = result.data || []
@@ -694,11 +697,6 @@ export class ChatHandler extends plugin {
                         if (!isPaging) seenCommands.add(command)
                     }
                 }
-
-                // 画图工具已把图片和完成提示直接发到会话，无需主模型再走一轮"思考中→回复"
-                if (drawImageDone) {
-                    return true
-                }
             }
 
             // Vision Relay：flag v 强制启用，否则按全局配置 + 模型是否需要转述
@@ -733,10 +731,13 @@ export class ChatHandler extends plugin {
             const isSingleMode = e._singleMode === true
             const userId = e.user_id
 
-            if (!isSingleMode) {
-                await e.reply(`${Config.AI_NAME}思考中 (使用 ${modelDisplay} 模型组)…`, true)
-            } else {
-                await e.reply(`${Config.AI_NAME}思考中 (单次对话模式，使用 ${modelDisplay} 模型组)…`, true)
+            // 画图场景工具已发过"🎨正在生成"进度提示，跳过"思考中"占位避免重复
+            if (!drawImageDone) {
+                if (!isSingleMode) {
+                    await e.reply(`${Config.AI_NAME}思考中 (使用 ${modelDisplay} 模型组)…`, true)
+                } else {
+                    await e.reply(`${Config.AI_NAME}思考中 (单次对话模式，使用 ${modelDisplay} 模型组)…`, true)
+                }
             }
             await setMsgEmojiLike(e, 282)
 

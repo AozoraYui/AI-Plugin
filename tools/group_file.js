@@ -11,6 +11,7 @@ import path from 'node:path'
 import { toolRegistry } from './registry.js'
 import { checkPathAllowed } from './file_read.js'
 import { Config } from '../utils/config.js'
+import { takeSourceMsg } from '../utils/common.js'
 
 const GF_MAX_DEPTH = 3          // 递归遍历群文件夹的最大深度
 const GF_DL_MAX_RETRIES = 3     // 下载重试次数
@@ -328,29 +329,46 @@ export const groupFileListTool = {
     }
 }
 
+// 从引用消息中提取群文件名（用户引用某条群文件消息要求下载时）
+async function extractFileNameFromReply(event) {
+    try {
+        const source = await takeSourceMsg(event)
+        if (!source || !Array.isArray(source.message)) return ''
+        for (const seg of source.message) {
+            if (seg.type === 'file') {
+                const name = seg.name || seg.file_name || seg.fileName || seg.file || ''
+                if (name) return String(name).trim()
+            }
+        }
+    } catch (err) {
+        logger.warn(`[AI-Plugin] 群文件：从引用消息提取文件名失败: ${err.message}`)
+    }
+    return ''
+}
+
 export const groupFileDownloadTool = {
     name: 'group_file_download',
     permission: 'master',
-    description: '把当前 QQ 群群文件区里的指定文件下载并保存到服务器白名单目录。仅限主人。适合主人说"把群文件里的xxx下载到xxx目录""把那个文件存到服务器"等场景。只能在群聊中使用。',
+    description: '把当前 QQ 群群文件区里的指定文件下载并保存到服务器白名单目录。仅限主人。适合主人说"把群文件里的xxx下载到xxx目录""把那个文件存到服务器"，或"引用某条群文件消息"后说"下载这个/帮我下载"等场景。只能在群聊中使用。',
 
     functionSchema: {
         type: 'function',
         function: {
             name: 'group_file_download',
-            description: '按文件名把群文件下载到服务器白名单目录。仅限主人，仅群聊可用。',
+            description: '按文件名把群文件下载到服务器白名单目录。仅限主人，仅群聊可用。若用户引用了某条群文件消息，file_name 可留空，工具会自动从引用消息中提取文件名。',
             parameters: {
                 type: 'object',
                 properties: {
                     file_name: {
                         type: 'string',
-                        description: '要下载的群文件名称，支持完整文件名或名称片段（会在群文件中模糊匹配）。'
+                        description: '要下载的群文件名称，支持完整文件名或名称片段（会在群文件中模糊匹配）。若用户是引用某条群文件消息来下载，可留空，工具会自动从引用消息提取。'
                     },
                     save_dir: {
                         type: 'string',
                         description: '可选，保存目录（必须在白名单内）。不填则默认保存到白名单首个目录下的 group-download 子目录。'
                     }
                 },
-                required: ['file_name']
+                required: []
             }
         }
     },
@@ -360,8 +378,13 @@ export const groupFileDownloadTool = {
         if (!event) return '【群文件下载失败】缺少会话上下文。'
         if (!event.group_id) return '【群文件下载失败】该功能仅在群聊中可用。'
 
-        const query = String(args.file_name || '').trim()
-        if (!query) return '【群文件下载失败】未提供要下载的文件名。'
+        let query = String(args.file_name || '').trim()
+        // 未指定文件名时，尝试从用户引用的群文件消息中提取
+        if (!query) {
+            query = await extractFileNameFromReply(event)
+            if (query) logger.info(`[AI-Plugin] 群文件：从引用消息提取到文件名「${query}」`)
+        }
+        if (!query) return '【群文件下载失败】未提供要下载的文件名，也未能从引用消息中识别出群文件。请直接说出文件名，或引用那条群文件消息再让我下载。'
 
         try {
             // 递归收集全部群文件后按名匹配
