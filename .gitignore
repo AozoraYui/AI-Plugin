@@ -1,7 +1,10 @@
 node_modules/
 *.log
 .DS_Store
-data/
+data/*
+!data/self/
+data/self/*
+!data/self/README.md
 config/
 !config_template/
 package-lock.json

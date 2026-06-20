@@ -11,6 +11,44 @@ import { toolRegistry } from './registry.js'
 import { Config } from '../utils/config.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
+import fs from 'node:fs'
+import path from 'node:path'
+
+// 自画像参考图目录：插件根目录 data/self（放 0.png / 1.png / 2.png 等官方参考图）
+const SELF_PORTRAIT_DIR = path.join(process.cwd(), 'plugins', 'AI-Plugin', 'data', 'self')
+const SELF_IMG_EXT = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
+
+function selfMime(ext) {
+    const e = ext.toLowerCase()
+    if (e === '.png') return 'image/png'
+    if (e === '.jpg' || e === '.jpeg') return 'image/jpeg'
+    if (e === '.webp') return 'image/webp'
+    if (e === '.gif') return 'image/gif'
+    return 'image/png'
+}
+
+// 读取本地自画像参考图，转为 AI 可用的 inline_data 数组（本地文件不走 fetch）
+function loadSelfPortraitImages() {
+    try {
+        if (!fs.existsSync(SELF_PORTRAIT_DIR)) return []
+        const files = fs.readdirSync(SELF_PORTRAIT_DIR)
+            .filter(f => SELF_IMG_EXT.includes(path.extname(f).toLowerCase()))
+            .sort()
+        const parts = []
+        for (const f of files.slice(0, Config.MAX_IMAGES_PER_MESSAGE)) {
+            try {
+                const buf = fs.readFileSync(path.join(SELF_PORTRAIT_DIR, f))
+                parts.push({ inline_data: { mime_type: selfMime(path.extname(f)), data: buf.toString('base64') } })
+            } catch (err) {
+                logger.warn(`[AI-Plugin] 画图工具：读取自画像参考图 ${f} 失败: ${err.message}`)
+            }
+        }
+        return parts
+    } catch (err) {
+        logger.warn(`[AI-Plugin] 画图工具：加载自画像参考图失败: ${err.message}`)
+        return []
+    }
+}
 
 // 从事件对象收集画图参考图：引用图 + 当前消息图 + @成员头像
 async function collectReferenceImages(event) {
@@ -73,6 +111,10 @@ export const imageGenTool = {
                         type: 'string',
                         enum: ['flash', 'pro', 'ultra'],
                         description: '可选，画质/模型组。默认 flash。用户要求"高质量/精细/pro/ultra"时可调高。'
+                    },
+                    self_portrait: {
+                        type: 'boolean',
+                        description: '可选。当用户要求"画你自己/画 AI 本人/给我看看你长什么样"等指向 AI 自身形象时设为 true，工具会自动加载本地官方参考图来锁定形象。普通画图请勿设置或设为 false。'
                     }
                 },
                 required: []
@@ -90,6 +132,13 @@ export const imageGenTool = {
         const prompt = String(args.prompt || '').trim()
         const presetName = String(args.preset || '').trim()
         const modelGroupKey = ['flash', 'pro', 'ultra'].includes(args.quality) ? args.quality : 'flash'
+        const isSelfPortrait = args.self_portrait === true || args.self_portrait === 'true'
+
+        // 画自己：加载本地官方参考图（data/self），用以锁定形象
+        const selfImages = isSelfPortrait ? loadSelfPortraitImages() : []
+        if (isSelfPortrait) {
+            logger.info(`[AI-Plugin] 画图工具：画自己模式，加载到 ${selfImages.length} 张本地参考图`)
+        }
 
         // 解析预设
         let preset = null
@@ -102,12 +151,12 @@ export const imageGenTool = {
 
         // 收集参考图
         const { images: refImages, hasReply } = await collectReferenceImages(event)
-        // 无参考图、无描述、无预设时，无法判断画什么
-        if (refImages.length === 0 && !prompt && !preset) {
+        // 无参考图、无描述、无预设、也没有自画像参考图时，无法判断画什么
+        if (refImages.length === 0 && selfImages.length === 0 && !prompt && !preset) {
             return '【画图失败】没有可用的画图内容：请提供文字描述，或附带/引用图片，或@某位成员。'
         }
         // 纯预设且无图时，默认用发送者头像作为参考（与 #draw 行为一致）
-        if (refImages.length === 0 && preset && !prompt && !hasReply) {
+        if (refImages.length === 0 && selfImages.length === 0 && preset && !prompt && !hasReply) {
             try { refImages.push(await getAvatarUrl(event.user_id)) } catch { /* ignore */ }
         }
 
@@ -119,6 +168,8 @@ export const imageGenTool = {
             await event.reply(`🎨 正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
 
             const parts = []
+            // 画自己：本地官方参考图优先放最前，锁定形象
+            if (selfImages.length > 0) parts.push(...selfImages)
             const processedImages = imagesToProcess.length > 0 ? await processImagesInBatches(imagesToProcess) : []
             if (imagesToProcess.length > 0 && processedImages.length === 0) {
                 await setMsgEmojiLike(event, 10)
@@ -132,6 +183,15 @@ export const imageGenTool = {
                 finalText = prompt ? `${preset.prompt} ${prompt}` : preset.prompt
             } else {
                 finalText = prompt
+            }
+            // 画自己：补充形象指令，引导模型参照参考图
+            if (isSelfPortrait) {
+                const refHint = selfImages.length > 0
+                    ? '请严格参考随附的参考图（这是你本人的官方形象），保持发型发色、瞳色、光环、服饰等关键特征一致。'
+                    : ''
+                const portraitDesc = Config.selfPortrait || ''
+                const selfText = `${refHint}${portraitDesc ? '形象设定：' + portraitDesc : ''}`.trim()
+                finalText = finalText ? `${selfText} 在此基础上：${finalText}` : selfText
             }
             if (finalText) parts.push({ text: finalText })
 
