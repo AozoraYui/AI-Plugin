@@ -17,8 +17,8 @@ import path from 'node:path'
 // 自画像参考图目录：插件根目录 data/self（放 0.png / 1.png / 2.png 等官方参考图）
 const SELF_PORTRAIT_DIR = path.join(process.cwd(), 'plugins', 'AI-Plugin', 'data', 'self')
 const SELF_IMG_EXT = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
-// 画自己时最多取用的本地参考图数量（过多会让 /images/edits 上传超时，曾出现 12 张触发 524）
-const SELF_PORTRAIT_MAX_REF = 4
+// 画自己时最多取用的本地参考图数量（过多会让 /images/edits 上传超时，曾出现 12/4 张触发 524）
+const SELF_PORTRAIT_MAX_REF = 2
 
 function selfMime(ext) {
     const e = ext.toLowerCase()
