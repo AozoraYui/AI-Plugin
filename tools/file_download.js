@@ -170,8 +170,9 @@ function resolveSaveDir(inputDir) {
 }
 
 // 下载单个媒体（带重试 + 超时）
-// renameSequential=true 时统一命名为 序号.后缀（如 0.png），index 从 0 起
-async function downloadOne(item, index, targetDir, renameSequential = false) {
+// 文件统一按序号命名：0.后缀、1.后缀…（index 从 0 起）
+// 后缀默认保持每个文件原本的类型；forceExt 非空时统一改用该后缀（如 '.gif'）
+async function downloadOne(item, index, targetDir, forceExt = '') {
     for (let attempt = 1; attempt <= DL_MAX_RETRIES; attempt++) {
         const controller = new AbortController()
         const timer = setTimeout(() => controller.abort(), DL_TIMEOUT_MS)
@@ -182,19 +183,13 @@ async function downloadOne(item, index, targetDir, renameSequential = false) {
                 logger.warn(`[AI-Plugin] 文件下载失败 HTTP ${res.status}: ${item.url}`)
                 return { ok: false }
             }
-            // 推断后缀：优先消息段自带名的扩展名，其次按 content-type
+            // 推断原后缀：优先消息段自带名的扩展名，其次按 content-type
             const ct = (res.headers.get('content-type') || '').split(';')[0].trim()
             const nameExt = item.name && /\.([a-z0-9]{1,8})$/i.test(item.name) ? item.name.match(/\.[a-z0-9]{1,8}$/i)[0] : ''
-            const ext = nameExt || CONTENT_TYPE_EXT[ct] || (item.type === 'image' ? '.png' : '.bin')
+            const ext = forceExt || nameExt || CONTENT_TYPE_EXT[ct] || (item.type === 'image' ? '.png' : '.bin')
 
-            let fileName
-            if (renameSequential) {
-                // 统一按序号重命名：0.png、1.png ...
-                fileName = `${index}${ext}`
-            } else {
-                // 优先消息段自带名，其次按类型+序号
-                fileName = item.name && /\.[a-z0-9]{1,8}$/i.test(item.name) ? item.name : `${item.type}_${index}${ext}`
-            }
+            // 统一按序号命名：0.后缀、1.后缀 ...
+            let fileName = `${index}${ext}`
             // 防目录穿越，只保留 basename
             fileName = path.basename(fileName)
             const buf = Buffer.from(await res.arrayBuffer())
@@ -231,9 +226,9 @@ export const fileDownloadTool = {
                         type: 'string',
                         description: '可选，保存目录（必须在白名单内）。用户明确指定目录时填写，文件会直接存入该目录；不填则默认存到机器人根目录 resources/noa/时间戳 子目录。'
                     },
-                    rename_sequential: {
-                        type: 'boolean',
-                        description: '可选。为 true 时把下载的文件统一重命名为 0.png、1.png、2.png… 这种按顺序的序号文件名（后缀按原文件类型）。用户要求"重命名为0 1 2/按顺序命名/命名成0.png这种"时设为 true。'
+                    force_ext: {
+                        type: 'string',
+                        description: '可选。统一指定保存的文件后缀（如 ".gif"），填写后所有下载文件都改用该后缀；不填则保持各自原本的文件类型。'
                     }
                 },
                 required: []
@@ -254,11 +249,19 @@ export const fileDownloadTool = {
         if (dirResult.error) return `【文件下载失败】${dirResult.error}`
         const targetDir = dirResult.dir
 
-        const renameSequential = args.rename_sequential === true || args.rename_sequential === 'true'
+        // 解析统一后缀（force_ext）：用户特别要求全部存成某格式时生效，否则保持各自原后缀
+        let forceExt = ''
+        if (args.force_ext && String(args.force_ext).trim()) {
+            forceExt = String(args.force_ext).trim().toLowerCase()
+            if (!forceExt.startsWith('.')) forceExt = '.' + forceExt
+            // 只保留合法的扩展名字符
+            if (!/^\.[a-z0-9]{1,8}$/.test(forceExt)) forceExt = ''
+        }
+
         const results = []
         let index = 0
         for (const item of media) {
-            const r = await downloadOne(item, index, targetDir, renameSequential)
+            const r = await downloadOne(item, index, targetDir, forceExt)
             if (r.ok) {
                 results.push(r)
                 index++

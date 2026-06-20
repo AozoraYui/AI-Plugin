@@ -181,10 +181,11 @@ ${toolDescriptions.join('\n')}
 - file_send: {"path": "要发送的文件/文件夹路径或文件名片段"}
   - 文件发送要求：当用户要求把服务器上的某个文件/文件夹"发给我/发到群里/发出来"时使用。path 可填用户说的文件名、片段或别名，工具会在白名单内查找并发送（文件夹自动打包）。
   - 若用户只是模糊描述（如"把那个日志发我"），可先用 dir_read/file_read 确认目标，再用 file_send 发送确认到的文件。
-- file_download: {"save_dir": "可选，保存目录", "rename_sequential": "可选true/false"}
+- file_download: {"save_dir": "可选，保存目录", "force_ext": "可选，统一后缀如.png"}
   - 文件下载要求：当用户要求把当前消息或其引用消息里的图片/视频/语音/文件"下载/保存到服务器"时使用。无需填 URL，工具会自动从消息中提取媒体。
+  - 文件名固定按顺序命名为 0、1、2、3…，后缀默认保持每个文件原本的类型，这是默认行为，无需任何参数。
   - save_dir：用户明确说了要存到哪个目录（如"存到/root/xxx""下载到resources/tmp"）才填，文件会直接存进该目录；用户没指定目录时就留空，工具会自动存到默认位置 resources/noa/时间戳 子目录。
-  - 当用户要求"重命名为0 1 2/按顺序命名/命名成0.png 1.png这种"时，把 rename_sequential 设为 true（文件会统一命名为 0.后缀、1.后缀…）。
+  - force_ext：仅当用户特别要求"全部存成gif/统一改成png/都保存为xxx格式"时才填该后缀（如".gif"），否则一律留空保持原后缀。
 - group_file_list: {"folder_name": "可选，子文件夹名", "recursive": 可选true/false}
   - 群文件浏览要求：当用户想"看看群文件有哪些/列一下群文件/群文件里有什么"时使用。要进某个子文件夹就填 folder_name，否则留空看根目录。当用户想"连文件夹里的文件也一起看/全部列出来/包括子文件夹"时把 recursive 设为 true。注意这是 QQ"群文件区"，不是聊天消息里的文件。
 - group_file_download: {"file_name": "可选，群文件名", "save_dir": "可选，保存目录"}
