@@ -196,7 +196,7 @@ async function getFileUrl(event, fileId, busid) {
 export const groupFileListTool = {
     name: 'group_file_list',
     permission: 'master',
-    description: '浏览当前 QQ 群的群文件，列出群文件区里有哪些文件和文件夹。仅限主人。适合主人说"看看群文件都有哪些东西""群文件里有什么""列一下群文件"等场景。只能在群聊中使用。',
+    description: '浏览当前 QQ 群的群文件，列出群文件区里有哪些文件和文件夹。仅限主人。适合主人说"看看群文件都有哪些东西""群文件里有什么""列一下群文件""连文件夹里的也都列出来"等场景。只能在群聊中使用。',
 
     functionSchema: {
         type: 'function',
@@ -208,7 +208,11 @@ export const groupFileListTool = {
                 properties: {
                     folder_name: {
                         type: 'string',
-                        description: '可选，要进入查看的子文件夹名称。不填则列出群文件根目录。'
+                        description: '可选，要进入查看的子文件夹名称。不填则从群文件根目录开始。'
+                    },
+                    recursive: {
+                        type: 'boolean',
+                        description: '可选，是否递归展开所有子文件夹里的文件。当用户想"连文件夹里的文件也一起看/全部列出/包括子文件夹"时设为 true。默认 false 只看当前层。'
                     }
                 },
                 required: []
@@ -237,14 +241,36 @@ export const groupFileListTool = {
                 layerName = hit.name
             }
 
+            const recursive = args.recursive === true
             const { files, folders } = await listLayer(event, targetFolderId)
-            // 上传者名字缺失/仅为 QQ 号时，查群成员补全可读昵称
             await fillUploaderNames(event, files)
+
+            const mapFile = f => ({ name: f.name, size: f.size, uploader: f.uploader, uploaderId: f.uploaderId, uploadTime: f.uploadTime })
+
+            if (!recursive) {
+                return {
+                    ok: true, layerName, recursive: false,
+                    folders: folders.map(d => ({ name: d.name, fileCount: d.fileCount })),
+                    files: files.map(mapFile)
+                }
+            }
+
+            // 递归：逐个子文件夹展开
+            const subTrees = []
+            for (const d of folders) {
+                try {
+                    const sub = await listLayer(event, d.folderId)
+                    await fillUploaderNames(event, sub.files)
+                    subTrees.push({ name: d.name, fileCount: d.fileCount, files: sub.files.map(mapFile) })
+                } catch (err) {
+                    logger.warn(`[AI-Plugin] 群文件：展开子文件夹 ${d.name} 失败: ${err.message}`)
+                    subTrees.push({ name: d.name, fileCount: d.fileCount, files: [], error: err.message })
+                }
+            }
             return {
-                ok: true,
-                layerName,
-                folders: folders.map(d => ({ name: d.name, fileCount: d.fileCount })),
-                files: files.map(f => ({ name: f.name, size: f.size, uploader: f.uploader, uploaderId: f.uploaderId, uploadTime: f.uploadTime }))
+                ok: true, layerName, recursive: true,
+                files: files.map(mapFile),
+                subFolders: subTrees
             }
         } catch (err) {
             logger.error('[AI-Plugin] 群文件浏览异常:', err)
@@ -255,7 +281,36 @@ export const groupFileListTool = {
     formatResult(data) {
         if (typeof data === 'string') return data
         if (!data || !data.ok) return String(data || '')
-        let out = `\n\n【群文件列表 - ${data.layerName}】\n`
+        const fileLine = (f, indent) => {
+            const mb = f.size > 0 ? `${(f.size / 1024 / 1024).toFixed(2)}MB` : '未知大小'
+            const meta = [mb]
+            if (f.uploader && f.uploaderId) meta.push(`上传者 ${f.uploader}(${f.uploaderId})`)
+            else if (f.uploader) meta.push(`上传者 ${f.uploader}`)
+            else if (f.uploaderId) meta.push(`上传者 QQ:${f.uploaderId}`)
+            const t = fmtTime(f.uploadTime)
+            if (t) meta.push(`上传于 ${t}`)
+            return `${indent}📄 ${f.name}（${meta.join('，')}）\n`
+        }
+
+        let out = `\n\n【群文件列表 - ${data.layerName}${data.recursive ? '（含子文件夹）' : ''}】\n`
+
+        if (data.recursive) {
+            const rootEmpty = data.files.length === 0 && data.subFolders.length === 0
+            if (rootEmpty) { out += '（群文件区为空）\n'; return out }
+            if (data.files.length > 0) {
+                out += '根目录文件：\n'
+                for (const f of data.files) out += fileLine(f, '  ')
+            }
+            for (const d of data.subFolders) {
+                out += `📁 ${d.name}（${d.fileCount} 个文件）\n`
+                if (d.error) { out += `  （展开失败：${d.error}）\n`; continue }
+                if (d.files.length === 0) { out += '  （空）\n'; continue }
+                for (const f of d.files) out += fileLine(f, '  ')
+            }
+            out += '\n请把以上群文件内容（含各子文件夹里的文件）如实告知主人。若主人要下载某个文件，可使用 group_file_download 工具。'
+            return out
+        }
+
         if (data.folders.length === 0 && data.files.length === 0) {
             out += '（该位置为空）\n'
             return out
@@ -266,19 +321,9 @@ export const groupFileListTool = {
         }
         if (data.files.length > 0) {
             out += '文件：\n'
-            for (const f of data.files) {
-                const mb = f.size > 0 ? `${(f.size / 1024 / 1024).toFixed(2)}MB` : '未知大小'
-                const meta = [mb]
-                // 上传者：优先「昵称(QQ)」，无昵称则仅 QQ 号
-                if (f.uploader && f.uploaderId) meta.push(`上传者 ${f.uploader}(${f.uploaderId})`)
-                else if (f.uploader) meta.push(`上传者 ${f.uploader}`)
-                else if (f.uploaderId) meta.push(`上传者 QQ:${f.uploaderId}`)
-                const t = fmtTime(f.uploadTime)
-                if (t) meta.push(`上传于 ${t}`)
-                out += `  📄 ${f.name}（${meta.join('，')}）\n`
-            }
+            for (const f of data.files) out += fileLine(f, '  ')
         }
-        out += '\n请把以上群文件内容如实告知主人。若主人要下载某个文件，可使用 group_file_download 工具。'
+        out += '\n请把以上群文件内容如实告知主人。若文件夹里还想看，可再指定文件夹名或要求递归展开。若主人要下载某个文件，可使用 group_file_download 工具。'
         return out
     }
 }
