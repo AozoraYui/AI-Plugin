@@ -621,7 +621,7 @@ export class ChatHandler extends plugin {
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (call.name === 'group_file_list' || call.name === 'group_file_download') {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
-                            userMessage = userMessage + '\n\n【重要指令】以上为群文件工具的实际执行结果，请如实告知主人，不要编造文件名或结果。' + formattedResult
+                            userMessage = userMessage + '\n\n【重要指令】以上为群文件工具的实际执行结果，请如实、完整地告知主人，逐条列出每一个文件，不要只挑部分/代表文件，不要编造文件名或结果。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (['group_mute', 'group_whole_mute', 'group_kick', 'group_set_card', 'group_set_title', 'group_essence', 'group_request_list', 'group_request_handle'].includes(call.name)) {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)

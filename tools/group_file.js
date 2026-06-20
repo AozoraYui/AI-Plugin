@@ -307,7 +307,7 @@ export const groupFileListTool = {
                 if (d.files.length === 0) { out += '  （空）\n'; continue }
                 for (const f of d.files) out += fileLine(f, '  ')
             }
-            out += '\n请把以上群文件内容（含各子文件夹里的文件）如实告知主人。若主人要下载某个文件，可使用 group_file_download 工具。'
+            out += '\n【转述要求】请把上面列出的【每一个文件】都完整告知主人，逐条列出，不要只挑"部分/代表文件"，不要省略、合并或用"等"字略过；上传者与上传时间按上面给出的原样保留（含 QQ 号，不要擅自隐藏）。若主人要下载某个文件，可使用 group_file_download 工具。'
             return out
         }
 
@@ -323,7 +323,7 @@ export const groupFileListTool = {
             out += '文件：\n'
             for (const f of data.files) out += fileLine(f, '  ')
         }
-        out += '\n请把以上群文件内容如实告知主人。若文件夹里还想看，可再指定文件夹名或要求递归展开。若主人要下载某个文件，可使用 group_file_download 工具。'
+        out += '\n【转述要求】请把上面每一个文件都完整告知主人，逐条列出，不要只挑"部分/代表文件"，不要省略或用"等"字略过；上传者与上传时间按原样保留（含 QQ 号，不要擅自隐藏）。若文件夹里还想看，可再指定文件夹名或要求递归展开。若主人要下载某个文件，可使用 group_file_download 工具。'
         return out
     }
 }
