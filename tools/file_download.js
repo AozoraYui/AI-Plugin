@@ -127,7 +127,8 @@ async function collectMediaFromEvent(event) {
 }
 
 // 解析保存目录：默认白名单第一个根目录下的 ai-download，可由参数指定（仍受白名单约束）
-function resolveSaveDir(inputDir) {
+// noTimestamp=true 时直接使用指定目录，不再追加时间戳子目录
+function resolveSaveDir(inputDir, noTimestamp = false) {
     const roots = Config.FILE_ROOTS
     if (!Array.isArray(roots) || roots.length === 0) {
         return { error: '未配置文件白名单(FILE_ROOTS)，无法确定保存目录' }
@@ -140,15 +141,21 @@ function resolveSaveDir(inputDir) {
         baseDir = path.join(path.resolve(roots[0]), 'ai-download')
     }
 
-    // 生成时间戳子目录，避免覆盖
-    const now = new Date()
-    const pad = (n) => String(n).padStart(2, '0')
-    const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
-    let target = path.join(baseDir, ts)
-    let suffix = 0
-    while (fs.existsSync(target)) {
-        suffix++
-        target = path.join(baseDir, `${ts}_${suffix}`)
+    let target
+    if (noTimestamp) {
+        // 直接使用目标目录本身，不建时间戳子目录
+        target = baseDir
+    } else {
+        // 生成时间戳子目录，避免覆盖
+        const now = new Date()
+        const pad = (n) => String(n).padStart(2, '0')
+        const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+        target = path.join(baseDir, ts)
+        let suffix = 0
+        while (fs.existsSync(target)) {
+            suffix++
+            target = path.join(baseDir, `${ts}_${suffix}`)
+        }
     }
 
     // 先建目录再校验白名单（checkPathAllowed 需要真实路径）
@@ -159,14 +166,15 @@ function resolveSaveDir(inputDir) {
     }
     const check = checkPathAllowed(target)
     if (!check.allowed) {
-        try { fs.rmdirSync(target) } catch { /* ignore */ }
+        if (!noTimestamp) { try { fs.rmdirSync(target) } catch { /* ignore */ } }
         return { error: `保存目录不在白名单内: ${check.reason || target}` }
     }
     return { dir: check.realPath }
 }
 
 // 下载单个媒体（带重试 + 超时）
-async function downloadOne(item, index, targetDir) {
+// renameSequential=true 时统一命名为 序号.后缀（如 0.png），index 从 0 起
+async function downloadOne(item, index, targetDir, renameSequential = false) {
     for (let attempt = 1; attempt <= DL_MAX_RETRIES; attempt++) {
         const controller = new AbortController()
         const timer = setTimeout(() => controller.abort(), DL_TIMEOUT_MS)
@@ -177,12 +185,18 @@ async function downloadOne(item, index, targetDir) {
                 logger.warn(`[AI-Plugin] 文件下载失败 HTTP ${res.status}: ${item.url}`)
                 return { ok: false }
             }
-            // 文件名：优先消息段自带名，其次按 content-type 推断后缀
-            let fileName = item.name && /\.[a-z0-9]{1,8}$/i.test(item.name) ? item.name : ''
-            if (!fileName) {
-                const ct = (res.headers.get('content-type') || '').split(';')[0].trim()
-                const ext = CONTENT_TYPE_EXT[ct] || (item.type === 'image' ? '.png' : '.bin')
-                fileName = `${item.type}_${index}${ext}`
+            // 推断后缀：优先消息段自带名的扩展名，其次按 content-type
+            const ct = (res.headers.get('content-type') || '').split(';')[0].trim()
+            const nameExt = item.name && /\.([a-z0-9]{1,8})$/i.test(item.name) ? item.name.match(/\.[a-z0-9]{1,8}$/i)[0] : ''
+            const ext = nameExt || CONTENT_TYPE_EXT[ct] || (item.type === 'image' ? '.png' : '.bin')
+
+            let fileName
+            if (renameSequential) {
+                // 统一按序号重命名：0.png、1.png ...
+                fileName = `${index}${ext}`
+            } else {
+                // 优先消息段自带名，其次按类型+序号
+                fileName = item.name && /\.[a-z0-9]{1,8}$/i.test(item.name) ? item.name : `${item.type}_${index}${ext}`
             }
             // 防目录穿越，只保留 basename
             fileName = path.basename(fileName)
@@ -219,6 +233,14 @@ export const fileDownloadTool = {
                     save_dir: {
                         type: 'string',
                         description: '可选，保存目录（必须在白名单内）。不填则默认保存到白名单首个目录下的 ai-download/时间戳 子目录。'
+                    },
+                    no_timestamp: {
+                        type: 'boolean',
+                        description: '可选。为 true 时直接把文件存到 save_dir 本身，不再创建时间戳子目录。用户说"不要时间戳目录/直接存到这个目录/就放在xxx下"时设为 true。'
+                    },
+                    rename_sequential: {
+                        type: 'boolean',
+                        description: '可选。为 true 时把下载的文件统一重命名为 0.png、1.png、2.png… 这种按顺序的序号文件名（后缀按原文件类型）。用户要求"重命名为0 1 2/按顺序命名/命名成0.png这种"时设为 true。'
                     }
                 },
                 required: []
@@ -235,14 +257,15 @@ export const fileDownloadTool = {
             return '【文件下载失败】当前消息和引用消息中都没有找到可下载的图片/视频/语音/文件。请引用包含媒体的消息后再试。'
         }
 
-        const dirResult = resolveSaveDir(args.save_dir)
+        const dirResult = resolveSaveDir(args.save_dir, args.no_timestamp === true || args.no_timestamp === 'true')
         if (dirResult.error) return `【文件下载失败】${dirResult.error}`
         const targetDir = dirResult.dir
 
+        const renameSequential = args.rename_sequential === true || args.rename_sequential === 'true'
         const results = []
-        let index = 1
+        let index = 0
         for (const item of media) {
-            const r = await downloadOne(item, index, targetDir)
+            const r = await downloadOne(item, index, targetDir, renameSequential)
             if (r.ok) {
                 results.push(r)
                 index++
@@ -250,7 +273,10 @@ export const fileDownloadTool = {
         }
 
         if (results.length === 0) {
-            try { fs.rmdirSync(targetDir) } catch { /* ignore */ }
+            // 仅在自建的时间戳子目录为空时清理；用户指定的目录(no_timestamp)不删
+            if (args.no_timestamp !== true && args.no_timestamp !== 'true') {
+                try { fs.rmdirSync(targetDir) } catch { /* ignore */ }
+            }
             return `【文件下载失败】共发现 ${media.length} 个媒体，但全部下载失败，详情见日志。`
         }
 
