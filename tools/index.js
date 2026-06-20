@@ -12,6 +12,10 @@ export { fileReadTool } from './file_read.js'
 export { fileSendTool } from './file_send.js'
 export { fileDownloadTool } from './file_download.js'
 export { groupFileListTool, groupFileDownloadTool } from './group_file.js'
+export {
+    groupMuteTool, groupWholeMuteTool, groupKickTool, groupSetCardTool,
+    groupSetTitleTool, groupEssenceTool, groupRequestListTool, groupRequestHandleTool
+} from './group_admin.js'
 export { imageGenTool } from './image_gen.js'
 export { shellExecTool } from './shell_exec.js'
 export { webFetchTool } from './web_fetch.js'

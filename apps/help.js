@@ -78,6 +78,11 @@ export class HelpHandler extends plugin {
   需在 models_config.yaml 开启 enable_ai_draw: true（独立开关）。
   开启后所有人可在对话中用自然语言让 AI 画图（等同 #draw）。
   支持参考图（带图/引用图/@成员头像）与预设风格名，生成图直接发送到会话。
+> 🛡️ 群管理（主人/群管理员）
+  需在 models_config.yaml 开启 enable_group_admin: true（独立开关）。
+  群聊中由主人或当前群管理员/群主用自然语言触发：禁言/解禁、全员禁言、踢人（可拉黑）、
+  改群名片、设专属头衔、精华消息、入群审核（查看/通过/拒绝加群申请）。
+  前提：机器人需为该群管理员（设头衔需群主）。
 > 开关可组合，如 #pv${chatCmd}、#us${chatCmd}n、#s${chatCmd}wf、#${chatCmd}vnwf 等。
 
 > #导出${aiName}记忆

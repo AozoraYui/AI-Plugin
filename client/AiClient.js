@@ -164,6 +164,11 @@ export class AiClient {
         return this.aiDrawConfig?.enabled === true
     }
 
+    /** 是否启用群管理（禁言/踢人/入群审核等，主人或群管理员可在对话中触发） */
+    get enableGroupAdmin() {
+        return this.groupAdminConfig?.enabled === true
+    }
+
     /** 搜索意图分析专用模型列表 */
     get webSearchIntentModels() {
         const models = this.webSearchConfig?.intent_model
@@ -406,6 +411,7 @@ export class AiClient {
                 this.shellExecConfig = { enabled: rawConfig.enable_shell_exec === true }
                 this.fileTransferConfig = { enabled: rawConfig.enable_file_transfer === true }
                 this.aiDrawConfig = { enabled: rawConfig.enable_ai_draw === true }
+                this.groupAdminConfig = { enabled: rawConfig.enable_group_admin === true }
                 for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_FOLLOWUP_MAX_ROUNDS', 'SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS', 'SHELL_EXEC_MAX_BUFFER']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
@@ -422,6 +428,9 @@ export class AiClient {
                 }
                 if (this.enableAiDraw) {
                     logger.info('[AI-Plugin] AI 对话画图已启用：可在对话中按意图调用插件画图能力')
+                }
+                if (this.enableGroupAdmin) {
+                    logger.info('[AI-Plugin] 群管理已启用：主人或群管理员可让 AI 执行禁言/踢人/入群审核等操作')
                 }
 
                 // 提取 weather_api_key（高德地图天气查询）

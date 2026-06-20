@@ -534,6 +534,21 @@ export class ChatHandler extends plugin {
             if (this.client.enableAiDraw) {
                 enabledTools.push('draw_image')
             }
+            // 群管理：开启 enable_group_admin 后，群聊中由「主人」或「当前群管理员/群主」触发
+            if (e.group_id && this.client.enableGroupAdmin) {
+                const senderRole = e.sender?.role || e.member?.role
+                const isGroupAdmin = senderRole === 'owner' || senderRole === 'admin' || e.member?.is_admin || e.member?.is_owner
+                if (e.isMaster || isGroupAdmin) {
+                    enabledTools.push('group_mute')
+                    enabledTools.push('group_whole_mute')
+                    enabledTools.push('group_kick')
+                    enabledTools.push('group_set_card')
+                    enabledTools.push('group_set_title')
+                    enabledTools.push('group_essence')
+                    enabledTools.push('group_request_list')
+                    enabledTools.push('group_request_handle')
+                }
+            }
 
             if (enabledTools.length > 0) {
                 // 为意图分析提供最近对话上下文（最多8轮 + 增量总结，仅非单次模式）
@@ -607,6 +622,10 @@ export class ChatHandler extends plugin {
                         } else if (call.name === 'group_file_list' || call.name === 'group_file_download') {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为群文件工具的实际执行结果，请如实告知主人，不要编造文件名或结果。' + formattedResult
+                            logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
+                        } else if (['group_mute', 'group_whole_mute', 'group_kick', 'group_set_card', 'group_set_title', 'group_essence', 'group_request_list', 'group_request_handle'].includes(call.name)) {
+                            const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
+                            userMessage = userMessage + '\n\n【重要指令】以上为群管理工具的实际执行结果，请如实转告操作者，不要编造结果。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (call.name === 'draw_image') {
                             const formattedResult = toolRegistry.formatToolResult('draw_image', result.data)

@@ -181,6 +181,23 @@ ${toolDescriptions.join('\n')}
   - 用户提到具体已有风格名（如"手办化""手办风"）时填 preset；不确定是否为预设就不要填 preset，直接用 prompt 描述。
   - 参考图（用户带图、引用的图、@的成员头像）由工具自动从消息中提取，不需要你处理图片，也不要因为有图就改用其他工具。
   - 只有用户确实想要生成/创作图片时才调用；普通聊天、发图让你看图说话、问问题都不要调用 draw_image。
+- group_mute: {"user_id": "QQ号", "time": 时长数值, "unit": "秒/分钟/小时/天"}
+  - 禁言/解禁要求：用户要"禁言某人/把xxx禁言N分钟/闭嘴/解除xxx的禁言"时使用。被操作者的 QQ 号从 @ 或消息中获取。解除禁言时 time 填 0。
+- group_whole_mute: {"enable": true/false}
+  - 全员禁言要求：用户要"开启/解除全员禁言、全体禁言"时使用。enable=true 开启，false 解除。
+- group_kick: {"user_id": "QQ号", "block": true/false}
+  - 踢人要求：用户要"把xxx踢了/踢出群/移出群聊"时使用。要求"拉黑/不再让进"时 block=true。
+- group_set_card: {"user_id": "QQ号", "card": "新名片"}
+  - 改名片要求：用户要"把xxx的群名片/群昵称改成yyy"时使用。card 留空表示清除名片。
+- group_set_title: {"user_id": "QQ号", "title": "头衔"}
+  - 设头衔要求：用户要"给xxx一个专属头衔yyy/取消头衔"时使用。title 留空表示清除。
+- group_essence: {"enable": true/false}
+  - 精华消息要求：用户「引用某条消息」并说"设为精华/加精/取消精华"时使用。enable=true 加精，false 取消。
+- group_request_list: {}
+  - 查看入群申请要求：用户问"有没有人申请进群/看看入群申请/谁要进群"时使用。
+- group_request_handle: {"user_id": "QQ号", "approve": true/false, "reason": "可选拒绝理由"}
+  - 处理入群申请要求：用户要"通过/同意/拒绝某人的加群申请"时使用。approve=true 通过，false 拒绝。
+  - 注意：以上 group_ 开头的工具都是「群管理」操作，仅主人或群管理员可触发，请准确区分用户究竟想做哪一种操作，user_id 必须是真实 QQ 号，拿不准就不要调用。
 
 请严格按以下JSON格式输出，不要输出其他任何内容：
 {"intent": "用户意图分析（一句话概括用户想做什么、隐含需求等）", "tools": [{"tool": "工具名", "params": {...}}]}

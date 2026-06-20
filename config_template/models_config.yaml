@@ -157,12 +157,18 @@ enable_web_fetch: false
 #   开启后所有人都可在对话中用自然语言让 AI 画图（等同调用 #draw）
 #   支持参考图（带图/引用图/@成员头像）与预设风格名识别
 #   生成的图片由工具直接发送到会话
+#
+# enable_group_admin: 是否启用群管理（默认 false）
+#   开启后，群聊中「主人」或「当前群的管理员/群主」可用自然语言让 AI 执行：
+#   禁言/解禁、全员禁言、踢人、改群名片、设专属头衔、精华消息、入群审核（通过/拒绝加群申请）
+#   前提：机器人本身需为该群管理员（设头衔需群主）；入群申请由插件自动记录 1 小时供审核
 # 注意：以上开关均与 enable_web_search 平级（不要缩进！）
 # ================================================
 # enable_file_read: false
 # enable_shell_exec: false
 # enable_file_transfer: false
 # enable_ai_draw: false
+# enable_group_admin: false
 # SHELL_EXEC_TIMEOUT_MS: 60000
 # SHELL_EXEC_MAX_TIMEOUT_MS: 240000
 # SHELL_EXEC_MAX_OUTPUT_CHARS: 24000
