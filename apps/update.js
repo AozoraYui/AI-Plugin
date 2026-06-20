@@ -16,8 +16,8 @@ export class UpdateHandler extends plugin {
             event: 'message',
             priority: 1150,
             rule: [
-                { reg: /^#ai插件更新$/i, fnc: 'gitPull' },
-                { reg: /^#ai插件强制更新$/i, fnc: 'gitForceUpdate' },
+                { reg: /^#ai插件更新$/i, fnc: 'gitPull', permission: 'master' },
+                { reg: /^#ai插件强制更新$/i, fnc: 'gitForceUpdate', permission: 'master' },
             ]
         })
     }
@@ -47,6 +47,7 @@ export class UpdateHandler extends plugin {
     }
 
     async gitPull(e) {
+        if (!e.isMaster) return e.reply('权限不足：插件更新仅限机器人主人使用。', true)
         if (!await checkAccess(e)) return true
 
         await e.reply('🔄 正在检查更新...')
@@ -86,6 +87,7 @@ export class UpdateHandler extends plugin {
     }
 
     async gitForceUpdate(e) {
+        if (!e.isMaster) return e.reply('权限不足：插件强制更新仅限机器人主人使用。', true)
         if (!await checkAccess(e)) return true
 
         const match = e.msg.match(/^#ai插件强制更新\s*(.*)/i)

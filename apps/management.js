@@ -170,6 +170,17 @@ export class ManagementHandler extends plugin {
             return ` ${icon} ${extraInfo}`
         }
 
+        const groupDisplay = (groupName) => {
+            const key = String(groupName).toLowerCase()
+            const map = {
+                flash: '⚡ FLASH 快速组',
+                pro: '🚀 PRO 专业组',
+                ultra: '💎 ULTRA 旗舰组'
+            }
+            const title = map[key] || `🔧 ${String(groupName).toUpperCase()}`
+            return `━━ ${title} ━━`
+        }
+
         for (const provider of sortedProviders) {
             const groupsWithModels = []
             for (const groupName of sortedGroups) {
@@ -203,16 +214,17 @@ export class ManagementHandler extends plugin {
             for (let gi = 0; gi < groupsWithModels.length; gi++) {
                 const { groupName, sections } = groupsWithModels[gi]
                 
-                providerMsg += `  ${groupName}\n`
+                if (gi > 0) providerMsg += `\n`
+                providerMsg += `${groupDisplay(groupName)}\n`
                 
                 for (let si = 0; si < sections.length; si++) {
                     const { label, models } = sections[si]
                     
-                    providerMsg += `    ${label}\n`
+                    providerMsg += `  ${label}\n`
                     
                     for (let mi = 0; mi < models.length; mi++) {
                         const { modelId, status, statusKey } = models[mi]
-                        providerMsg += `      ${modelId}${buildStatusText(status, statusKey)}\n`
+                        providerMsg += `    • ${modelId}${buildStatusText(status, statusKey)}\n`
                     }
                 }
             }
