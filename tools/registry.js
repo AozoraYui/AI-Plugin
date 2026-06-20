@@ -3,6 +3,8 @@
  * 管理所有内置工具，支持 Function Calling schema 生成和结果格式化
  */
 
+import { Config } from '../utils/config.js'
+
 class ToolRegistry {
     constructor() {
         this.tools = new Map()
@@ -144,6 +146,15 @@ class ToolRegistry {
             ? '\n\n当前用户消息包含图片。注意：你看不到图片内容，图片理解会交给后续多模态主模型处理。若文字本身没有明确要求搜索、查天气、读文件、执行命令或抓取链接，不要仅凭短语/表情/图片上下文脑补工具调用，tools 应返回空数组。\n'
             : ''
 
+        // AI 自身形象设定：仅当启用 draw_image 且配置了自画像时注入，供"画你自己"类需求填写 prompt
+        let selfPortraitBlock = ''
+        if (enabledTools.includes('draw_image')) {
+            const portrait = Config.selfPortrait
+            if (portrait) {
+                selfPortraitBlock = `\n\n【AI 自身形象设定】当用户要求"画你自己/画 AI 本人/看看你长什么样"等时，draw_image 的 prompt 请基于以下外貌描述填写（可在此基础上叠加用户提出的动作、场景、风格要求）：\n${portrait}\n`
+            }
+        }
+
         const analysisPrompt = `当前时间：${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日。你是一个意图分析助手。分析用户消息，输出意图分析和需要调用的工具。
 
 可用工具：
@@ -181,6 +192,7 @@ ${toolDescriptions.join('\n')}
   - 用户提到具体已有风格名（如"手办化""手办风"）时填 preset；不确定是否为预设就不要填 preset，直接用 prompt 描述。
   - 参考图（用户带图、引用的图、@的成员头像）由工具自动从消息中提取，不需要你处理图片，也不要因为有图就改用其他工具。
   - 只有用户确实想要生成/创作图片时才调用；普通聊天、发图让你看图说话、问问题都不要调用 draw_image。
+  - 特别注意：当用户要求"画你自己/画一下你/画 AI 本人/给我看看你长什么样"等指向 AI 自身形象时，prompt 必须基于下方【AI 自身形象设定】里给出的外貌描述来填写，不要自己凭空想象一个形象；若下方没有提供该设定，再按通用可爱 AI 少女填写。
 - group_mute: {"user_id": "QQ号", "time": 时长数值, "unit": "秒/分钟/小时/天"}
   - 禁言/解禁要求：用户要"禁言某人/把xxx禁言N分钟/闭嘴/解除xxx的禁言"时使用。被操作者的 QQ 号从 @ 或消息中获取。解除禁言时 time 填 0。
 - group_whole_mute: {"enable": true/false}
@@ -212,7 +224,7 @@ ${toolDescriptions.join('\n')}
         try {
             const analysisPayload = {
                 contents: [
-                    { role: "user", parts: [{ text: analysisPrompt + imageContextBlock + summaryBlock + contextBlock + candidateUrlBlock + `\n\n用户消息：\n${userMessage}` }] }
+                    { role: "user", parts: [{ text: analysisPrompt + imageContextBlock + selfPortraitBlock + summaryBlock + contextBlock + candidateUrlBlock + `\n\n用户消息：\n${userMessage}` }] }
                 ]
             }
 

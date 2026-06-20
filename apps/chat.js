@@ -570,6 +570,7 @@ export class ChatHandler extends plugin {
                 const intent = toolAnalysis?.intent || ''
                 const toolCalls = Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools : []
                 const executedShellCommands = []
+                let drawImageDone = false
                 // 意图分析注入
                 if (intent) {
                     userMessage = userMessage + `\n\n【意图分析】${intent}`
@@ -579,7 +580,11 @@ export class ChatHandler extends plugin {
                     const toolContext = { userId: e.user_id, groupId: e.group_id, event: e }
                     const result = await toolRegistry.execute(call.name, call.args, e.isMaster, toolContext)
                     if (result.success) {
-                        if (call.name === 'web_search') {
+                        if (call.name === 'draw_image') {
+                            // 画图工具已把图片+完成提示直接发到会话，标记后跳过主模型收尾，避免重复的"思考中→画好啦"
+                            drawImageDone = true
+                            logger.info('[AI-Plugin] draw_image 完成，图片已直接发送，跳过主模型回复')
+                        } else if (call.name === 'web_search') {
                             // 搜索：将结果注入提示词
                             const results = result.data || []
                             if (results.length > 0) {
@@ -627,10 +632,6 @@ export class ChatHandler extends plugin {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为群管理工具的实际执行结果，请如实转告操作者，不要编造结果。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
-                        } else if (call.name === 'draw_image') {
-                            const formattedResult = toolRegistry.formatToolResult('draw_image', result.data)
-                            userMessage = userMessage + '\n\n【重要指令】画图工具已执行并把图片直接发送到会话。' + formattedResult + '请用一句简短自然的话回应用户（如"画好啦~"），不要重复描述图片细节，也不要声称自己不能画图。'
-                            logger.info(`[AI-Plugin] draw_image 完成，结果已注入`)
                         } else {
                             userMessage = userMessage + result.data
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
@@ -692,6 +693,11 @@ export class ChatHandler extends plugin {
                         seenPagedKeys.add(pagedKey)
                         if (!isPaging) seenCommands.add(command)
                     }
+                }
+
+                // 画图工具已把图片和完成提示直接发到会话，无需主模型再走一轮"思考中→回复"
+                if (drawImageDone) {
+                    return true
                 }
             }
 
