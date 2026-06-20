@@ -191,14 +191,16 @@ export class ManagementHandler extends plugin {
                 if (group.chat_models) {
                     const chatModels = group.chat_models.map(modelId => {
                         const statusKey = `${provider.id}-${modelId}`
-                        return { modelId, status: this.client.modelStatus[statusKey], statusKey }
+                        const perCall = Array.isArray(provider.per_call_models) && provider.per_call_models.includes(modelId)
+                        return { modelId, status: this.client.modelStatus[statusKey], statusKey, perCall }
                     })
                     if (chatModels.length > 0) sections.push({ type: 'chat', label: '💬 chat', models: chatModels })
                 }
                 if (group.draw_models) {
                     const drawModels = group.draw_models.map(modelId => {
                         const statusKey = `${provider.id}-${modelId}`
-                        return { modelId, status: this.client.modelStatus[statusKey], statusKey }
+                        const perCall = Array.isArray(provider.per_call_models) && provider.per_call_models.includes(modelId)
+                        return { modelId, status: this.client.modelStatus[statusKey], statusKey, perCall }
                     })
                     if (drawModels.length > 0) sections.push({ type: 'draw', label: '🎨 draw', models: drawModels })
                 }
@@ -223,8 +225,9 @@ export class ManagementHandler extends plugin {
                     providerMsg += `  ${label}\n`
                     
                     for (let mi = 0; mi < models.length; mi++) {
-                        const { modelId, status, statusKey } = models[mi]
-                        providerMsg += `    • ${modelId}${buildStatusText(status, statusKey)}\n`
+                        const { modelId, status, statusKey, perCall } = models[mi]
+                        const costTag = perCall ? ' 💰按次' : ''
+                        providerMsg += `    • ${modelId}${costTag}${buildStatusText(status, statusKey)}\n`
                     }
                 }
             }

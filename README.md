@@ -46,6 +46,7 @@
 ### ⚙️ 模型管理
 - 多模型供应商支持，通过 `provider_id + model_id` 唯一标识模型
 - 模型优先级分组与智能排序（基于成功率与响应速度）
+- 成本感知调度：可标记按次扣费模型，同优先级内优先使用按量计费模型，按量模型全部不可用时才降级
 - 数字前缀临时指定供应商（如 `#3chat` 使用 priority=3 的供应商）
 - 模型熔断机制：连续失败 3 次后熔断 30 秒，全部熔断时无视冷却强制尝试
 - 模型自动测试与状态管理
@@ -88,8 +89,11 @@ pnpm install
 - id: "provider1"
   name: "供应商名称"
   priority: 1          # 优先级分组（数字越小越优先）
+  multimodal: true     # 是否支持识图（默认 true）
   base_url: "https://api.example.com/v1"
   api_key: "your-api-key-here"
+  # per_call_models:   # 可选：该站按次扣费的模型名，调度时尽量避开
+  #   - "c-gemini-2.5-flash"
   model_groups:
     flash:
       chat_models:
@@ -362,6 +366,21 @@ AI-Plugin/
 | **Ultra** | `ultra` | `u` | 旗舰模型组，性能最强 |
 
 每个模型组可独立配置 `chat_models`（对话模型）和 `draw_models`（绘图模型）。
+
+#### 按次扣费模型（成本感知调度）
+部分中转站的模型按「每次请求固定计费」，而非按 token 计费。可在供应商下用 `per_call_models` 列出这些模型名：
+
+```yaml
+- id: "provider1"
+  name: "供应商名称"
+  per_call_models:
+    - "c-gemini-2.5-flash"
+    - "c-gemini-3-pro-high"
+  model_groups:
+    ...
+```
+
+调度规则：同一优先级内，**按量计费模型只要没有全部熔断，就始终优先于按次扣费模型**；只有按量模型全部不可用时才降级使用按次模型。`#ai模型列表` 中按次模型会标注 `💰按次`。不同中转站的按次模型名各异，按各自实际名称填写即可。
 
 ### 数字前缀临时指定供应商
 在 `#` 后直接加数字前缀（1-9），可临时切换到此优先级的供应商，不影响全局配置：

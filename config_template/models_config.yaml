@@ -18,13 +18,18 @@
 #               false 表示纯文本模型，遇图片时自动走 Vision Relay
 #   base_url    API 基础地址（仅到 /v1，结尾不要带斜杠或多余空格）
 #   api_key     API 密钥
+#   per_call_models  （可选）按次扣费模型名单
+#               列在此处的模型视为「每次请求固定计费」，调度时尽量避开：
+#               同优先级内，按量计费模型只要没全部熔断就优先使用，
+#               按量模型全挂了才降级到按次模型。名单按模型名精确匹配。
+#               不同中转站的按次模型名各异，按各自实际名称填写即可。
 #   model_groups 模型组，分 flash / pro / ultra 三档：
 #               flash  默认组    → #chat / #draw
 #               pro    专业组    → #pchat / #pdraw
 #               ultra  旗舰组    → #uchat / #udraw
 #               （指令前缀随 CHAT_COMMAND / DRAW_COMMAND 变化）
 #     每组含：
-#       chat_models  对话模型列表（按填写顺序为同分时的偏好）
+#       chat_models  对话模型列表（同优先级、同计费档内按得分排序）
 #       draw_models  绘图模型列表（不支持绘图填 [] 即可）
 #       直接填模型名字符串，插件自动适配 chat / images 端点
 # ================================================================
@@ -35,6 +40,8 @@
   multimodal: true
   base_url: "https://api.example.com/v1"
   api_key: "your-api-key-here"
+  # per_call_models:           # 可选：该站按次扣费的模型名（调度时尽量避开）
+  #   - "c-gemini-2.5-flash"
   model_groups:
     flash:
       chat_models:

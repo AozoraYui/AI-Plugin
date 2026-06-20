@@ -237,23 +237,31 @@ export class AiClient {
         return successRate * 0.7 + latencyScore * 0.3
     }
 
-    /** 智能排序模型池：先按 provider priority 分组，同组内按得分排序 */
+    /** 智能排序模型池：先按 provider priority 分组，再按成本档（按量优先），同档内按得分排序 */
     _sortModelPool(pool) {
         const scored = pool.map(item => {
             const key = `${item.provider.id}-${item.modelId}`
             if (!this.modelStatus[key]) this._initModelStatusEntry(key)
             const priority = item.provider.priority ?? 1
-            return { ...item, score: this._getModelScore(this.modelStatus[key]), priority }
+            const score = this._getModelScore(this.modelStatus[key])
+            // 成本档：0=按量计费（优先），1=按次扣费（尽量避开）
+            const costTier = item.perCall ? 1 : 0
+            return { ...item, score, priority, costTier }
         })
 
-        // 按 priority 升序 → 得分降序
+        // 排序优先级：priority 升 → 可用性（熔断排末尾）→ 成本档（按量优先）→ 得分降
         scored.sort((a, b) => {
             if (a.priority !== b.priority) return a.priority - b.priority
+            // 熔断模型（score < 0）统一沉底，不参与成本/得分比较
+            const aDown = a.score < 0
+            const bDown = b.score < 0
+            if (aDown !== bDown) return aDown ? 1 : -1
+            if (!aDown && a.costTier !== b.costTier) return a.costTier - b.costTier
             return b.score - a.score
         })
 
         const logging = scored.map(s =>
-            `${s.provider.name}(${s.modelId}) [P${s.priority}] 得分:${s.score.toFixed(2)}`
+            `${s.provider.name}(${s.modelId}) [P${s.priority}]${s.costTier ? '[按次]' : ''} 得分:${s.score.toFixed(2)}`
         ).join(', ')
         logger.debug(`[AI-Plugin] 模型排序: ${logging}`)
 
@@ -492,6 +500,13 @@ export class AiClient {
         }
     }
 
+    /** 判断某模型是否为按次扣费（命中供应商的 per_call_models 名单） */
+    _isPerCallModel(provider, modelId) {
+        const list = provider?.per_call_models
+        if (!Array.isArray(list) || list.length === 0) return false
+        return list.includes(modelId)
+    }
+
     _buildActiveModelPools() {
         this.activeModelPools = {}
 
@@ -513,7 +528,8 @@ export class AiClient {
                         // 跳过手动禁用的模型
                         if (this.disabledModels.has(statusKey)) continue
                         this._initModelStatusEntry(statusKey)
-                        this.activeModelPools[groupName].chat.push({ provider, modelId })
+                        const perCall = this._isPerCallModel(provider, modelId)
+                        this.activeModelPools[groupName].chat.push({ provider, modelId, perCall })
                     }
                 }
                 if (group.draw_models) {
@@ -522,7 +538,8 @@ export class AiClient {
                         // 跳过手动禁用的模型
                         if (this.disabledModels.has(statusKey)) continue
                         this._initModelStatusEntry(statusKey)
-                        this.activeModelPools[groupName].image.push({ provider, modelId })
+                        const perCall = this._isPerCallModel(provider, modelId)
+                        this.activeModelPools[groupName].image.push({ provider, modelId, perCall })
                     }
                 }
             }
