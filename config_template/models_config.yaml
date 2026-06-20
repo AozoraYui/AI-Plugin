@@ -142,8 +142,8 @@ enable_web_fetch: false
 # 以下为可调上限（注释即用默认值，单位见名）：
 #   SHELL_EXEC_TIMEOUT_MS            单条命令默认超时（默认 60000）
 #   SHELL_EXEC_MAX_TIMEOUT_MS        单条命令超时上限（默认 240000）
-#   SHELL_EXEC_MAX_OUTPUT_CHARS      单条命令输出截断字符数（默认 24000）
-#   SHELL_EXEC_FOLLOWUP_MAX_ROUNDS   多轮补查最大轮数（默认 2）
+#   SHELL_EXEC_MAX_OUTPUT_CHARS      单页输出截断字符数（默认 24000，超长按游标分页不丢数据）
+#   SHELL_EXEC_FOLLOWUP_MAX_ROUNDS   多轮补查最大轮数（默认 5，含大数据翻页续读）
 #   SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS 补查时回传给模型的上下文字符数（默认 24000）
 # 注意：以上开关均与 enable_web_search 平级（不要缩进！）
 # ================================================
@@ -152,7 +152,7 @@ enable_web_fetch: false
 # SHELL_EXEC_TIMEOUT_MS: 60000
 # SHELL_EXEC_MAX_TIMEOUT_MS: 240000
 # SHELL_EXEC_MAX_OUTPUT_CHARS: 24000
-# SHELL_EXEC_FOLLOWUP_MAX_ROUNDS: 2
+# SHELL_EXEC_FOLLOWUP_MAX_ROUNDS: 5
 # SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS: 24000
 
 # ================================================

@@ -259,9 +259,12 @@ async function askMainModelForNextShellCommand(client, modelGroupKey, providerFi
 
 规则：
 - 只有在现有结果不足以回答用户问题时，才返回 need_shell=true。
-- 每轮最多返回一条命令，不要重复已执行命令。
+- 每轮最多返回一条命令。
 - 禁止交互式、长期运行、无限输出命令。
 - 优先使用只读/查询命令，例如 pwd、ls、find、rg、grep、cat、tail、git status、git diff、df、free、ps。
+- 【精确取数】数据量大时，优先用 jq/grep/awk/sed 只提取需要的字段或行，不要直接 cat 整个大文件，以减少数据量、避免浪费。
+- 【翻页续读】如果上一条命令的结果提示"输出未读完"并给出了 offset_chars，且你确实需要后续完整内容，可返回相同的 command 并带上提示的 offset_chars 继续读取下一页（这种翻页不算重复命令）。
+- 除翻页外，不要重复已执行的相同命令。
 - 只有用户明确要求修改、删除、安装、重启等操作时，才允许返回有副作用命令。
 - cwd 可省略；如果知道合适工作目录再填写。
 - max_output_chars 不要超过 ${Config.SHELL_EXEC_MAX_OUTPUT_CHARS}。
@@ -272,7 +275,7 @@ ${executedCommands.length > 0 ? executedCommands.map((cmd, i) => `${i + 1}. ${cm
 请严格输出 JSON，不要输出其他内容：
 {"need_shell": false, "reason": "信息已经足够"}
 或
-{"need_shell": true, "reason": "还需要查看xxx", "command": "要执行的命令", "cwd": "可选工作目录", "timeout_ms": ${Config.SHELL_EXEC_TIMEOUT_MS}, "max_output_chars": ${Config.SHELL_EXEC_MAX_OUTPUT_CHARS}}
+{"need_shell": true, "reason": "还需要查看xxx", "command": "要执行的命令", "cwd": "可选工作目录", "timeout_ms": ${Config.SHELL_EXEC_TIMEOUT_MS}, "max_output_chars": ${Config.SHELL_EXEC_MAX_OUTPUT_CHARS}, "offset_chars": 0}
 
 当前轮次：${round}
 
@@ -593,6 +596,8 @@ export class ChatHandler extends plugin {
                 if (e.isMaster && enabledTools.includes('shell_exec') && executedShellCommands.length > 0) {
                     const toolContext = { userId: e.user_id, groupId: e.group_id }
                     const seenCommands = new Set(executedShellCommands.filter(Boolean))
+                    // 翻页续读使用 "命令@offset" 作为去重键，允许同命令不同分页继续
+                    const seenPagedKeys = new Set()
                     for (let round = 1; round <= Config.SHELL_EXEC_FOLLOWUP_MAX_ROUNDS; round++) {
                         const decision = await askMainModelForNextShellCommand(this.client, modelGroupKey, providerFilter, userMessage, [...seenCommands], round)
                         if (!decision?.need_shell) {
@@ -605,7 +610,16 @@ export class ChatHandler extends plugin {
                             logger.warn('[AI-Plugin] Shell 补查跳过：未返回 command')
                             break
                         }
-                        if (seenCommands.has(command)) {
+                        const offsetChars = Math.max(Number(decision.offset_chars) || 0, 0)
+                        const isPaging = offsetChars > 0
+                        const pagedKey = `${command}@${offsetChars}`
+                        // 非翻页的重复命令直接停止；翻页命令只要 offset 不同就允许继续
+                        if (isPaging) {
+                            if (seenPagedKeys.has(pagedKey)) {
+                                logger.warn(`[AI-Plugin] Shell 补查跳过重复翻页: ${pagedKey}`)
+                                break
+                            }
+                        } else if (seenCommands.has(command)) {
                             logger.warn(`[AI-Plugin] Shell 补查跳过重复命令: ${command}`)
                             break
                         }
@@ -614,9 +628,10 @@ export class ChatHandler extends plugin {
                             command,
                             cwd: decision.cwd,
                             timeout_ms: decision.timeout_ms,
-                            max_output_chars: decision.max_output_chars
+                            max_output_chars: decision.max_output_chars,
+                            offset_chars: offsetChars
                         }
-                        logger.warn(`[AI-Plugin] Shell 补查第 ${round} 轮: ${command}`)
+                        logger.warn(`[AI-Plugin] Shell 补查第 ${round} 轮: ${command}${isPaging ? ` (offset=${offsetChars})` : ''}`)
                         const result = await toolRegistry.execute('shell_exec', args, e.isMaster, toolContext)
                         if (!result.success) {
                             logger.warn(`[AI-Plugin] Shell 补查失败: ${result.error}`)
@@ -625,8 +640,10 @@ export class ChatHandler extends plugin {
                         }
 
                         const formattedResult = toolRegistry.formatToolResult('shell_exec', result.data)
-                        userMessage += `\n\n【Shell补查第${round}轮】主模型判断需要继续补充服务器信息。请同样严格基于实际执行结果回答，不要编造未执行的结果。${formattedResult}`
-                        seenCommands.add(command)
+                        const pagingNote = result.data?.paging?.hasMore ? '（注意：本页仍未读完，如需完整数据可继续翻页）' : ''
+                        userMessage += `\n\n【Shell补查第${round}轮】主模型判断需要继续补充服务器信息。请同样严格基于实际执行结果回答，不要编造未执行的结果。${pagingNote}${formattedResult}`
+                        seenPagedKeys.add(pagedKey)
+                        if (!isPaging) seenCommands.add(command)
                     }
                 }
             }

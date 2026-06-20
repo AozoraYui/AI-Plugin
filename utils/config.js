@@ -83,14 +83,14 @@ const defaultConfig = {
     FILE_MAX_SIZE: 8388608,
     // readAll 模式下所有文件总大小上限（字节），默认 4MB
     FILE_READ_ALL_MAX_TOTAL: 4194304,
-    // Shell 命令默认超时时间（毫秒），仅在 enable_file_read + enable_shell_exec 同时开启后可由主人使用
+    // Shell 命令默认超时时间（毫秒），仅在 enable_shell_exec 开启后可由主人使用
     SHELL_EXEC_TIMEOUT_MS: 60000,
     // Shell 命令最大超时时间（毫秒），防止长期阻塞
     SHELL_EXEC_MAX_TIMEOUT_MS: 240000,
-    // Shell 输出注入模型的最大字符数
+    // Shell 单页输出注入模型的最大字符数（超长输出按游标分页，不丢数据）
     SHELL_EXEC_MAX_OUTPUT_CHARS: 24000,
-    // Shell 补查最大轮数
-    SHELL_EXEC_FOLLOWUP_MAX_ROUNDS: 2,
+    // Shell 补查最大轮数（含翻页续读，留足空间给大数据分页读取）
+    SHELL_EXEC_FOLLOWUP_MAX_ROUNDS: 5,
     // Shell 补查决策上下文最大字符数
     SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS: 24000,
     // child_process exec 最大缓冲区

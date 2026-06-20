@@ -8,12 +8,20 @@ import path from 'node:path'
 import { toolRegistry } from './registry.js'
 import { Config } from '../utils/config.js'
 
-function truncateText(text, maxChars) {
-    if (!text) return ''
-    if (text.length <= maxChars) return text
-    const head = Math.floor(maxChars * 0.7)
-    const tail = maxChars - head
-    return `${text.slice(0, head)}\n\n...【输出过长，已截断 ${text.length - maxChars} 字符】...\n\n${text.slice(-tail)}`
+function paginateText(text, offset, pageSize) {
+    const full = String(text || '')
+    const total = full.length
+    if (total === 0) return { text: '', total: 0, start: 0, end: 0, hasMore: false, nextOffset: 0 }
+    const start = Math.min(Math.max(offset, 0), total)
+    const end = Math.min(start + pageSize, total)
+    return {
+        text: full.slice(start, end),
+        total,
+        start,
+        end,
+        hasMore: end < total,
+        nextOffset: end
+    }
 }
 
 function runShellCommand(command, options = {}) {
@@ -74,7 +82,11 @@ export const shellExecTool = {
                     },
                     max_output_chars: {
                         type: 'number',
-                        description: '可选，返回给模型的最大输出字符数。默认使用配置 SHELL_EXEC_MAX_OUTPUT_CHARS。'
+                        description: '可选，单页返回给模型的最大输出字符数。默认使用配置 SHELL_EXEC_MAX_OUTPUT_CHARS。输出超过此值时分页返回，不会丢数据。'
+                    },
+                    offset_chars: {
+                        type: 'number',
+                        description: '可选，分页游标。从该字符位置开始返回输出，用于翻页读取超长结果的后续部分。默认 0（从头开始）。'
                     }
                 },
                 required: ['command']
@@ -87,16 +99,30 @@ export const shellExecTool = {
         if (!command) return '【Shell执行失败】未提供 command。'
 
         const cwd = args.cwd ? path.resolve(String(args.cwd)) : process.cwd()
-        const maxOutputChars = Math.min(
+        // 单页大小：仍受 SHELL_EXEC_MAX_OUTPUT_CHARS 约束，避免单次请求超出模型上下文
+        const pageSize = Math.min(
             Math.max(Number(args.max_output_chars) || Config.SHELL_EXEC_MAX_OUTPUT_CHARS, 1000),
             Config.SHELL_EXEC_MAX_OUTPUT_CHARS
         )
+        const offset = Math.max(Number(args.offset_chars) || 0, 0)
         const result = await runShellCommand(command, { cwd, timeoutMs: args.timeout_ms })
+
+        // 分页（不丢数据）：超长输出按游标分页，模型可通过 offset_chars 翻页读取后续部分
+        const stdoutPage = paginateText(result.stdout, offset, pageSize)
+        const stderrPage = paginateText(result.stderr, offset, pageSize)
 
         return {
             ...result,
-            stdout: truncateText(result.stdout, maxOutputChars),
-            stderr: truncateText(result.stderr, maxOutputChars)
+            stdout: stdoutPage.text,
+            stderr: stderrPage.text,
+            paging: {
+                offset,
+                pageSize,
+                stdoutTotal: stdoutPage.total,
+                stderrTotal: stderrPage.total,
+                hasMore: stdoutPage.hasMore || stderrPage.hasMore,
+                nextOffset: Math.max(stdoutPage.nextOffset, stderrPage.nextOffset)
+            }
         }
     },
 
@@ -107,7 +133,18 @@ export const shellExecTool = {
         output += `\n退出码: ${data.code}`
         if (data.signal) output += `\n信号: ${data.signal}`
         if (data.timedOut) output += `\n是否超时: 是`
-        output += `\n耗时: ${data.elapsed}s\n`
+        output += `\n耗时: ${data.elapsed}s`
+        const p = data.paging
+        if (p && (p.stdoutTotal > p.pageSize || p.stderrTotal > p.pageSize || p.offset > 0)) {
+            const shownEnd = Math.min(p.offset + p.pageSize, Math.max(p.stdoutTotal, p.stderrTotal))
+            output += `\n分页: 已显示第 ${p.offset}~${shownEnd} 字符 / 共 ${Math.max(p.stdoutTotal, p.stderrTotal)} 字符`
+            if (p.hasMore) {
+                output += `\n⚠ 输出未读完，如需后续内容，再次调用 shell_exec 并传入相同 command 与 offset_chars=${p.nextOffset}（建议优先用 jq/grep/awk/sed 精确过滤减少数据量）`
+            } else {
+                output += `（已读完）`
+            }
+        }
+        output += `\n`
         if (data.stdout) output += `\n--- stdout ---\n${data.stdout}\n`
         if (data.stderr) output += `\n--- stderr ---\n${data.stderr}\n`
         if (data.error && !data.stderr) output += `\n--- error ---\n${data.error}\n`
