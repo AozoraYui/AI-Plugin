@@ -183,7 +183,7 @@ ${toolDescriptions.join('\n')}
   - 若用户只是模糊描述（如"把那个日志发我"），可先用 dir_read/file_read 确认目标，再用 file_send 发送确认到的文件。
 - file_download: {"save_dir": "可选，保存目录", "rename_sequential": "可选true/false"}
   - 文件下载要求：当用户要求把当前消息或其引用消息里的图片/视频/语音/文件"下载/保存到服务器"时使用。无需填 URL，工具会自动从消息中提取媒体。
-  - save_dir：用户明确说了要存到哪个目录（如"存到/root/xxx""下载到resources/tmp"）才填，文件会直接存进该目录；用户没指定目录时就留空，工具会自动存到默认位置（带时间戳子目录）。
+  - save_dir：用户明确说了要存到哪个目录（如"存到/root/xxx""下载到resources/tmp"）才填，文件会直接存进该目录；用户没指定目录时就留空，工具会自动存到默认位置 resources/noa/时间戳 子目录。
   - 当用户要求"重命名为0 1 2/按顺序命名/命名成0.png 1.png这种"时，把 rename_sequential 设为 true（文件会统一命名为 0.后缀、1.后缀…）。
 - group_file_list: {"folder_name": "可选，子文件夹名", "recursive": 可选true/false}
   - 群文件浏览要求：当用户想"看看群文件有哪些/列一下群文件/群文件里有什么"时使用。要进某个子文件夹就填 folder_name，否则留空看根目录。当用户想"连文件夹里的文件也一起看/全部列出来/包括子文件夹"时把 recursive 设为 true。注意这是 QQ"群文件区"，不是聊天消息里的文件。

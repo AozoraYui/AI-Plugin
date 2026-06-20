@@ -128,7 +128,7 @@ async function collectMediaFromEvent(event) {
 
 // 解析保存目录（仍受白名单约束）：
 //   - 用户指定了 save_dir：直接存入该目录本身，不套时间戳子目录。
-//   - 未指定：存到白名单首个根目录下的 ai-download/时间戳 子目录（避免默认堆积/覆盖）。
+//   - 未指定：存到机器人根目录 resources/noa/时间戳 子目录（避免默认堆积/覆盖）。
 function resolveSaveDir(inputDir) {
     const roots = Config.FILE_ROOTS
     if (!Array.isArray(roots) || roots.length === 0) {
@@ -141,8 +141,8 @@ function resolveSaveDir(inputDir) {
         // 用户明确指定目录：直接使用，不追加时间戳
         target = path.resolve(String(inputDir).trim())
     } else {
-        // 默认位置：ai-download 下按时间戳分目录，避免覆盖
-        const baseDir = path.join(path.resolve(roots[0]), 'ai-download')
+        // 默认位置：机器人根目录 resources/noa 下按时间戳分目录，避免覆盖
+        const baseDir = path.join(process.cwd(), 'resources', 'noa')
         const now = new Date()
         const pad = (n) => String(n).padStart(2, '0')
         const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
@@ -229,7 +229,7 @@ export const fileDownloadTool = {
                 properties: {
                     save_dir: {
                         type: 'string',
-                        description: '可选，保存目录（必须在白名单内）。用户明确指定目录时填写，文件会直接存入该目录；不填则默认存到白名单首个目录下的 ai-download/时间戳 子目录。'
+                        description: '可选，保存目录（必须在白名单内）。用户明确指定目录时填写，文件会直接存入该目录；不填则默认存到机器人根目录 resources/noa/时间戳 子目录。'
                     },
                     rename_sequential: {
                         type: 'boolean',
