@@ -599,12 +599,23 @@ export class ChatHandler extends plugin {
                     const result = await toolRegistry.execute(call.name, call.args, e.isMaster, toolContext)
                     if (result.success) {
                         if (call.name === 'draw_image') {
-                            // 画图工具已把图片直接发到会话并显示了"🎨正在生成"进度，无需再发"思考中"占位；
-                            // 但仍让主模型用人设口吻收尾回复（如"画好啦~"）
-                            drawImageDone = true
-                            const formattedResult = toolRegistry.formatToolResult('draw_image', result.data)
-                            userMessage = userMessage + '\n\n【重要指令】画图工具已执行并把图片直接发送到会话。' + formattedResult + '请用一句简短自然的话回应用户（如"画好啦~"），不要重复描述图片细节，也不要声称自己不能画图。'
-                            logger.info('[AI-Plugin] draw_image 完成，图片已直接发送，结果已注入')
+                            // 画图工具成功时返回对象 {ok:true,...}；失败/模型返回文本时返回字符串。
+                            // 只有真正成功（已发出图片）才设 drawImageDone 并让主模型说"画好啦"，
+                            // 否则如实告知失败，避免明明没画出来却谎称已发送。
+                            const drawSucceeded = result.data && typeof result.data === 'object' && result.data.ok === true
+                            if (drawSucceeded) {
+                                // 画图工具已把图片直接发到会话并显示了"🎨正在生成"进度，无需再发"思考中"占位；
+                                // 但仍让主模型用人设口吻收尾回复（如"画好啦~"）
+                                drawImageDone = true
+                                const formattedResult = toolRegistry.formatToolResult('draw_image', result.data)
+                                userMessage = userMessage + '\n\n【重要指令】画图工具已执行并把图片直接发送到会话。' + formattedResult + '请用一句简短自然的话回应用户（如"画好啦~"），不要重复描述图片细节，也不要声称自己不能画图。'
+                                logger.info('[AI-Plugin] draw_image 完成，图片已直接发送，结果已注入')
+                            } else {
+                                // 画图失败（如上游超时/返回文本）：如实把失败信息交给主模型，不要谎称已发送
+                                const failText = toolRegistry.formatToolResult('draw_image', result.data)
+                                userMessage = userMessage + '\n\n【重要指令】画图工具本次执行未成功，没有生成图片：' + failText + '请用人设口吻如实、简短地告诉用户这次没画成（可能是超时或服务繁忙），建议稍后再试，不要声称图片已经画好或已经发送。'
+                                logger.warn(`[AI-Plugin] draw_image 未成功，已如实注入失败信息`)
+                            }
                         } else if (call.name === 'web_search') {
                             // 搜索：将结果注入提示词
                             const results = result.data || []

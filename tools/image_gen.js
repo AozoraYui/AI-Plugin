@@ -17,6 +17,8 @@ import path from 'node:path'
 // 自画像参考图目录：插件根目录 data/self（放 0.png / 1.png / 2.png 等官方参考图）
 const SELF_PORTRAIT_DIR = path.join(process.cwd(), 'plugins', 'AI-Plugin', 'data', 'self')
 const SELF_IMG_EXT = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
+// 画自己时最多取用的本地参考图数量（过多会让 /images/edits 上传超时，曾出现 12 张触发 524）
+const SELF_PORTRAIT_MAX_REF = 4
 
 function selfMime(ext) {
     const e = ext.toLowerCase()
@@ -28,14 +30,21 @@ function selfMime(ext) {
 }
 
 // 读取本地自画像参考图，转为 AI 可用的 inline_data 数组（本地文件不走 fetch）
+// 为避免参考图过多导致上游 /images/edits 超时，从所有图中随机挑选最多 SELF_PORTRAIT_MAX_REF 张
 function loadSelfPortraitImages() {
     try {
         if (!fs.existsSync(SELF_PORTRAIT_DIR)) return []
         const files = fs.readdirSync(SELF_PORTRAIT_DIR)
             .filter(f => SELF_IMG_EXT.includes(path.extname(f).toLowerCase()))
-            .sort()
+        if (files.length === 0) return []
+        // 随机洗牌（Fisher-Yates）后取前 N 张，让每次画自己参考的角度不同
+        for (let i = files.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1))
+            ;[files[i], files[j]] = [files[j], files[i]]
+        }
+        const picked = files.slice(0, SELF_PORTRAIT_MAX_REF)
         const parts = []
-        for (const f of files.slice(0, Config.MAX_IMAGES_PER_MESSAGE)) {
+        for (const f of picked) {
             try {
                 const buf = fs.readFileSync(path.join(SELF_PORTRAIT_DIR, f))
                 parts.push({ inline_data: { mime_type: selfMime(path.extname(f)), data: buf.toString('base64') } })
