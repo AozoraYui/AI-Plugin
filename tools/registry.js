@@ -10,6 +10,10 @@ class ToolRegistry {
         this.openWeatherMapApiKey = null
     }
 
+    _hasExplicitWebSearchIntent(text) {
+        return /(搜索|搜一下|查一下|查询|联网|上网|最新|新闻|资料|百科|官网|价格|汇率|天气|在哪里|附近|周边|推荐.*(?:店|餐厅|酒店|景点)|(?:店|餐厅|酒店|景点).*推荐)/i.test(String(text || ''))
+    }
+
     /** 设置天气 API Key（由 AiClient 初始化时调用） */
     setWeatherApiKey(apiKey) {
         this.weatherApiKey = apiKey
@@ -88,10 +92,11 @@ class ToolRegistry {
      * @param {string[]} enabledTools - 当前可用的工具名列表
      * @returns {Promise<{intent: string, tools: Array<{name: string, args: object}>}>} 意图和工具调用列表
      */
-    async analyzeToolIntent(userMessage, client, enabledTools = [], recentHistory = [], memorySummary = '', candidateUrls = []) {
+    async analyzeToolIntent(userMessage, client, enabledTools = [], recentHistory = [], memorySummary = '', candidateUrls = [], options = {}) {
         if (!userMessage || !userMessage.trim() || enabledTools.length === 0) return { intent: '', tools: [] }
 
         const now = new Date()
+        const hasImages = options.hasImages === true
 
         // 构建工具描述
         const toolDescriptions = []
@@ -134,6 +139,11 @@ class ToolRegistry {
             candidateUrlBlock = `\n\n当前消息/引用/合并转发中发现的候选链接（仅当用户明确需要查看、总结、分析网页内容时才调用 web_fetch）：\n${urls.map((url, index) => `${index + 1}. ${url}`).join('\n')}\n`
         }
 
+        // 当前消息图片上下文：意图分析模型只接收文本，不看图；带图时避免从短文本脑补工具需求
+        const imageContextBlock = hasImages
+            ? '\n\n当前用户消息包含图片。注意：你看不到图片内容，图片理解会交给后续多模态主模型处理。若文字本身没有明确要求搜索、查天气、读文件、执行命令或抓取链接，不要仅凭短语/表情/图片上下文脑补工具调用，tools 应返回空数组。\n'
+            : ''
+
         const analysisPrompt = `当前时间：${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日。你是一个意图分析助手。分析用户消息，输出意图分析和需要调用的工具。
 
 可用工具：
@@ -171,7 +181,7 @@ ${toolDescriptions.join('\n')}
         try {
             const analysisPayload = {
                 contents: [
-                    { role: "user", parts: [{ text: analysisPrompt + summaryBlock + contextBlock + candidateUrlBlock + `\n\n用户消息：\n${userMessage}` }] }
+                    { role: "user", parts: [{ text: analysisPrompt + imageContextBlock + summaryBlock + contextBlock + candidateUrlBlock + `\n\n用户消息：\n${userMessage}` }] }
                 ]
             }
 
@@ -234,13 +244,22 @@ ${toolDescriptions.join('\n')}
             const intent = parsed.intent || ''
 
             // 过滤非法工具调用
-            const validCalls = tools.filter(t => {
+            let validCalls = tools.filter(t => {
                 if (!t.name || !enabledTools.includes(t.name)) {
                     logger.warn(`[AI-Plugin] 工具路由 忽略非法工具: ${t.name}`)
                     return false
                 }
                 return true
             })
+
+            // 带图消息的意图分析模型看不到图片，短文本容易脑补搜索；没有明确搜索/查询意图时禁止自动搜索
+            if (hasImages && !this._hasExplicitWebSearchIntent(userMessage)) {
+                const before = validCalls.length
+                validCalls = validCalls.filter(t => t.name !== 'web_search')
+                if (before !== validCalls.length) {
+                    logger.info('[AI-Plugin] 带图消息缺少明确搜索意图，已过滤 web_search，交给多模态主模型处理')
+                }
+            }
 
             logger.info(`[AI-Plugin] 工具路由 决定调用 ${validCalls.length} 个工具: ${validCalls.map(t => t.name).join(', ')}`)
             return { intent, tools: validCalls }

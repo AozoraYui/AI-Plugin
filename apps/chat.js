@@ -535,7 +535,9 @@ export class ChatHandler extends plugin {
                     }
                 }
                 const candidateUrls = extractUrlsFromText(userMessage, 10)
-                const toolAnalysis = await toolRegistry.analyzeToolIntent(userMessage, this.client, enabledTools, recentHistory, memorySummary, candidateUrls)
+                const toolAnalysis = await toolRegistry.analyzeToolIntent(userMessage, this.client, enabledTools, recentHistory, memorySummary, candidateUrls, {
+                    hasImages: allImages.length > 0
+                })
                 const intent = toolAnalysis?.intent || ''
                 const toolCalls = Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools : []
                 const executedShellCommands = []
