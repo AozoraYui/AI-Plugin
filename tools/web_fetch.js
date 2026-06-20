@@ -10,6 +10,162 @@ const REQUEST_TIMEOUT_MS = 30000
 const MAX_RESPONSE_SIZE = 10 * 1024 * 1024 // 10MB
 
 /**
+ * 将 GitHub 网页 URL 转换为 GitHub API 请求
+ * 直接爬取 github.com 网页易触发 secondary rate limit（防爬，偶发 429）；
+ * 改走 api.github.com 限额更高、返回干净 JSON，更稳定。
+ * @returns {{apiUrl: string, kind: string}|null} 无法识别则返回 null（按普通网页抓取）
+ */
+function resolveGitHubApi(rawUrl) {
+    let u
+    try {
+        u = new URL(rawUrl)
+    } catch {
+        return null
+    }
+    if (u.hostname !== 'github.com' && u.hostname !== 'www.github.com') return null
+
+    const parts = u.pathname.split('/').filter(Boolean)
+    if (parts.length < 2) return null
+    const [owner, repo, section, ...rest] = parts
+
+    // owner/repo/commits/<branch> 或 owner/repo/commits
+    if (section === 'commits') {
+        const branch = rest[0] || u.searchParams.get('ref') || ''
+        const q = branch ? `?sha=${encodeURIComponent(branch)}&per_page=20` : '?per_page=20'
+        return { apiUrl: `https://api.github.com/repos/${owner}/${repo}/commits${q}`, kind: 'commits' }
+    }
+    // owner/repo/commit/<sha>
+    if (section === 'commit' && rest[0]) {
+        return { apiUrl: `https://api.github.com/repos/${owner}/${repo}/commits/${rest[0]}`, kind: 'commit' }
+    }
+    // owner/repo/releases
+    if (section === 'releases') {
+        return { apiUrl: `https://api.github.com/repos/${owner}/${repo}/releases?per_page=10`, kind: 'releases' }
+    }
+    // owner/repo/issues 或 pulls
+    if (section === 'issues' || section === 'pulls') {
+        return { apiUrl: `https://api.github.com/repos/${owner}/${repo}/${section}?per_page=20&state=all`, kind: section }
+    }
+    // owner/repo/blob/<branch>/<path...> → 取原始文件
+    if (section === 'blob' && rest.length >= 2) {
+        const branch = rest[0]
+        const filePath = rest.slice(1).join('/')
+        return { apiUrl: `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`, kind: 'raw' }
+    }
+    // owner/repo（仓库主页）
+    if (!section) {
+        return { apiUrl: `https://api.github.com/repos/${owner}/${repo}`, kind: 'repo' }
+    }
+    return null
+}
+
+/** 将 GitHub API 返回的 JSON 精简为可读文本，减少冗余 token */
+function formatGitHubJson(kind, json) {
+    try {
+        const data = JSON.parse(json)
+        if (kind === 'commits' && Array.isArray(data)) {
+            return data.map(c => {
+                const msg = (c.commit?.message || '').split('\n')[0]
+                const author = c.commit?.author?.name || c.author?.login || '未知'
+                const date = c.commit?.author?.date || ''
+                const sha = (c.sha || '').slice(0, 7)
+                return `- [${sha}] ${date} ${author}: ${msg}`
+            }).join('\n')
+        }
+        if (kind === 'commit') {
+            const msg = data.commit?.message || ''
+            const author = data.commit?.author?.name || ''
+            const date = data.commit?.author?.date || ''
+            const files = (data.files || []).map(f => `  ${f.status} ${f.filename} (+${f.additions}/-${f.deletions})`).join('\n')
+            return `提交 ${(data.sha || '').slice(0, 7)} by ${author} @ ${date}\n${msg}\n变更文件:\n${files}`
+        }
+        if (kind === 'releases' && Array.isArray(data)) {
+            return data.map(r => `- ${r.tag_name} ${r.name || ''} (${r.published_at || '未发布'})\n${(r.body || '').slice(0, 500)}`).join('\n\n')
+        }
+        if ((kind === 'issues' || kind === 'pulls') && Array.isArray(data)) {
+            return data.map(i => `- #${i.number} [${i.state}] ${i.title} (by ${i.user?.login || '?'}, ${i.created_at || ''})`).join('\n')
+        }
+        if (kind === 'repo') {
+            return `仓库: ${data.full_name}\n描述: ${data.description || '无'}\n语言: ${data.language || '未知'}\nStar: ${data.stargazers_count} | Fork: ${data.forks_count} | Issue: ${data.open_issues_count}\n默认分支: ${data.default_branch}\n更新于: ${data.pushed_at}\n主页: ${data.homepage || ''}`
+        }
+    } catch {
+        // 解析失败则返回原始 JSON
+    }
+    return json
+}
+
+/**
+ * 通过 GitHub API/raw 抓取，带 429 退避重试与可选 token
+ */
+async function fetchGitHubApi(gh, originalUrl, maxChars) {
+    const isRaw = gh.kind === 'raw'
+    const headers = {
+        'User-Agent': 'AI-Plugin-WebFetch',
+        'Accept': isRaw ? 'text/plain,*/*' : 'application/vnd.github+json',
+    }
+    if (!isRaw) headers['X-GitHub-Api-Version'] = '2022-11-28'
+    // 可选：配置 GITHUB_TOKEN 环境变量可大幅提高速率上限（匿名 60 次/小时 → 5000 次/小时）
+    const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN
+    if (token && !isRaw) headers['Authorization'] = `Bearer ${token}`
+
+    const maxRetries = 2
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        let res
+        try {
+            res = await fetch(gh.apiUrl, {
+                method: 'GET',
+                headers,
+                signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+                redirect: 'follow',
+            })
+        } catch (err) {
+            logger.warn(`[AI-Plugin] WebFetch GitHub API 请求失败: ${gh.apiUrl} - ${err.message}`)
+            return `\n\n【网页抓取失败】GitHub 请求出错: ${err.message}\n`
+        }
+
+        if (res.status === 429 || res.status === 403) {
+            const retryAfter = Number(res.headers.get('retry-after'))
+            const remaining = res.headers.get('x-ratelimit-remaining')
+            const reset = Number(res.headers.get('x-ratelimit-reset'))
+            // 配额已耗尽（remaining=0）：重试无意义，需等到 reset，直接返回提示
+            const quotaExhausted = remaining === '0'
+            if (!quotaExhausted && attempt < maxRetries) {
+                const waitMs = retryAfter > 0 ? Math.min(retryAfter * 1000, 8000) : (attempt + 1) * 2000
+                logger.warn(`[AI-Plugin] WebFetch GitHub API ${res.status}（剩余配额 ${remaining}），${waitMs}ms 后重试 (${attempt + 1}/${maxRetries})`)
+                await new Promise(r => setTimeout(r, waitMs))
+                continue
+            }
+            let resetHint = ''
+            if (quotaExhausted && reset > 0) {
+                const mins = Math.max(Math.ceil((reset * 1000 - Date.now()) / 60000), 1)
+                resetHint = `约 ${mins} 分钟后恢复。`
+            }
+            logger.warn(`[AI-Plugin] WebFetch GitHub API ${res.status}（剩余配额 ${remaining}）: ${gh.apiUrl}`)
+            return `\n\n【网页抓取失败】GitHub 触发频率限制（HTTP ${res.status}，剩余配额 ${remaining ?? '未知'}）。匿名访问每小时仅 60 次，${resetHint}如需更高配额（5000 次/小时），可在服务器配置 GITHUB_TOKEN 环境变量。\n`
+        }
+
+        if (!res.ok) {
+            logger.warn(`[AI-Plugin] WebFetch GitHub API 返回非200: ${gh.apiUrl} - ${res.status}`)
+            return `\n\n【网页抓取失败】GitHub API HTTP ${res.status}\n`
+        }
+
+        let body
+        try {
+            body = await res.text()
+            if (body.length > MAX_RESPONSE_SIZE) body = body.slice(0, MAX_RESPONSE_SIZE)
+        } catch (err) {
+            return `\n\n【网页抓取失败】读取 GitHub 响应出错: ${err.message}\n`
+        }
+
+        const text = isRaw ? body : formatGitHubJson(gh.kind, body)
+        const originalLen = text.length
+        const finalText = text.length > maxChars ? text.slice(0, maxChars) + '\n...(已截断)' : text
+        logger.info(`[AI-Plugin] WebFetch 成功(GitHub ${gh.kind}): ${originalUrl} (${originalLen} 字符)`)
+        return `\n\n【GitHub 内容「${originalUrl}」(${gh.kind}, ${originalLen} 字符)】：\n${finalText}\n【GitHub 内容结束】\n`
+    }
+}
+
+/**
  * 简单 HTML → 纯文本转换
  * 去标签、解码实体、压缩空白
  */
@@ -70,6 +226,13 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS) {
         return `\n\n【网页抓取失败】不支持的协议，仅允许 http/https: ${targetUrl}\n`
     }
 
+    // GitHub 网页易触发 secondary rate limit（429），自动改走 GitHub API/raw，更稳定且返回干净数据
+    const gh = resolveGitHubApi(targetUrl)
+    if (gh) {
+        logger.info(`[AI-Plugin] WebFetch: GitHub 链接改走 API (${gh.kind}) -> ${gh.apiUrl}`)
+        return await fetchGitHubApi(gh, targetUrl, maxChars)
+    }
+
     logger.info(`[AI-Plugin] WebFetch: 开始抓取 ${targetUrl}`)
 
     let res
@@ -91,6 +254,9 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS) {
 
     if (!res.ok) {
         logger.warn(`[AI-Plugin] WebFetch 返回非200: ${targetUrl} - ${res.status}`)
+        if (res.status === 429) {
+            return `\n\n【网页抓取失败】HTTP 429：目标站点请求过于频繁（触发了频率限制）。请稍后再试，通常几分钟后即可恢复。\n`
+        }
         return `\n\n【网页抓取失败】HTTP ${res.status}\n`
     }
 
