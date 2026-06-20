@@ -35,10 +35,10 @@ const defaultConfig = {
     // ========== API 请求体大小控制 ==========
     // 请求体大小警告阈值（MB），超过此值时记录警告日志并开始裁剪历史
     // 使用场景: apps/chat.js 中检测请求体大小
-    REQUEST_SIZE_WARNING_MB: 8,
+    REQUEST_SIZE_WARNING_MB: 16,
     // 请求体大小限制（MB），裁剪历史直到低于此值
     // 使用场景: apps/chat.js 中循环裁剪历史
-    REQUEST_SIZE_LIMIT_MB: 5,
+    REQUEST_SIZE_LIMIT_MB: 10,
     // 裁剪历史时最少保留的历史条数，即使超过大小限制也不会低于此值
     // 使用场景: apps/chat.js 中控制裁剪下限
     MIN_HISTORY_FOR_TRUNCATION: 5,
@@ -79,18 +79,22 @@ const defaultConfig = {
     // 使用场景: utils/common.js, utils/scheduler.js 中每日摘要降级处理
     FALLBACK_DAILY_SUMMARY_MAX_LENGTH: 500,
     // ========== 文件读取与 Shell 工具配置 ==========
-    // 单次读取文件最大大小（字节），默认 4MB
-    FILE_MAX_SIZE: 4194304,
-    // readAll 模式下所有文件总大小上限（字节），默认 2MB
-    FILE_READ_ALL_MAX_TOTAL: 2097152,
+    // 单次读取文件最大大小（字节），默认 8MB
+    FILE_MAX_SIZE: 8388608,
+    // readAll 模式下所有文件总大小上限（字节），默认 4MB
+    FILE_READ_ALL_MAX_TOTAL: 4194304,
     // Shell 命令默认超时时间（毫秒），仅在 enable_file_read + enable_shell_exec 同时开启后可由主人使用
-    SHELL_EXEC_TIMEOUT_MS: 30000,
+    SHELL_EXEC_TIMEOUT_MS: 60000,
     // Shell 命令最大超时时间（毫秒），防止长期阻塞
-    SHELL_EXEC_MAX_TIMEOUT_MS: 120000,
+    SHELL_EXEC_MAX_TIMEOUT_MS: 240000,
     // Shell 输出注入模型的最大字符数
-    SHELL_EXEC_MAX_OUTPUT_CHARS: 12000,
+    SHELL_EXEC_MAX_OUTPUT_CHARS: 24000,
+    // Shell 补查最大轮数
+    SHELL_EXEC_FOLLOWUP_MAX_ROUNDS: 2,
+    // Shell 补查决策上下文最大字符数
+    SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS: 24000,
     // child_process exec 最大缓冲区
-    SHELL_EXEC_MAX_BUFFER: 10485760,
+    SHELL_EXEC_MAX_BUFFER: 20971520,
     version: 'v1.0.0'
 }
 
@@ -340,6 +344,10 @@ export const Config = {
     set SHELL_EXEC_MAX_TIMEOUT_MS(val) { config.SHELL_EXEC_MAX_TIMEOUT_MS = Number(val) || defaultConfig.SHELL_EXEC_MAX_TIMEOUT_MS },
     get SHELL_EXEC_MAX_OUTPUT_CHARS() { return config.SHELL_EXEC_MAX_OUTPUT_CHARS ?? defaultConfig.SHELL_EXEC_MAX_OUTPUT_CHARS },
     set SHELL_EXEC_MAX_OUTPUT_CHARS(val) { config.SHELL_EXEC_MAX_OUTPUT_CHARS = Number(val) || defaultConfig.SHELL_EXEC_MAX_OUTPUT_CHARS },
+    get SHELL_EXEC_FOLLOWUP_MAX_ROUNDS() { return config.SHELL_EXEC_FOLLOWUP_MAX_ROUNDS ?? defaultConfig.SHELL_EXEC_FOLLOWUP_MAX_ROUNDS },
+    set SHELL_EXEC_FOLLOWUP_MAX_ROUNDS(val) { config.SHELL_EXEC_FOLLOWUP_MAX_ROUNDS = Number(val) || defaultConfig.SHELL_EXEC_FOLLOWUP_MAX_ROUNDS },
+    get SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS() { return config.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS ?? defaultConfig.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS },
+    set SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS(val) { config.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS = Number(val) || defaultConfig.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS },
     get SHELL_EXEC_MAX_BUFFER() { return config.SHELL_EXEC_MAX_BUFFER ?? defaultConfig.SHELL_EXEC_MAX_BUFFER },
     set SHELL_EXEC_MAX_BUFFER(val) { config.SHELL_EXEC_MAX_BUFFER = Number(val) || defaultConfig.SHELL_EXEC_MAX_BUFFER },
     presets,

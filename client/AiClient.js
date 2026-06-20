@@ -104,7 +104,7 @@ export class AiClient {
                 continue
             }
             const startTime = Date.now()
-            const result = await this.attemptRequest('chat', payload, provider, modelConfig.model_id, 512, 15000)
+            const result = await this.attemptRequest('chat', payload, provider, modelConfig.model_id, 1024, 30000)
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
             if (result.success) {
                 logger.info(`[AI-Plugin] 意图分析成功: ${provider.name}/${modelConfig.model_id}, 耗时 ${elapsed}s`)
@@ -377,7 +377,7 @@ export class AiClient {
                 // 提取 enable_file_read（默认关闭）
                 this.fileReadConfig = { enabled: rawConfig.enable_file_read === true }
                 this.shellExecConfig = { enabled: rawConfig.enable_shell_exec === true }
-                for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_MAX_BUFFER']) {
+                for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_FOLLOWUP_MAX_ROUNDS', 'SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS', 'SHELL_EXEC_MAX_BUFFER']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
                 if (this.enableFileRead) {

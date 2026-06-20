@@ -118,9 +118,11 @@ enable_web_fetch: false
 # ================================================
 # enable_file_read: false
 # enable_shell_exec: false
-# SHELL_EXEC_TIMEOUT_MS: 30000
-# SHELL_EXEC_MAX_TIMEOUT_MS: 120000
-# SHELL_EXEC_MAX_OUTPUT_CHARS: 12000
+# SHELL_EXEC_TIMEOUT_MS: 60000
+# SHELL_EXEC_MAX_TIMEOUT_MS: 240000
+# SHELL_EXEC_MAX_OUTPUT_CHARS: 24000
+# SHELL_EXEC_FOLLOWUP_MAX_ROUNDS: 2
+# SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS: 24000
 
 # ================================================
 # 天气查询配置

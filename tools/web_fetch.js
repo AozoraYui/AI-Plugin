@@ -5,9 +5,9 @@
 
 import { toolRegistry } from './registry.js'
 
-const DEFAULT_MAX_CHARS = 8000
-const REQUEST_TIMEOUT_MS = 15000
-const MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB
+const DEFAULT_MAX_CHARS = 16000
+const REQUEST_TIMEOUT_MS = 30000
+const MAX_RESPONSE_SIZE = 10 * 1024 * 1024 // 10MB
 
 /**
  * 简单 HTML → 纯文本转换

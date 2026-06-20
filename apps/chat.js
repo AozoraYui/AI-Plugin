@@ -214,7 +214,7 @@ function detectMasterOnlyToolRequest(message, flags = {}) {
     return null
 }
 
-function extractUrlsFromText(text, limit = 5) {
+function extractUrlsFromText(text, limit = 10) {
     if (!text || typeof text !== 'string') return []
 
     const urls = []
@@ -229,6 +229,69 @@ function extractUrlsFromText(text, limit = 5) {
         }
     }
     return urls
+}
+
+function truncateForPrompt(text, maxChars) {
+    const value = String(text || '')
+    if (value.length <= maxChars) return value
+    const head = Math.floor(maxChars * 0.65)
+    const tail = maxChars - head
+    return `${value.slice(0, head)}\n\n...【上下文过长，已截断 ${value.length - maxChars} 字符】...\n\n${value.slice(-tail)}`
+}
+
+function parseJsonObject(text) {
+    const value = String(text || '').trim()
+    const match = value.match(/\{[\s\S]*\}/)
+    if (!match) return null
+    try {
+        return JSON.parse(match[0])
+    } catch {
+        return null
+    }
+}
+
+function normalizeShellCommand(command) {
+    return String(command || '').replace(/\s+/g, ' ').trim()
+}
+
+async function askMainModelForNextShellCommand(client, modelGroupKey, providerFilter, userMessage, executedCommands, round) {
+    const prompt = `你是服务器 Shell 补查决策器。请根据用户原始需求和已经执行过的工具结果，判断是否还需要再执行一条 Shell 命令来补充信息。
+
+规则：
+- 只有在现有结果不足以回答用户问题时，才返回 need_shell=true。
+- 每轮最多返回一条命令，不要重复已执行命令。
+- 禁止交互式、长期运行、无限输出命令。
+- 优先使用只读/查询命令，例如 pwd、ls、find、rg、grep、cat、tail、git status、git diff、df、free、ps。
+- 只有用户明确要求修改、删除、安装、重启等操作时，才允许返回有副作用命令。
+- cwd 可省略；如果知道合适工作目录再填写。
+- max_output_chars 不要超过 ${Config.SHELL_EXEC_MAX_OUTPUT_CHARS}。
+
+已执行命令：
+${executedCommands.length > 0 ? executedCommands.map((cmd, i) => `${i + 1}. ${cmd}`).join('\n') : '无'}
+
+请严格输出 JSON，不要输出其他内容：
+{"need_shell": false, "reason": "信息已经足够"}
+或
+{"need_shell": true, "reason": "还需要查看xxx", "command": "要执行的命令", "cwd": "可选工作目录", "timeout_ms": ${Config.SHELL_EXEC_TIMEOUT_MS}, "max_output_chars": ${Config.SHELL_EXEC_MAX_OUTPUT_CHARS}}
+
+当前轮次：${round}
+
+用户请求和已有工具结果：
+${truncateForPrompt(userMessage, Config.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS)}`
+
+    const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
+    const result = await client.makeRequest('chat', payload, modelGroupKey, 1024, providerFilter)
+    if (!result.success || !result.data) {
+        logger.warn(`[AI-Plugin] Shell 补查决策失败: ${result.error || '无返回'}`)
+        return null
+    }
+
+    const parsed = parseJsonObject(result.data)
+    if (!parsed) {
+        logger.warn(`[AI-Plugin] Shell 补查决策 JSON 解析失败: ${String(result.data).slice(0, 200)}`)
+        return null
+    }
+    return parsed
 }
 
 export class ChatHandler extends plugin {
@@ -464,10 +527,11 @@ export class ChatHandler extends plugin {
                         logger.warn(`[AI-Plugin] 加载意图分析上下文失败: ${err.message}`)
                     }
                 }
-                const candidateUrls = extractUrlsFromText(userMessage, 5)
+                const candidateUrls = extractUrlsFromText(userMessage, 10)
                 const toolAnalysis = await toolRegistry.analyzeToolIntent(userMessage, this.client, enabledTools, recentHistory, memorySummary, candidateUrls)
                 const intent = toolAnalysis?.intent || ''
                 const toolCalls = Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools : []
+                const executedShellCommands = []
                 // 意图分析注入
                 if (intent) {
                     userMessage = userMessage + `\n\n【意图分析】${intent}`
@@ -496,7 +560,7 @@ export class ChatHandler extends plugin {
                                     try {
                                         const topUrl = uniqueResults[0].url
                                         logger.info(`[AI-Plugin] 自动抓取搜索结果首条: ${topUrl}`)
-                                        const fetchResult = await toolRegistry.execute('web_fetch', { url: topUrl, max_chars: 6000 }, e.isMaster)
+                                        const fetchResult = await toolRegistry.execute('web_fetch', { url: topUrl, max_chars: 12000 }, e.isMaster)
                                         if (fetchResult.success) {
                                             userMessage = userMessage + fetchResult.data
                                         }
@@ -511,6 +575,7 @@ export class ChatHandler extends plugin {
                         } else if (call.name === 'shell_exec') {
                             const formattedResult = toolRegistry.formatToolResult('shell_exec', result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为服务器 Shell 命令的实际执行结果。请严格基于 stdout/stderr/退出码回答，不要编造未执行的结果。' + formattedResult
+                            executedShellCommands.push(normalizeShellCommand(result.data?.command || call.args?.command))
                             logger.warn(`[AI-Plugin] shell_exec 完成，结果已注入`)
                         } else {
                             userMessage = userMessage + result.data
@@ -518,6 +583,46 @@ export class ChatHandler extends plugin {
                         }
                     } else {
                         logger.warn(`[AI-Plugin] ${call.name} 失败: ${result.error}`)
+                    }
+                }
+
+                if (e.isMaster && enabledTools.includes('shell_exec') && executedShellCommands.length > 0) {
+                    const toolContext = { userId: e.user_id, groupId: e.group_id }
+                    const seenCommands = new Set(executedShellCommands.filter(Boolean))
+                    for (let round = 1; round <= Config.SHELL_EXEC_FOLLOWUP_MAX_ROUNDS; round++) {
+                        const decision = await askMainModelForNextShellCommand(this.client, modelGroupKey, providerFilter, userMessage, [...seenCommands], round)
+                        if (!decision?.need_shell) {
+                            logger.info(`[AI-Plugin] Shell 补查结束: ${decision?.reason || '无需补查'}`)
+                            break
+                        }
+
+                        const command = normalizeShellCommand(decision.command)
+                        if (!command) {
+                            logger.warn('[AI-Plugin] Shell 补查跳过：未返回 command')
+                            break
+                        }
+                        if (seenCommands.has(command)) {
+                            logger.warn(`[AI-Plugin] Shell 补查跳过重复命令: ${command}`)
+                            break
+                        }
+
+                        const args = {
+                            command,
+                            cwd: decision.cwd,
+                            timeout_ms: decision.timeout_ms,
+                            max_output_chars: decision.max_output_chars
+                        }
+                        logger.warn(`[AI-Plugin] Shell 补查第 ${round} 轮: ${command}`)
+                        const result = await toolRegistry.execute('shell_exec', args, e.isMaster, toolContext)
+                        if (!result.success) {
+                            logger.warn(`[AI-Plugin] Shell 补查失败: ${result.error}`)
+                            userMessage += `\n\n【Shell补查失败】命令: ${command}\n错误: ${result.error}\n`
+                            break
+                        }
+
+                        const formattedResult = toolRegistry.formatToolResult('shell_exec', result.data)
+                        userMessage += `\n\n【Shell补查第${round}轮】主模型判断需要继续补充服务器信息。请同样严格基于实际执行结果回答，不要编造未执行的结果。${formattedResult}`
+                        seenCommands.add(command)
                     }
                 }
             }

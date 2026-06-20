@@ -110,7 +110,7 @@ class ToolRegistry {
                 const role = turn.role === 'model' ? 'AI' : '用户'
                 const texts = (turn.parts || [])
                     .filter(p => p.text)
-                    .map(p => p.text.slice(0, 200))  // 每段最多200字，控制token
+                    .map(p => p.text.slice(0, 400))  // 每段最多400字，控制token
                 if (texts.length > 0) {
                     contextLines.push(`${role}: ${texts.join(' ')}`)
                 }
@@ -120,17 +120,17 @@ class ToolRegistry {
             }
         }
 
-        // 构建记忆总结上下文（增量总结，截取前500字控制token）
+        // 构建记忆总结上下文（增量总结，截取前1000字控制token）
         let summaryBlock = ''
         if (memorySummary) {
-            const trimmed = memorySummary.slice(0, 500)
+            const trimmed = memorySummary.slice(0, 1000)
             summaryBlock = `\n\n用户与AI的历史记忆摘要（帮助理解长期上下文，如提到过的话题、偏好、路径等）：\n${trimmed}\n`
         }
 
         // 构建候选链接上下文（来自当前消息、引用消息、合并转发及嵌套合并转发）
         let candidateUrlBlock = ''
         if (Array.isArray(candidateUrls) && candidateUrls.length > 0) {
-            const urls = [...new Set(candidateUrls)].slice(0, 5)
+            const urls = [...new Set(candidateUrls)].slice(0, 10)
             candidateUrlBlock = `\n\n当前消息/引用/合并转发中发现的候选链接（仅当用户明确需要查看、总结、分析网页内容时才调用 web_fetch）：\n${urls.map((url, index) => `${index + 1}. ${url}`).join('\n')}\n`
         }
 
@@ -187,7 +187,7 @@ ${toolDescriptions.join('\n')}
 
             // 降级：使用 Flash 模型组
             if (!result?.success) {
-                result = await client.makeRequest('chat', analysisPayload, 'flash', 512)
+                result = await client.makeRequest('chat', analysisPayload, 'flash', 1024)
             }
 
             if (!result.success || !result.data) {
