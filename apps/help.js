@@ -72,6 +72,7 @@ export class HelpHandler extends plugin {
   需在 models_config.yaml 开启 enable_file_transfer: true（独立开关）。
   上传：让 AI 把白名单目录内的文件/文件夹发到当前会话（文件夹自动打包为 tar.gz）。
   下载：让 AI 把当前消息或引用消息里的图片/视频/语音/文件保存到白名单目录。
+  群文件：让 AI 浏览当前群的群文件区，或按文件名把群文件下载到白名单目录（仅群聊）。
   路径受 file_roots.yaml 白名单约束，仅主人可用。
 > 🎨 AI 对话画图
   需在 models_config.yaml 开启 enable_ai_draw: true（独立开关）。

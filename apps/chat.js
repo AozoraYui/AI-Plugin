@@ -524,6 +524,11 @@ export class ChatHandler extends plugin {
             if (e.isMaster && this.client.enableFileTransfer) {
                 enabledTools.push('file_send')
                 enabledTools.push('file_download')
+                // 群文件浏览/下载（仅群聊有意义，但工具内部已做群聊校验）
+                if (e.group_id) {
+                    enabledTools.push('group_file_list')
+                    enabledTools.push('group_file_download')
+                }
             }
             // AI 对话画图：开启 enable_ai_draw 后，所有人可在对话中按意图触发画图
             if (this.client.enableAiDraw) {
@@ -598,6 +603,10 @@ export class ChatHandler extends plugin {
                         } else if (call.name === 'file_send' || call.name === 'file_download') {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为文件收发工具的实际执行结果，请如实告知主人操作结果，不要编造。' + formattedResult
+                            logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
+                        } else if (call.name === 'group_file_list' || call.name === 'group_file_download') {
+                            const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
+                            userMessage = userMessage + '\n\n【重要指令】以上为群文件工具的实际执行结果，请如实告知主人，不要编造文件名或结果。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (call.name === 'draw_image') {
                             const formattedResult = toolRegistry.formatToolResult('draw_image', result.data)
