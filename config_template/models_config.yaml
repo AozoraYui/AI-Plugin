@@ -1,27 +1,38 @@
+# ================================================================
 # AI 插件模型供应商配置
-# 每个供应商包含以下字段：
-#   id: 供应商标识（唯一）
-#   name: 供应商显示名称
-#   priority: 优先级（数字越小越优先，默认1）
-#             同优先级内按模型得分（成功率+延迟）排序
-#             高优先级组全部失败后自动降级到下一组
-#             例：priority 1 为主力，priority 2 为备用
-#   multimodal: 是否为多模态（支持识图），默认 true
-#             设为 false 表示纯文本模型，有图片时会自动启用 Vision Relay
-#   base_url: API 基础地址
-#   api_key: API 密钥
-#   model_groups: 模型组配置
-#     flash: Flash 模型组（用于 #chat, #draw 等指令）
-#     pro: Pro 模型组（用于 #prochat 指令）
-#     ultra: Ultra 模型组（用于 #ultrachat, #ultradraw 指令）
-#   每个模型组包含：
-#     chat_models: 对话模型列表
-#     draw_models: 绘图模型列表
-#       直接填模型名字符串即可，插件会自动适配请求端点
+# ----------------------------------------------------------------
+# 本文件为多文档 YAML，用 "---" 分隔为若干段落：
+#   1) 供应商列表（模型来源）
+#   2) 指令自定义
+#   3) 图文转述 Vision Relay
+#   4) 联网搜索 / 网页抓取 / 文件读取 / Shell / 天气 等开关
+# ----------------------------------------------------------------
+# 每个供应商字段说明：
+#   id          供应商唯一标识（被 intent_model / vision_model 引用）
+#   name        显示名称（用于 #ai模型列表 等展示）
+#   priority    优先级，数字越小越优先（默认 1）
+#               同优先级内按模型得分（成功率 + 延迟）自动排序
+#               高优先级组全部失败后自动降级到下一优先级
+#               例：priority 1 主力，priority 2 备用
+#   multimodal  是否支持识图（默认 true）
+#               false 表示纯文本模型，遇图片时自动走 Vision Relay
+#   base_url    API 基础地址（仅到 /v1，结尾不要带斜杠或多余空格）
+#   api_key     API 密钥
+#   model_groups 模型组，分 flash / pro / ultra 三档：
+#               flash  默认组    → #chat / #draw
+#               pro    专业组    → #pchat / #pdraw
+#               ultra  旗舰组    → #uchat / #udraw
+#               （指令前缀随 CHAT_COMMAND / DRAW_COMMAND 变化）
+#     每组含：
+#       chat_models  对话模型列表（按填写顺序为同分时的偏好）
+#       draw_models  绘图模型列表（不支持绘图填 [] 即可）
+#       直接填模型名字符串，插件自动适配 chat / images 端点
+# ================================================================
 
 - id: "your-provider-id"
   name: "供应商名称"
   priority: 1
+  multimodal: true
   base_url: "https://api.example.com/v1"
   api_key: "your-api-key-here"
   model_groups:
@@ -45,10 +56,12 @@
 # ================================================
 # 指令自定义（可选，不配置则使用默认值）
 # CHAT_COMMAND: 对话指令关键词（默认 chat）
-#   例: 设为 "c" 后 → #c, #pc, #uc, #sc
+#   例: 设为 "c" 后 → #c 默认 / #pc 专业 / #uc 旗舰 / #sc 单次
 # DRAW_COMMAND: 绘图指令关键词（默认 draw）
-#   例: 设为 "d" 后 → #d, #pd, #ud
-# 注意：请勿使用与预设指令冲突的关键词
+#   例: 设为 "d" 后 → #d 默认 / #pd 专业 / #ud 旗舰
+# 临时 flag 可叠加在前缀后：n 联网 / w 网页抓取 / f 文件读取 / v 图文转述
+#   例: #cn 临时联网、#cf 临时文件读取
+# 注意：请勿使用与绘图预设（如 cos化、手办化）冲突的关键词
 # ================================================
 # CHAT_COMMAND: chat
 # DRAW_COMMAND: draw
@@ -107,14 +120,25 @@ enable_web_fetch: false
 
 # ================================================
 # 本地文件读取与 Shell 工具配置
-# enable_file_read: 是否启用本地文件读取（默认 false，使用 #cf/#scf 临时启用只读文件工具）
-#   启用后，AI 会自动检测文件/目录读取意图并调用工具
-#   默认关闭，防止 AI 意外读取本地文件
+# ------------------------------------------------
+# enable_file_read: 是否启用本地文件读取（默认 false）
+#   仅主人可用；启用后 AI 自动识别文件/目录读取意图并调用只读工具
+#   临时启用：#cf / #scf
+#   非主人即使显式索要本地文件，也会被直接拒绝
+#
 # enable_shell_exec: 是否允许 AI 执行服务器 Shell 命令（默认 false）
-#   仅主人可用；开启后 AI 可根据用户意图执行完整 shell 命令，具备服务器操作权限
-#   开启即默认具备文件读取能力（无需额外开启 enable_file_read）
-#   请只在完全信任使用者与模型路由时开启
-#   注意：与 enable_web_search 平级（不要缩进！）
+#   ⚠ 高危能力：等同把服务器命令行交给 AI，请慎重开启
+#   仅主人可用；非主人无论如何都无法触发
+#   独立开关：无需再开 enable_file_read，开启后自动具备文件读取能力
+#   支持多轮补查：AI 可根据上一条命令结果决定下一步命令
+#
+# 以下为可调上限（注释即用默认值，单位见名）：
+#   SHELL_EXEC_TIMEOUT_MS            单条命令默认超时（默认 60000）
+#   SHELL_EXEC_MAX_TIMEOUT_MS        单条命令超时上限（默认 240000）
+#   SHELL_EXEC_MAX_OUTPUT_CHARS      单条命令输出截断字符数（默认 24000）
+#   SHELL_EXEC_FOLLOWUP_MAX_ROUNDS   多轮补查最大轮数（默认 2）
+#   SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS 补查时回传给模型的上下文字符数（默认 24000）
+# 注意：以上开关均与 enable_web_search 平级（不要缩进！）
 # ================================================
 # enable_file_read: false
 # enable_shell_exec: false
