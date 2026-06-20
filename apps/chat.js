@@ -168,6 +168,29 @@ async function expandInlineContent(bot, msgArray, sender = "发送者", depth = 
 }
 
 const CHAT_PREFIX_PATTERN = '((?:[1-9])?(?:pro|p|ultra|u)?[vnwf]*)'
+const DRAW_COMMAND_PREFIX_PATTERN = '(?:[1-9])?(?:pro|p|ultra|u)?'
+
+function escapeRegex(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function getImagePresetCommandExclusion() {
+    const commands = (Config.presets || [])
+        .flatMap(p => [p.command, ...(p.aliases || [])])
+        .filter(Boolean)
+        .map(escapeRegex)
+
+    if (commands.length === 0) return ''
+    return `(?!${DRAW_COMMAND_PREFIX_PATTERN}(?:${commands.join('|')})(?:\\s|$))`
+}
+
+function buildChatRegex(chatCmd) {
+    return new RegExp(`^#${getImagePresetCommandExclusion()}${CHAT_PREFIX_PATTERN}${escapeRegex(chatCmd)}([vnwf]*)([\\s\\S]*)$`, 'i')
+}
+
+function buildSingleChatRegex(chatCmd) {
+    return new RegExp(`^#${getImagePresetCommandExclusion()}${CHAT_PREFIX_PATTERN}s${CHAT_PREFIX_PATTERN}${escapeRegex(chatCmd)}([vnwf]*)([\\s\\S]*)$`, 'i')
+}
 
 function extractUrlsFromText(text, limit = 5) {
     if (!text || typeof text !== 'string') return []
@@ -195,8 +218,8 @@ export class ChatHandler extends plugin {
             event: 'message',
             priority: -9101,
             rule: [
-                { reg: new RegExp(`^#${CHAT_PREFIX_PATTERN}s${CHAT_PREFIX_PATTERN}${chatCmd}([vnwf]*)([\\s\\S]*)$`, 'i'), fnc: 'handleSingleChat' },
-                { reg: new RegExp(`^#${CHAT_PREFIX_PATTERN}${chatCmd}([vnwf]*)([\\s\\S]*)$`, 'i'), fnc: 'handleChat' },
+                { reg: buildSingleChatRegex(chatCmd), fnc: 'handleSingleChat' },
+                { reg: buildChatRegex(chatCmd), fnc: 'handleChat' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}记忆$`, 'i'), fnc: 'exportMyMemory' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'), fnc: 'exportMemoryByDate' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆$`, 'i'), fnc: 'exportAllMemory', permission: 'master' },
@@ -212,7 +235,7 @@ export class ChatHandler extends plugin {
         if (!await checkAccess(e)) return true
 
         const chatCmd = Config.CHAT_COMMAND
-        const match = e.msg.match(new RegExp(`^#${CHAT_PREFIX_PATTERN}s${CHAT_PREFIX_PATTERN}${chatCmd}([vnwf]*)([\\s\\S]*)$`, 'i'))
+        const match = e.msg.match(buildSingleChatRegex(chatCmd))
         if (!match) return
 
         e._singleMode = true
@@ -251,7 +274,7 @@ export class ChatHandler extends plugin {
         if (!await checkAccess(e)) return true
 
         const chatCmd = Config.CHAT_COMMAND
-        const match = e.msg.match(new RegExp(`^#${CHAT_PREFIX_PATTERN}${chatCmd}([vnwf]*)([\\s\\S]*)$`, 'i'))
+        const match = e.msg.match(buildChatRegex(chatCmd))
         if (!match) return
 
         const prefix = match[1].toLowerCase()
@@ -389,6 +412,9 @@ export class ChatHandler extends plugin {
             if (e._fileReadFlag || this.client.enableFileRead) {
                 enabledTools.push('file_read')
                 enabledTools.push('dir_read')
+                if (e.isMaster && this.client.enableShellExec) {
+                    enabledTools.push('shell_exec')
+                }
             }
 
             if (enabledTools.length > 0) {
@@ -446,6 +472,10 @@ export class ChatHandler extends plugin {
                         } else if (call.name === 'file_read' || call.name === 'dir_read') {
                             userMessage = userMessage + '\n\n【重要指令】以上为服务器实际文件内容。请严格按照实际内容回答，不要总结、不要遗漏、不要编造。列出所有文件和目录，包括隐藏文件（如.git、.gitignore）和数据库文件（如.db、.db-shm、.db-wal）。' + result.data
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
+                        } else if (call.name === 'shell_exec') {
+                            const formattedResult = toolRegistry.formatToolResult('shell_exec', result.data)
+                            userMessage = userMessage + '\n\n【重要指令】以上为服务器 Shell 命令的实际执行结果。请严格基于 stdout/stderr/退出码回答，不要编造未执行的结果。' + formattedResult
+                            logger.warn(`[AI-Plugin] shell_exec 完成，结果已注入`)
                         } else {
                             userMessage = userMessage + result.data
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)

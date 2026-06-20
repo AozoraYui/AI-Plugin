@@ -78,11 +78,19 @@ const defaultConfig = {
     // 每日摘要生成失败时，使用原始片段的最大长度（字符数）
     // 使用场景: utils/common.js, utils/scheduler.js 中每日摘要降级处理
     FALLBACK_DAILY_SUMMARY_MAX_LENGTH: 500,
-    // ========== 文件读取工具配置 ==========
+    // ========== 文件读取与 Shell 工具配置 ==========
     // 单次读取文件最大大小（字节），默认 4MB
     FILE_MAX_SIZE: 4194304,
     // readAll 模式下所有文件总大小上限（字节），默认 2MB
     FILE_READ_ALL_MAX_TOTAL: 2097152,
+    // Shell 命令默认超时时间（毫秒），仅在 enable_file_read + enable_shell_exec 同时开启后可由主人使用
+    SHELL_EXEC_TIMEOUT_MS: 30000,
+    // Shell 命令最大超时时间（毫秒），防止长期阻塞
+    SHELL_EXEC_MAX_TIMEOUT_MS: 120000,
+    // Shell 输出注入模型的最大字符数
+    SHELL_EXEC_MAX_OUTPUT_CHARS: 12000,
+    // child_process exec 最大缓冲区
+    SHELL_EXEC_MAX_BUFFER: 10485760,
     version: 'v1.0.0'
 }
 
@@ -326,6 +334,14 @@ export const Config = {
     get FILE_ROOTS() { return loadedFileRoots ?? defaultConfig.FILE_ROOTS },
     get FILE_MAX_SIZE() { return config.FILE_MAX_SIZE ?? defaultConfig.FILE_MAX_SIZE },
     get FILE_READ_ALL_MAX_TOTAL() { return config.FILE_READ_ALL_MAX_TOTAL ?? defaultConfig.FILE_READ_ALL_MAX_TOTAL },
+    get SHELL_EXEC_TIMEOUT_MS() { return config.SHELL_EXEC_TIMEOUT_MS ?? defaultConfig.SHELL_EXEC_TIMEOUT_MS },
+    set SHELL_EXEC_TIMEOUT_MS(val) { config.SHELL_EXEC_TIMEOUT_MS = Number(val) || defaultConfig.SHELL_EXEC_TIMEOUT_MS },
+    get SHELL_EXEC_MAX_TIMEOUT_MS() { return config.SHELL_EXEC_MAX_TIMEOUT_MS ?? defaultConfig.SHELL_EXEC_MAX_TIMEOUT_MS },
+    set SHELL_EXEC_MAX_TIMEOUT_MS(val) { config.SHELL_EXEC_MAX_TIMEOUT_MS = Number(val) || defaultConfig.SHELL_EXEC_MAX_TIMEOUT_MS },
+    get SHELL_EXEC_MAX_OUTPUT_CHARS() { return config.SHELL_EXEC_MAX_OUTPUT_CHARS ?? defaultConfig.SHELL_EXEC_MAX_OUTPUT_CHARS },
+    set SHELL_EXEC_MAX_OUTPUT_CHARS(val) { config.SHELL_EXEC_MAX_OUTPUT_CHARS = Number(val) || defaultConfig.SHELL_EXEC_MAX_OUTPUT_CHARS },
+    get SHELL_EXEC_MAX_BUFFER() { return config.SHELL_EXEC_MAX_BUFFER ?? defaultConfig.SHELL_EXEC_MAX_BUFFER },
+    set SHELL_EXEC_MAX_BUFFER(val) { config.SHELL_EXEC_MAX_BUFFER = Number(val) || defaultConfig.SHELL_EXEC_MAX_BUFFER },
     presets,
     reloadPresets() {
         this.presets = loadPresetsSync()

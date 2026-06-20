@@ -106,13 +106,21 @@ enable_web_search: false
 enable_web_fetch: false
 
 # ================================================
-# 本地文件读取配置
-# enable_file_read: 是否启用本地文件读取（默认 false，使用 #cf/#scf 临时启用）
+# 本地文件读取与 Shell 工具配置
+# enable_file_read: 是否启用本地文件读取（默认 false，使用 #cf/#scf 临时启用只读文件工具）
 #   启用后，AI 会自动检测文件/目录读取意图并调用工具
 #   默认关闭，防止 AI 意外读取本地文件
+# enable_shell_exec: 是否允许 AI 执行服务器 Shell 命令（默认 false）
+#   生效条件：必须同时设置 enable_file_read: true 和 enable_shell_exec: true
+#   仅主人可用；开启后 AI 可根据用户意图执行完整 shell 命令，具备服务器操作权限
+#   请只在完全信任使用者与模型路由时开启
 #   注意：与 enable_web_search 平级（不要缩进！）
 # ================================================
 # enable_file_read: false
+# enable_shell_exec: false
+# SHELL_EXEC_TIMEOUT_MS: 30000
+# SHELL_EXEC_MAX_TIMEOUT_MS: 120000
+# SHELL_EXEC_MAX_OUTPUT_CHARS: 12000
 
 # ================================================
 # 天气查询配置

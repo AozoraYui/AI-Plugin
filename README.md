@@ -34,6 +34,7 @@
 - **服务器状态查询**：AI 可查看服务器 CPU、内存、温度等系统信息
 - **本地文件只读**：AI 可读取白名单目录下的文件内容（最大 4MB），支持自然语言别名、相对路径和文件名片段定位
 - **目录浏览**：AI 可列出白名单目录下的文件和子目录，支持逐层深入浏览
+- **Shell 执行**：可选开启后，主人可让 AI 根据意图执行服务器 Shell 命令，适合 grep/rg 搜索、日志排查、服务诊断等
 - **联网搜索**：AI 自动判断是否需要联网搜索，注入搜索结果辅助回答。默认关闭，使用 `#cn` 临时启用
 
 ### 🖼️ Vision Relay（图文转述）
@@ -148,7 +149,8 @@ vision_model:
 enable_web_search: false
 # intent_model: []
 enable_web_fetch: false
-# enable_file_read: false  # 默认关闭，可使用 #cf 临时启用
+# enable_file_read: false  # 默认关闭，可使用 #cf 临时启用只读文件工具
+# enable_shell_exec: false # 默认关闭；需同时 enable_file_read: true 才允许主人让 AI 执行 Shell
 ```
 
 **`draw_presets.yaml`** - 作图预设配置
@@ -253,12 +255,14 @@ AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单
 | 本地文件读取 | 全局开关开启后自动检测，或使用 `#cf` 临时强制读取 | 只读，仅限白名单目录，最大 4MB；支持“日志/配置/模型配置/插件目录”等别名、相对路径和文件名片段 |
 | 目录浏览 | 全局开关开启后自动检测，或使用 `#cf` 临时强制浏览 | 列出文件和子目录，受白名单限制；支持“data目录/上次那个目录”等自然语言指代 |
 | 目录+文件全读 | 全局开关开启后自动检测，或使用 `#cf` 临时强制读取 | 递归读取所有文本文件，自动跳过二进制和超大文件 |
+| Shell 执行 | `enable_file_read: true` + `enable_shell_exec: true` 后，主人对话中自动按意图调用 | 执行服务器 shell 命令并返回 stdout/stderr，适合 `grep`/`rg`/`find` 查文件、日志排查、服务诊断；具备完整服务器权限 |
 | 联网搜索 | 使用 `#cn` 临时启用，AI 自动判断是否需要搜索 | 注入搜索结果辅助回答，自动抓取首条结果网页全文 |
 | 网页抓取 | 使用 `#cw` 临时启用，自动提取消息中的 URL 并抓取网页内容 | 提取网页可读文本，支持 HTML/JSON，最大 8000 字符 |
 
 > 💡 文件读取白名单在 `config/file_roots.yaml` 中单独配置，AI 只能读取无法写入修改。
 >  文件读取默认关闭，可使用 `#cf` 临时启用，或在 `models_config.yaml` 中设置 `enable_file_read: true` 全局开启。
 >  开启后可以直接说“看下日志”“读一下模型配置”“data目录有什么”“看看上次那个目录”，无需每次输入绝对路径。
+> ⚠️ Shell 执行默认关闭，且不会被 `#cf` 临时打开；必须同时设置 `enable_file_read: true` 和 `enable_shell_exec: true`，并且仅主人可用。开启后 AI 可执行完整服务器命令，请谨慎使用。
 > 💡 联网搜索默认关闭，可使用 `#cn` 临时启用，或在 `models_config.yaml` 中设置 `enable_web_search: true` 全局开启。推荐配置专用意图分析模型以加速。
 > 💡 网页抓取默认关闭，可使用 `#cw` 临时启用，或在 `models_config.yaml` 中设置 `enable_web_fetch: true` 全局开启。消息中包含 URL 时自动抓取网页内容。
 
@@ -307,7 +311,8 @@ AI-Plugin/
 │   ├── index.js            # 工具注册入口
 │   ├── registry.js         # 工具注册表（注册、意图检测等）
 │   ├── file_read.js        # 本地文件读取 & 目录浏览
-│   ├── system_info.js      # 服务器系统信息查询
+│   ├── shell_exec.js       # Shell 命令执行工具（主人专用，可选开启）
+│   ├── system_info.js      # 系统信息查询
 │   ├── search.js           # 联网搜索
 │   ├── web_fetch.js        # 网页抓取
 │   └── vision_relay.js     # 图文转述
@@ -389,7 +394,8 @@ AI-Plugin/
 12. **Vision Relay**：非多模态模型通过 Vision 模型描述图片后间接理解图片；有图请求会优先使用多模态模型，避免纯文本模型直接接收图片
 13. **作图兼容**：chat/completions 不支持图片时自动重试 `/images/edits`（multipart 传图）或 `/images/generations`（纯文本）
 14. **文件读取安全**：AI 只能读取 `file_roots.yaml` 白名单目录下的文件，无法写入、修改或删除
-15. **指令自定义**：可在 `models_config.yaml` 中修改 `chat_command`/`draw_command` 缩短指令
+15. **Shell 执行风险**：Shell 工具默认关闭，需 `enable_file_read: true` + `enable_shell_exec: true` 同时开启且仅主人可用；开启后具备完整服务器命令权限
+16. **指令自定义**：可在 `models_config.yaml` 中修改 `chat_command`/`draw_command` 缩短指令
 
 ## 🤝 贡献
 

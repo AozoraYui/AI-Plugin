@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import yaml from 'yaml'
-import { MODELS_CONFIG_FILE, MODEL_STATUS_FILE, DISABLED_MODELS_FILE, TEMPLATE_DIR_EXPORT } from '../utils/config.js'
+import { Config, MODELS_CONFIG_FILE, MODEL_STATUS_FILE, DISABLED_MODELS_FILE, TEMPLATE_DIR_EXPORT } from '../utils/config.js'
 import { fetchWithProxy } from '../utils/common.js'
 import { toolRegistry } from '../tools/index.js'
 
@@ -21,6 +21,7 @@ export class AiClient {
         this.webSearchConfig = { enabled: false, intent_model: null }
         this.webFetchConfig = { enabled: false }
         this.fileReadConfig = { enabled: false }
+        this.shellExecConfig = { enabled: false }
         this.weatherApiKey = null
         this.openWeatherMapApiKey = null
         this.loadModelsConfig()
@@ -137,6 +138,11 @@ export class AiClient {
     /** 是否启用本地文件读取（默认关闭，需配置明确启用） */
     get enableFileRead() {
         return (this.fileReadConfig?.enable_file_read ?? this.fileReadConfig?.enabled) === true
+    }
+
+    /** 是否允许 AI 执行 Shell（需同时开启文件读取与 Shell 开关） */
+    get enableShellExec() {
+        return this.enableFileRead && this.shellExecConfig?.enabled === true
     }
 
     /** 搜索意图分析专用模型列表 */
@@ -370,10 +376,19 @@ export class AiClient {
 
                 // 提取 enable_file_read（默认关闭）
                 this.fileReadConfig = { enabled: rawConfig.enable_file_read === true }
+                this.shellExecConfig = { enabled: rawConfig.enable_shell_exec === true }
+                for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_MAX_BUFFER']) {
+                    if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
+                }
                 if (this.enableFileRead) {
                     logger.info('[AI-Plugin] 本地文件读取已启用')
                 } else {
                     logger.debug('[AI-Plugin] 本地文件读取未启用（可通过 #cf/#scf 临时调用）')
+                }
+                if (this.enableShellExec) {
+                    logger.warn('[AI-Plugin] Shell 执行工具已启用：AI 可在主人请求下执行服务器命令')
+                } else if (this.shellExecConfig.enabled) {
+                    logger.warn('[AI-Plugin] enable_shell_exec 已配置，但 enable_file_read 未启用，Shell 工具不会开放')
                 }
 
                 // 提取 weather_api_key（高德地图天气查询）
