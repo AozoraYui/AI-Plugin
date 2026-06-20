@@ -456,6 +456,24 @@ export class ChatHandler extends plugin {
                             if (imgUrl) {
                                 allImages.push(imgUrl)
                             }
+                        } else if (m.type === 'file') {
+                            // 引用的是群文件：把文件名写入上下文，并缓存到 redis，供后续"刚才那个文件/这个文件"下载
+                            const fileName = m.name || m.file_name || m.fileName || m.data?.name || m.data?.file_name || m.file || m.data?.file || ''
+                            if (fileName) {
+                                replyText += `\n[群文件：${fileName}]\n`
+                                if (e.group_id) {
+                                    try {
+                                        await redis.set(
+                                            `AI-Plugin:lastQuotedFile:${e.group_id}:${e.user_id}`,
+                                            String(fileName).trim(),
+                                            { EX: 3600 }
+                                        )
+                                        logger.info(`[AI-Plugin] 已缓存引用群文件名「${fileName}」到上下文`)
+                                    } catch (err) {
+                                        logger.warn(`[AI-Plugin] 缓存引用群文件名失败: ${err.message}`)
+                                    }
+                                }
+                            }
                         }
                     }
 

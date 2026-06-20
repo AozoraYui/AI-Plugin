@@ -384,6 +384,18 @@ export const groupFileDownloadTool = {
             query = await extractFileNameFromReply(event)
             if (query) logger.info(`[AI-Plugin] 群文件：从引用消息提取到文件名「${query}」`)
         }
+        // 仍为空时，回退读取最近引用过的群文件名（chat.js 缓存，有效期1小时）
+        if (!query && event.group_id && context.userId) {
+            try {
+                const cached = await redis.get(`AI-Plugin:lastQuotedFile:${event.group_id}:${context.userId}`)
+                if (cached) {
+                    query = String(cached).trim()
+                    logger.info(`[AI-Plugin] 群文件：使用最近引用过的群文件名「${query}」`)
+                }
+            } catch (err) {
+                logger.warn(`[AI-Plugin] 群文件：读取最近引用文件名缓存失败: ${err.message}`)
+            }
+        }
         if (!query) return '【群文件下载失败】未提供要下载的文件名，也未能从引用消息中识别出群文件。请直接说出文件名，或引用那条群文件消息再让我下载。'
 
         try {
