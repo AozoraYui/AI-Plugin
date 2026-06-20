@@ -506,12 +506,16 @@ export class ChatHandler extends plugin {
                 enabledTools.push('system_info')
             }
             enabledTools.push('weather') // 天气查询，所有用户可用
-            if (e.isMaster && (e._fileReadFlag || this.client.enableFileRead)) {
+            // 文件读取：主人开启 enable_file_read 或带 f flag
+            const fileReadEnabled = e.isMaster && (e._fileReadFlag || this.client.enableFileRead)
+            // Shell 执行：主人开启 enable_shell_exec（独立于 file_read），开启即默认具备文件读取能力
+            const shellEnabled = e.isMaster && this.client.enableShellExec
+            if (fileReadEnabled || shellEnabled) {
                 enabledTools.push('file_read')
                 enabledTools.push('dir_read')
-                if (this.client.enableShellExec) {
-                    enabledTools.push('shell_exec')
-                }
+            }
+            if (shellEnabled) {
+                enabledTools.push('shell_exec')
             }
 
             if (enabledTools.length > 0) {

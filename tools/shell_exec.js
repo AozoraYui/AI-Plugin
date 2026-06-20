@@ -1,6 +1,6 @@
 /**
  * 本地 Shell 执行工具
- * 仅主人可用；仅在 enable_file_read + enable_shell_exec 同时开启后进入工具路由。
+ * 仅主人可用；仅在 enable_shell_exec 开启后进入工具路由（开启即默认具备文件读取能力）。
  */
 
 import { exec } from 'node:child_process'
@@ -50,7 +50,7 @@ function runShellCommand(command, options = {}) {
 export const shellExecTool = {
     name: 'shell_exec',
     permission: 'master',
-    description: '在服务器上执行 Shell 命令并返回 stdout/stderr。拥有完整命令权限，仅限主人，需同时开启 enable_file_read 与 enable_shell_exec。适合查找文件、grep/rg 搜索、查看日志、诊断服务状态、执行用户明确要求的服务器操作。',
+    description: '在服务器上执行 Shell 命令并返回 stdout/stderr。拥有完整命令权限，仅限主人，需开启 enable_shell_exec。适合查找文件、grep/rg 搜索、查看日志、诊断服务状态、执行用户明确要求的服务器操作。',
 
     functionSchema: {
         type: 'function',

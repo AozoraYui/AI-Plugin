@@ -62,9 +62,18 @@ export class AiClient {
 
     /** 检查 payload 是否包含图片 */
     _payloadHasImages(payload) {
-        return payload?.contents?.some(content =>
-            content.parts?.some(part => part.inline_data?.data)
-        ) === true
+        const contents = payload?.contents
+        if (!Array.isArray(contents) || contents.length === 0) return false
+        // 只检查当前用户回合（最后一条 user 消息），避免历史记录里的旧图片导致误判
+        let lastUserContent = null
+        for (let i = contents.length - 1; i >= 0; i--) {
+            if (contents[i]?.role === 'user') {
+                lastUserContent = contents[i]
+                break
+            }
+        }
+        if (!lastUserContent) lastUserContent = contents[contents.length - 1]
+        return lastUserContent?.parts?.some(part => part.inline_data?.data) === true
     }
 
     /** 检查当前模型组是否有可用多模态对话模型 */
@@ -140,9 +149,9 @@ export class AiClient {
         return (this.fileReadConfig?.enable_file_read ?? this.fileReadConfig?.enabled) === true
     }
 
-    /** 是否允许 AI 执行 Shell（需同时开启文件读取与 Shell 开关） */
+    /** 是否允许 AI 执行 Shell（仅需 Shell 开关；开启即默认具备文件读取能力） */
     get enableShellExec() {
-        return this.enableFileRead && this.shellExecConfig?.enabled === true
+        return this.shellExecConfig?.enabled === true
     }
 
     /** 搜索意图分析专用模型列表 */
@@ -386,9 +395,7 @@ export class AiClient {
                     logger.debug('[AI-Plugin] 本地文件读取未启用（可通过 #cf/#scf 临时调用）')
                 }
                 if (this.enableShellExec) {
-                    logger.warn('[AI-Plugin] Shell 执行工具已启用：AI 可在主人请求下执行服务器命令')
-                } else if (this.shellExecConfig.enabled) {
-                    logger.warn('[AI-Plugin] enable_shell_exec 已配置，但 enable_file_read 未启用，Shell 工具不会开放')
+                    logger.warn('[AI-Plugin] Shell 执行工具已启用：AI 可在主人请求下执行服务器命令（含文件读取）')
                 }
 
                 // 提取 weather_api_key（高德地图天气查询）
