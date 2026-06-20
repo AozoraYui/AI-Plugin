@@ -48,6 +48,67 @@ async function sendFileToSession(event, filePath, fileName) {
     }
 }
 
+// docker 内 napcat 看不到宿主机路径时的典型错误特征
+const DOCKER_NAPCAT_ERR_HINTS = [
+    'no such file', 'not found', 'cannot find', 'enoent',
+    'file not exist', 'file does not exist', '不存在', '找不到', '无法找到',
+    'read file', '读取文件', 'failed to', 'upload', 'rich media transfer'
+]
+
+/** 判断 sendFile 报错是否疑似 docker napcat 路径不可见导致 */
+function isLikelyDockerPathError(errMsg) {
+    const lower = String(errMsg || '').toLowerCase()
+    return DOCKER_NAPCAT_ERR_HINTS.some(k => lower.includes(k))
+}
+
+/** 生成 docker napcat 适配问题的排查提示 */
+function buildDockerNapcatHint(sendPath) {
+    const dirOfFile = path.dirname(sendPath)
+    return [
+        '',
+        '⚠ 文件发送失败，疑似 NapCat 部署在 Docker 容器内、读取不到宿主机文件路径导致。',
+        `本次尝试发送的服务器路径为：${sendPath}`,
+        '',
+        '━━━━━━━━━━ 原因说明 ━━━━━━━━━━',
+        '发送文件时，本插件只是把"宿主机上的本地路径"字符串交给 NapCat，',
+        '真正去打开并上传这个文件的是 NapCat 自己（OneBot 的 upload_group_file / upload_private_file 接口）。',
+        '如果 NapCat 跑在 Docker 容器里，容器内部是一套独立的文件系统，',
+        '宿主机的这个路径在容器里根本不存在，于是 NapCat 报"文件找不到/读取失败"。',
+        'TRSS-Yunzai 与插件本身能读到该文件，不代表容器里的 NapCat 也能读到——这是两个不同的文件系统视角。',
+        '',
+        '━━━━━━━━━━ 如何确认是不是这个问题 ━━━━━━━━━━',
+        '1. 确认 NapCat 是用 Docker 跑的（docker ps 能看到 napcat 容器）。',
+        '2. 进入容器检查这个路径在容器里是否存在：',
+        `   docker exec -it <napcat容器名> ls -l "${sendPath}"`,
+        '   若提示 No such file or directory，即可确认是路径不可见问题。',
+        '',
+        '━━━━━━━━━━ 解决方案（按推荐顺序） ━━━━━━━━━━',
+        '【方案一｜推荐】把文件所在目录挂载进容器，并让"容器内外路径完全一致"',
+        '  这样插件传给 NapCat 的宿主机路径，在容器里指向的就是同一个文件，零改动即可生效。',
+        '  · docker run 写法：在原有命令上追加一行卷挂载',
+        `      -v "${dirOfFile}:${dirOfFile}"`,
+        '  · docker-compose 写法：在该服务的 volumes 下加一行',
+        '      volumes:',
+        `        - "${dirOfFile}:${dirOfFile}"`,
+        '  · 建议直接把 file_roots.yaml 里的白名单根目录整体挂载进去，省得每个子目录单独挂。',
+        '  · 改完后需要重新创建容器使挂载生效：',
+        '      docker compose up -d   （或 docker rm -f 后用新的 -v 重新 docker run）',
+        '',
+        '【方案二】把要发送的文件放到"已经和容器共享的目录"里再发',
+        '  NapCat 容器通常已经挂了数据目录（如宿主机某目录映射到容器内 /app/.config/QQ 之类），',
+        '  把目标文件复制到这个已共享目录下，再把该宿主机目录加入 file_roots.yaml 白名单，然后发送。',
+        '  注意：若容器内外路径不一致，仍可能失败，优先用方案一保持路径一致。',
+        '',
+        '【方案三】检查 NapCat 自身的文件/富媒体上传权限与配置',
+        '  确认 NapCat 的 OneBot 配置已允许文件上传，且账号有发文件权限（如群文件需要管理权限或群设置允许）。',
+        '',
+        '━━━━━━━━━━ 补充 ━━━━━━━━━━',
+        '· 若 NapCat 与 TRSS-Yunzai 都在同一宿主机原生运行（没用 Docker），通常不会有此问题，',
+        '  请改为检查：文件是否真实存在、是否有读取权限、文件是否过大或为空。',
+        '· 若 NapCat 和 Yunzai 分别在不同机器/不同容器，本质同理，需保证 NapCat 那侧能访问到该文件路径。'
+    ].join('\n')
+}
+
 export const fileSendTool = {
     name: 'file_send',
     permission: 'master',
@@ -135,6 +196,10 @@ export const fileSendTool = {
                 isArchive
             }
         } catch (err) {
+            // sendFile 抛错且特征疑似 docker napcat 路径不可见 → 附带排查与解决方案
+            if (isLikelyDockerPathError(err.message)) {
+                return `【文件发送失败】${err.message}\n${buildDockerNapcatHint(sendPath)}`
+            }
             return `【文件发送失败】${err.message}`
         } finally {
             if (tempToClean && fs.existsSync(tempToClean)) {
