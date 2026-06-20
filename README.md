@@ -154,7 +154,7 @@ enable_web_search: false
 # intent_model: []
 enable_web_fetch: false
 # enable_file_read: false  # 默认关闭，可使用 #cf 临时启用只读文件工具
-# enable_shell_exec: false # 默认关闭；需同时 enable_file_read: true 才允许主人让 AI 执行 Shell
+# enable_shell_exec: false # 默认关闭；独立开关，开启后即允许主人让 AI 执行 Shell（无需 enable_file_read）
 ```
 
 **`draw_presets.yaml`** - 作图预设配置
@@ -259,14 +259,14 @@ AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单
 | 本地文件读取 | 全局开关开启后自动检测，或使用 `#cf` 临时强制读取 | 只读，仅限白名单目录，最大 4MB；支持“日志/配置/模型配置/插件目录”等别名、相对路径和文件名片段 |
 | 目录浏览 | 全局开关开启后自动检测，或使用 `#cf` 临时强制浏览 | 列出文件和子目录，受白名单限制；支持“data目录/上次那个目录”等自然语言指代 |
 | 目录+文件全读 | 全局开关开启后自动检测，或使用 `#cf` 临时强制读取 | 递归读取所有文本文件，自动跳过二进制和超大文件 |
-| Shell 执行 | `enable_file_read: true` + `enable_shell_exec: true` 后，主人对话中自动按意图调用 | 执行服务器 shell 命令并返回 stdout/stderr，适合 `grep`/`rg`/`find` 查文件、日志排查、服务诊断；具备完整服务器权限 |
+| Shell 执行 | `enable_shell_exec: true` 后，主人对话中自动按意图调用 | 执行服务器 shell 命令并返回 stdout/stderr，适合 `grep`/`rg`/`find` 查文件、日志排查、服务诊断；具备完整服务器权限 |
 | 联网搜索 | 使用 `#cn` 临时启用，AI 自动判断是否需要搜索 | 注入搜索结果辅助回答，自动抓取首条结果网页全文 |
 | 网页抓取 | 使用 `#cw` 临时启用，自动提取消息中的 URL 并抓取网页内容 | 提取网页可读文本，支持 HTML/JSON，最大 8000 字符；GitHub 链接自动改走 API 取干净数据，规避网页防爬限流 |
 
 > 💡 文件读取白名单在 `config/file_roots.yaml` 中单独配置，AI 只能读取无法写入修改。
 >  文件读取默认关闭，可使用 `#cf` 临时启用，或在 `models_config.yaml` 中设置 `enable_file_read: true` 全局开启。
 >  开启后可以直接说“看下日志”“读一下模型配置”“data目录有什么”“看看上次那个目录”，无需每次输入绝对路径。
-> ⚠️ Shell 执行默认关闭，且不会被 `#cf` 临时打开；必须同时设置 `enable_file_read: true` 和 `enable_shell_exec: true`，并且仅主人可用。开启后 AI 可执行完整服务器命令，请谨慎使用。
+> ⚠️ Shell 执行默认关闭，且不会被 `#cf` 临时打开；独立开关，只需设置 `enable_shell_exec: true`（无需 `enable_file_read`），并且仅主人可用。开启后 AI 可执行完整服务器命令，请谨慎使用。
 > 💡 联网搜索默认关闭，可使用 `#cn` 临时启用，或在 `models_config.yaml` 中设置 `enable_web_search: true` 全局开启。推荐配置专用意图分析模型以加速。
 > 💡 网页抓取默认关闭，可使用 `#cw` 临时启用，或在 `models_config.yaml` 中设置 `enable_web_fetch: true` 全局开启。消息中包含 URL 时自动抓取网页内容。
 > 💡 抓取 GitHub 链接（commits/commit/releases/issues/pulls/blob/仓库主页）时会自动改走 GitHub API/raw，返回精简数据并规避网页防爬。匿名访问限 60 次/小时，可在服务器配置 `GITHUB_TOKEN` 环境变量提升到 5000 次/小时。
@@ -414,7 +414,7 @@ AI-Plugin/
 12. **Vision Relay**：非多模态模型通过 Vision 模型描述图片后间接理解图片；有图请求会优先使用多模态模型，避免纯文本模型直接接收图片
 13. **作图兼容**：chat/completions 不支持图片时自动重试 `/images/edits`（multipart 传图）或 `/images/generations`（纯文本）
 14. **文件读取安全**：AI 只能读取 `file_roots.yaml` 白名单目录下的文件，无法写入、修改或删除
-15. **Shell 执行风险**：Shell 工具默认关闭，需 `enable_file_read: true` + `enable_shell_exec: true` 同时开启且仅主人可用；开启后具备完整服务器命令权限
+15. **Shell 执行风险**：Shell 工具默认关闭，需 `enable_shell_exec: true` 开启（独立开关，无需 `enable_file_read`）且仅主人可用；开启后具备完整服务器命令权限
 16. **指令自定义**：可在 `models_config.yaml` 中修改 `chat_command`/`draw_command` 缩短指令
 
 ## 🤝 贡献

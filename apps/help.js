@@ -65,7 +65,7 @@ export class HelpHandler extends plugin {
   支持“日志/配置/模型配置/插件目录/data目录”等别名、相对路径、文件名片段和“上次那个目录”。
   目录会递归读取所有子目录（跳过 .git 和 node_modules）。
 > 🖥️ Shell 执行（主人专用）
-  需同时在 models_config.yaml 开启 enable_file_read: true 和 enable_shell_exec: true。
+  需在 models_config.yaml 开启 enable_shell_exec: true（独立开关，无需 enable_file_read）。
   开启后 AI 可根据你的意图执行服务器 Shell 命令，例如 grep/rg 查文件、查看日志、诊断服务状态。
   注意：Shell 具备完整服务器权限，不会被 #f 临时开关单独启用。
 > 开关可组合，如 #pv${chatCmd}、#us${chatCmd}n、#s${chatCmd}wf、#${chatCmd}vnwf 等。
@@ -218,7 +218,7 @@ export class HelpHandler extends plugin {
   #cn 查天气 → 启用联网搜索
   #cf /root/Yunzai/plugins/AI-Plugin → 读取本地文件/目录
   #cvn 这是个啥 → 同时启用两者
-  Shell 执行需 enable_file_read + enable_shell_exec 双开，且仅主人可用，不会被 #cf 临时启用
+  Shell 执行需 enable_shell_exec 开启（独立开关），且仅主人可用，不会被 #cf 临时启用
 
 > 🎨 作图技巧
   - 预设命令加模型组前缀切换模型（#p手办化 / #u手办化）
