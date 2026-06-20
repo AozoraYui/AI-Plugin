@@ -42,6 +42,8 @@ function normFile(f) {
         size: Number(f.file_size || f.size || 0),
         busid: f.busid ?? f.bus_id ?? 0,
         uploader: f.uploader_name || f.uploader || '',
+        // 上传者 QQ 号（OneBot 标准字段 uploader 为数字 QQ；部分端用 uploader_uin/user_id）
+        uploaderId: Number(f.uploader_uin || f.user_id || (typeof f.uploader === 'number' ? f.uploader : 0)) || 0,
         // 上传时间（秒级时间戳），不同协议端字段名不一
         uploadTime: Number(f.upload_time || f.modify_time || f.create_time || f.UploadTime || 0)
     }
@@ -85,7 +87,28 @@ async function listLayer(event, folderId) {
     }
 }
 
-// 递归收集全部文件（含子文件夹），用于按名查找
+// 为上传者名字缺失（或仅为 QQ 号）的文件补全可读昵称
+// 优先用群名片，其次昵称；查不到则保留 QQ 号
+async function fillUploaderNames(event, files) {
+    const group = event.group || (event.bot?.pickGroup && event.group_id ? event.bot.pickGroup(Number(event.group_id)) : null)
+    if (!group) return
+    const cache = new Map()
+    for (const f of files) {
+        const idStr = String(f.uploaderId || '')
+        const nameIsNumericOrEmpty = !f.uploader || /^\d+$/.test(f.uploader)
+        if (!f.uploaderId || !nameIsNumericOrEmpty) continue
+        try {
+            if (!cache.has(idStr)) {
+                const member = group.pickMember ? group.pickMember(f.uploaderId) : null
+                const info = member ? (member.info || (member.getInfo ? await member.getInfo() : null)) : null
+                cache.set(idStr, info ? (info.card || info.nickname || '') : '')
+            }
+            const realName = cache.get(idStr)
+            if (realName) f.uploader = realName
+        } catch { /* 查不到就保留原值 */ }
+    }
+}
+
 async function collectAllFiles(event, folderId, depth, acc) {
     if (depth > GF_MAX_DEPTH) return
     const { files, folders } = await listLayer(event, folderId)
@@ -215,11 +238,13 @@ export const groupFileListTool = {
             }
 
             const { files, folders } = await listLayer(event, targetFolderId)
+            // 上传者名字缺失/仅为 QQ 号时，查群成员补全可读昵称
+            await fillUploaderNames(event, files)
             return {
                 ok: true,
                 layerName,
                 folders: folders.map(d => ({ name: d.name, fileCount: d.fileCount })),
-                files: files.map(f => ({ name: f.name, size: f.size, uploader: f.uploader, uploadTime: f.uploadTime }))
+                files: files.map(f => ({ name: f.name, size: f.size, uploader: f.uploader, uploaderId: f.uploaderId, uploadTime: f.uploadTime }))
             }
         } catch (err) {
             logger.error('[AI-Plugin] 群文件浏览异常:', err)
@@ -244,7 +269,10 @@ export const groupFileListTool = {
             for (const f of data.files) {
                 const mb = f.size > 0 ? `${(f.size / 1024 / 1024).toFixed(2)}MB` : '未知大小'
                 const meta = [mb]
-                if (f.uploader) meta.push(`上传者 ${f.uploader}`)
+                // 上传者：优先「昵称(QQ)」，无昵称则仅 QQ 号
+                if (f.uploader && f.uploaderId) meta.push(`上传者 ${f.uploader}(${f.uploaderId})`)
+                else if (f.uploader) meta.push(`上传者 ${f.uploader}`)
+                else if (f.uploaderId) meta.push(`上传者 QQ:${f.uploaderId}`)
                 const t = fmtTime(f.uploadTime)
                 if (t) meta.push(`上传于 ${t}`)
                 out += `  📄 ${f.name}（${meta.join('，')}）\n`
