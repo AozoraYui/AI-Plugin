@@ -44,14 +44,18 @@ function loadSelfPortraitImages() {
         }
         const picked = files.slice(0, SELF_PORTRAIT_MAX_REF)
         const parts = []
+        const usedNames = []
         for (const f of picked) {
             try {
                 const buf = fs.readFileSync(path.join(SELF_PORTRAIT_DIR, f))
                 parts.push({ inline_data: { mime_type: selfMime(path.extname(f)), data: buf.toString('base64') } })
+                usedNames.push(f)
             } catch (err) {
                 logger.warn(`[AI-Plugin] 画图工具：读取自画像参考图 ${f} 失败: ${err.message}`)
             }
         }
+        // 把实际使用的文件名挂到数组上，供调用处打印日志（不影响请求体）
+        parts.usedNames = usedNames
         return parts
     } catch (err) {
         logger.warn(`[AI-Plugin] 画图工具：加载自画像参考图失败: ${err.message}`)
@@ -146,7 +150,9 @@ export const imageGenTool = {
         // 画自己：加载本地官方参考图（data/self），用以锁定形象
         const selfImages = isSelfPortrait ? loadSelfPortraitImages() : []
         if (isSelfPortrait) {
-            logger.info(`[AI-Plugin] 画图工具：画自己模式，加载到 ${selfImages.length} 张本地参考图`)
+            const usedNames = selfImages.usedNames || []
+            const nameNote = usedNames.length > 0 ? `：${usedNames.join('、')}` : ''
+            logger.info(`[AI-Plugin] 画图工具：画自己模式，加载到 ${selfImages.length} 张本地参考图${nameNote}`)
         }
 
         // 解析预设
