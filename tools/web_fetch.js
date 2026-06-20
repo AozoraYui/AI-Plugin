@@ -31,7 +31,7 @@ function resolveGitHubApi(rawUrl) {
     // owner/repo/commits/<branch> 或 owner/repo/commits
     if (section === 'commits') {
         const branch = rest[0] || u.searchParams.get('ref') || ''
-        const q = branch ? `?sha=${encodeURIComponent(branch)}&per_page=20` : '?per_page=20'
+        const q = branch ? `?sha=${encodeURIComponent(branch)}&per_page=100` : '?per_page=100'
         return { apiUrl: `https://api.github.com/repos/${owner}/${repo}/commits${q}`, kind: 'commits' }
     }
     // owner/repo/commit/<sha>
@@ -40,11 +40,11 @@ function resolveGitHubApi(rawUrl) {
     }
     // owner/repo/releases
     if (section === 'releases') {
-        return { apiUrl: `https://api.github.com/repos/${owner}/${repo}/releases?per_page=10`, kind: 'releases' }
+        return { apiUrl: `https://api.github.com/repos/${owner}/${repo}/releases?per_page=100`, kind: 'releases' }
     }
     // owner/repo/issues 或 pulls
     if (section === 'issues' || section === 'pulls') {
-        return { apiUrl: `https://api.github.com/repos/${owner}/${repo}/${section}?per_page=20&state=all`, kind: section }
+        return { apiUrl: `https://api.github.com/repos/${owner}/${repo}/${section}?per_page=100&state=all`, kind: section }
     }
     // owner/repo/blob/<branch>/<path...> → 取原始文件
     if (section === 'blob' && rest.length >= 2) {
@@ -96,6 +96,7 @@ function formatGitHubJson(kind, json) {
 
 /**
  * 通过 GitHub API/raw 抓取，带 429 退避重试与可选 token
+ * 列表类资源（commits/issues/pulls/releases）自动跟随 Link 头翻页，拉取全部数据
  */
 async function fetchGitHubApi(gh, originalUrl, maxChars) {
     const isRaw = gh.kind === 'raw'
@@ -108,61 +109,108 @@ async function fetchGitHubApi(gh, originalUrl, maxChars) {
     const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN
     if (token && !isRaw) headers['Authorization'] = `Bearer ${token}`
 
-    const maxRetries = 2
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        let res
-        try {
-            res = await fetch(gh.apiUrl, {
-                method: 'GET',
-                headers,
-                signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-                redirect: 'follow',
-            })
-        } catch (err) {
-            logger.warn(`[AI-Plugin] WebFetch GitHub API 请求失败: ${gh.apiUrl} - ${err.message}`)
-            return `\n\n【网页抓取失败】GitHub 请求出错: ${err.message}\n`
-        }
-
-        if (res.status === 429 || res.status === 403) {
-            const retryAfter = Number(res.headers.get('retry-after'))
-            const remaining = res.headers.get('x-ratelimit-remaining')
-            const reset = Number(res.headers.get('x-ratelimit-reset'))
-            // 配额已耗尽（remaining=0）：重试无意义，需等到 reset，直接返回提示
-            const quotaExhausted = remaining === '0'
-            if (!quotaExhausted && attempt < maxRetries) {
-                const waitMs = retryAfter > 0 ? Math.min(retryAfter * 1000, 8000) : (attempt + 1) * 2000
-                logger.warn(`[AI-Plugin] WebFetch GitHub API ${res.status}（剩余配额 ${remaining}），${waitMs}ms 后重试 (${attempt + 1}/${maxRetries})`)
-                await new Promise(r => setTimeout(r, waitMs))
-                continue
+    // 单次请求（含限流退避重试）。成功返回 {body, res}；失败返回 {error}
+    const requestOnce = async (url) => {
+        const maxRetries = 2
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            let res
+            try {
+                res = await fetch(url, {
+                    method: 'GET',
+                    headers,
+                    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+                    redirect: 'follow',
+                })
+            } catch (err) {
+                logger.warn(`[AI-Plugin] WebFetch GitHub API 请求失败: ${url} - ${err.message}`)
+                return { error: `\n\n【网页抓取失败】GitHub 请求出错: ${err.message}\n` }
             }
-            let resetHint = ''
-            if (quotaExhausted && reset > 0) {
-                const mins = Math.max(Math.ceil((reset * 1000 - Date.now()) / 60000), 1)
-                resetHint = `约 ${mins} 分钟后恢复。`
+
+            if (res.status === 429 || res.status === 403) {
+                const retryAfter = Number(res.headers.get('retry-after'))
+                const remaining = res.headers.get('x-ratelimit-remaining')
+                const reset = Number(res.headers.get('x-ratelimit-reset'))
+                const quotaExhausted = remaining === '0'
+                if (!quotaExhausted && attempt < maxRetries) {
+                    const waitMs = retryAfter > 0 ? Math.min(retryAfter * 1000, 8000) : (attempt + 1) * 2000
+                    logger.warn(`[AI-Plugin] WebFetch GitHub API ${res.status}（剩余配额 ${remaining}），${waitMs}ms 后重试 (${attempt + 1}/${maxRetries})`)
+                    await new Promise(r => setTimeout(r, waitMs))
+                    continue
+                }
+                let resetHint = ''
+                if (quotaExhausted && reset > 0) {
+                    const mins = Math.max(Math.ceil((reset * 1000 - Date.now()) / 60000), 1)
+                    resetHint = `约 ${mins} 分钟后恢复。`
+                }
+                logger.warn(`[AI-Plugin] WebFetch GitHub API ${res.status}（剩余配额 ${remaining}）: ${url}`)
+                return { error: `\n\n【网页抓取失败】GitHub 触发频率限制（HTTP ${res.status}，剩余配额 ${remaining ?? '未知'}）。匿名访问每小时仅 60 次，${resetHint}如需更高配额（5000 次/小时），可在服务器配置 GITHUB_TOKEN 环境变量。\n` }
             }
-            logger.warn(`[AI-Plugin] WebFetch GitHub API ${res.status}（剩余配额 ${remaining}）: ${gh.apiUrl}`)
-            return `\n\n【网页抓取失败】GitHub 触发频率限制（HTTP ${res.status}，剩余配额 ${remaining ?? '未知'}）。匿名访问每小时仅 60 次，${resetHint}如需更高配额（5000 次/小时），可在服务器配置 GITHUB_TOKEN 环境变量。\n`
-        }
 
-        if (!res.ok) {
-            logger.warn(`[AI-Plugin] WebFetch GitHub API 返回非200: ${gh.apiUrl} - ${res.status}`)
-            return `\n\n【网页抓取失败】GitHub API HTTP ${res.status}\n`
-        }
+            if (!res.ok) {
+                logger.warn(`[AI-Plugin] WebFetch GitHub API 返回非200: ${url} - ${res.status}`)
+                return { error: `\n\n【网页抓取失败】GitHub API HTTP ${res.status}\n` }
+            }
 
-        let body
-        try {
-            body = await res.text()
-            if (body.length > MAX_RESPONSE_SIZE) body = body.slice(0, MAX_RESPONSE_SIZE)
-        } catch (err) {
-            return `\n\n【网页抓取失败】读取 GitHub 响应出错: ${err.message}\n`
+            let body
+            try {
+                body = await res.text()
+                if (body.length > MAX_RESPONSE_SIZE) body = body.slice(0, MAX_RESPONSE_SIZE)
+            } catch (err) {
+                return { error: `\n\n【网页抓取失败】读取 GitHub 响应出错: ${err.message}\n` }
+            }
+            return { body, res }
         }
-
-        const text = isRaw ? body : formatGitHubJson(gh.kind, body)
-        const originalLen = text.length
-        const finalText = text.length > maxChars ? text.slice(0, maxChars) + '\n...(已截断)' : text
-        logger.info(`[AI-Plugin] WebFetch 成功(GitHub ${gh.kind}): ${originalUrl} (${originalLen} 字符)`)
-        return `\n\n【GitHub 内容「${originalUrl}」(${gh.kind}, ${originalLen} 字符)】：\n${finalText}\n【GitHub 内容结束】\n`
     }
+
+    // 列表类资源：跟随 Link 头翻页，累积全部条目
+    const isPaginated = ['commits', 'issues', 'pulls', 'releases'].includes(gh.kind)
+
+    if (isPaginated) {
+        const MAX_PAGES = 30 // 上限保护：30 页 × 100 条 = 最多 3000 条，避免超大仓库爆 token
+        const all = []
+        let url = gh.apiUrl
+        let pages = 0
+        let truncatedByLimit = false
+        while (url && pages < MAX_PAGES) {
+            const r = await requestOnce(url)
+            if (r.error) {
+                // 已经拿到部分数据时，带着已有数据继续返回；完全没拿到才报错
+                if (all.length === 0) return r.error
+                truncatedByLimit = true
+                break
+            }
+            try {
+                const arr = JSON.parse(r.body)
+                if (Array.isArray(arr)) all.push(...arr)
+                else { all.push(arr); break }
+            } catch {
+                break
+            }
+            pages++
+            // 解析 Link 头的 rel="next"
+            const link = r.res.headers.get('link') || ''
+            const m = link.match(/<([^>]+)>;\s*rel="next"/)
+            url = m ? m[1] : null
+            if (!url && pages >= MAX_PAGES) truncatedByLimit = true
+        }
+        if (url && pages >= MAX_PAGES) truncatedByLimit = true
+
+        const text = formatGitHubJson(gh.kind, JSON.stringify(all))
+        const originalLen = text.length
+        let finalText = text.length > maxChars ? text.slice(0, maxChars) + '\n...(内容过长已截断)' : text
+        const note = truncatedByLimit ? `（注意：数据量较大，已达抓取上限，可能未覆盖最早的记录）` : ''
+        logger.info(`[AI-Plugin] WebFetch 成功(GitHub ${gh.kind}): ${originalUrl} 共 ${all.length} 条，${pages} 页 (${originalLen} 字符)`)
+        return `\n\n【GitHub 内容「${originalUrl}」(${gh.kind}, 共 ${all.length} 条${note}, ${originalLen} 字符)】：\n${finalText}\n【GitHub 内容结束】\n`
+    }
+
+    // 非列表资源（repo/commit/raw）：单次请求
+    const r = await requestOnce(gh.apiUrl)
+    if (r.error) return r.error
+    const text = isRaw ? r.body : formatGitHubJson(gh.kind, r.body)
+    const originalLen = text.length
+    const finalText = text.length > maxChars ? text.slice(0, maxChars) + '\n...(已截断)' : text
+    logger.info(`[AI-Plugin] WebFetch 成功(GitHub ${gh.kind}): ${originalUrl} (${originalLen} 字符)`)
+    return `\n\n【GitHub 内容「${originalUrl}」(${gh.kind}, ${originalLen} 字符)】：\n${finalText}\n【GitHub 内容结束】\n`
 }
 
 /**
