@@ -94,7 +94,8 @@ function findFuzzyPathInAllowedRoots(inputPath) {
     const roots = Config.FILE_ROOTS
     if (!Array.isArray(roots) || roots.length === 0) return null
 
-    const ignoredDirs = new Set(['.git', 'node_modules'])
+    // 仅排除依赖目录；.git 不再排除，允许查找/读取版本库内文件
+    const ignoredDirs = new Set(['node_modules'])
     const maxDepth = Config.FILE_FUZZY_SEARCH_MAX_DEPTH || 5
     const maxVisited = Config.FILE_FUZZY_SEARCH_MAX_VISITED || 3000
 
@@ -305,8 +306,8 @@ function readLocalDir(dirPath, options = {}) {
                     for (const entry of entries) {
                         const fullPath = path.join(dir, entry.name)
                         if (entry.isDirectory()) {
-                            // 跳过 .git 和 node_modules
-                            if (entry.name === '.git' || entry.name === 'node_modules') {
+                            // 跳过 node_modules（依赖目录）；.git 允许读取
+                            if (entry.name === 'node_modules') {
                                 skippedDir++
                                 continue
                             }
@@ -356,7 +357,7 @@ function readLocalDir(dirPath, options = {}) {
 
             if (skippedBinary > 0) output += `\n(已跳过 ${skippedBinary} 个二进制文件)\n`
             if (skippedSize > 0) output += `\n(已跳过 ${skippedSize} 个超大文件)\n`
-            if (skippedDir > 0) output += `\n(已跳过 ${skippedDir} 个目录: .git, node_modules)\n`
+            if (skippedDir > 0) output += `\n(已跳过 ${skippedDir} 个目录: node_modules)\n`
 
             logger.info(`[AI-Plugin] DirRead(readAll): ${dirPath} (递归, 读取 ${(totalRead / 1024).toFixed(1)}KB)`)
         } else {
