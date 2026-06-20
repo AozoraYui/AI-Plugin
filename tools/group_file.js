@@ -41,8 +41,20 @@ function normFile(f) {
         name: f.file_name || f.name || '未命名文件',
         size: Number(f.file_size || f.size || 0),
         busid: f.busid ?? f.bus_id ?? 0,
-        uploader: f.uploader_name || f.uploader || ''
+        uploader: f.uploader_name || f.uploader || '',
+        // 上传时间（秒级时间戳），不同协议端字段名不一
+        uploadTime: Number(f.upload_time || f.modify_time || f.create_time || f.UploadTime || 0)
     }
+}
+
+// 把秒级时间戳格式化为 YYYY-MM-DD HH:mm
+function fmtTime(ts) {
+    if (!ts) return ''
+    const ms = ts < 1e12 ? ts * 1000 : ts // 兼容秒/毫秒
+    const d = new Date(ms)
+    if (Number.isNaN(d.getTime())) return ''
+    const p = n => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
 // 规范化单个文件夹对象
@@ -207,7 +219,7 @@ export const groupFileListTool = {
                 ok: true,
                 layerName,
                 folders: folders.map(d => ({ name: d.name, fileCount: d.fileCount })),
-                files: files.map(f => ({ name: f.name, size: f.size, uploader: f.uploader }))
+                files: files.map(f => ({ name: f.name, size: f.size, uploader: f.uploader, uploadTime: f.uploadTime }))
             }
         } catch (err) {
             logger.error('[AI-Plugin] 群文件浏览异常:', err)
@@ -231,7 +243,11 @@ export const groupFileListTool = {
             out += '文件：\n'
             for (const f of data.files) {
                 const mb = f.size > 0 ? `${(f.size / 1024 / 1024).toFixed(2)}MB` : '未知大小'
-                out += `  📄 ${f.name}（${mb}${f.uploader ? `，上传者 ${f.uploader}` : ''}）\n`
+                const meta = [mb]
+                if (f.uploader) meta.push(`上传者 ${f.uploader}`)
+                const t = fmtTime(f.uploadTime)
+                if (t) meta.push(`上传于 ${t}`)
+                out += `  📄 ${f.name}（${meta.join('，')}）\n`
             }
         }
         out += '\n请把以上群文件内容如实告知主人。若主人要下载某个文件，可使用 group_file_download 工具。'
