@@ -126,27 +126,23 @@ async function collectMediaFromEvent(event) {
     })
 }
 
-// 解析保存目录：默认白名单第一个根目录下的 ai-download，可由参数指定（仍受白名单约束）
-// noTimestamp=true 时直接使用指定目录，不再追加时间戳子目录
-function resolveSaveDir(inputDir, noTimestamp = false) {
+// 解析保存目录（仍受白名单约束）：
+//   - 用户指定了 save_dir：直接存入该目录本身，不套时间戳子目录。
+//   - 未指定：存到白名单首个根目录下的 ai-download/时间戳 子目录（避免默认堆积/覆盖）。
+function resolveSaveDir(inputDir) {
     const roots = Config.FILE_ROOTS
     if (!Array.isArray(roots) || roots.length === 0) {
         return { error: '未配置文件白名单(FILE_ROOTS)，无法确定保存目录' }
     }
 
-    let baseDir
-    if (inputDir && String(inputDir).trim()) {
-        baseDir = path.resolve(String(inputDir).trim())
-    } else {
-        baseDir = path.join(path.resolve(roots[0]), 'ai-download')
-    }
-
+    const hasInput = inputDir && String(inputDir).trim()
     let target
-    if (noTimestamp) {
-        // 直接使用目标目录本身，不建时间戳子目录
-        target = baseDir
+    if (hasInput) {
+        // 用户明确指定目录：直接使用，不追加时间戳
+        target = path.resolve(String(inputDir).trim())
     } else {
-        // 生成时间戳子目录，避免覆盖
+        // 默认位置：ai-download 下按时间戳分目录，避免覆盖
+        const baseDir = path.join(path.resolve(roots[0]), 'ai-download')
         const now = new Date()
         const pad = (n) => String(n).padStart(2, '0')
         const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
@@ -166,10 +162,11 @@ function resolveSaveDir(inputDir, noTimestamp = false) {
     }
     const check = checkPathAllowed(target)
     if (!check.allowed) {
-        if (!noTimestamp) { try { fs.rmdirSync(target) } catch { /* ignore */ } }
+        // 仅清理默认时间戳目录；用户指定目录不删
+        if (!hasInput) { try { fs.rmdirSync(target) } catch { /* ignore */ } }
         return { error: `保存目录不在白名单内: ${check.reason || target}` }
     }
-    return { dir: check.realPath }
+    return { dir: check.realPath, userSpecified: !!hasInput }
 }
 
 // 下载单个媒体（带重试 + 超时）
@@ -232,11 +229,7 @@ export const fileDownloadTool = {
                 properties: {
                     save_dir: {
                         type: 'string',
-                        description: '可选，保存目录（必须在白名单内）。不填则默认保存到白名单首个目录下的 ai-download/时间戳 子目录。'
-                    },
-                    no_timestamp: {
-                        type: 'boolean',
-                        description: '可选。为 true 时直接把文件存到 save_dir 本身，不再创建时间戳子目录。用户说"不要时间戳目录/直接存到这个目录/就放在xxx下"时设为 true。'
+                        description: '可选，保存目录（必须在白名单内）。用户明确指定目录时填写，文件会直接存入该目录；不填则默认存到白名单首个目录下的 ai-download/时间戳 子目录。'
                     },
                     rename_sequential: {
                         type: 'boolean',
@@ -257,7 +250,7 @@ export const fileDownloadTool = {
             return '【文件下载失败】当前消息和引用消息中都没有找到可下载的图片/视频/语音/文件。请引用包含媒体的消息后再试。'
         }
 
-        const dirResult = resolveSaveDir(args.save_dir, args.no_timestamp === true || args.no_timestamp === 'true')
+        const dirResult = resolveSaveDir(args.save_dir)
         if (dirResult.error) return `【文件下载失败】${dirResult.error}`
         const targetDir = dirResult.dir
 
@@ -273,8 +266,8 @@ export const fileDownloadTool = {
         }
 
         if (results.length === 0) {
-            // 仅在自建的时间戳子目录为空时清理；用户指定的目录(no_timestamp)不删
-            if (args.no_timestamp !== true && args.no_timestamp !== 'true') {
+            // 仅清理默认自建的时间戳目录；用户指定的目录不删
+            if (!dirResult.userSpecified) {
                 try { fs.rmdirSync(targetDir) } catch { /* ignore */ }
             }
             return `【文件下载失败】共发现 ${media.length} 个媒体，但全部下载失败，详情见日志。`
