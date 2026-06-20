@@ -192,6 +192,28 @@ function buildSingleChatRegex(chatCmd) {
     return new RegExp(`^#${getImagePresetCommandExclusion()}${CHAT_PREFIX_PATTERN}s${CHAT_PREFIX_PATTERN}${escapeRegex(chatCmd)}([vnwf]*)([\\s\\S]*)$`, 'i')
 }
 
+function detectMasterOnlyToolRequest(message, flags = {}) {
+    const text = String(message || '').trim()
+    if (!text) return null
+
+    if (flags.fileReadFlag) return '本地文件读取'
+    if (flags.webFetchFlag) return '网页抓取'
+
+    if (/(服务器|系统|主机|机器).{0,12}(状态|信息|资源|负载|CPU|内存|磁盘|温度|运行情况)|状态.{0,8}(服务器|系统|主机)|fastfetch|neofetch|uname\b|df\s+-h|free\s+-h|\btop\b|\bhtop\b/i.test(text)) {
+        return '服务器状态查询'
+    }
+
+    if (/\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\b/.test(text) && /(看|查看|读取|打开|列出|浏览|检查|找|搜索|配置|日志|文件|目录)/.test(text)) {
+        return '本地文件读取'
+    }
+
+    if (/(执行|运行|调用).{0,12}(shell|命令|终端|命令行|脚本)|\b(?:cat|tail|head|ls|find|grep|rg|bash|sh|zsh|systemctl|docker|pm2|git)\b/i.test(text)) {
+        return 'Shell执行'
+    }
+
+    return null
+}
+
 function extractUrlsFromText(text, limit = 5) {
     if (!text || typeof text !== 'string') return []
 
@@ -396,23 +418,35 @@ export class ChatHandler extends plugin {
 
             if (!userMessage && allImages.length === 0) return e.reply('请输入内容或发送图片呀', true)
 
+            if (!e.isMaster) {
+                const deniedTool = detectMasterOnlyToolRequest(userMessage, {
+                    fileReadFlag: e._fileReadFlag,
+                    webFetchFlag: e._webFetchFlag
+                })
+                if (deniedTool) {
+                    logger.warn(`[AI-Plugin] 非主人尝试请求主人专用能力: ${deniedTool}`)
+                    await setMsgEmojiLike(e, 10)
+                    return e.reply(`权限不足：${deniedTool} 仅限机器人主人使用。`, true)
+                }
+            }
+
             // 工具调用：LLM 统一路由（deepseek-v4-flash 分析意图，决定调用哪些工具）
             const enabledTools = []
             if (e._netFlag || this.client.enableWebSearch) {
                 enabledTools.push('web_search')
-                enabledTools.push('web_fetch') // 搜索时允许抓取
+                if (e.isMaster) enabledTools.push('web_fetch') // 搜索时主人允许抓取
             }
-            if (e._webFetchFlag || this.client.enableWebFetch) {
+            if (e.isMaster && (e._webFetchFlag || this.client.enableWebFetch)) {
                 if (!enabledTools.includes('web_fetch')) enabledTools.push('web_fetch')
             }
             if (e.isMaster) {
                 enabledTools.push('system_info')
             }
             enabledTools.push('weather') // 天气查询，所有用户可用
-            if (e._fileReadFlag || this.client.enableFileRead) {
+            if (e.isMaster && (e._fileReadFlag || this.client.enableFileRead)) {
                 enabledTools.push('file_read')
                 enabledTools.push('dir_read')
-                if (e.isMaster && this.client.enableShellExec) {
+                if (this.client.enableShellExec) {
                     enabledTools.push('shell_exec')
                 }
             }
@@ -457,16 +491,18 @@ export class ChatHandler extends plugin {
                                 userMessage = userMessage + formattedResult
                                 logger.info(`[AI-Plugin] 搜索完成，${uniqueResults.length} 条结果已注入`)
 
-                                // 自动抓取搜索结果中第一名网页
-                                try {
-                                    const topUrl = uniqueResults[0].url
-                                    logger.info(`[AI-Plugin] 自动抓取搜索结果首条: ${topUrl}`)
-                                    const fetchResult = await toolRegistry.execute('web_fetch', { url: topUrl, max_chars: 6000 }, e.isMaster)
-                                    if (fetchResult.success) {
-                                        userMessage = userMessage + fetchResult.data
+                                // 主人自动抓取搜索结果中第一名网页
+                                if (e.isMaster) {
+                                    try {
+                                        const topUrl = uniqueResults[0].url
+                                        logger.info(`[AI-Plugin] 自动抓取搜索结果首条: ${topUrl}`)
+                                        const fetchResult = await toolRegistry.execute('web_fetch', { url: topUrl, max_chars: 6000 }, e.isMaster)
+                                        if (fetchResult.success) {
+                                            userMessage = userMessage + fetchResult.data
+                                        }
+                                    } catch (err) {
+                                        logger.warn(`[AI-Plugin] 自动抓取失败: ${err.message}`)
                                     }
-                                } catch (err) {
-                                    logger.warn(`[AI-Plugin] 自动抓取失败: ${err.message}`)
                                 }
                             }
                         } else if (call.name === 'file_read' || call.name === 'dir_read') {
