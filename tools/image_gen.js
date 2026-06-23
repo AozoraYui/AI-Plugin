@@ -201,9 +201,14 @@ export const imageGenTool = {
             }
             // 画自己：补充形象指令，引导模型参照参考图
             if (isSelfPortrait) {
-                const refHint = selfImages.length > 0
-                    ? '请严格参考随附的参考图（这是你本人的官方形象），保持发型发色、瞳色、光环、服饰等关键特征一致。'
-                    : ''
+                let refHint = ''
+                if (selfImages.length > 0 && processedImages.length > 0) {
+                    refHint = `请注意参考图顺序：前 ${selfImages.length} 张是你本人的官方形象参考图，必须严格保持发型发色、瞳色、光环、服饰等关键特征一致；后续 ${processedImages.length} 张是用户额外提供的参考图，仅用于场景、姿势、构图、镜头、氛围或风格参考，不要把后续参考图中的人物身份/外貌替换成你。`
+                } else if (selfImages.length > 0) {
+                    refHint = '请严格参考随附的参考图（这是你本人的官方形象），保持发型发色、瞳色、光环、服饰等关键特征一致。'
+                } else if (processedImages.length > 0) {
+                    refHint = `用户提供了 ${processedImages.length} 张额外参考图，请仅用于场景、姿势、构图、镜头、氛围或风格参考；你的本人形象仍以文字设定为准。`
+                }
                 const portraitDesc = Config.selfPortrait || ''
                 const selfText = `${refHint}${portraitDesc ? '形象设定：' + portraitDesc : ''}`.trim()
                 finalText = finalText ? `${selfText} 在此基础上：${finalText}` : selfText
