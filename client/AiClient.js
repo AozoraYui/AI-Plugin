@@ -657,9 +657,11 @@ export class AiClient {
         for (const content of requestPayload.contents) {
             const role = content.role === 'model' ? 'assistant' : 'user'
             const messageContent = []
+            const textParts = []
 
             for (const part of content.parts) {
                 if (part.text) {
+                    textParts.push(part.text)
                     messageContent.push({ type: 'text', text: part.text })
                 }
                 if (part.inline_data) {
@@ -673,7 +675,12 @@ export class AiClient {
                     })
                 }
             }
-            messages.push({ role, content: messageContent })
+
+            const hasImage = messageContent.some(part => part.type === 'image_url')
+            messages.push({
+                role,
+                content: hasImage ? messageContent : textParts.join('\n')
+            })
         }
         return messages
     }
@@ -821,7 +828,8 @@ export class AiClient {
                         }
                     }
                 }
-                throw new Error(`HTTP状态码: ${res.status}`)
+                const errBody = await res.text().catch(() => '')
+                throw new Error(`HTTP状态码: ${res.status}${errBody ? `，响应: ${errBody.slice(0, 300)}` : ''}`)
             }
 
             const responseText = await res.text()
