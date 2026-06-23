@@ -304,15 +304,33 @@ export class AiClient {
 
         try {
             const fileContent = fs.readFileSync(MODELS_CONFIG_FILE, 'utf8')
-            // 支持多文档 YAML：doc0=供应商列表, doc1=指令自定义, doc2=Vision Relay
             const allDocs = yaml.parseAllDocuments(fileContent)
-            const providersDoc = allDocs[0]
-            const commandDoc = allDocs[1]
-            const visionDoc = allDocs[2] || allDocs[1]  // 兼容旧格式（只有2个文档时，doc1=vision）
-            const webSearchDoc = allDocs[3]               // web_search 配置（第4个文档）
+            const docValues = allDocs
+                .map(doc => doc?.toJS?.())
+                .filter(value => value !== null && value !== undefined)
 
-            if (providersDoc) {
-                const configs = providersDoc.toJS()
+            const providersConfig = docValues.find(value => Array.isArray(value))
+            const commandConfig = docValues.find(value => value && typeof value === 'object' && !Array.isArray(value) && (value.CHAT_COMMAND || value.DRAW_COMMAND))
+            const visionConfigDoc = docValues.find(value => value && typeof value === 'object' && !Array.isArray(value) && (value.enable_vision_relay !== undefined || value.vision_model !== undefined))
+            const runtimeConfigDoc = docValues.find(value => value && typeof value === 'object' && !Array.isArray(value) && (
+                value.web_search !== undefined ||
+                value.enable_web_search !== undefined ||
+                value.intent_model !== undefined ||
+                value.enable_web_fetch !== undefined ||
+                value.enable_file_read !== undefined ||
+                value.enable_shell_exec !== undefined ||
+                value.enable_file_transfer !== undefined ||
+                value.enable_ai_draw !== undefined ||
+                value.enable_group_admin !== undefined ||
+                value.show_thinking !== undefined ||
+                value.show_thinking_notice !== undefined ||
+                value.draw_review_after_generate !== undefined ||
+                value.weather_api_key !== undefined ||
+                value.openweathermap_api_key !== undefined
+            ))
+
+            if (providersConfig) {
+                const configs = providersConfig
                 if (Array.isArray(configs)) {
                     for (const provider of configs) {
                         if (!provider.model_groups || typeof provider.model_groups !== 'object') {
@@ -329,24 +347,12 @@ export class AiClient {
                 throw new Error("模型配置文件为空或格式不正确。")
             }
 
-            if (visionDoc) {
-                const visionConfig = visionDoc.toJS()
-                const cmdConfig = commandDoc?.toJS() || {}
+            if (visionConfigDoc || commandConfig) {
+                const visionConfig = visionConfigDoc || {}
+                const cmdConfig = commandConfig || {}
 
-                // 检测旧格式：如果 doc1 没有 CHAT_COMMAND/DRAW_COMMAND 但有 enable_vision_relay，则是旧格式
-                const isLegacyFormat = allDocs.length === 2 &&
-                    !(cmdConfig?.hasOwnProperty?.('CHAT_COMMAND') || cmdConfig?.hasOwnProperty?.('DRAW_COMMAND'))
-
-                if (isLegacyFormat) {
-                    // 旧格式：doc1 就是 vision relay
-                    if (cmdConfig && typeof cmdConfig === 'object' && cmdConfig.hasOwnProperty?.('enable_vision_relay')) {
-                        this.visionRelayConfig = cmdConfig
-                    }
-                } else {
-                    // 新格式：doc1=指令, doc2=vision
-                    if (visionConfig && typeof visionConfig === 'object' && visionConfig.hasOwnProperty?.('enable_vision_relay')) {
-                        this.visionRelayConfig = visionConfig
-                    }
+                if (visionConfig && typeof visionConfig === 'object' && visionConfig.hasOwnProperty?.('enable_vision_relay')) {
+                    this.visionRelayConfig = visionConfig
                 }
 
                 // 解析指令配置
@@ -367,8 +373,8 @@ export class AiClient {
             }
 
             // 解析 web_search 配置
-            if (webSearchDoc) {
-                let rawConfig = webSearchDoc.toJS()
+            if (runtimeConfigDoc) {
+                let rawConfig = runtimeConfigDoc || {}
                 // 兼容两种格式：带 web_search 包裹或不带
                 rawConfig = rawConfig.web_search || rawConfig
                 // 兼容缩进嵌套：如果 intent_model 被误缩进到 enable_web_search 下，
