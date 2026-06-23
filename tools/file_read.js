@@ -45,6 +45,11 @@ function resolvePathInput(inputPath, context = {}) {
 
     const lastResolvedPath = getLastResolvedPath(context)
 
+    // 绝对路径必须优先按原样解析，避免 /root/.../AI-Plugin/... 被“插件目录”等别名误命中成目录
+    if (path.isAbsolute(raw)) {
+        return raw
+    }
+
     // 支持「上次那个文件/刚才的目录」等指代
     if (lastResolvedPath && /(上次|刚才|之前|那个|这个|它)/.test(raw)) {
         return lastResolvedPath

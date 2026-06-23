@@ -323,7 +323,10 @@ function cleanupDrawPrompt(text, selfPortrait, characterId = '') {
 
 function extractAbsolutePath(text) {
     const match = String(text || '').match(/\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)[^\s，。；;]*/i)
-    return match ? match[0].replace(/[，。；;,]+$/g, '') : ''
+    if (!match) return ''
+    const raw = match[0].replace(/[，。；;,]+$/g, '')
+    const fileMatch = raw.match(/^(.+?\.(?:tar\.gz|png|jpe?g|webp|gif|mp4|mov|avi|mkv|mp3|wav|ogg|flac|zip|7z|rar|gz|pdf|txt|log|md|json|ya?ml|js|ts|db|sqlite|bin))\b/i)
+    return fileMatch ? fileMatch[1] : raw
 }
 
 function parseForceExt(text) {
@@ -396,7 +399,22 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         }
     }
 
-    // 3) 主人明确给出 shell 命令：直接走 shell_exec。
+    // 3) 明确要求发送服务器本地文件：直接走 file_send，避免小模型等待和误判。
+    if (hasTool(enabledTools, 'file_send')) {
+        const filePath = extractAbsolutePath(text)
+        const sendIntent = /(?:发给我|发我|发送|发出来|发到(?:群里|这里)?|传给我|上传到(?:群里|这里)?)/i.test(text)
+        if (filePath && sendIntent) {
+            const args = { path: filePath }
+            if (/(?:以图片形式|作为图片|直接发图|发成图片|以图(?:片)?形式)/i.test(text)) args.as_image = true
+            return {
+                intent: args.as_image ? '规则预路由：主人明确要求将服务器图片文件以图片形式发送。' : '规则预路由：主人明确要求发送服务器本地文件。',
+                tools: [{ name: 'file_send', args }],
+                routedBy: 'rule'
+            }
+        }
+    }
+
+    // 4) 主人明确给出 shell 命令：直接走 shell_exec。
     if (hasTool(enabledTools, 'shell_exec')) {
         const command = parseShellCommand(text)
         if (command) {
@@ -408,7 +426,7 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         }
     }
 
-    // 4) 明确要求查看/总结链接内容：直接走 web_fetch（仅在工具已启用时）。
+    // 5) 明确要求查看/总结链接内容：直接走 web_fetch（仅在工具已启用时）。
     if (hasTool(enabledTools, 'web_fetch') && urls.length > 0) {
         const fetchIntent = /(?:看|看看|打开|读取|抓取|总结|分析|解释|概括).{0,20}(?:链接|网页|网址|页面|内容|这个)/i.test(text)
             || /(?:这个|这条|上面).{0,8}(?:链接|网页|网址).{0,12}(?:讲|说|内容|总结|看看|分析)/i.test(text)
@@ -507,6 +525,7 @@ export class ChatHandler extends plugin {
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'), fnc: 'exportAllMemoryByDate', permission: 'master' },
                 { reg: /^#ai思考(开启|关闭)$/i, fnc: 'switchThinkingMode', permission: 'master' },
                 { reg: /^#?ai(开启|关闭)思考提示$/i, fnc: 'switchThinkingNotice', permission: 'master' },
+                { reg: /^#?ai(开启|关闭)画图审图$/i, fnc: 'switchDrawReview', permission: 'master' },
             ]
         })
         this.client = global.AIPluginClient
@@ -713,6 +732,7 @@ export class ChatHandler extends plugin {
             // drawImageAttempted：本轮是否调用过画图工具（无论成败，工具内已发过"🎨正在生成"进度提示），
             // 用于跳过后续"思考中"占位，避免重复刷屏。
             let drawImageAttempted = false
+            const generatedDrawReviewImages = []
             if (e._netFlag || this.client.enableWebSearch) {
                 enabledTools.push('web_search')
                 if (e.isMaster) enabledTools.push('web_fetch') // 搜索时主人允许抓取
@@ -814,10 +834,17 @@ export class ChatHandler extends plugin {
                             const drawSucceeded = result.data && typeof result.data === 'object' && result.data.ok === true
                             if (drawSucceeded) {
                                 // 画图工具已把图片直接发到会话并显示了"🎨正在生成"进度，无需再发"思考中"占位；
-                                // 但仍让主模型用人设口吻收尾回复（如"画好啦~"）
+                                // 默认只让主模型收尾；开启画图审图时，把刚生成的图也交给主模型看一眼再短评。
                                 const formattedResult = toolRegistry.formatToolResult('draw_image', result.data)
-                                userMessage = userMessage + '\n\n【重要指令】画图工具已执行并把图片直接发送到会话。' + formattedResult + '请用一句简短自然的话回应用户（如"画好啦~"），不要重复描述图片细节，也不要声称自己不能画图。'
-                                logger.info('[AI-Plugin] draw_image 完成，图片已直接发送，结果已注入')
+                                const drawReviewEnabled = getAccessConfig().draw_review_after_generate === true
+                                if (drawReviewEnabled && result.data.reviewImage?.data) {
+                                    generatedDrawReviewImages.push({ inline_data: result.data.reviewImage })
+                                    userMessage = userMessage + '\n\n【重要指令】画图工具已执行并把图片直接发送到会话。' + formattedResult + '当前输入中的最后一张图片是刚生成的图片；如果前面还有图片，那些是用户原始参考图。请你实际观察最后这张生成图，然后用一句简短自然的话告诉用户画好了，可以轻微描述画面亮点；不要长篇评价，不要声称自己没看到图片。'
+                                    logger.info('[AI-Plugin] draw_image 完成，已启用画图审图，生成图将传给主模型')
+                                } else {
+                                    userMessage = userMessage + '\n\n【重要指令】画图工具已执行并把图片直接发送到会话。' + formattedResult + '请用一句简短自然的话回应用户（如"画好啦~"），不要重复描述图片细节，也不要声称自己不能画图。'
+                                    logger.info('[AI-Plugin] draw_image 完成，图片已直接发送，结果已注入')
+                                }
                             } else {
                                 // 画图失败（如上游超时/返回文本）：如实把失败信息交给主模型，不要谎称已发送
                                 const failText = toolRegistry.formatToolResult('draw_image', result.data)
@@ -1004,6 +1031,9 @@ export class ChatHandler extends plugin {
                 const validImages = await processImagesInBatches(allImages)
                 currentUserTurnParts.push(...validImages)
             }
+            if (generatedDrawReviewImages.length > 0) {
+                currentUserTurnParts.push(...generatedDrawReviewImages)
+            }
 
             if (userMessage) {
                 currentUserTurnParts.push({ "text": userMessage })
@@ -1169,7 +1199,10 @@ export class ChatHandler extends plugin {
                 await setMsgEmojiLike(e, 144)
 
                 if (!isSingleMode) {
-                    const updatedHistory = [...history, { "role": "user", "parts": currentUserTurnParts }, { "role": "model", "parts": [{ "text": finalResponseText }] }]
+                    const historyUserTurnParts = generatedDrawReviewImages.length > 0
+                        ? currentUserTurnParts.filter(part => !generatedDrawReviewImages.includes(part))
+                        : currentUserTurnParts
+                    const updatedHistory = [...history, { "role": "user", "parts": historyUserTurnParts }, { "role": "model", "parts": [{ "text": finalResponseText }] }]
                     await this.conversationManager.saveUserHistory(userId, updatedHistory)
 
                     if (updatedHistory.length >= Config.AUTO_SUMMARY_THRESHOLD) {
@@ -1305,6 +1338,20 @@ export class ChatHandler extends plugin {
             await e.reply(`✅ 设置成功：已开启${Config.AI_NAME}思考提示。普通对话会发送“${Config.AI_NAME}思考中…”占位提示。`)
         } else {
             await e.reply(`🚫 设置成功：已关闭${Config.AI_NAME}思考提示。普通对话将不再发送“${Config.AI_NAME}思考中…”占位提示。`)
+        }
+    }
+
+    async switchDrawReview(e) {
+        const isTurnOn = e.msg.includes("开启")
+        const config = getAccessConfig()
+
+        config.draw_review_after_generate = isTurnOn
+        saveAccessConfig(config)
+
+        if (isTurnOn) {
+            await e.reply(`✅ 设置成功：已开启画图审图。画图成功后，${Config.AI_NAME}会看一眼生成图再用一句话短评。`)
+        } else {
+            await e.reply(`🚫 设置成功：已关闭画图审图。画图成功后只发送图片并进行普通收尾回复。`)
         }
     }
 }

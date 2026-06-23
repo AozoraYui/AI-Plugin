@@ -9,7 +9,7 @@
 
 import { toolRegistry } from './registry.js'
 import { Config } from '../utils/config.js'
-import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
+import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, resolveModelDisplay } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -294,12 +294,23 @@ export const imageGenTool = {
             // 返回的是图片（base64 / url）则发图；否则当作文本回复
             if (typeof result.data === 'string' && (result.data.startsWith('data:image/') || result.data.startsWith('http'))) {
                 let imageToSend = result.data
+                let reviewImage = null
                 if (result.data.startsWith('data:image/')) {
-                    imageToSend = `base64://${result.data.split(',')[1]}`
+                    const match = result.data.match(/^data:(image\/[^;]+);base64,(.+)$/)
+                    if (match) {
+                        reviewImage = { mime_type: match[1], data: match[2] }
+                        imageToSend = `base64://${match[2]}`
+                    } else {
+                        imageToSend = `base64://${result.data.split(',')[1]}`
+                    }
                 } else {
                     try {
-                        const buf = await urlToBuffer(result.data)
-                        imageToSend = `base64://${buf.toString('base64')}`
+                        const arr = await urlToBuffer(result.data)
+                        const buf = Buffer.from(arr)
+                        const mimeType = getImageMimeType(buf) || 'image/png'
+                        const data = buf.toString('base64')
+                        reviewImage = { mime_type: mimeType, data }
+                        imageToSend = `base64://${data}`
                     } catch { /* 用原 url */ }
                 }
                 const caption = preset
@@ -314,7 +325,8 @@ export const imageGenTool = {
                     preset: preset?.name || null,
                     character: characterProfile?.name || characterProfile?.id || null,
                     refCount: processedImages.length,
-                    characterRefCount: characterImages.length
+                    characterRefCount: characterImages.length,
+                    reviewImage
                 }
             } else {
                 // 模型只返回了文本（如拒绝/描述），交回文本
@@ -335,7 +347,7 @@ export const imageGenTool = {
         const characterNote = data.character ? `，角色「${data.character}」` : ''
         const characterRefNote = data.characterRefCount > 0 ? `，角色参考图 ${data.characterRefCount} 张` : ''
         const refNote = data.refCount > 0 ? `，用户参考图 ${data.refCount} 张` : ''
-        return `\n\n【画图成功】已生成图片并发送到当前会话（耗时 ${data.elapsed}s${presetNote}${characterNote}${characterRefNote}${refNote}）。图片已直接发出，无需你再描述图片内容。`
+        return `\n\n【画图成功】已生成图片并发送到当前会话（耗时 ${data.elapsed}s${presetNote}${characterNote}${characterRefNote}${refNote}）。`
     }
 }
 

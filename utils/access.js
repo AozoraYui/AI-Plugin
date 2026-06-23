@@ -11,7 +11,8 @@ const defaultAccessConfig = {
     blacklist_groups: [],
     blacklist_users: [],
     show_thinking: false,
-    show_thinking_notice: false
+    show_thinking_notice: false,
+    draw_review_after_generate: false
 }
 
 // 权限配置缓存，避免频繁读取文件

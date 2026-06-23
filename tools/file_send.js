@@ -14,6 +14,7 @@ import { checkPathAllowed, findFuzzyPathInAllowedRoots, resolvePathInput } from 
 
 // 单个文件发送上限（字节）。过大文件 QQ 通常发送失败，提前拦截给出清晰提示。
 const MAX_SEND_SIZE = 200 * 1024 * 1024 // 200MB
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif'])
 
 /** 将文件夹打包为临时 tar.gz，返回压缩包路径 */
 function packDirectory(dirPath) {
@@ -125,6 +126,10 @@ export const fileSendTool = {
                     path: {
                         type: 'string',
                         description: '要发送的文件或文件夹路径，支持绝对路径、相对路径、常用别名或文件名片段（会在白名单目录内模糊查找）。建议先用 dir_read/file_read 确认目标文件后再发送。'
+                    },
+                    as_image: {
+                        type: 'boolean',
+                        description: '可选。仅当用户明确要求“以图片形式/作为图片/直接发图”发送图片文件时设为 true；否则保持 false，按普通文件发送。'
                     }
                 },
                 required: ['path']
@@ -134,6 +139,7 @@ export const fileSendTool = {
 
     async execute(args = {}, context = {}) {
         const rawInput = String(args.path || '').trim()
+        const asImage = args.as_image === true || args.as_image === 'true'
         if (!rawInput) return '【文件发送失败】未提供 path。'
 
         const event = context.event
@@ -161,6 +167,32 @@ export const fileSendTool = {
             stats = fs.statSync(realPath)
         } catch (err) {
             return `【文件发送失败】无法读取文件信息: ${err.message}`
+        }
+
+        if (asImage) {
+            if (!stats.isFile()) {
+                return `【文件发送失败】目标不是图片文件，无法以图片形式发送: ${realPath}`
+            }
+            const ext = path.extname(realPath).toLowerCase()
+            if (!IMAGE_EXTS.has(ext)) {
+                return `【文件发送失败】目标不是支持的图片格式（支持 png/jpg/jpeg/webp/gif）: ${path.basename(realPath)}`
+            }
+            if (stats.size > MAX_SEND_SIZE) {
+                return `【文件发送失败】图片过大（${(stats.size / 1024 / 1024).toFixed(1)}MB），超过 ${MAX_SEND_SIZE / 1024 / 1024}MB 上限，QQ 可能无法发送。`
+            }
+            if (stats.size === 0) {
+                return `【文件发送失败】图片文件为空: ${path.basename(realPath)}`
+            }
+            const imageBase64 = fs.readFileSync(realPath).toString('base64')
+            await event.reply(segment.image(`base64://${imageBase64}`), true)
+            return {
+                ok: true,
+                fileName: path.basename(realPath),
+                sourcePath: realPath,
+                sizeBytes: stats.size,
+                isArchive: false,
+                asImage: true
+            }
         }
 
         let sendPath = realPath
@@ -212,6 +244,9 @@ export const fileSendTool = {
         if (typeof data === 'string') return data
         if (!data || !data.ok) return String(data || '')
         const sizeMb = (data.sizeBytes / 1024 / 1024).toFixed(2)
+        if (data.asImage) {
+            return `\n\n【图片发送成功】已将图片发送到当前会话。\n名称: ${data.fileName}\n来源: ${data.sourcePath}\n大小: ${sizeMb}MB\n`
+        }
         const kind = data.isArchive ? '文件夹（已打包为 tar.gz）' : '文件'
         return `\n\n【文件发送成功】已将${kind}发送到当前会话。\n名称: ${data.fileName}\n来源: ${data.sourcePath}\n大小: ${sizeMb}MB\n`
     }
