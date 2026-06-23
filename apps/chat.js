@@ -231,6 +231,137 @@ function extractUrlsFromText(text, limit = 10) {
     return urls
 }
 
+function hasTool(enabledTools, name) {
+    return Array.isArray(enabledTools) && enabledTools.includes(name)
+}
+
+function parseQualityFromText(text) {
+    if (/(?:\bultra\b|旗舰|最高|u模型组|ultra模型组)/i.test(text)) return 'ultra'
+    if (/(?:\bpro\b|专业|p模型组|pro模型组)/i.test(text)) return 'pro'
+    if (/(?:\bflash\b|默认|快速|flash模型组)/i.test(text)) return 'flash'
+    return undefined
+}
+
+function cleanupDrawPrompt(text, selfPortrait) {
+    let prompt = String(text || '')
+        .replace(/用\s*(?:flash|pro|ultra|默认|快速|专业|旗舰)\s*模型组/gi, '')
+        .replace(/(?:刚刚|刚才|之前)?(?:报错|没图|失败了?|没画出来|重试|再试试|重新)/g, '')
+
+    if (selfPortrait) {
+        prompt = prompt
+            .replace(/(?:帮我)?(?:画|绘制|生成|创作|做)(?:个|一张|一下)?(?:你自己|你本人|AI本人|你的自画像|自画像|你现在的样子|你长什么样|你)/g, '')
+            .replace(/(?:看看|给我看看)(?:你长什么样|你的样子)/g, '')
+    } else {
+        prompt = prompt
+            .replace(/^(?:帮我|给我)?(?:画|绘制|生成|创作|做)(?:个|一张|一下)?/g, '')
+            .replace(/(?:图片|图|画|插画)$/g, '')
+    }
+
+    return prompt
+        .replace(/^[，。,.、\s]+/, '')
+        .replace(/^(?:场景|背景|要求|构图|镜头)(?:是|为)[:：]?\s*/g, '')
+        .trim()
+}
+
+function extractAbsolutePath(text) {
+    const match = String(text || '').match(/\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)[^\s，。；;]*/i)
+    return match ? match[0].replace(/[，。；;,]+$/g, '') : ''
+}
+
+function parseForceExt(text) {
+    const match = String(text || '').match(/(?:全部|统一|都).{0,10}(?:改成|保存为|存成|转成|后缀(?:为)?|格式(?:为)?)\s*\.?([a-z0-9]{1,8})\b/i)
+    return match ? `.${match[1].toLowerCase()}` : ''
+}
+
+function parseShellCommand(text) {
+    const value = String(text || '').trim()
+    const patterns = [
+        /^(?:执行|运行|调用)\s*(?:shell|命令|终端|命令行)[:：]?\s*([\s\S]+)$/i,
+        /^shell[:：]\s*([\s\S]+)$/i,
+        /^命令[:：]\s*([\s\S]+)$/i
+    ]
+    for (const pattern of patterns) {
+        const match = value.match(pattern)
+        if (match?.[1]?.trim()) return match[1].trim()
+    }
+    return ''
+}
+
+function preRouteToolIntent(userMessage, enabledTools, options = {}) {
+    const text = String(userMessage || '').trim()
+    if (!text) return null
+
+    const urls = options.urls || []
+    const hasImages = options.hasImages === true
+
+    // 1) 明确画图/画自己：直接走 draw_image，避免让小模型在长工具说明里猜。
+    if (hasTool(enabledTools, 'draw_image')) {
+        const drawIntent = /(?:帮我|给我)?(?:画|绘制|生成|创作|做)(?:个|一张|一下)?[\s\S]{0,80}(?:图|图片|画|插画|头像|壁纸|你自己|你本人|AI本人|自画像|你长什么样|你的样子|你)/i.test(text)
+            || /(?:看看|给我看看)(?:你长什么样|你的样子)/i.test(text)
+        if (drawIntent) {
+            const selfPortrait = /(?:你自己|你本人|AI本人|自画像|你长什么样|你的样子|你现在的样子)/i.test(text)
+            const args = {
+                prompt: cleanupDrawPrompt(text, selfPortrait),
+                self_portrait: selfPortrait
+            }
+            const quality = parseQualityFromText(text)
+            if (quality) args.quality = quality
+            return {
+                intent: selfPortrait ? '规则预路由：用户明确要求绘制 AI 自画像。' : '规则预路由：用户明确要求生成图片。',
+                tools: [{ name: 'draw_image', args }],
+                routedBy: 'rule'
+            }
+        }
+    }
+
+    // 2) 明确要求下载/保存当前或引用消息媒体：直接走 file_download。
+    if (hasTool(enabledTools, 'file_download') && !/(?:群文件|群文件区)/.test(text)) {
+        const mediaWords = '(?:图片|照片|图|视频|语音|文件|这些|这个|引用|消息|媒体)'
+        const actionWords = '(?:下载|保存|存储|存到|下载到|保存到|存起来)'
+        const downloadIntent = new RegExp(`${actionWords}.{0,30}${mediaWords}|${mediaWords}.{0,30}${actionWords}`, 'i').test(text)
+            || (hasImages && /(?:下载|保存|存储|存到|下载到|保存到|存起来)/i.test(text))
+        if (downloadIntent) {
+            const args = {}
+            const saveDir = extractAbsolutePath(text)
+            const forceExt = parseForceExt(text)
+            if (saveDir) args.save_dir = saveDir
+            if (forceExt) args.force_ext = forceExt
+            return {
+                intent: '规则预路由：用户明确要求下载/保存当前或引用消息中的媒体文件。',
+                tools: [{ name: 'file_download', args }],
+                routedBy: 'rule'
+            }
+        }
+    }
+
+    // 3) 主人明确给出 shell 命令：直接走 shell_exec。
+    if (hasTool(enabledTools, 'shell_exec')) {
+        const command = parseShellCommand(text)
+        if (command) {
+            return {
+                intent: '规则预路由：主人明确要求执行 Shell 命令。',
+                tools: [{ name: 'shell_exec', args: { command } }],
+                routedBy: 'rule'
+            }
+        }
+    }
+
+    // 4) 明确要求查看/总结链接内容：直接走 web_fetch（仅在工具已启用时）。
+    if (hasTool(enabledTools, 'web_fetch') && urls.length > 0) {
+        const fetchIntent = /(?:看|看看|打开|读取|抓取|总结|分析|解释|概括).{0,20}(?:链接|网页|网址|页面|内容|这个)/i.test(text)
+            || /(?:这个|这条|上面).{0,8}(?:链接|网页|网址).{0,12}(?:讲|说|内容|总结|看看|分析)/i.test(text)
+        if (fetchIntent) {
+            return {
+                intent: '规则预路由：用户明确要求查看/总结链接内容。',
+                tools: [{ name: 'web_fetch', args: { url: urls[0] } }],
+                routedBy: 'rule'
+            }
+        }
+    }
+
+    return null
+}
+
 function truncateForPrompt(text, maxChars) {
     const value = String(text || '')
     if (value.length <= maxChars) return value
@@ -586,9 +717,19 @@ export class ChatHandler extends plugin {
                     }
                 }
                 const candidateUrls = extractUrlsFromText(userMessage, 10)
-                const toolAnalysis = await toolRegistry.analyzeToolIntent(userMessage, this.client, enabledTools, recentHistory, memorySummary, candidateUrls, {
-                    hasImages: allImages.length > 0
+                const preRouted = preRouteToolIntent(userMessage, enabledTools, {
+                    hasImages: allImages.length > 0,
+                    urls: candidateUrls
                 })
+                let toolAnalysis
+                if (preRouted) {
+                    toolAnalysis = preRouted
+                    logger.info(`[AI-Plugin] 工具预路由命中: ${preRouted.tools.map(t => t.name).join(', ')} - ${preRouted.intent}`)
+                } else {
+                    toolAnalysis = await toolRegistry.analyzeToolIntent(userMessage, this.client, enabledTools, recentHistory, memorySummary, candidateUrls, {
+                        hasImages: allImages.length > 0
+                    })
+                }
                 const intent = toolAnalysis?.intent || ''
                 const toolCalls = Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools : []
                 const executedShellCommands = []
