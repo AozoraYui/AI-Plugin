@@ -313,6 +313,7 @@ export class ChatHandler extends plugin {
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆$`, 'i'), fnc: 'exportAllMemory', permission: 'master' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'), fnc: 'exportAllMemoryByDate', permission: 'master' },
                 { reg: /^#ai思考(开启|关闭)$/i, fnc: 'switchThinkingMode', permission: 'master' },
+                { reg: /^#?ai(开启|关闭)思考提示$/i, fnc: 'switchThinkingNotice', permission: 'master' },
             ]
         })
         this.client = global.AIPluginClient
@@ -764,8 +765,9 @@ export class ChatHandler extends plugin {
             const isSingleMode = e._singleMode === true
             const userId = e.user_id
 
-            // 画图场景工具已发过"🎨正在生成"进度提示（无论成败），跳过"思考中"占位避免重复
-            if (!drawImageAttempted) {
+            // 画图场景工具已发过"🎨正在生成"进度提示（无论成败），跳过"思考中"占位避免重复；
+            // 普通思考占位由主人命令「#ai开启/关闭思考提示」控制，默认关闭。
+            if (getAccessConfig().show_thinking_notice === true && !drawImageAttempted) {
                 if (!isSingleMode) {
                     await e.reply(`${Config.AI_NAME}思考中 (使用 ${modelDisplay} 模型组)…`, true)
                 } else {
@@ -1086,6 +1088,20 @@ export class ChatHandler extends plugin {
             await e.reply("✅ 设置成功：已开启思考过程显示 (Raw模式)。")
         } else {
             await e.reply("🚫 设置成功：已关闭思考过程显示 (自动清洗模式)。")
+        }
+    }
+
+    async switchThinkingNotice(e) {
+        const isTurnOn = e.msg.includes("开启")
+        const config = getAccessConfig()
+
+        config.show_thinking_notice = isTurnOn
+        saveAccessConfig(config)
+
+        if (isTurnOn) {
+            await e.reply(`✅ 设置成功：已开启${Config.AI_NAME}思考提示。普通对话会发送“${Config.AI_NAME}思考中…”占位提示。`)
+        } else {
+            await e.reply(`🚫 设置成功：已关闭${Config.AI_NAME}思考提示。普通对话将不再发送“${Config.AI_NAME}思考中…”占位提示。`)
         }
     }
 }

@@ -210,6 +210,8 @@ export class HelpHandler extends plugin {
   查看插件运行状态。
 > #ai思考开启/关闭
   切换是否显示AI的思考过程。
+> #ai开启思考提示 / #ai关闭思考提示
+  切换普通对话是否发送“AI思考中…”占位提示（默认关闭）。
 > #ai插件更新
   检查并更新插件（git pull）。
 > #ai插件强制更新
