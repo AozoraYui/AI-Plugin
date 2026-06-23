@@ -302,7 +302,8 @@ function detectCharactersFromText(text) {
     return matched
 }
 
-function cleanupDrawPrompt(text, selfPortrait, characterId = '') {
+function cleanupDrawPrompt(text, selfPortrait, characterIds = []) {
+    const ids = Array.isArray(characterIds) ? characterIds : (characterIds ? [characterIds] : [])
     let prompt = String(text || '')
         .replace(/用\s*(?:flash|pro|ultra|默认|快速|专业|旗舰)\s*模型组/gi, '')
         .replace(/(?:刚刚|刚才|之前)?(?:报错|没图|失败了?|没画出来|重试|再试试|重新)/g, '')
@@ -317,7 +318,7 @@ function cleanupDrawPrompt(text, selfPortrait, characterId = '') {
             .replace(/(?:图片|图|画|插画)$/g, '')
     }
 
-    if (characterId) {
+    for (const characterId of ids) {
         const profile = loadCharacterAliasesForRoute().find(item => item.id === characterId)
         for (const name of profile?.names || []) {
             const raw = String(name || '').trim()
@@ -372,20 +373,24 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
     if (hasTool(enabledTools, 'draw_image')) {
         const characters = detectCharactersFromText(text)
         const character = characters.length === 1 ? characters[0] : ''
+        const hasCharacter = characters.length > 0
         const drawIntent = /(?:帮我|给我)?(?:画|绘制|生成|创作|做)(?:个|一张|一下)?[\s\S]{0,80}(?:图|图片|画|插画|头像|壁纸|你自己|你本人|AI本人|自画像|你长什么样|你的样子|你)/i.test(text)
             || /(?:看看|给我看看)(?:你长什么样|你的样子)/i.test(text)
-            || (character && /(?:帮我|给我)?(?:画|绘制|生成|创作|做)(?:个|一张|一下)?/i.test(text))
-        if (drawIntent && characters.length <= 1) {
-            const selfPortrait = /(?:你自己|你本人|AI本人|自画像|你长什么样|你的样子|你现在的样子)/i.test(text) || character === 'noa'
+            || (hasCharacter && /(?:帮我|给我)?(?:画|绘制|生成|创作|做)(?:个|一张|一下)?/i.test(text))
+        if (drawIntent) {
+            const selfPortrait = /(?:你自己|你本人|AI本人|自画像|你长什么样|你的样子|你现在的样子)/i.test(text) && characters.length <= 1
             const args = {
-                prompt: cleanupDrawPrompt(text, selfPortrait, character),
+                prompt: cleanupDrawPrompt(text, selfPortrait, characters),
                 self_portrait: selfPortrait
             }
-            if (character && !selfPortrait) args.character = character
+            if (!selfPortrait) {
+                if (characters.length > 1) args.characters = characters
+                else if (character) args.character = character
+            }
             const quality = parseQualityFromText(text)
             if (quality) args.quality = quality
             return {
-                intent: selfPortrait ? '规则预路由：用户明确要求绘制 AI 自画像。' : (character ? `规则预路由：用户明确要求绘制角色「${character}」。` : '规则预路由：用户明确要求生成图片。'),
+                intent: selfPortrait ? '规则预路由：用户明确要求绘制 AI 自画像。' : (characters.length > 0 ? `规则预路由：用户明确要求绘制角色「${characters.join('、')}」。` : '规则预路由：用户明确要求生成图片。'),
                 tools: [{ name: 'draw_image', args }],
                 routedBy: 'rule'
             }

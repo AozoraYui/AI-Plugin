@@ -183,7 +183,12 @@ export const imageGenTool = {
                     },
                     character: {
                         type: 'string',
-                        description: '可选，角色参考图库中的角色ID或别名（如 noa、yuuka、maki、rio，或 profile.yaml 中配置的 aliases）。用户要求画某个已配置角色时填写；工具会自动加载 data/characters/{角色ID} 下的参考图和设定。'
+                        description: '可选，角色参考图库中的单个角色ID或别名（如 noa、yuuka、maki、rio，或 profile.yaml 中配置的 aliases）。用户只要求画一个已配置角色时填写；工具会自动加载 data/characters/{角色ID} 下的参考图和设定。'
+                    },
+                    characters: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: '可选，多个角色ID或别名数组。用户要求同一画面出现多个已配置角色时填写，例如 ["noa", "yuuka"]；工具会为每个角色各加载一张参考图。'
                     }
                 },
                 required: []
@@ -202,17 +207,29 @@ export const imageGenTool = {
         const presetName = String(args.preset || '').trim()
         const modelGroupKey = ['flash', 'pro', 'ultra'].includes(args.quality) ? args.quality : 'flash'
         const isSelfPortrait = args.self_portrait === true || args.self_portrait === 'true'
-        const characterInput = isSelfPortrait ? 'noa' : String(args.character || '').trim()
-        const characterProfile = resolveCharacterProfile(characterInput, isSelfPortrait)
+        const rawCharacters = Array.isArray(args.characters) ? args.characters : []
+        const characterInputs = isSelfPortrait
+            ? ['noa']
+            : [...rawCharacters, args.character]
+                .map(v => String(v || '').trim())
+                .filter(Boolean)
+                .filter((v, i, arr) => arr.findIndex(x => (normalizeCharacterKey(x) || x) === (normalizeCharacterKey(v) || v)) === i)
+        const characterProfiles = characterInputs
+            .map(input => resolveCharacterProfile(input, isSelfPortrait && input === 'noa'))
+            .filter(Boolean)
 
-        // 角色参考图：加载 data/characters/{角色ID} 来锁定角色形象
-        const characterImages = characterProfile ? loadCharacterImages(characterProfile) : []
-        if (characterProfile) {
-            const usedNames = characterImages.usedNames || []
+        // 角色参考图：每个角色从 data/characters/{角色ID} 各取一张，锁定多角色形象
+        const characterImageGroups = characterProfiles.map(profile => ({ profile, images: loadCharacterImages(profile) }))
+        const characterImages = characterImageGroups.flatMap(group => group.images)
+        for (const group of characterImageGroups) {
+            const usedNames = group.images.usedNames || []
             const nameNote = usedNames.length > 0 ? `：${usedNames.join('、')}` : ''
-            logger.info(`[AI-Plugin] 画图工具：角色参考模式「${characterProfile.name || characterProfile.id}」，加载到 ${characterImages.length} 张本地参考图${nameNote}`)
-        } else if (characterInput) {
-            logger.warn(`[AI-Plugin] 画图工具：未找到角色参考图库「${characterInput}」，将仅使用文本/用户参考图画图`)
+            logger.info(`[AI-Plugin] 画图工具：角色参考模式「${group.profile.name || group.profile.id}」，加载到 ${group.images.length} 张本地参考图${nameNote}`)
+        }
+        for (const input of characterInputs) {
+            if (!characterProfiles.some(profile => normalizeCharacterKey(profile.id) === normalizeCharacterKey(input) || normalizeCharacterKey(profile.name) === normalizeCharacterKey(input) || (profile.aliases || []).some(alias => normalizeCharacterKey(alias) === normalizeCharacterKey(input) || String(alias).trim() === input))) {
+                logger.warn(`[AI-Plugin] 画图工具：未找到角色参考图库「${input}」，将仅使用文本/用户参考图画图`)
+            }
         }
 
         // 解析预设
@@ -260,19 +277,36 @@ export const imageGenTool = {
                 finalText = prompt
             }
             // 角色参考：补充形象指令，引导模型区分角色图库参考图与用户额外参考图
-            if (characterProfile) {
-                const characterName = characterProfile.name || characterProfile.id
+            if (characterProfiles.length > 0) {
+                const characterNames = characterProfiles.map(profile => profile.name || profile.id)
+                const refRanges = []
+                let refStart = 1
+                for (const group of characterImageGroups) {
+                    const count = group.images.length
+                    const name = group.profile.name || group.profile.id
+                    if (count > 0) {
+                        const refEnd = refStart + count - 1
+                        refRanges.push(count === 1 ? `参考图#${refStart} 是角色「${name}」` : `参考图#${refStart}-#${refEnd} 是角色「${name}」`)
+                        refStart += count
+                    }
+                }
+
                 let refHint = ''
                 if (characterImages.length > 0 && processedImages.length > 0) {
-                    refHint = `请注意参考图顺序：前 ${characterImages.length} 张是角色「${characterName}」的官方/设定参考图，必须严格保持该角色的发型发色、瞳色、光环、服饰等关键特征一致；后续 ${processedImages.length} 张是用户额外提供的参考图，仅用于场景、姿势、构图、镜头、氛围或风格参考，不要把后续参考图中的人物身份/外貌替换成目标角色。`
+                    refHint = `请注意参考图顺序：${refRanges.join('；')}。这些是角色官方/设定参考图，必须分别保持对应角色的发型发色、瞳色、光环、服饰等关键特征一致，不要混淆角色；后续 ${processedImages.length} 张是用户额外提供的参考图，仅用于场景、姿势、构图、镜头、氛围或风格参考，不要把后续参考图中的人物身份/外貌替换成目标角色。`
                 } else if (characterImages.length > 0) {
-                    refHint = `请严格参考随附的角色「${characterName}」参考图，保持发型发色、瞳色、光环、服饰等关键特征一致。`
+                    refHint = `请严格按顺序参考随附角色图：${refRanges.join('；')}。请在同一画面中分别保持每个角色的发型发色、瞳色、光环、服饰等关键特征一致，不要把多个角色的外貌混在一起。`
                 } else if (processedImages.length > 0) {
-                    refHint = `用户提供了 ${processedImages.length} 张额外参考图，请仅用于场景、姿势、构图、镜头、氛围或风格参考；角色「${characterName}」的形象仍以文字设定为准。`
+                    refHint = `用户提供了 ${processedImages.length} 张额外参考图，请仅用于场景、姿势、构图、镜头、氛围或风格参考；角色「${characterNames.join('、')}」的形象仍以文字设定为准。`
                 }
-                const characterDesc = characterProfile.description || ''
-                const characterText = `${refHint}${characterDesc ? `角色设定（${characterName}）：` + characterDesc : ''}`.trim()
-                finalText = finalText ? `${characterText} 在此基础上：${finalText}` : characterText
+                const descLines = characterProfiles
+                    .map(profile => {
+                        const name = profile.name || profile.id
+                        return profile.description ? `角色设定（${name}）：${profile.description}` : `目标角色：${name}`
+                    })
+                    .join('\n')
+                const characterText = `${refHint}\n${descLines}`.trim()
+                finalText = finalText ? `${characterText}\n在此基础上：${finalText}` : characterText
             }
             if (finalText) parts.push({ text: finalText })
 
@@ -323,7 +357,8 @@ export const imageGenTool = {
                     elapsed,
                     platform: result.platform,
                     preset: preset?.name || null,
-                    character: characterProfile?.name || characterProfile?.id || null,
+                    characters: characterProfiles.map(profile => profile.name || profile.id),
+                    character: characterProfiles.length === 1 ? (characterProfiles[0].name || characterProfiles[0].id) : null,
                     refCount: processedImages.length,
                     characterRefCount: characterImages.length,
                     reviewImage
@@ -344,7 +379,10 @@ export const imageGenTool = {
         if (typeof data === 'string') return data
         if (!data || !data.ok) return String(data || '')
         const presetNote = data.preset ? `，预设「${data.preset}」` : ''
-        const characterNote = data.character ? `，角色「${data.character}」` : ''
+        const characterNames = Array.isArray(data.characters) && data.characters.length > 0
+            ? data.characters
+            : (data.character ? [data.character] : [])
+        const characterNote = characterNames.length > 0 ? `，角色「${characterNames.join('、')}」` : ''
         const characterRefNote = data.characterRefCount > 0 ? `，角色参考图 ${data.characterRefCount} 张` : ''
         const refNote = data.refCount > 0 ? `，用户参考图 ${data.refCount} 张` : ''
         return `\n\n【画图成功】已生成图片并发送到当前会话（耗时 ${data.elapsed}s${presetNote}${characterNote}${characterRefNote}${refNote}）。`

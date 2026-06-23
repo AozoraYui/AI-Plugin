@@ -146,7 +146,7 @@ class ToolRegistry {
 
         // 角色参考图库说明：角色外貌设定统一放在 data/characters/{角色ID}/profile.yaml
         const characterLibraryBlock = enabledTools.includes('draw_image')
-            ? '\n\n【角色参考图库说明】draw_image 支持 character 参数。用户要求"画你自己/画 AI 本人/看看你长什么样"等时，可设置 self_portrait=true 或 character="noa"；prompt 只填用户额外提出的动作、场景、风格要求。用户要求画某个已配置角色（如诺亚/优香/真纪/莉音/其他角色名或别名）时，把 character 填为用户说的角色名或别名，并把场景、动作、镜头、风格写入 prompt。角色外貌设定由 data/characters/{角色ID}/profile.yaml 提供。\n'
+            ? '\n\n【角色参考图库说明】draw_image 支持 character 参数和 characters 数组。用户要求"画你自己/画 AI 本人/看看你长什么样"等时，可设置 self_portrait=true 或 character="noa"；prompt 只填用户额外提出的动作、场景、风格要求。用户要求画单个已配置角色（如诺亚/优香/真纪/莉音/其他角色名或别名）时，把 character 填为用户说的角色名或别名；用户要求同一画面出现多个已配置角色时，把 characters 填为角色名/别名数组（如 ["noa", "yuuka"]），并把场景、动作、镜头、风格写入 prompt。角色外貌设定由 data/characters/{角色ID}/profile.yaml 提供，每个角色会各取一张参考图。\n'
             : ''
 
         const analysisPrompt = `当前时间：${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日。你是一个意图分析助手。分析用户消息，输出意图分析和需要调用的工具。
@@ -185,12 +185,12 @@ ${toolDescriptions.join('\n')}
   - 群文件浏览要求：当用户想"看看群文件有哪些/列一下群文件/群文件里有什么"时使用。要进某个子文件夹就填 folder_name，否则留空看根目录。当用户想"连文件夹里的文件也一起看/全部列出来/包括子文件夹"时把 recursive 设为 true。注意这是 QQ"群文件区"，不是聊天消息里的文件。
 - group_file_download: {"file_name": "可选，群文件名", "save_dir": "可选，保存目录"}
   - 群文件下载要求：当用户要求把"群文件里的某个文件"下载/保存到服务器某目录时使用。file_name 填用户说的文件名（可为片段）。若用户是"引用了一条群文件消息"再说"下载这个/帮我下载到xxx/把这个存到服务器"，或者说"把刚才那个群文件/上次引用的文件下载到xxx"，file_name 都可以留空——工具会自动从被引用的群文件消息提取，或回退到最近引用过的群文件名。这是从 QQ 群文件区下载，区别于 file_download（后者下载聊天消息里的媒体）。
-- draw_image: {"prompt": "画图描述", "preset": "可选预设名", "quality": "可选 flash/pro/ultra", "self_portrait": "可选 true/false", "character": "可选角色ID或别名"}
+- draw_image: {"prompt": "画图描述", "preset": "可选预设名", "quality": "可选 flash/pro/ultra", "self_portrait": "可选 true/false", "character": "可选单个角色ID或别名", "characters": "可选多个角色ID或别名数组"}
   - 画图要求：当用户明确要求"画/绘制/生成一张图/帮我画/做张图/用某某风格画"等时使用。prompt 填用户想画的内容描述。
   - 用户提到具体已有风格名（如"手办化""手办风"）时填 preset；不确定是否为预设就不要填 preset，直接用 prompt 描述。
   - 参考图（用户带图、引用的图、@的成员头像）由工具自动从消息中提取，不需要你处理图片，也不要因为有图就改用其他工具。
   - 只有用户确实想要生成/创作图片时才调用；普通聊天、发图让你看图说话、问问题都不要调用 draw_image。
-  - 角色参考图库：当用户要求画某个角色（如诺亚/优香/真纪/莉音，或用户提到的其他明确角色名）时，把 character 填为用户说的角色名或别名；prompt 只填用户额外提出的动作、场景、镜头、风格要求。工具会自动从 data/characters/{角色ID}/profile.yaml 和图片加载参考。
+  - 角色参考图库：当用户要求画单个角色（如诺亚/优香/真纪/莉音，或用户提到的其他明确角色名）时，把 character 填为用户说的角色名或别名；当用户要求同一张图里出现多个角色时，把 characters 填为角色名/别名数组（如 ["noa", "yuuka"]）。prompt 只填用户额外提出的动作、场景、镜头、风格要求。工具会自动从 data/characters/{角色ID}/profile.yaml 和图片加载参考，每个角色各取一张参考图。
   - 特别注意：当用户要求"画你自己/画一下你/画 AI 本人/给我看看你长什么样"等指向 AI 自身形象时，把 self_portrait 设为 true（等价于 character="noa"），prompt 只需填用户额外提出的动作/场景/风格（如"在海边""穿和服"），没有额外要求时 prompt 可留空。
 - group_mute: {"user_id": "QQ号", "time": 时长数值, "unit": "秒/分钟/小时/天"}
   - 禁言/解禁要求：用户要"禁言某人/把xxx禁言N分钟/闭嘴/解除xxx的禁言"时使用。被操作者的 QQ 号从 @ 或消息中获取。解除禁言时 time 填 0。
