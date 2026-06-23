@@ -2,9 +2,9 @@ node_modules/
 *.log
 .DS_Store
 data/*
-!data/self/
-data/self/*
-!data/self/README.md
+!data/characters_template/
+data/characters_template/*
+!data/characters_template/profile.yaml
 config/
 !config_template/
 package-lock.json

@@ -271,11 +271,6 @@ export const Config = {
     presets,
     get Prompts() { return config.Prompts ?? loadedPrompts },
     set Prompts(val) { config.Prompts = val },
-    get selfPortrait() {
-        const aiName = config.AI_NAME ?? loadedAIName ?? '诺亚'
-        const raw = (this.Prompts?.persona?.self_portrait || '').trim()
-        return raw ? raw.replace(/\{AI_NAME\}/g, aiName) : ''
-    },
     get USE_PROXY() { return config.USE_PROXY ?? defaultConfig.USE_PROXY },
     set USE_PROXY(val) { config.USE_PROXY = val },
     get PROXY_URL() { return config.PROXY_URL ?? defaultConfig.PROXY_URL },

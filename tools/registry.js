@@ -3,8 +3,6 @@
  * 管理所有内置工具，支持 Function Calling schema 生成和结果格式化
  */
 
-import { Config } from '../utils/config.js'
-
 class ToolRegistry {
     constructor() {
         this.tools = new Map()
@@ -146,16 +144,10 @@ class ToolRegistry {
             ? '\n\n当前用户消息包含图片。注意：你看不到图片内容，图片理解会交给后续多模态主模型处理。若文字本身没有明确要求搜索、查天气、读文件、执行命令或抓取链接，不要仅凭短语/表情/图片上下文脑补工具调用，tools 应返回空数组。\n'
             : ''
 
-        // AI 自身形象设定：仅当启用 draw_image 且配置了自画像时注入，供"画你自己"类需求填写 prompt/character
-        let selfPortraitBlock = ''
-        if (enabledTools.includes('draw_image')) {
-            const portrait = Config.selfPortrait
-            if (portrait) {
-                selfPortraitBlock = `\n\n【角色参考图库说明】draw_image 支持 character 参数。用户要求"画你自己/画 AI 本人/看看你长什么样"等时，可设置 self_portrait=true 或 character="noa"；prompt 只填用户额外提出的动作、场景、风格要求。用户要求画某个已配置角色（如诺亚/优香/真纪/莉音/其他角色名或别名）时，把 character 填为用户说的角色名或别名，并把场景、动作、镜头、风格写入 prompt。AI 自身形象设定如下：\n${portrait}\n`
-            } else {
-                selfPortraitBlock = '\n\n【角色参考图库说明】draw_image 支持 character 参数。用户要求画某个已配置角色时，把 character 填为用户说的角色名或别名，并把场景、动作、镜头、风格写入 prompt。\n'
-            }
-        }
+        // 角色参考图库说明：角色外貌设定统一放在 data/characters/{角色ID}/profile.yaml
+        const characterLibraryBlock = enabledTools.includes('draw_image')
+            ? '\n\n【角色参考图库说明】draw_image 支持 character 参数。用户要求"画你自己/画 AI 本人/看看你长什么样"等时，可设置 self_portrait=true 或 character="noa"；prompt 只填用户额外提出的动作、场景、风格要求。用户要求画某个已配置角色（如诺亚/优香/真纪/莉音/其他角色名或别名）时，把 character 填为用户说的角色名或别名，并把场景、动作、镜头、风格写入 prompt。角色外貌设定由 data/characters/{角色ID}/profile.yaml 提供。\n'
+            : ''
 
         const analysisPrompt = `当前时间：${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日。你是一个意图分析助手。分析用户消息，输出意图分析和需要调用的工具。
 
@@ -230,7 +222,7 @@ ${toolDescriptions.join('\n')}
         try {
             const analysisPayload = {
                 contents: [
-                    { role: "user", parts: [{ text: analysisPrompt + imageContextBlock + selfPortraitBlock + summaryBlock + contextBlock + candidateUrlBlock + `\n\n用户消息：\n${userMessage}` }] }
+                    { role: "user", parts: [{ text: analysisPrompt + imageContextBlock + characterLibraryBlock + summaryBlock + contextBlock + candidateUrlBlock + `\n\n用户消息：\n${userMessage}` }] }
                 ]
             }
 

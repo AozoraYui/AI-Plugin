@@ -16,9 +16,7 @@ import path from 'node:path'
 import yaml from 'yaml'
 
 // 角色参考图库目录：插件根目录 data/characters/{角色ID}/profile.yaml + 0.png/1.png...
-// 兼容旧目录 data/self：当 character=noa 且 data/characters/noa 不存在时回退使用 data/self
 const CHARACTER_ROOT_DIR = path.join(process.cwd(), 'plugins', 'AI-Plugin', 'data', 'characters')
-const SELF_PORTRAIT_DIR = path.join(process.cwd(), 'plugins', 'AI-Plugin', 'data', 'self')
 const IMG_EXT = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
 // 每个角色最多取用的本地参考图数量（过多会让 /images/edits 上传超时）
 const CHARACTER_MAX_REF = 1
@@ -73,15 +71,7 @@ function resolveCharacterProfile(inputCharacter, isSelfPortrait = false) {
             .map(d => d.name)
         for (const dirName of dirs) {
             const dir = path.join(CHARACTER_ROOT_DIR, dirName)
-            const fallback = dirName === 'noa'
-                ? {
-                    id: 'noa',
-                    name: '诺亚',
-                    aliases: ['诺亚', '生盐诺亚', 'noa', 'noah', '你自己', '自己'],
-                    description: Config.selfPortrait || ''
-                }
-                : { id: dirName, name: dirName, aliases: [] }
-            const profile = readCharacterProfile(dir, fallback)
+            const profile = readCharacterProfile(dir, { id: dirName, name: dirName, aliases: [] })
             const candidates = [dirName, profile.id, profile.name, ...(profile.aliases || [])]
                 .filter(Boolean)
                 .map(v => normalizeCharacterKey(v))
@@ -92,18 +82,6 @@ function resolveCharacterProfile(inputCharacter, isSelfPortrait = false) {
             if (candidates.includes(requested) || (raw && rawCandidates.includes(raw))) {
                 return { ...profile, id: dirName, dir, legacy: false }
             }
-        }
-    }
-
-    // 兼容旧 self 目录：画自己/诺亚/noa 时使用 data/self + Config.selfPortrait
-    if ((isSelfPortrait || ['noa', 'noah'].includes(requested) || ['诺亚', '生盐诺亚'].includes(raw)) && fs.existsSync(SELF_PORTRAIT_DIR)) {
-        return {
-            id: 'noa',
-            name: '诺亚',
-            aliases: ['诺亚', '生盐诺亚', 'noa', 'noah', '你自己', '自己'],
-            description: Config.selfPortrait || '',
-            dir: SELF_PORTRAIT_DIR,
-            legacy: true
         }
     }
 
@@ -227,7 +205,7 @@ export const imageGenTool = {
         const characterInput = isSelfPortrait ? 'noa' : String(args.character || '').trim()
         const characterProfile = resolveCharacterProfile(characterInput, isSelfPortrait)
 
-        // 角色参考图：加载 data/characters/{角色ID}（画自己兼容 data/self）来锁定角色形象
+        // 角色参考图：加载 data/characters/{角色ID} 来锁定角色形象
         const characterImages = characterProfile ? loadCharacterImages(characterProfile) : []
         if (characterProfile) {
             const usedNames = characterImages.usedNames || []
@@ -292,7 +270,7 @@ export const imageGenTool = {
                 } else if (processedImages.length > 0) {
                     refHint = `用户提供了 ${processedImages.length} 张额外参考图，请仅用于场景、姿势、构图、镜头、氛围或风格参考；角色「${characterName}」的形象仍以文字设定为准。`
                 }
-                const characterDesc = characterProfile.description || (characterProfile.id === 'noa' ? Config.selfPortrait : '') || ''
+                const characterDesc = characterProfile.description || ''
                 const characterText = `${refHint}${characterDesc ? `角色设定（${characterName}）：` + characterDesc : ''}`.trim()
                 finalText = finalText ? `${characterText} 在此基础上：${finalText}` : characterText
             }
