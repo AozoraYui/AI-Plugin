@@ -1187,8 +1187,35 @@ export class ChatHandler extends plugin {
                 const MAX_LENGTH = Config.CHECKPOINT_DISPLAY_MAX_LENGTH
                 const footerSuffix = isSingleMode ? ' (单次对话)' : ''
                 const footerInfo = `⏱️ 耗时: ${elapsed}s${tokenInfo} @${result.platform}${footerSuffix}`
+                const reasoningText = Config.show_thinking && result.reasoning ? String(result.reasoning).trim() : ''
 
-                if (finalResponseText.length <= MAX_LENGTH) {
+                if (reasoningText) {
+                    const forwardMsgNodes = []
+                    const pushChunks = (title, text, footer = '') => {
+                        let content = text || ''
+                        let part = 1
+                        while (content.length > 0) {
+                            let splitIndex = Math.min(MAX_LENGTH, content.length)
+                            if (content.length > MAX_LENGTH) {
+                                const lastNewLine = content.lastIndexOf('\n', MAX_LENGTH)
+                                if (lastNewLine > MAX_LENGTH * 0.8) splitIndex = lastNewLine + 1
+                            }
+                            const chunk = content.slice(0, splitIndex)
+                            content = content.slice(splitIndex)
+                            const suffix = content.length === 0 && footer ? `\n\n${footer}` : ''
+                            forwardMsgNodes.push({
+                                user_id: Bot.uin,
+                                nickname: `${Config.AI_NAME} ${title}${part > 1 ? ` ${part}` : ''}`,
+                                message: `${chunk}${suffix}`
+                            })
+                            part++
+                        }
+                    }
+                    pushChunks('思考过程', `🧠 思考过程\n\n${reasoningText}`)
+                    pushChunks('最终回复', `💬 最终回复\n\n${finalResponseText}`, footerInfo)
+                    const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
+                    await e.reply(forwardMsg)
+                } else if (finalResponseText.length <= MAX_LENGTH) {
                     await e.reply(`${finalResponseText}\n\n${footerInfo}`, true)
                 } else {
                     const forwardMsgNodes = []

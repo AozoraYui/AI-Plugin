@@ -730,9 +730,11 @@ export class AiClient {
         const usage = this._normalizeUsage(data.usage)
 
         if (type === 'chat') {
-            const text = data.choices?.[0]?.message?.content
+            const message = data.choices?.[0]?.message || {}
+            const text = message.content
+            const reasoning = message.reasoning_content || message.reasoning || ''
             if (text) {
-                return { success: true, data: text, usage: usage }
+                return { success: true, data: text, reasoning, usage: usage }
             }
             return { success: false, error: 'AI返回了空消息。这可能是由于内容安全策略或模型内部错误。' }
         }
@@ -780,6 +782,7 @@ export class AiClient {
         const lines = streamText.split('\n').filter(line => line.startsWith('data: ') && !line.includes('[DONE]'))
 
         let accumulatedContent = ""
+        let accumulatedReasoning = ""
         let imageUrlInStream = null
 
         for (const line of lines) {
@@ -788,9 +791,14 @@ export class AiClient {
                 if (!jsonStr) continue
                 const chunk = JSON.parse(jsonStr)
 
-                const deltaContent = chunk.choices?.[0]?.delta?.content
+                const delta = chunk.choices?.[0]?.delta || {}
+                const deltaContent = delta.content
+                const deltaReasoning = delta.reasoning_content || delta.reasoning
                 if (deltaContent) {
                     accumulatedContent += deltaContent
+                }
+                if (deltaReasoning) {
+                    accumulatedReasoning += deltaReasoning
                 }
             } catch (e) {
                 // 忽略无法解析的行
@@ -802,7 +810,7 @@ export class AiClient {
             imageUrlInStream = imageMatch[1]
         }
 
-        let messageObject = { content: accumulatedContent }
+        let messageObject = { content: accumulatedContent, reasoning_content: accumulatedReasoning }
         if (type === 'image' && imageUrlInStream) {
             messageObject.images = [{ image_url: { url: imageUrlInStream } }]
         }
@@ -864,6 +872,7 @@ export class AiClient {
                 return {
                     success: true,
                     data: result.data,
+                    reasoning: result.reasoning,
                     platform: `${provider.name} (${modelId})`,
                     usage: result.usage
                 }
