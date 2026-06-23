@@ -4,13 +4,57 @@ import sqlite3 from 'sqlite3'
 import { getDBTimestamp, ensureDir } from './common.js'
 
 const _path = process.cwd()
-const DATA_DIR = path.join(_path, 'plugins', 'AI-Plugin', 'config')
+const PLUGIN_DIR = path.join(_path, 'plugins', 'AI-Plugin')
+const DATA_DIR = path.join(PLUGIN_DIR, 'data', 'database')
+const LEGACY_DB_DIRS = [
+    path.join(PLUGIN_DIR, 'config'),
+    path.join(_path, 'data', 'ai_assistant')
+]
+const LEGACY_DB_FILES = ['ai_plugin.db', 'ai_assistant.db']
 
 export const DB_FILE = path.join(DATA_DIR, 'ai_plugin.db')
 
+function moveFileSync(from, to) {
+    try {
+        fs.renameSync(from, to)
+    } catch (err) {
+        if (err.code !== 'EXDEV') throw err
+        fs.copyFileSync(from, to)
+        fs.unlinkSync(from)
+    }
+}
+
+function migrateLegacyDatabase() {
+    ensureDir(DATA_DIR)
+
+    if (fs.existsSync(DB_FILE)) return
+
+    for (const legacyDir of LEGACY_DB_DIRS) {
+        for (const legacyName of LEGACY_DB_FILES) {
+            const legacyFile = path.join(legacyDir, legacyName)
+            if (!fs.existsSync(legacyFile)) continue
+
+            try {
+                const suffixes = ['', '-wal', '-shm']
+                for (const suffix of suffixes) {
+                    const from = legacyFile + suffix
+                    if (!fs.existsSync(from)) continue
+                    const to = DB_FILE + suffix
+                    moveFileSync(from, to)
+                }
+                logger.info(`[AI-Plugin] 已迁移 SQLite 数据库到新目录: ${DB_FILE}`)
+                return
+            } catch (err) {
+                logger.error(`[AI-Plugin] 迁移旧 SQLite 数据库失败: ${err.message}`)
+                return
+            }
+        }
+    }
+}
+
 export class AIDatabase {
     constructor() {
-        ensureDir(DATA_DIR)
+        migrateLegacyDatabase()
         this.db = new sqlite3.Database(DB_FILE)
         this.db.run('PRAGMA journal_mode = WAL')
         this.db.run('PRAGMA foreign_keys = ON')
