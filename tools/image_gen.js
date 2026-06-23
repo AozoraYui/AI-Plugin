@@ -73,7 +73,15 @@ function resolveCharacterProfile(inputCharacter, isSelfPortrait = false) {
             .map(d => d.name)
         for (const dirName of dirs) {
             const dir = path.join(CHARACTER_ROOT_DIR, dirName)
-            const profile = readCharacterProfile(dir, { id: dirName, name: dirName, aliases: [] })
+            const fallback = dirName === 'noa'
+                ? {
+                    id: 'noa',
+                    name: '诺亚',
+                    aliases: ['诺亚', '生盐诺亚', 'noa', 'noah', '你自己', '自己'],
+                    description: Config.selfPortrait || ''
+                }
+                : { id: dirName, name: dirName, aliases: [] }
+            const profile = readCharacterProfile(dir, fallback)
             const candidates = [dirName, profile.id, profile.name, ...(profile.aliases || [])]
                 .filter(Boolean)
                 .map(v => normalizeCharacterKey(v))
