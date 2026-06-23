@@ -78,6 +78,8 @@ const defaultConfig = {
     // 每日摘要生成失败时，使用原始片段的最大长度（字符数）
     // 使用场景: utils/common.js, utils/scheduler.js 中每日摘要降级处理
     FALLBACK_DAILY_SUMMARY_MAX_LENGTH: 500,
+    draw_review_after_generate: false,
+    show_thinking_notice: false,
     // ========== 文件读取与 Shell 工具配置 ==========
     // 单次读取文件最大大小（字节），默认 8MB
     FILE_MAX_SIZE: 8388608,
@@ -335,6 +337,10 @@ export const Config = {
     set FALLBACK_CHUNK_MAX_LENGTH(val) { config.FALLBACK_CHUNK_MAX_LENGTH = val },
     get FALLBACK_DAILY_SUMMARY_MAX_LENGTH() { return config.FALLBACK_DAILY_SUMMARY_MAX_LENGTH ?? defaultConfig.FALLBACK_DAILY_SUMMARY_MAX_LENGTH },
     set FALLBACK_DAILY_SUMMARY_MAX_LENGTH(val) { config.FALLBACK_DAILY_SUMMARY_MAX_LENGTH = val },
+    get draw_review_after_generate() { return config.draw_review_after_generate ?? defaultConfig.draw_review_after_generate },
+    set draw_review_after_generate(val) { config.draw_review_after_generate = val === true },
+    get show_thinking_notice() { return config.show_thinking_notice ?? defaultConfig.show_thinking_notice },
+    set show_thinking_notice(val) { config.show_thinking_notice = val === true },
     get FILE_ROOTS() { return loadedFileRoots ?? defaultConfig.FILE_ROOTS },
     get FILE_MAX_SIZE() { return config.FILE_MAX_SIZE ?? defaultConfig.FILE_MAX_SIZE },
     get FILE_READ_ALL_MAX_TOTAL() { return config.FILE_READ_ALL_MAX_TOTAL ?? defaultConfig.FILE_READ_ALL_MAX_TOTAL },

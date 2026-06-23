@@ -10,7 +10,7 @@ import { fetchWithProxy } from '../utils/common.js'
 
 /**
  * 将图片发送给 Vision 模型，获取详细描述
- * @param {string[]} imageUrls - 图片 URL 数组
+ * @param {(string|object)[]} imageUrls - 图片 URL 数组，或已经处理好的 inline_data 图片数组
  * @param {string} context - 用户消息上下文
  * @param {object} client - AiClient 实例
  * @param {object} visionModelConfig - { provider_id, model_id }
@@ -24,8 +24,12 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
     const startTime = Date.now()
 
     try {
-        // 处理图片为 inline_data 格式
-        const validImages = await processImagesInBatches(imageUrls)
+        const inlineImages = imageUrls.filter(img => img?.inline_data?.data)
+        const urlImages = imageUrls.filter(img => typeof img === 'string')
+        const validImages = [
+            ...inlineImages,
+            ...(urlImages.length > 0 ? await processImagesInBatches(urlImages) : [])
+        ]
         if (validImages.length === 0) {
             logger.warn('[AI-Plugin] Vision Relay: 所有图片处理失败')
             return ''

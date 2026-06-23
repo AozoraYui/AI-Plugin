@@ -412,6 +412,8 @@ export class AiClient {
                 this.fileTransferConfig = { enabled: rawConfig.enable_file_transfer === true }
                 this.aiDrawConfig = { enabled: rawConfig.enable_ai_draw === true }
                 this.groupAdminConfig = { enabled: rawConfig.enable_group_admin === true }
+                Config.draw_review_after_generate = rawConfig.draw_review_after_generate === true
+                Config.show_thinking_notice = rawConfig.show_thinking_notice === true
                 for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_FOLLOWUP_MAX_ROUNDS', 'SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS', 'SHELL_EXEC_MAX_BUFFER']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
@@ -599,7 +601,7 @@ export class AiClient {
             },
             body: JSON.stringify({
                 model: modelId,
-                messages: this.convertToOpenAIMessages(payload),
+                messages: this.convertToOpenAIMessages(payload, providerConfig.multimodal !== false),
                 max_tokens: maxTokens,
                 stream: false,
             })
@@ -652,12 +654,13 @@ export class AiClient {
         }
     }
 
-    convertToOpenAIMessages(requestPayload) {
+    convertToOpenAIMessages(requestPayload, allowImages = true) {
         const messages = []
         for (const content of requestPayload.contents) {
             const role = content.role === 'model' ? 'assistant' : 'user'
             const messageContent = []
             const textParts = []
+            let droppedImages = 0
 
             for (const part of content.parts) {
                 if (part.text) {
@@ -665,6 +668,10 @@ export class AiClient {
                     messageContent.push({ type: 'text', text: part.text })
                 }
                 if (part.inline_data) {
+                    if (!allowImages) {
+                        droppedImages++
+                        continue
+                    }
                     const mimeType = part.inline_data.mime_type
                     const base64Data = part.inline_data.data
                     messageContent.push({
@@ -674,6 +681,10 @@ export class AiClient {
                         }
                     })
                 }
+            }
+
+            if (droppedImages > 0) {
+                textParts.push(`【系统提示：这里有 ${droppedImages} 张历史图片/临时图片，但当前目标模型是纯文本模型，图片内容已在可能的情况下由 Vision Relay 转述；未转述的旧图片不会直接发送给纯文本模型。】`)
             }
 
             const hasImage = messageContent.some(part => part.type === 'image_url')

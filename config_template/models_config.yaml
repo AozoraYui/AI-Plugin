@@ -162,6 +162,9 @@ enable_web_fetch: false
 #   开启后，群聊中「主人」或「当前群的管理员/群主」可用自然语言让 AI 执行：
 #   禁言/解禁、全员禁言、踢人、改群名片、设专属头衔、精华消息、入群审核（通过/拒绝加群申请）
 #   前提：机器人本身需为该群管理员（设头衔需群主）；入群申请由插件自动记录 1 小时供审核
+#
+# show_thinking_notice: 是否在普通对话请求模型前发送“xx思考中”占位提示（默认 false）
+# draw_review_after_generate: 画图成功后是否把生成图再交给 AI 看一眼，并基于图片说一句短评（默认 false，会额外消耗一次多模态输入）
 # 注意：以上开关均与 enable_web_search 平级（不要缩进！）
 # ================================================
 # enable_file_read: false
@@ -169,6 +172,8 @@ enable_web_fetch: false
 # enable_file_transfer: false
 # enable_ai_draw: false
 # enable_group_admin: false
+# show_thinking_notice: false
+# draw_review_after_generate: false
 # SHELL_EXEC_TIMEOUT_MS: 60000
 # SHELL_EXEC_MAX_TIMEOUT_MS: 240000
 # SHELL_EXEC_MAX_OUTPUT_CHARS: 24000

@@ -1,13 +1,9 @@
 # 权限控制配置
 # mode: whitelist(白名单模式) 或 blacklist(黑名单模式)
 # show_thinking: 是否显示 AI 思考过程（Raw 模式；false 时自动清洗思考内容）
-# show_thinking_notice: 是否在普通对话请求模型前发送“xx思考中”占位提示
-# draw_review_after_generate: 画图成功后是否把生成图再交给 AI 看一眼，并基于图片说一句短评（会额外消耗一次多模态输入）
 mode: whitelist
 whitelist_groups: []
 whitelist_users: []
 blacklist_groups: []
 blacklist_users: []
 show_thinking: false
-show_thinking_notice: false
-draw_review_after_generate: false

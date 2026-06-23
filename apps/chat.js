@@ -1,7 +1,7 @@
 import plugin from '../../../lib/plugins/plugin.js'
 import fs from 'node:fs'
 import path from 'node:path'
-import { Config, expandPrompt } from '../utils/config.js'
+import { Config, MODELS_CONFIG_FILE, expandPrompt } from '../utils/config.js'
 import { AiClient } from '../client/AiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
@@ -32,6 +32,19 @@ function extractCardInfo(data) {
         }
     }
     return lines.length > 0 ? lines.join('\n') : ''
+}
+
+function saveMainConfigSwitch(key, value) {
+    const fileContent = fs.readFileSync(MODELS_CONFIG_FILE, 'utf8')
+    const docs = yaml.parseAllDocuments(fileContent)
+    let targetDoc = docs.find(doc => doc?.toJS?.()?.[key] !== undefined)
+    if (!targetDoc) {
+        targetDoc = docs[docs.length - 1]
+    }
+    if (!targetDoc) throw new Error('models_config.yaml 为空')
+    targetDoc.set(key, value === true)
+    fs.writeFileSync(MODELS_CONFIG_FILE, docs.map(doc => doc.toString()).join('---\n'), 'utf8')
+    Config[key] = value === true
 }
 
 async function expandForwardMsg(bot, resid, depth = 0, maxDepth = Config.FORWARD_MSG_MAX_DEPTH) {
@@ -836,7 +849,7 @@ export class ChatHandler extends plugin {
                                 // 画图工具已把图片直接发到会话并显示了"🎨正在生成"进度，无需再发"思考中"占位；
                                 // 默认只让主模型收尾；开启画图审图时，把刚生成的图也交给主模型看一眼再短评。
                                 const formattedResult = toolRegistry.formatToolResult('draw_image', result.data)
-                                const drawReviewEnabled = getAccessConfig().draw_review_after_generate === true
+                                const drawReviewEnabled = Config.draw_review_after_generate === true
                                 if (drawReviewEnabled && result.data.reviewImage?.data) {
                                     generatedDrawReviewImages.push({ inline_data: result.data.reviewImage })
                                     userMessage = userMessage + '\n\n【重要指令】画图工具已执行并把图片直接发送到会话。' + formattedResult + '当前输入中的最后一张图片是刚生成的图片；如果前面还有图片，那些是用户原始参考图。请你实际观察最后这张生成图，然后用一句简短自然的话告诉用户画好了，可以轻微描述画面亮点；不要长篇评价，不要声称自己没看到图片。'
@@ -997,7 +1010,7 @@ export class ChatHandler extends plugin {
 
             // 画图场景工具已发过"🎨正在生成"进度提示（无论成败），跳过"思考中"占位避免重复；
             // 普通思考占位由主人命令「#ai开启/关闭思考提示」控制，默认关闭。
-            if (getAccessConfig().show_thinking_notice === true && !drawImageAttempted) {
+            if (Config.show_thinking_notice === true && !drawImageAttempted) {
                 if (!isSingleMode) {
                     await e.reply(`${Config.AI_NAME}思考中 (使用 ${modelDisplay} 模型组)…`, true)
                 } else {
@@ -1026,6 +1039,24 @@ export class ChatHandler extends plugin {
             }
 
             const currentUserTurnParts = []
+
+            if (generatedDrawReviewImages.length > 0 && useVisionRelay) {
+                const visionModels = this.client.visionModels
+                logger.info(`[AI-Plugin] Vision Relay: 目标模型为纯文本，开始转述 ${generatedDrawReviewImages.length} 张生成图审图图片`)
+                let reviewDescription = ''
+                for (const visionConf of visionModels) {
+                    reviewDescription = await relayImagesToVision(generatedDrawReviewImages, '这是刚生成并已发送给用户的图片，请简短描述画面，供后续回复用户时使用。', this.client, visionConf)
+                    if (reviewDescription) break
+                    logger.warn(`[AI-Plugin] Vision Relay: ${visionConf.provider_id}/${visionConf.model_id} 生成图审图转述失败，尝试下一个`)
+                }
+                if (reviewDescription) {
+                    userMessage = (userMessage || '') + '\n\n【以下是刚生成图片的视觉描述，请基于它给用户一句简短自然的收尾评价：】\n' + reviewDescription + '\n【生成图描述结束】\n'
+                    generatedDrawReviewImages = []
+                    logger.info('[AI-Plugin] Vision Relay: 生成图审图转述完成，图片已替换为文本描述')
+                } else {
+                    logger.warn('[AI-Plugin] Vision Relay: 生成图审图转述失败，将不把图片直接发送给纯文本模型')
+                }
+            }
 
             if (allImages.length > 0) {
                 const validImages = await processImagesInBatches(allImages)
@@ -1329,10 +1360,7 @@ export class ChatHandler extends plugin {
 
     async switchThinkingNotice(e) {
         const isTurnOn = e.msg.includes("开启")
-        const config = getAccessConfig()
-
-        config.show_thinking_notice = isTurnOn
-        saveAccessConfig(config)
+        saveMainConfigSwitch('show_thinking_notice', isTurnOn)
 
         if (isTurnOn) {
             await e.reply(`✅ 设置成功：已开启${Config.AI_NAME}思考提示。普通对话会发送“${Config.AI_NAME}思考中…”占位提示。`)
@@ -1343,10 +1371,7 @@ export class ChatHandler extends plugin {
 
     async switchDrawReview(e) {
         const isTurnOn = e.msg.includes("开启")
-        const config = getAccessConfig()
-
-        config.draw_review_after_generate = isTurnOn
-        saveAccessConfig(config)
+        saveMainConfigSwitch('draw_review_after_generate', isTurnOn)
 
         if (isTurnOn) {
             await e.reply(`✅ 设置成功：已开启画图审图。画图成功后，${Config.AI_NAME}会看一眼生成图再用一句话短评。`)
