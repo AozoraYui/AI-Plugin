@@ -9,8 +9,7 @@ const defaultAccessConfig = {
     whitelist_groups: [],
     whitelist_users: [],
     blacklist_groups: [],
-    blacklist_users: [],
-    show_thinking: false
+    blacklist_users: []
 }
 
 // 权限配置缓存，避免频繁读取文件

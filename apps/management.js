@@ -133,8 +133,7 @@ export class ManagementHandler extends plugin {
     }
 
     async _buildModelListForwardMsg() {
-        const config = getAccessConfig()
-        const thinkingStatus = config.show_thinking ? "✅ 开启 (显示思考过程)" : "🚫 关闭 (自动过滤思考)"
+        const thinkingStatus = Config.show_thinking ? "✅ 开启 (显示思考过程)" : "🚫 关闭 (自动过滤思考)"
         
         const forwardMsgNodes = [{ 
             user_id: Bot.uin, 
@@ -252,7 +251,7 @@ export class ManagementHandler extends plugin {
 
             const accessConfig = getAccessConfig()
             const accessMode = accessConfig.mode === 'whitelist' ? '白名单模式' : '黑名单模式'
-            const thinkingMode = accessConfig.show_thinking ? '✅ 开启 (Raw模式)' : '🚫 关闭 (自动清洗)'
+            const thinkingMode = Config.show_thinking ? '✅ 开启 (Raw模式)' : '🚫 关闭 (自动清洗)'
 
             const trustedGroups = Config.trustedGroups
             const trustedGroupCount = trustedGroups.length

@@ -4,7 +4,7 @@ import path from 'node:path'
 import { Config, MODELS_CONFIG_FILE, expandPrompt } from '../utils/config.js'
 import { AiClient } from '../client/AiClient.js'
 import { ConversationManager } from '../model/conversation.js'
-import { checkAccess, getAccessConfig, saveAccessConfig } from '../utils/access.js'
+import { checkAccess } from '../utils/access.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, resolveModelGroup, resolveModelDisplay, resolveProviderPriority } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
 import { toolRegistry } from '../tools/index.js'
@@ -1151,8 +1151,7 @@ export class ChatHandler extends plugin {
             if (result.success) {
                 let rawResponseText = result.data.trim()
                 let finalResponseText = rawResponseText
-                const config = getAccessConfig()
-                if (!config.show_thinking) {
+                if (!Config.show_thinking) {
                     const blocks = rawResponseText.split('\n\n')
                     let startContentIndex = 0
                     let foundContent = false
@@ -1346,10 +1345,7 @@ export class ChatHandler extends plugin {
 
     async switchThinkingMode(e) {
         const isTurnOn = e.msg.includes("开启")
-        const config = getAccessConfig()
-
-        config.show_thinking = isTurnOn
-        saveAccessConfig(config)
+        saveMainConfigSwitch('show_thinking', isTurnOn)
 
         if (isTurnOn) {
             await e.reply("✅ 设置成功：已开启思考过程显示 (Raw模式)。")
