@@ -13,14 +13,17 @@ import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, resolveModel
 import { processImagesInBatches } from '../utils/image.js'
 import fs from 'node:fs'
 import path from 'node:path'
+import yaml from 'yaml'
 
-// 自画像参考图目录：插件根目录 data/self（放 0.png / 1.png / 2.png 等官方参考图）
+// 角色参考图库目录：插件根目录 data/characters/{角色ID}/profile.yaml + 0.png/1.png...
+// 兼容旧目录 data/self：当 character=noa 且 data/characters/noa 不存在时回退使用 data/self
+const CHARACTER_ROOT_DIR = path.join(process.cwd(), 'plugins', 'AI-Plugin', 'data', 'characters')
 const SELF_PORTRAIT_DIR = path.join(process.cwd(), 'plugins', 'AI-Plugin', 'data', 'self')
-const SELF_IMG_EXT = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
-// 画自己时最多取用的本地参考图数量（过多会让 /images/edits 上传超时，曾出现 12/4 张触发 524）
-const SELF_PORTRAIT_MAX_REF = 2
+const IMG_EXT = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
+// 每个角色最多取用的本地参考图数量（过多会让 /images/edits 上传超时）
+const CHARACTER_MAX_REF = 1
 
-function selfMime(ext) {
+function imageMime(ext) {
     const e = ext.toLowerCase()
     if (e === '.png') return 'image/png'
     if (e === '.jpg' || e === '.jpeg') return 'image/jpeg'
@@ -29,36 +32,99 @@ function selfMime(ext) {
     return 'image/png'
 }
 
-// 读取本地自画像参考图，转为 AI 可用的 inline_data 数组（本地文件不走 fetch）
-// 为避免参考图过多导致上游 /images/edits 超时，从所有图中随机挑选最多 SELF_PORTRAIT_MAX_REF 张
-function loadSelfPortraitImages() {
+function normalizeCharacterKey(value) {
+    return String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '')
+}
+
+function shuffleInPlace(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        ;[arr[i], arr[j]] = [arr[j], arr[i]]
+    }
+    return arr
+}
+
+function readCharacterProfile(dir, fallback = {}) {
+    const profilePath = path.join(dir, 'profile.yaml')
+    if (!fs.existsSync(profilePath)) return fallback
     try {
-        if (!fs.existsSync(SELF_PORTRAIT_DIR)) return []
-        const files = fs.readdirSync(SELF_PORTRAIT_DIR)
-            .filter(f => SELF_IMG_EXT.includes(path.extname(f).toLowerCase()))
-        if (files.length === 0) return []
-        // 随机洗牌（Fisher-Yates）后取前 N 张，让每次画自己参考的角度不同
-        for (let i = files.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1))
-            ;[files[i], files[j]] = [files[j], files[i]]
+        const data = yaml.parse(fs.readFileSync(profilePath, 'utf8')) || {}
+        return {
+            ...fallback,
+            ...data,
+            aliases: Array.isArray(data.aliases) ? data.aliases : (fallback.aliases || [])
         }
-        const picked = files.slice(0, SELF_PORTRAIT_MAX_REF)
+    } catch (err) {
+        logger.warn(`[AI-Plugin] 画图工具：读取角色 profile.yaml 失败 ${profilePath}: ${err.message}`)
+        return fallback
+    }
+}
+
+function resolveCharacterProfile(inputCharacter, isSelfPortrait = false) {
+    const raw = String(inputCharacter || '').trim()
+    const normalized = normalizeCharacterKey(raw)
+    const requested = isSelfPortrait ? 'noa' : (normalized || raw)
+    if (!requested) return null
+
+    // 新结构：data/characters/{id}
+    if (fs.existsSync(CHARACTER_ROOT_DIR)) {
+        const dirs = fs.readdirSync(CHARACTER_ROOT_DIR, { withFileTypes: true })
+            .filter(d => d.isDirectory())
+            .map(d => d.name)
+        for (const dirName of dirs) {
+            const dir = path.join(CHARACTER_ROOT_DIR, dirName)
+            const profile = readCharacterProfile(dir, { id: dirName, name: dirName, aliases: [] })
+            const candidates = [dirName, profile.id, profile.name, ...(profile.aliases || [])]
+                .filter(Boolean)
+                .map(v => normalizeCharacterKey(v))
+            // 中文别名 normalize 后可能为空，所以额外做原文精确匹配
+            const rawCandidates = [dirName, profile.id, profile.name, ...(profile.aliases || [])]
+                .filter(Boolean)
+                .map(v => String(v).trim())
+            if (candidates.includes(requested) || (raw && rawCandidates.includes(raw))) {
+                return { ...profile, id: dirName, dir, legacy: false }
+            }
+        }
+    }
+
+    // 兼容旧 self 目录：画自己/诺亚/noa 时使用 data/self + Config.selfPortrait
+    if ((isSelfPortrait || ['noa', 'noah'].includes(requested) || ['诺亚', '生盐诺亚'].includes(raw)) && fs.existsSync(SELF_PORTRAIT_DIR)) {
+        return {
+            id: 'noa',
+            name: '诺亚',
+            aliases: ['诺亚', '生盐诺亚', 'noa', 'noah', '你自己', '自己'],
+            description: Config.selfPortrait || '',
+            dir: SELF_PORTRAIT_DIR,
+            legacy: true
+        }
+    }
+
+    return null
+}
+
+// 读取角色参考图，转为 AI 可用的 inline_data 数组（本地文件不走 fetch）
+function loadCharacterImages(characterProfile) {
+    try {
+        if (!characterProfile?.dir || !fs.existsSync(characterProfile.dir)) return []
+        const files = fs.readdirSync(characterProfile.dir)
+            .filter(f => IMG_EXT.includes(path.extname(f).toLowerCase()))
+        if (files.length === 0) return []
+        const picked = shuffleInPlace(files).slice(0, CHARACTER_MAX_REF)
         const parts = []
         const usedNames = []
         for (const f of picked) {
             try {
-                const buf = fs.readFileSync(path.join(SELF_PORTRAIT_DIR, f))
-                parts.push({ inline_data: { mime_type: selfMime(path.extname(f)), data: buf.toString('base64') } })
+                const buf = fs.readFileSync(path.join(characterProfile.dir, f))
+                parts.push({ inline_data: { mime_type: imageMime(path.extname(f)), data: buf.toString('base64') } })
                 usedNames.push(f)
             } catch (err) {
-                logger.warn(`[AI-Plugin] 画图工具：读取自画像参考图 ${f} 失败: ${err.message}`)
+                logger.warn(`[AI-Plugin] 画图工具：读取角色参考图 ${characterProfile.id}/${f} 失败: ${err.message}`)
             }
         }
-        // 把实际使用的文件名挂到数组上，供调用处打印日志（不影响请求体）
         parts.usedNames = usedNames
         return parts
     } catch (err) {
-        logger.warn(`[AI-Plugin] 画图工具：加载自画像参考图失败: ${err.message}`)
+        logger.warn(`[AI-Plugin] 画图工具：加载角色参考图失败: ${err.message}`)
         return []
     }
 }
@@ -102,7 +168,7 @@ function findPreset(presetName) {
 export const imageGenTool = {
     name: 'draw_image',
     permission: 'everyone',
-    description: '调用插件自身的 AI 画图能力生成图片并直接发送到当前会话。适合用户说"画一个/帮我画/生成一张图/用某某风格画"等。支持参考图（用户带图、引用图片、@成员取头像作为参考）。支持预设风格名。',
+    description: '调用插件自身的 AI 画图能力生成图片并直接发送到当前会话。适合用户说"画一个/帮我画/生成一张图/用某某风格画"等。支持参考图（用户带图、引用图片、@成员头像）和角色参考图库（data/characters）。支持预设风格名。',
 
     functionSchema: {
         type: 'function',
@@ -127,7 +193,11 @@ export const imageGenTool = {
                     },
                     self_portrait: {
                         type: 'boolean',
-                        description: '可选。当用户要求"画你自己/画 AI 本人/给我看看你长什么样"等指向 AI 自身形象时设为 true，工具会自动加载本地官方参考图来锁定形象。普通画图请勿设置或设为 false。'
+                        description: '可选。当用户要求"画你自己/画 AI 本人/给我看看你长什么样"等指向 AI 自身形象时设为 true，等价于 character="noa"。普通画图请勿设置或设为 false。'
+                    },
+                    character: {
+                        type: 'string',
+                        description: '可选，角色参考图库中的角色ID或别名（如 noa、yuuka、maki、rio，或 profile.yaml 中配置的 aliases）。用户要求画某个已配置角色时填写；工具会自动加载 data/characters/{角色ID} 下的参考图和设定。'
                     }
                 },
                 required: []
@@ -146,13 +216,17 @@ export const imageGenTool = {
         const presetName = String(args.preset || '').trim()
         const modelGroupKey = ['flash', 'pro', 'ultra'].includes(args.quality) ? args.quality : 'flash'
         const isSelfPortrait = args.self_portrait === true || args.self_portrait === 'true'
+        const characterInput = isSelfPortrait ? 'noa' : String(args.character || '').trim()
+        const characterProfile = resolveCharacterProfile(characterInput, isSelfPortrait)
 
-        // 画自己：加载本地官方参考图（data/self），用以锁定形象
-        const selfImages = isSelfPortrait ? loadSelfPortraitImages() : []
-        if (isSelfPortrait) {
-            const usedNames = selfImages.usedNames || []
+        // 角色参考图：加载 data/characters/{角色ID}（画自己兼容 data/self）来锁定角色形象
+        const characterImages = characterProfile ? loadCharacterImages(characterProfile) : []
+        if (characterProfile) {
+            const usedNames = characterImages.usedNames || []
             const nameNote = usedNames.length > 0 ? `：${usedNames.join('、')}` : ''
-            logger.info(`[AI-Plugin] 画图工具：画自己模式，加载到 ${selfImages.length} 张本地参考图${nameNote}`)
+            logger.info(`[AI-Plugin] 画图工具：角色参考模式「${characterProfile.name || characterProfile.id}」，加载到 ${characterImages.length} 张本地参考图${nameNote}`)
+        } else if (characterInput) {
+            logger.warn(`[AI-Plugin] 画图工具：未找到角色参考图库「${characterInput}」，将仅使用文本/用户参考图画图`)
         }
 
         // 解析预设
@@ -166,12 +240,12 @@ export const imageGenTool = {
 
         // 收集参考图
         const { images: refImages, hasReply } = await collectReferenceImages(event)
-        // 无参考图、无描述、无预设、也没有自画像参考图时，无法判断画什么
-        if (refImages.length === 0 && selfImages.length === 0 && !prompt && !preset) {
+        // 无参考图、无描述、无预设、也没有角色参考图时，无法判断画什么
+        if (refImages.length === 0 && characterImages.length === 0 && !prompt && !preset) {
             return '【画图失败】没有可用的画图内容：请提供文字描述，或附带/引用图片，或@某位成员。'
         }
         // 纯预设且无图时，默认用发送者头像作为参考（与 #draw 行为一致）
-        if (refImages.length === 0 && selfImages.length === 0 && preset && !prompt && !hasReply) {
+        if (refImages.length === 0 && characterImages.length === 0 && preset && !prompt && !hasReply) {
             try { refImages.push(await getAvatarUrl(event.user_id)) } catch { /* ignore */ }
         }
 
@@ -183,8 +257,8 @@ export const imageGenTool = {
             await event.reply(`🎨 正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
 
             const parts = []
-            // 画自己：本地官方参考图优先放最前，锁定形象
-            if (selfImages.length > 0) parts.push(...selfImages)
+            // 角色图库参考图优先放最前，锁定目标角色形象
+            if (characterImages.length > 0) parts.push(...characterImages)
             const processedImages = imagesToProcess.length > 0 ? await processImagesInBatches(imagesToProcess) : []
             if (imagesToProcess.length > 0 && processedImages.length === 0) {
                 await setMsgEmojiLike(event, 10)
@@ -199,19 +273,20 @@ export const imageGenTool = {
             } else {
                 finalText = prompt
             }
-            // 画自己：补充形象指令，引导模型参照参考图
-            if (isSelfPortrait) {
+            // 角色参考：补充形象指令，引导模型区分角色图库参考图与用户额外参考图
+            if (characterProfile) {
+                const characterName = characterProfile.name || characterProfile.id
                 let refHint = ''
-                if (selfImages.length > 0 && processedImages.length > 0) {
-                    refHint = `请注意参考图顺序：前 ${selfImages.length} 张是你本人的官方形象参考图，必须严格保持发型发色、瞳色、光环、服饰等关键特征一致；后续 ${processedImages.length} 张是用户额外提供的参考图，仅用于场景、姿势、构图、镜头、氛围或风格参考，不要把后续参考图中的人物身份/外貌替换成你。`
-                } else if (selfImages.length > 0) {
-                    refHint = '请严格参考随附的参考图（这是你本人的官方形象），保持发型发色、瞳色、光环、服饰等关键特征一致。'
+                if (characterImages.length > 0 && processedImages.length > 0) {
+                    refHint = `请注意参考图顺序：前 ${characterImages.length} 张是角色「${characterName}」的官方/设定参考图，必须严格保持该角色的发型发色、瞳色、光环、服饰等关键特征一致；后续 ${processedImages.length} 张是用户额外提供的参考图，仅用于场景、姿势、构图、镜头、氛围或风格参考，不要把后续参考图中的人物身份/外貌替换成目标角色。`
+                } else if (characterImages.length > 0) {
+                    refHint = `请严格参考随附的角色「${characterName}」参考图，保持发型发色、瞳色、光环、服饰等关键特征一致。`
                 } else if (processedImages.length > 0) {
-                    refHint = `用户提供了 ${processedImages.length} 张额外参考图，请仅用于场景、姿势、构图、镜头、氛围或风格参考；你的本人形象仍以文字设定为准。`
+                    refHint = `用户提供了 ${processedImages.length} 张额外参考图，请仅用于场景、姿势、构图、镜头、氛围或风格参考；角色「${characterName}」的形象仍以文字设定为准。`
                 }
-                const portraitDesc = Config.selfPortrait || ''
-                const selfText = `${refHint}${portraitDesc ? '形象设定：' + portraitDesc : ''}`.trim()
-                finalText = finalText ? `${selfText} 在此基础上：${finalText}` : selfText
+                const characterDesc = characterProfile.description || (characterProfile.id === 'noa' ? Config.selfPortrait : '') || ''
+                const characterText = `${refHint}${characterDesc ? `角色设定（${characterName}）：` + characterDesc : ''}`.trim()
+                finalText = finalText ? `${characterText} 在此基础上：${finalText}` : characterText
             }
             if (finalText) parts.push({ text: finalText })
 
@@ -251,7 +326,9 @@ export const imageGenTool = {
                     elapsed,
                     platform: result.platform,
                     preset: preset?.name || null,
-                    refCount: processedImages.length
+                    character: characterProfile?.name || characterProfile?.id || null,
+                    refCount: processedImages.length,
+                    characterRefCount: characterImages.length
                 }
             } else {
                 // 模型只返回了文本（如拒绝/描述），交回文本
@@ -269,8 +346,10 @@ export const imageGenTool = {
         if (typeof data === 'string') return data
         if (!data || !data.ok) return String(data || '')
         const presetNote = data.preset ? `，预设「${data.preset}」` : ''
-        const refNote = data.refCount > 0 ? `，参考图 ${data.refCount} 张` : ''
-        return `\n\n【画图成功】已生成图片并发送到当前会话（耗时 ${data.elapsed}s${presetNote}${refNote}）。图片已直接发出，无需你再描述图片内容。`
+        const characterNote = data.character ? `，角色「${data.character}」` : ''
+        const characterRefNote = data.characterRefCount > 0 ? `，角色参考图 ${data.characterRefCount} 张` : ''
+        const refNote = data.refCount > 0 ? `，用户参考图 ${data.refCount} 张` : ''
+        return `\n\n【画图成功】已生成图片并发送到当前会话（耗时 ${data.elapsed}s${presetNote}${characterNote}${characterRefNote}${refNote}）。图片已直接发出，无需你再描述图片内容。`
     }
 }
 
