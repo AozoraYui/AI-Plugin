@@ -48,6 +48,20 @@ export class AIGroupRequest extends plugin {
             // 申请记录保留 1 小时（与 QQ 申请有效期大致一致）
             await redis.set(GROUP_REQUEST_KEY(e.group_id, e.user_id), JSON.stringify(record), { EX: 3600 })
             logger.info(`[AI-Plugin] 已记录加群申请：群 ${e.group_id} 用户 ${e.user_id}`)
+
+            try {
+                const group = e.group || e.bot?.pickGroup?.(Number(e.group_id)) || (typeof Bot !== 'undefined' ? Bot.pickGroup?.(Number(e.group_id)) : null)
+                const who = `${record.nickname || '未知用户'}(${record.user_id})`
+                const comment = record.comment ? `\n申请留言：${record.comment}` : ''
+                if (group?.sendMsg) {
+                    await group.sendMsg(`收到加群申请：${who}${comment}\n可对我说「通过 ${record.user_id} 的申请」或「拒绝 ${record.user_id} 的申请」。`)
+                    logger.info(`[AI-Plugin] 已发送加群申请提示：群 ${e.group_id} 用户 ${e.user_id}`)
+                } else {
+                    logger.warn(`[AI-Plugin] 无法发送加群申请提示：未取得群对象，群 ${e.group_id}`)
+                }
+            } catch (noticeErr) {
+                logger.warn(`[AI-Plugin] 发送加群申请提示失败: ${noticeErr.message}`)
+            }
         } catch (err) {
             logger.error('[AI-Plugin] 记录加群申请失败:', err)
         }

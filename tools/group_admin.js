@@ -652,7 +652,7 @@ export const groupRequestListTool = {
 export const groupRequestHandleTool = {
     name: 'group_request_handle',
     permission: 'everyone',
-    description: '通过或拒绝某个加群申请。仅主人或群管理员可用，机器人需为管理员。适合"通过xxx的申请""同意那个人进群""拒绝xxx的入群申请"等。需先有待审申请。',
+    description: '通过或拒绝某个加群申请。仅主人或群管理员可用，机器人需为管理员。适合"通过xxx的申请""同意那个人进群""拒绝xxx的入群申请"等。需先有待审申请；若当前群只有一条待审申请，可省略 user_id。',
     functionSchema: {
         type: 'function',
         function: {
@@ -661,11 +661,11 @@ export const groupRequestHandleTool = {
             parameters: {
                 type: 'object',
                 properties: {
-                    user_id: { type: 'string', description: '申请人的 QQ 号。' },
+                    user_id: { type: 'string', description: '申请人的 QQ 号。只有一条待审申请且用户说"刚才那个/他/那个人"时可省略。' },
                     approve: { type: 'boolean', description: 'true 通过，false 拒绝。必须明确填写。' },
                     reason: { type: 'string', description: '拒绝理由（仅 approve=false 时有意义），可选。' }
                 },
-                required: ['user_id', 'approve']
+                required: ['approve']
             }
         }
     },
@@ -676,11 +676,19 @@ export const groupRequestHandleTool = {
         const group = pickGroup(event)
         if (!await botIsAdmin(event, group)) return '【处理申请失败】机器人不是该群管理员，无法处理加群申请。'
 
-        const userId = String(args.user_id || '').trim()
-        if (!/^\d{5,}$/.test(userId)) return '【处理申请失败】请提供正确的申请人 QQ 号。'
+        let userId = String(args.user_id || '').trim()
         if (typeof args.approve !== 'boolean') return '【处理申请失败】请明确说明是通过还是拒绝该申请。'
 
         if (typeof redis === 'undefined' || !redis.get) return '【处理申请失败】redis 不可用，无法读取申请记录。'
+        if (!/^\d{5,}$/.test(userId)) {
+            const pending = await scanPendingRequests(event.group_id)
+            if (pending.length === 0) return '【处理申请失败】当前没有待审核的加群申请。'
+            if (pending.length > 1) {
+                const lines = pending.map((r, i) => `${i + 1}. ${r.nickname || '未知'}(${r.user_id})`).join('、')
+                return `【处理申请失败】当前有多条待审核申请，请指定 QQ 号：${lines}`
+            }
+            userId = String(pending[0].user_id)
+        }
         const key = GROUP_REQUEST_KEY(event.group_id, userId)
         const raw = await redis.get(key)
         if (!raw) return `【处理申请失败】没有找到 ${userId} 的待审核加群申请，可能已过期或已被处理。`
