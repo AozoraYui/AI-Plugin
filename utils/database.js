@@ -120,6 +120,28 @@ export class AIDatabase {
                 CREATE INDEX IF NOT EXISTS idx_group_logs_group_user
                 ON group_message_logs(group_id, user_id);
 
+                -- 群成员称呼/外号记忆（来自本群公开聊天，不作为事实断言）
+                CREATE TABLE IF NOT EXISTS group_member_aliases (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id TEXT NOT NULL,
+                    target_user_id TEXT NOT NULL,
+                    alias TEXT NOT NULL,
+                    source_user_id TEXT,
+                    source_nickname TEXT,
+                    note TEXT,
+                    is_joke BOOLEAN DEFAULT 1,
+                    confidence REAL DEFAULT 0.6,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(group_id, target_user_id, alias)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_group_aliases_group_target
+                ON group_member_aliases(group_id, target_user_id);
+
+                CREATE INDEX IF NOT EXISTS idx_group_aliases_group_alias
+                ON group_member_aliases(group_id, alias);
+
                 -- 用户档案表
                 CREATE TABLE IF NOT EXISTS user_profiles (
                     user_id TEXT PRIMARY KEY,
@@ -402,6 +424,118 @@ export class AIDatabase {
                     createdAt: row.created_at
                 }))
                 resolve(normalized)
+            })
+        })
+    }
+
+    saveGroupMemberAlias(record) {
+        return new Promise((resolve, reject) => {
+            const updatedAt = getDBTimestamp()
+            this.db.run(`
+                INSERT INTO group_member_aliases
+                    (group_id, target_user_id, alias, source_user_id, source_nickname, note, is_joke, confidence, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(group_id, target_user_id, alias) DO UPDATE SET
+                    source_user_id = excluded.source_user_id,
+                    source_nickname = excluded.source_nickname,
+                    note = excluded.note,
+                    is_joke = excluded.is_joke,
+                    confidence = excluded.confidence,
+                    updated_at = excluded.updated_at
+            `, [
+                String(record.groupId),
+                String(record.targetUserId),
+                String(record.alias || '').trim(),
+                record.sourceUserId ? String(record.sourceUserId) : '',
+                record.sourceNickname || '',
+                record.note || '',
+                record.isJoke ? 1 : 0,
+                Number(record.confidence) || 0.6,
+                updatedAt,
+                updatedAt
+            ], function(err) {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(this.changes || 0)
+            })
+        })
+    }
+
+    getGroupMemberAliases(groupId, targetUserIds = [], options = {}) {
+        return new Promise((resolve, reject) => {
+            const params = [String(groupId)]
+            let query = `
+                SELECT group_id, target_user_id, alias, source_user_id, source_nickname, note, is_joke, confidence, created_at, updated_at
+                FROM group_member_aliases
+                WHERE group_id = ?
+            `
+            const ids = Array.isArray(targetUserIds)
+                ? [...new Set(targetUserIds.map(id => String(id)).filter(Boolean))]
+                : (targetUserIds ? [String(targetUserIds)] : [])
+            if (ids.length > 0) {
+                query += ` AND target_user_id IN (${ids.map(() => '?').join(',')})`
+                params.push(...ids)
+            }
+            query += ' ORDER BY updated_at DESC, id DESC LIMIT ?'
+            params.push(Math.min(Math.max(Number(options.limit) || 50, 1), 200))
+
+            this.db.all(query, params, (err, rows) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(rows.map(row => ({
+                    groupId: row.group_id,
+                    targetUserId: row.target_user_id,
+                    alias: row.alias,
+                    sourceUserId: row.source_user_id,
+                    sourceNickname: row.source_nickname,
+                    note: row.note,
+                    isJoke: row.is_joke === 1,
+                    confidence: row.confidence,
+                    createdAt: row.created_at,
+                    updatedAt: row.updated_at
+                })))
+            })
+        })
+    }
+
+    findGroupMemberAliases(groupId, query = '', options = {}) {
+        return new Promise((resolve, reject) => {
+            const params = [String(groupId)]
+            let sql = `
+                SELECT group_id, target_user_id, alias, source_user_id, source_nickname, note, is_joke, confidence, created_at, updated_at
+                FROM group_member_aliases
+                WHERE group_id = ?
+            `
+            const q = String(query || '').trim()
+            if (q) {
+                const like = `%${q}%`
+                sql += ' AND (alias LIKE ? OR target_user_id LIKE ? OR source_user_id LIKE ? OR source_nickname LIKE ? OR note LIKE ?)'
+                params.push(like, like, like, like, like)
+            }
+            sql += ' ORDER BY updated_at DESC, id DESC LIMIT ?'
+            params.push(Math.min(Math.max(Number(options.limit) || 50, 1), 200))
+
+            this.db.all(sql, params, (err, rows) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(rows.map(row => ({
+                    groupId: row.group_id,
+                    targetUserId: row.target_user_id,
+                    alias: row.alias,
+                    sourceUserId: row.source_user_id,
+                    sourceNickname: row.source_nickname,
+                    note: row.note,
+                    isJoke: row.is_joke === 1,
+                    confidence: row.confidence,
+                    createdAt: row.created_at,
+                    updatedAt: row.updated_at
+                })))
             })
         })
     }

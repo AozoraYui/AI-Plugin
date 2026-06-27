@@ -7,6 +7,7 @@ import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, resolveModelGroup, resolveModelDisplay, resolveProviderPriority } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
+import { buildGroupAliasMemoryText, captureGroupMemberAliases } from '../utils/group_alias.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import yaml from 'yaml'
 
@@ -647,6 +648,7 @@ ${toolSummary}
 - 当前消息包含图片：${hasImages ? '是' : '否'}；最近图片缓存可用：${hasRecentImages ? '是' : '否'}。规划阶段不会收到图片内容；如果用户只是让你看图/描述图且没有明确工具需求，交给最终多模态/视觉流程，不要计划工具。
 - draw_image 可以自动提取当前消息图、引用图、@头像，也可以在用户说“刚才那张/这张图/用 p 模型处理/修图/去水印/二维码/套预设”等时复用最近图片缓存。用户明确要求基于图片生成、重绘、修图、去水印或套风格时，可以计划 draw_image，但不要承诺精准像素级编辑。
 - 用户问“刚才/之前/他们/大家/群里聊了什么、发生了什么、前情提要、总结最近群聊”时，优先计划 group_chat_context 读取畅聊捕获的本群公开群流水。
+- 用户问“这个人是谁/@某某有什么外号/谁是杂鱼/谁被叫过xxx/本群怎么称呼某人”时，计划 group_member_aliases 查询本群称呼记忆；这类结果只代表群内公开聊天里的称呼记录，不是真实身份断言。
 - 只计划“可用工具”中列出的工具，最多 5 个。
 - 群管理成员操作必须有明确目标；如果用户只给昵称/群名片且不确定 QQ 号，先计划 group_member_list 或 group_member_resolve。
 - 如果当前消息 @ 了唯一成员，用户说“这个人/他/她/这位/被 @ 的人”等指代时，应把该 @ 成员作为明确目标，可以直接计划对应群管理工具并在 params_hint 中写入 user_id。
@@ -955,6 +957,24 @@ export class ChatHandler extends plugin {
             if (mentionedUserIds.length > 0) {
                 logger.info(`[AI-Plugin] 当前消息检测到 @ 成员: ${mentionedUserIds.join(', ')}`)
             }
+            let groupAliasMemoryText = ''
+            if (e.group_id) {
+                try {
+                    await captureGroupMemberAliases(this.conversationManager.db, e, userMessage)
+                } catch (err) {
+                    logger.warn(`[AI-Plugin] [称呼记忆] 记录失败: ${err.message}`)
+                }
+                if (mentionedUserIds.length > 0) {
+                    try {
+                        groupAliasMemoryText = await buildGroupAliasMemoryText(this.conversationManager.db, e.group_id, mentionedUserIds, { limit: 20 })
+                        if (groupAliasMemoryText) {
+                            logger.info(`[AI-Plugin] [称呼记忆] 已注入 @ 成员称呼记忆 ${mentionedUserIds.join(', ')}`)
+                        }
+                    } catch (err) {
+                        logger.warn(`[AI-Plugin] [称呼记忆] 加载失败: ${err.message}`)
+                    }
+                }
+            }
 
             if (!userMessage && allImages.length === 0) return e.reply('请输入内容或发送图片呀', true)
 
@@ -1037,6 +1057,7 @@ export class ChatHandler extends plugin {
             }
             if (e.group_id) {
                 enabledTools.push('group_chat_context')
+                enabledTools.push('group_member_aliases')
             }
             // 群管理：开启 enable_group_admin 后，群聊中由「主人」或「当前群管理员/群主」触发
             if (e.group_id) {
@@ -1211,6 +1232,10 @@ export class ChatHandler extends plugin {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为畅聊模式捕获的当前群公开聊天流水。请严格基于这些记录回答用户关于“之前聊了什么/发生了什么/前情提要”的问题；如果记录不足，要明确说明只能看到已捕获的部分。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
+                        } else if (call.name === 'group_member_aliases') {
+                            const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
+                            userMessage = userMessage + '\n\n【重要指令】以上为当前群公开聊天中提取的成员称呼/外号记录。请只把它当作群内称呼或调侃记录来转述，不要当作真实身份、事实断言或攻击性结论。' + formattedResult
+                            logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (['group_mute', 'group_whole_mute', 'group_kick', 'group_set_card', 'group_set_title', 'group_essence', 'group_member_list', 'group_member_resolve', 'group_request_list', 'group_request_handle'].includes(call.name)) {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为群管理工具的实际执行结果，请如实转告操作者，不要编造结果。' + formattedResult
@@ -1375,7 +1400,20 @@ export class ChatHandler extends plugin {
                 })
             }
 
+            const historyStartIndex = contents.length
             contents.push(...history)
+            const historyEndIndex = contents.length
+
+            if (groupAliasMemoryText) {
+                contents.push({
+                    "role": "user",
+                    "parts": [{ "text": groupAliasMemoryText }]
+                })
+                contents.push({
+                    "role": "model",
+                    "parts": [{ "text": "好的，我会把这些只当作当前群内的称呼或调侃记录来理解，不会当成事实断言。" }]
+                })
+            }
 
             // 添加聊天环境提示（放在历史之后，用户消息之前，确保最高优先级）
             logger.info(`[AI-Plugin] 环境提示: ${environmentHint}`)
@@ -1398,19 +1436,20 @@ export class ChatHandler extends plugin {
             if (currentSizeMB > Config.REQUEST_SIZE_WARNING_MB) {
                 logger.warn(`[AI-Plugin] 请求体过大 (${currentSizeMB.toFixed(2)}MB)，正在裁剪历史...`)
 
-                // 缓存前缀部分（personaPrimer + 时间注入 + 记忆总结 + 环境提示），避免循环内重复构建
-                const prefixParts = contents.slice(0, contents.length - history.length - 1)
+                // 缓存历史前后的系统上下文，避免循环内重复构建，同时保持环境/称呼记忆不被误裁到历史里。
+                const prefixParts = contents.slice(0, historyStartIndex)
+                const suffixParts = contents.slice(historyEndIndex)
 
                 // 循环裁剪历史，直到请求体低于限制或达到最少保留条数
                 while (currentSizeMB > Config.REQUEST_SIZE_LIMIT_MB && history.length > Config.MIN_HISTORY_FOR_TRUNCATION) {
                     // 每次裁剪 5 条历史，但保证至少保留 MIN_HISTORY_FOR_TRUNCATION 条
                     history = history.slice(-Math.max(Config.MIN_HISTORY_FOR_TRUNCATION, history.length - 5))
-                    const trimmedContents = [...prefixParts, ...history, { "role": "user", "parts": currentUserTurnParts }]
+                    const trimmedContents = [...prefixParts, ...history, ...suffixParts]
                     currentPayload = { "contents": trimmedContents }
                     currentSizeMB = JSON.stringify(currentPayload).length / (1024 * 1024)
                 }
                 // 更新最终的 contents 为裁剪后的结果
-                contents = [...prefixParts, ...history, { "role": "user", "parts": currentUserTurnParts }]
+                contents = [...prefixParts, ...history, ...suffixParts]
                 logger.info(`[AI-Plugin] 请求体已裁剪至 ${currentSizeMB.toFixed(2)}MB`)
             }
             

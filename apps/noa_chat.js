@@ -5,6 +5,7 @@ import { checkAccess } from '../utils/access.js'
 import { getBeijingTimeStr, getTodayDateStr, takeSourceMsg } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
 import { buildEnvironmentHint, expandForwardMsg, extractCardInfo } from './chat.js'
+import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedUserIds } from '../utils/group_alias.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 
 const replyCooldown = new Map()
@@ -229,7 +230,7 @@ function extractUrlsFromText(text, limit = 10) {
 function shouldRouteNoaTools(text, urls = []) {
     const value = String(text || '')
     if (urls.length > 0 && /(看|看看|打开|总结|分析|解释|读|抓取|链接|网页|网站)/i.test(value)) return true
-    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|画|绘制|生成|作图|手办化|图片处理|修图|之前|前面|刚才|刚刚|最近|他们|大家|群里|前情提要|聊了啥|说了啥|发生了什么|什么情况|群成员|成员列表|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
+    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|画|绘制|生成|作图|手办化|图片处理|修图|之前|前面|刚才|刚刚|最近|他们|大家|群里|前情提要|聊了啥|说了啥|发生了什么|什么情况|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
 }
 
 async function buildNoaEnabledTools(e, client) {
@@ -263,6 +264,7 @@ async function buildNoaEnabledTools(e, client) {
     }
     if (e.group_id) {
         enabledTools.push('group_chat_context')
+        enabledTools.push('group_member_aliases')
         if (client.enableGroupAdmin) {
             const operatorRole = await resolveGroupOperatorRole(e)
             if (operatorRole === 'master' || operatorRole === 'owner' || operatorRole === 'admin') {
@@ -288,6 +290,9 @@ function formatNoaToolInjection(toolName, result) {
     const formattedResult = toolRegistry.formatToolResult(toolName, result)
     if (toolName === 'group_chat_context') {
         return `\n\n【畅聊工具结果：群聊上下文】以下是当前群已捕获的公开聊天流水，请据此回答前情问题；记录不足时说明只能看到已捕获部分。${formattedResult}`
+    }
+    if (toolName === 'group_member_aliases') {
+        return `\n\n【畅聊工具结果：群成员称呼记忆】以下是当前群公开聊天中提取的称呼/外号记录；只当作群内称呼或调侃来转述，不要当作真实身份或事实断言。${formattedResult}`
     }
     if (toolName === 'web_search' || toolName === 'web_fetch') {
         return `\n\n【畅聊工具结果：联网信息】请基于以下实际联网结果回答，不要编造。${formattedResult}`
@@ -339,6 +344,12 @@ export class NoaChatHandler extends plugin {
             logger.error(`[AI-Plugin] [畅聊] 保存群消息失败:`, err)
         }
 
+        try {
+            await captureGroupMemberAliases(this.conversationManager.db, e, normalized.normalizedText, { sourceNickname: normalized.nickname })
+        } catch (err) {
+            logger.warn(`[AI-Plugin] [畅聊][称呼记忆] 记录失败: ${err.message}`)
+        }
+
         if (normalized.isBot || normalized.isCommand) return false
         if (!shouldTriggerNoa(e, normalized.normalizedText)) return false
 
@@ -364,6 +375,18 @@ export class NoaChatHandler extends plugin {
         const limit = Math.max(10, Number(Config.NOA_CHAT_CONTEXT_LIMIT) || 60)
         const logs = await this.conversationManager.db.getRecentGroupMessageLogs(e.group_id, limit, { excludeCommands: true })
         const contextText = formatGroupContext(logs)
+        const mentionedUserIds = extractMentionedUserIds(e.message || [], { botUserId: getBotUin(e) })
+        let groupAliasMemoryText = ''
+        if (mentionedUserIds.length > 0) {
+            try {
+                groupAliasMemoryText = await buildGroupAliasMemoryText(this.conversationManager.db, e.group_id, mentionedUserIds, { limit: 20 })
+                if (groupAliasMemoryText) {
+                    logger.info(`[AI-Plugin] [畅聊][称呼记忆] 已注入 @ 成员称呼记忆 ${mentionedUserIds.join(', ')}`)
+                }
+            } catch (err) {
+                logger.warn(`[AI-Plugin] [畅聊][称呼记忆] 加载失败: ${err.message}`)
+            }
+        }
         let memoryData = null
         let personalMemory = ''
         try {
@@ -401,7 +424,7 @@ export class NoaChatHandler extends plugin {
                     [],
                     personalMemory,
                     candidateUrls,
-                    { hasImages: normalized.imageMeta.length > 0 || imageParts.length > 0 }
+                    { hasImages: normalized.imageMeta.length > 0 || imageParts.length > 0, mentionedUserIds }
                 )
                 const toolCalls = Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools.slice(0, 3) : []
                 if (toolCalls.length > 0) {
@@ -434,6 +457,7 @@ export class NoaChatHandler extends plugin {
 - 不要逐字复述大段历史，像正常群友一样自然接话。
 - 图片在长期记录里只以 [图片] 和元信息存在；如果本轮附带了图片输入，可以基于实际看到的图片回答。
 - 如果当前用户在问“之前聊了什么/发生了什么/前情提要”，请结合最近群聊文本和本轮附带的最近图片一起概括；没有记录就直接说明只能看到启用畅聊后捕获到的内容。
+- “本群称呼记忆”只表示群里公开聊天中有人这样称呼过某个成员；带调侃的记录不要当作真实身份或事实断言。
 - “触发者个人记忆摘要”只用于理解当前触发者的偏好、称呼和长期上下文；具体隐私边界以当前聊天环境提示为准。
 - 不要编造没有出现在上下文里的事实。
 - 如果上下文不足，就坦诚说不太确定。
@@ -444,7 +468,7 @@ ${getBeijingTimeStr()}
 【最近群聊上下文】
 ${contextText || '暂无'}
 
-${personalMemory ? `【触发者个人记忆摘要】\n${personalMemory}\n\n` : ''}${toolContextText ? `【本轮工具结果】${toolContextText}\n\n` : ''}【当前触发消息】
+${groupAliasMemoryText ? `${groupAliasMemoryText}\n\n` : ''}${personalMemory ? `【触发者个人记忆摘要】\n${personalMemory}\n\n` : ''}${toolContextText ? `【本轮工具结果】${toolContextText}\n\n` : ''}【当前触发消息】
 ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}`
 
         const contents = [
