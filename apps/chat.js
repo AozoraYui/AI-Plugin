@@ -646,6 +646,7 @@ ${toolSummary}
 - 链接只在用户明确要求查看/总结/分析网页内容时计划 web_fetch；只是出现链接不代表需要抓取。
 - 当前消息包含图片：${hasImages ? '是' : '否'}；最近图片缓存可用：${hasRecentImages ? '是' : '否'}。规划阶段不会收到图片内容；如果用户只是让你看图/描述图且没有明确工具需求，交给最终多模态/视觉流程，不要计划工具。
 - draw_image 可以自动提取当前消息图、引用图、@头像，也可以在用户说“刚才那张/这张图/用 p 模型处理/修图/去水印/二维码/套预设”等时复用最近图片缓存。用户明确要求基于图片生成、重绘、修图、去水印或套风格时，可以计划 draw_image，但不要承诺精准像素级编辑。
+- 用户问“刚才/之前/他们/大家/群里聊了什么、发生了什么、前情提要、总结最近群聊”时，优先计划 group_chat_context 读取畅聊捕获的本群公开群流水。
 - 只计划“可用工具”中列出的工具，最多 5 个。
 - 群管理成员操作必须有明确目标；如果用户只给昵称/群名片且不确定 QQ 号，先计划 group_member_list 或 group_member_resolve。
 - 如果当前消息 @ 了唯一成员，用户说“这个人/他/她/这位/被 @ 的人”等指代时，应把该 @ 成员作为明确目标，可以直接计划对应群管理工具并在 params_hint 中写入 user_id。
@@ -1034,6 +1035,9 @@ export class ChatHandler extends plugin {
             if (this.client.enableAiDraw) {
                 enabledTools.push('draw_image')
             }
+            if (e.group_id) {
+                enabledTools.push('group_chat_context')
+            }
             // 群管理：开启 enable_group_admin 后，群聊中由「主人」或「当前群管理员/群主」触发
             if (e.group_id) {
                 const looksLikeGroupAdminRequest = /(群管理|群管|群成员|成员列表|群里有哪些|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(userMessage)
@@ -1202,6 +1206,10 @@ export class ChatHandler extends plugin {
                         } else if (call.name === 'group_file_list' || call.name === 'group_file_download') {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为群文件工具的实际执行结果，请如实、完整地告知主人，逐条列出每一个文件，不要只挑部分/代表文件，不要编造文件名或结果。' + formattedResult
+                            logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
+                        } else if (call.name === 'group_chat_context') {
+                            const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
+                            userMessage = userMessage + '\n\n【重要指令】以上为畅聊模式捕获的当前群公开聊天流水。请严格基于这些记录回答用户关于“之前聊了什么/发生了什么/前情提要”的问题；如果记录不足，要明确说明只能看到已捕获的部分。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (['group_mute', 'group_whole_mute', 'group_kick', 'group_set_card', 'group_set_title', 'group_essence', 'group_member_list', 'group_member_resolve', 'group_request_list', 'group_request_handle'].includes(call.name)) {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)

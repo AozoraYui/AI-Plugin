@@ -12,6 +12,7 @@ export { fileReadTool } from './file_read.js'
 export { fileSendTool } from './file_send.js'
 export { fileDownloadTool } from './file_download.js'
 export { groupFileListTool, groupFileDownloadTool } from './group_file.js'
+export { groupChatContextTool } from './group_chat_context.js'
 export {
     groupMuteTool, groupWholeMuteTool, groupKickTool, groupSetCardTool,
     groupSetTitleTool, groupEssenceTool, groupMemberListTool, groupMemberResolveTool,

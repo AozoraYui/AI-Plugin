@@ -5,6 +5,7 @@ import { checkAccess } from '../utils/access.js'
 import { getBeijingTimeStr, getTodayDateStr, takeSourceMsg } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
 import { buildEnvironmentHint, expandForwardMsg, extractCardInfo } from './chat.js'
+import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 
 const replyCooldown = new Map()
 const PERSONAL_MEMORY_MAX_CHARS = 2600
@@ -210,6 +211,102 @@ function cleanModelText(text) {
     return firstContent >= 0 ? blocks.slice(firstContent).join('\n\n').replace(/^>\s*/, '').trim() : result
 }
 
+function extractUrlsFromText(text, limit = 10) {
+    const urls = []
+    const seen = new Set()
+    const urlRegex = /https?:\/\/[^\s<>'"，。！？、]+/gi
+    let match
+    while ((match = urlRegex.exec(String(text || ''))) !== null && urls.length < limit) {
+        const url = match[0].replace(/[)\]}.,，。!?！？;；:：]+$/g, '')
+        if (!seen.has(url)) {
+            seen.add(url)
+            urls.push(url)
+        }
+    }
+    return urls
+}
+
+function shouldRouteNoaTools(text, urls = []) {
+    const value = String(text || '')
+    if (urls.length > 0 && /(看|看看|打开|总结|分析|解释|读|抓取|链接|网页|网站)/i.test(value)) return true
+    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|画|绘制|生成|作图|手办化|图片处理|修图|之前|前面|刚才|刚刚|最近|他们|大家|群里|前情提要|聊了啥|说了啥|发生了什么|什么情况|群成员|成员列表|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
+}
+
+async function buildNoaEnabledTools(e, client) {
+    const enabledTools = ['weather']
+    if (client.enableWebSearch) {
+        enabledTools.push('web_search')
+        if (e.isMaster) enabledTools.push('web_fetch')
+    }
+    if (e.isMaster && client.enableWebFetch && !enabledTools.includes('web_fetch')) {
+        enabledTools.push('web_fetch')
+    }
+    if (e.isMaster) {
+        enabledTools.push('system_info')
+    }
+    const fileReadEnabled = e.isMaster && client.enableFileRead
+    const shellEnabled = e.isMaster && client.enableShellExec
+    if (fileReadEnabled || shellEnabled) {
+        enabledTools.push('file_read', 'dir_read')
+    }
+    if (shellEnabled) {
+        enabledTools.push('shell_exec')
+    }
+    if (e.isMaster && client.enableFileTransfer) {
+        enabledTools.push('file_send', 'file_download')
+        if (e.group_id) {
+            enabledTools.push('group_file_list', 'group_file_download')
+        }
+    }
+    if (client.enableAiDraw) {
+        enabledTools.push('draw_image')
+    }
+    if (e.group_id) {
+        enabledTools.push('group_chat_context')
+        if (client.enableGroupAdmin) {
+            const operatorRole = await resolveGroupOperatorRole(e)
+            if (operatorRole === 'master' || operatorRole === 'owner' || operatorRole === 'admin') {
+                enabledTools.push(
+                    'group_mute',
+                    'group_whole_mute',
+                    'group_kick',
+                    'group_set_card',
+                    'group_set_title',
+                    'group_essence',
+                    'group_member_list',
+                    'group_member_resolve',
+                    'group_request_list',
+                    'group_request_handle'
+                )
+            }
+        }
+    }
+    return [...new Set(enabledTools)]
+}
+
+function formatNoaToolInjection(toolName, result) {
+    const formattedResult = toolRegistry.formatToolResult(toolName, result)
+    if (toolName === 'group_chat_context') {
+        return `\n\n【畅聊工具结果：群聊上下文】以下是当前群已捕获的公开聊天流水，请据此回答前情问题；记录不足时说明只能看到已捕获部分。${formattedResult}`
+    }
+    if (toolName === 'web_search' || toolName === 'web_fetch') {
+        return `\n\n【畅聊工具结果：联网信息】请基于以下实际联网结果回答，不要编造。${formattedResult}`
+    }
+    if (toolName === 'file_read' || toolName === 'dir_read' || toolName === 'shell_exec') {
+        return `\n\n【畅聊工具结果：服务器信息】请严格基于以下实际结果回答，不要编造未执行的内容。${formattedResult}`
+    }
+    if (toolName === 'file_send' || toolName === 'file_download' || toolName === 'group_file_list' || toolName === 'group_file_download') {
+        return `\n\n【畅聊工具结果：文件操作】请如实告知操作结果。${formattedResult}`
+    }
+    if (toolName.startsWith('group_')) {
+        return `\n\n【畅聊工具结果：群管理】请如实转告操作者，不要编造结果。${formattedResult}`
+    }
+    if (toolName === 'draw_image') {
+        return `\n\n【畅聊工具结果：画图】画图工具如成功会直接发送图片；请根据以下结果简短回应。${formattedResult}`
+    }
+    return `\n\n【畅聊工具结果：${toolName}】${formattedResult}`
+}
+
 export class NoaChatHandler extends plugin {
     constructor() {
         super({
@@ -291,6 +388,46 @@ export class NoaChatHandler extends plugin {
         const environmentHint = buildEnvironmentHint(e)
         logger.info(`[AI-Plugin] [畅聊] 环境提示: ${environmentHint}`)
 
+        let toolContextText = ''
+        try {
+            const enabledTools = await buildNoaEnabledTools(e, this.client)
+            const candidateUrls = extractUrlsFromText(normalized.normalizedText, 10)
+            if (enabledTools.length > 0 && shouldRouteNoaTools(normalized.normalizedText, candidateUrls)) {
+                logger.info(`[AI-Plugin] [畅聊] 工具路由开始: 可用工具=${enabledTools.join(', ')}`)
+                const toolAnalysis = await toolRegistry.analyzeToolIntent(
+                    normalized.normalizedText,
+                    this.client,
+                    enabledTools,
+                    [],
+                    personalMemory,
+                    candidateUrls,
+                    { hasImages: normalized.imageMeta.length > 0 || imageParts.length > 0 }
+                )
+                const toolCalls = Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools.slice(0, 3) : []
+                if (toolCalls.length > 0) {
+                    logger.info(`[AI-Plugin] [畅聊] 工具执行队列: ${toolCalls.map(call => `${call.name}(${JSON.stringify(call.args || {}).slice(0, 120)})`).join(' -> ')}`)
+                }
+                for (const call of toolCalls) {
+                    const result = await toolRegistry.execute(call.name, call.args || {}, e.isMaster, {
+                        userId: normalized.userId,
+                        groupId: normalized.groupId,
+                        event: e
+                    })
+                    if (result.success) {
+                        toolContextText += formatNoaToolInjection(call.name, result.data)
+                        logger.info(`[AI-Plugin] [畅聊] ${call.name} 完成，结果已注入`)
+                    } else {
+                        toolContextText += `\n\n【畅聊工具失败：${call.name}】${result.error || '未知错误'}`
+                        logger.warn(`[AI-Plugin] [畅聊] ${call.name} 失败: ${result.error}`)
+                    }
+                }
+            } else if (enabledTools.length > 0) {
+                logger.debug('[AI-Plugin] [畅聊] 未检测到明确工具倾向，跳过工具路由')
+            }
+        } catch (err) {
+            logger.warn(`[AI-Plugin] [畅聊] 工具路由/执行失败: ${err.message}`)
+        }
+
         const prompt = `你是 ${Config.AI_NAME}，正在一个 QQ 群里自然聊天。
 
 请基于下面的群聊上下文回复当前触发你的用户。你能看到最近群聊流水，但要注意：
@@ -307,7 +444,7 @@ ${getBeijingTimeStr()}
 【最近群聊上下文】
 ${contextText || '暂无'}
 
-${personalMemory ? `【触发者个人记忆摘要】\n${personalMemory}\n\n` : ''}【当前触发消息】
+${personalMemory ? `【触发者个人记忆摘要】\n${personalMemory}\n\n` : ''}${toolContextText ? `【本轮工具结果】${toolContextText}\n\n` : ''}【当前触发消息】
 ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}`
 
         const contents = [
