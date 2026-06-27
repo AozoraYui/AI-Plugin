@@ -44,7 +44,10 @@ export class ImageHandler extends plugin {
 
     generateCommandRegex(presets) {
         const allCommands = presets.flatMap(p => [p.command, ...(p.aliases || [])]).filter(Boolean).map(escapeRegex)
-        return allCommands.length > 0 ? `^#${DRAW_PREFIX_PATTERN}(${allCommands.join('|')})(?:\\s+(.*))?$` : `^#无任何作图预设$`
+        const pattern = allCommands.length > 0
+            ? `^#${DRAW_PREFIX_PATTERN}(${allCommands.join('|')})(?:\\s+(.*))?$`
+            : `^#无任何作图预设$`
+        return new RegExp(pattern, 'i')
     }
 
     updateDynamicRule() {
