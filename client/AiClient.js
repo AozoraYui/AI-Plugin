@@ -169,6 +169,11 @@ export class AiClient {
         return this.groupAdminConfig?.enabled === true
     }
 
+    /** 是否启用畅聊模式（群消息捕获 + 触发词回复） */
+    get enableNoaChat() {
+        return this.noaChatConfig?.enabled === true
+    }
+
     /** 搜索意图分析专用模型列表 */
     get webSearchIntentModels() {
         const models = this.webSearchConfig?.intent_model
@@ -322,6 +327,7 @@ export class AiClient {
                 value.enable_file_transfer !== undefined ||
                 value.enable_ai_draw !== undefined ||
                 value.enable_group_admin !== undefined ||
+                value.enable_noa_chat !== undefined ||
                 value.show_thinking !== undefined ||
                 value.show_thinking_notice !== undefined ||
                 value.draw_review_after_generate !== undefined ||
@@ -418,9 +424,17 @@ export class AiClient {
                 this.fileTransferConfig = { enabled: rawConfig.enable_file_transfer === true }
                 this.aiDrawConfig = { enabled: rawConfig.enable_ai_draw === true }
                 this.groupAdminConfig = { enabled: rawConfig.enable_group_admin === true }
+                this.noaChatConfig = { enabled: rawConfig.enable_noa_chat === true }
                 Config.show_thinking = rawConfig.show_thinking === true
                 Config.show_thinking_notice = rawConfig.show_thinking_notice === true
                 Config.draw_review_after_generate = rawConfig.draw_review_after_generate === true
+                Config.enable_noa_chat = rawConfig.enable_noa_chat === true
+                for (const key of ['NOA_CHAT_CONTEXT_LIMIT', 'NOA_CHAT_REPLY_COOLDOWN_MS', 'NOA_CHAT_MAX_CONTEXT_IMAGES']) {
+                    if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
+                }
+                if (Array.isArray(rawConfig.NOA_CHAT_TRIGGER_KEYWORDS)) {
+                    Config.NOA_CHAT_TRIGGER_KEYWORDS = rawConfig.NOA_CHAT_TRIGGER_KEYWORDS
+                }
                 for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_FOLLOWUP_MAX_ROUNDS', 'SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS', 'SHELL_EXEC_MAX_BUFFER']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
@@ -440,6 +454,9 @@ export class AiClient {
                 }
                 if (this.enableGroupAdmin) {
                     logger.info('[AI-Plugin] 群管理已启用：主人或群管理员可让 AI 执行禁言/踢人/入群审核等操作')
+                }
+                if (this.enableNoaChat) {
+                    logger.info('[AI-Plugin] 畅聊模式已启用：群消息将被轻量捕获，触发词命中时 AI 会基于群上下文回复')
                 }
 
                 // 提取 weather_api_key（高德地图天气查询）

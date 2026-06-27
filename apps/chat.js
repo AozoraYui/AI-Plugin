@@ -10,7 +10,7 @@ import { processImagesInBatches } from '../utils/image.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import yaml from 'yaml'
 
-function extractCardInfo(data) {
+export function extractCardInfo(data) {
     const lines = []
     const meta = data.meta || data.detail || data.appmsg || data.app || {}
     const news = meta.news || meta.detail || meta.appmsg || meta.app || {}
@@ -46,7 +46,7 @@ function saveMainConfigSwitch(key, value) {
     Config[key] = value === true
 }
 
-async function expandForwardMsg(bot, resid, depth = 0, maxDepth = Config.FORWARD_MSG_MAX_DEPTH) {
+export async function expandForwardMsg(bot, resid, depth = 0, maxDepth = Config.FORWARD_MSG_MAX_DEPTH) {
     const textParts = []
     const images = []
 

@@ -98,6 +98,28 @@ export class AIDatabase {
                 CREATE INDEX IF NOT EXISTS idx_summary_user_date 
                 ON summary_cache(user_id, date_str);
 
+                -- 群聊流水表（畅聊模式使用，仅存文本化内容与图片元信息，不存图片本体）
+                CREATE TABLE IF NOT EXISTS group_message_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id TEXT NOT NULL,
+                    message_id TEXT,
+                    seq TEXT,
+                    user_id TEXT NOT NULL,
+                    nickname TEXT,
+                    normalized_text TEXT NOT NULL,
+                    image_meta TEXT,
+                    is_command BOOLEAN DEFAULT 0,
+                    is_bot BOOLEAN DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(group_id, message_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_group_logs_group_created
+                ON group_message_logs(group_id, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_group_logs_group_user
+                ON group_message_logs(group_id, user_id);
+
                 -- 用户档案表
                 CREATE TABLE IF NOT EXISTS user_profiles (
                     user_id TEXT PRIMARY KEY,
@@ -314,6 +336,72 @@ export class AIDatabase {
             `, [String(userId), role, JSON.stringify(parts), dateStr], (err) => {
                 if (err) reject(err)
                 else resolve()
+            })
+        })
+    }
+
+    saveGroupMessageLog(log) {
+        return new Promise((resolve, reject) => {
+            const createdAt = log.createdAt || getDBTimestamp()
+            this.db.run(`
+                INSERT OR IGNORE INTO group_message_logs
+                    (group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                String(log.groupId),
+                log.messageId ? String(log.messageId) : null,
+                log.seq ? String(log.seq) : null,
+                String(log.userId),
+                log.nickname || '',
+                log.normalizedText || '',
+                JSON.stringify(log.imageMeta || []),
+                log.isCommand ? 1 : 0,
+                log.isBot ? 1 : 0,
+                createdAt
+            ], function(err) {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(this.changes || 0)
+            })
+        })
+    }
+
+    getRecentGroupMessageLogs(groupId, limit = 60, options = {}) {
+        return new Promise((resolve, reject) => {
+            const params = [String(groupId)]
+            let query = `
+                SELECT group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at
+                FROM group_message_logs
+                WHERE group_id = ?
+            `
+            if (options.excludeCommands === true) {
+                query += ' AND is_command = 0'
+            }
+            query += ' ORDER BY id DESC LIMIT ?'
+            params.push(Math.max(1, Number(limit) || 60))
+
+            this.db.all(query, params, (err, rows) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                const normalized = rows.reverse().map(row => ({
+                    groupId: row.group_id,
+                    messageId: row.message_id,
+                    seq: row.seq,
+                    userId: row.user_id,
+                    nickname: row.nickname,
+                    normalizedText: row.normalized_text,
+                    imageMeta: (() => {
+                        try { return JSON.parse(row.image_meta || '[]') } catch { return [] }
+                    })(),
+                    isCommand: row.is_command === 1,
+                    isBot: row.is_bot === 1,
+                    createdAt: row.created_at
+                }))
+                resolve(normalized)
             })
         })
     }

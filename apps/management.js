@@ -19,6 +19,7 @@ function saveRuntimeSwitch(key, value) {
                 value.enable_file_transfer !== undefined ||
                 value.enable_ai_draw !== undefined ||
                 value.enable_group_admin !== undefined ||
+                value.enable_noa_chat !== undefined ||
                 value.show_thinking !== undefined ||
                 value.draw_review_after_generate !== undefined
             )
@@ -46,6 +47,7 @@ export class ManagementHandler extends plugin {
                 { reg: /^#ai信任群(添加|删除)\s*(\d+)$/i, fnc: 'modifyTrustedGroup', permission: 'master' },
                 { reg: /^#ai信任群列表$/i, fnc: 'listTrustedGroups', permission: 'master' },
                 { reg: /^#?ai(开启|关闭)群管理$/i, fnc: 'switchGroupAdmin', permission: 'master' },
+                { reg: /^#?ai(开启|关闭)畅聊$/i, fnc: 'switchNoaChat', permission: 'master' },
                 { reg: /^#ai状态$/i, fnc: 'showStatus', permission: 'master' },
             ]
         })
@@ -176,6 +178,23 @@ export class ManagementHandler extends plugin {
         return true
     }
 
+    async switchNoaChat(e) {
+        const isTurnOn = e.msg.includes('开启')
+        try {
+            saveRuntimeSwitch('enable_noa_chat', isTurnOn)
+            Config.enable_noa_chat = isTurnOn
+            this.client.noaChatConfig = { enabled: isTurnOn }
+            logger.info(`[AI-Plugin] 畅聊模式已${isTurnOn ? '开启' : '关闭'}（运行时立即生效）`)
+            await e.reply(isTurnOn
+                ? '✅ 已开启畅聊模式。群消息会被轻量捕获；有人提到诺亚/noa 或 @我 时，我会基于最近群上下文自然回复。'
+                : '🚫 已关闭畅聊模式。群消息捕获和触发词回复已停止。')
+        } catch (err) {
+            logger.error('[AI-Plugin] 切换畅聊模式失败:', err)
+            await e.reply(`❌ 切换失败: ${err.message}`)
+        }
+        return true
+    }
+
     async _buildModelListForwardMsg() {
         const thinkingStatus = Config.show_thinking ? "✅ 开启 (显示思考过程)" : "🚫 关闭 (自动过滤思考)"
         
@@ -297,6 +316,7 @@ export class ManagementHandler extends plugin {
             const accessMode = accessConfig.mode === 'whitelist' ? '白名单模式' : '黑名单模式'
             const thinkingMode = Config.show_thinking ? '✅ 开启 (Raw模式)' : '🚫 关闭 (自动清洗)'
             const groupAdminMode = this.client.enableGroupAdmin ? '✅ 开启' : '🚫 关闭'
+            const noaChatMode = (this.client.enableNoaChat || Config.enable_noa_chat) ? '✅ 开启' : '🚫 关闭'
 
             const trustedGroups = Config.trustedGroups
             const trustedGroupCount = trustedGroups.length
@@ -316,6 +336,7 @@ export class ManagementHandler extends plugin {
                 `  - 权限控制: ${accessMode}`,
                 `  - AI思考过程: ${thinkingMode}`,
                 `  - 群管理工具: ${groupAdminMode}`,
+                `  - 畅聊模式: ${noaChatMode}`,
                 `  - 信任群聊: ${trustedGroupCount} 个`,
                 '=============================='
             ].join('\n')
