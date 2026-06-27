@@ -113,7 +113,7 @@ export class ImageHandler extends plugin {
         const replyImages = await takeSourceMsg(e, { img: true })
         logger.info(`[AI-Plugin] takeSourceMsg: replyImages=${JSON.stringify(replyImages?.slice?.(0, 2))}, e.source=${!!e.source}, e.source?.seq=${e.source?.seq}, hasReplySeg=${!!e.message?.find(m => m.type === 'reply')}, replySegId=${e.message?.find(m => m.type === 'reply')?.id}, hasGetReply=${typeof e.getReply === 'function'}`)
         if (replyImages) allImages = allImages.concat(replyImages)
-        const currentImages = e.message.filter(m => m.type === "image").map(m => m.url)
+        const currentImages = (e.message || []).filter(m => m.type === "image").map(m => m.data?.url || m.url).filter(Boolean)
         if (currentImages.length > 0) allImages = allImages.concat(currentImages)
 
         await setMsgEmojiLike(e, 282)
@@ -126,12 +126,12 @@ export class ImageHandler extends plugin {
         try {
             // 处理 @：回复消息时跳过第一个 @（QQ 自动加的）
             const hasReply = e.source || e.message?.find(m => m.type === 'reply')
-            let atSegments = e.message.filter(m => m.type === "at" && m.qq)
+            let atSegments = (e.message || []).filter(m => m.type === "at" && (m.qq || m.data?.qq))
             if (hasReply && atSegments.length > 0) {
                 atSegments = atSegments.slice(1)
             }
             for (const atSeg of atSegments) {
-                allImages.push(await getAvatarUrl(atSeg.qq))
+                allImages.push(await getAvatarUrl(atSeg.qq || atSeg.data?.qq))
             }
 
             if (allImages.length === 0 && !isCustomCommand && !hasReply) {

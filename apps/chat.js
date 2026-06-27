@@ -46,6 +46,63 @@ function saveMainConfigSwitch(key, value) {
     Config[key] = value === true
 }
 
+const RECENT_IMAGE_CACHE_TTL_SECONDS = 1800
+const RECENT_IMAGE_CACHE_LIMIT = 6
+
+function recentImageCacheKeys(e) {
+    if (!e) return []
+    if (e.group_id) {
+        return [
+            `AI-Plugin:lastImages:group:${e.group_id}:user:${e.user_id}`,
+            `AI-Plugin:lastImages:group:${e.group_id}`
+        ]
+    }
+    return [`AI-Plugin:lastImages:private:${e.user_id}`]
+}
+
+async function cacheRecentImages(e, images = []) {
+    if (!Array.isArray(images) || images.length === 0 || typeof redis === 'undefined' || !redis.set) return
+    const uniqueImages = [...new Set(images.filter(Boolean))].slice(0, Math.min(Config.MAX_IMAGES_PER_MESSAGE, RECENT_IMAGE_CACHE_LIMIT))
+    if (uniqueImages.length === 0) return
+
+    const record = {
+        images: uniqueImages,
+        userId: String(e.user_id || ''),
+        groupId: e.group_id ? String(e.group_id) : '',
+        messageId: e.message_id || e.seq || '',
+        time: Date.now()
+    }
+
+    try {
+        for (const key of recentImageCacheKeys(e)) {
+            await redis.set(key, JSON.stringify(record), { EX: RECENT_IMAGE_CACHE_TTL_SECONDS })
+        }
+        logger.info(`[AI-Plugin] 已缓存最近图片 ${uniqueImages.length} 张，供后续图片处理工具复用（${RECENT_IMAGE_CACHE_TTL_SECONDS}s）`)
+    } catch (err) {
+        logger.warn(`[AI-Plugin] 缓存最近图片失败: ${err.message}`)
+    }
+}
+
+async function getRecentImageCacheInfo(e) {
+    if (typeof redis === 'undefined' || !redis.get) return { available: false, count: 0 }
+
+    for (const key of recentImageCacheKeys(e)) {
+        try {
+            const raw = await redis.get(key)
+            if (!raw) continue
+            const record = JSON.parse(raw)
+            const images = Array.isArray(record.images) ? record.images.filter(Boolean) : []
+            if (images.length > 0) {
+                return { available: true, count: images.length, key, time: record.time || 0 }
+            }
+        } catch (err) {
+            logger.warn(`[AI-Plugin] 读取最近图片缓存状态失败: ${err.message}`)
+        }
+    }
+
+    return { available: false, count: 0 }
+}
+
 export async function expandForwardMsg(bot, resid, depth = 0, maxDepth = Config.FORWARD_MSG_MAX_DEPTH) {
     const textParts = []
     const images = []
@@ -260,8 +317,8 @@ function hasTool(enabledTools, name) {
 }
 
 function parseQualityFromText(text) {
-    if (/(?:\bultra\b|旗舰|最高|u模型组|ultra模型组)/i.test(text)) return 'ultra'
-    if (/(?:\bpro\b|专业|p模型组|pro模型组)/i.test(text)) return 'pro'
+    if (/(?:\bultra\b|旗舰|最高|u模型(?:组)?|ultra模型(?:组)?)/i.test(text)) return 'ultra'
+    if (/(?:\bpro\b|专业|p模型(?:组)?|pro模型(?:组)?)/i.test(text)) return 'pro'
     if (/(?:\bflash\b|默认|快速|flash模型组)/i.test(text)) return 'flash'
     return undefined
 }
@@ -315,7 +372,7 @@ function detectCharactersFromText(text) {
 function cleanupDrawPrompt(text, selfPortrait, characterIds = []) {
     const ids = Array.isArray(characterIds) ? characterIds : (characterIds ? [characterIds] : [])
     let prompt = String(text || '')
-        .replace(/用\s*(?:flash|pro|ultra|默认|快速|专业|旗舰)\s*模型组/gi, '')
+        .replace(/用\s*(?:flash|pro|ultra|默认|快速|专业|旗舰|p|u)\s*模型(?:组)?/gi, '')
         .replace(/(?:刚刚|刚才|之前)?(?:报错|没图|失败了?|没画出来|重试|再试试|重新)/g, '')
 
     if (selfPortrait) {
@@ -378,6 +435,8 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
 
     const urls = options.urls || []
     const hasImages = options.hasImages === true
+    const hasRecentImages = options.hasRecentImages === true
+    const hasImageContext = hasImages || hasRecentImages
 
     // 1) 明确画图/角色图：直接走 draw_image，避免让小模型在长工具说明里猜。
     if (hasTool(enabledTools, 'draw_image')) {
@@ -387,6 +446,9 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         const drawIntent = /(?:帮我|给我)?(?:画|绘制|生成|创作|做)(?:个|一张|一下)?[\s\S]{0,80}(?:图|图片|画|插画|头像|壁纸|你自己|你本人|AI本人|自画像|你长什么样|你的样子|你)/i.test(text)
             || /(?:看看|给我看看)(?:你长什么样|你的样子)/i.test(text)
             || (hasCharacter && /(?:帮我|给我)?(?:画|绘制|生成|创作|做)(?:个|一张|一下)?/i.test(text))
+        const imageEditIntent = hasImageContext
+            && /(?:去掉|去除|移除|擦除|消除|抹掉|清理|删掉|去水印|水印|二维码|改成|变成|转成|风格化|手办化|inpaint|inpainting)/i.test(text)
+            && /(?:图片|照片|图|原图|参考图|这张|那张|水印|二维码|手办化|风格化)/i.test(text)
         if (drawIntent) {
             const selfPortrait = /(?:你自己|你本人|AI本人|自画像|你长什么样|你的样子|你现在的样子)/i.test(text) && characters.length <= 1
             const args = {
@@ -401,6 +463,18 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
             if (quality) args.quality = quality
             return {
                 intent: selfPortrait ? '规则预路由：用户明确要求绘制 AI 自画像。' : (characters.length > 0 ? `规则预路由：用户明确要求绘制角色「${characters.join('、')}」。` : '规则预路由：用户明确要求生成图片。'),
+                tools: [{ name: 'draw_image', args }],
+                routedBy: 'rule'
+            }
+        }
+        if (imageEditIntent) {
+            const args = { prompt: text }
+            const quality = parseQualityFromText(text)
+            if (quality) args.quality = quality
+            return {
+                intent: hasImages
+                    ? '规则预路由：用户明确要求基于当前图片进行绘图/修图处理。'
+                    : '规则预路由：用户明确要求基于最近图片缓存进行绘图/修图处理。',
                 tools: [{ name: 'draw_image', args }],
                 routedBy: 'rule'
             }
@@ -529,7 +603,8 @@ async function askMainModelForToolPlan(client, modelGroupKey, providerFilter, op
         enabledTools = [],
         candidateUrls = [],
         mentionedUserIds = [],
-        hasImages = false
+        hasImages = false,
+        hasRecentImages = false
     } = options
 
     if (!userMessage && !hasImages) return { need_tools: false, reason: '当前消息为空' }
@@ -552,7 +627,7 @@ async function askMainModelForToolPlan(client, modelGroupKey, providerFilter, op
         ? `\n\n【当前消息 @ 的成员】\n${mentions.map((id, index) => `${index + 1}. QQ：${id}`).join('\n')}`
         : ''
 
-    logger.info(`[AI-Plugin] 主模型工具规划开始: 可用工具=${enabledTools.join(', ')}, 历史条数=${history.length}, 有记忆=${Boolean(incrementalCheckpoint)}, 有图片=${hasImages}, @成员=${mentions.join(', ') || '无'}`)
+    logger.info(`[AI-Plugin] 主模型工具规划开始: 可用工具=${enabledTools.join(', ')}, 历史条数=${history.length}, 有记忆=${Boolean(incrementalCheckpoint)}, 有图片=${hasImages}, 有近期图片=${hasRecentImages}, @成员=${mentions.join(', ') || '无'}`)
 
     const prompt = `你现在处于工具规划阶段。你是主模型本人，需要基于完整上下文判断本轮是否需要调用工具；这不是最终回复。
 
@@ -569,7 +644,8 @@ ${toolSummary}
 - 不要为了“可能有用”而调用工具；只有工具结果会直接影响回答时才计划工具。
 - 文件/目录优先使用 file_read/dir_read；shell_exec 只用于用户明确要求命令、诊断、搜索服务器或普通文件工具不足的场景。
 - 链接只在用户明确要求查看/总结/分析网页内容时计划 web_fetch；只是出现链接不代表需要抓取。
-- 当前消息包含图片：${hasImages ? '是' : '否'}。规划阶段不会收到图片内容；如果用户只是让你看图/描述图且没有明确工具需求，交给最终多模态/视觉流程，不要计划工具。
+- 当前消息包含图片：${hasImages ? '是' : '否'}；最近图片缓存可用：${hasRecentImages ? '是' : '否'}。规划阶段不会收到图片内容；如果用户只是让你看图/描述图且没有明确工具需求，交给最终多模态/视觉流程，不要计划工具。
+- draw_image 可以自动提取当前消息图、引用图、@头像，也可以在用户说“刚才那张/这张图/用 p 模型处理/修图/去水印/二维码/套预设”等时复用最近图片缓存。用户明确要求基于图片生成、重绘、修图、去水印或套风格时，可以计划 draw_image，但不要承诺精准像素级编辑。
 - 只计划“可用工具”中列出的工具，最多 5 个。
 - 群管理成员操作必须有明确目标；如果用户只给昵称/群名片且不确定 QQ 号，先计划 group_member_list 或 group_member_resolve。
 - 如果当前消息 @ 了唯一成员，用户说“这个人/他/她/这位/被 @ 的人”等指代时，应把该 @ 成员作为明确目标，可以直接计划对应群管理工具并在 params_hint 中写入 user_id。
@@ -869,8 +945,11 @@ export class ChatHandler extends plugin {
                 }
             }
 
-            const currentImages = e.message.filter(m => m.type === "image").map(m => m.data?.url || m.url).filter(url => url)
+            const currentImages = (e.message || []).filter(m => m.type === "image").map(m => m.data?.url || m.url).filter(url => url)
             if (currentImages.length > 0) allImages = allImages.concat(currentImages)
+            if (allImages.length > 0) {
+                await cacheRecentImages(e, allImages)
+            }
             const mentionedUserIds = extractAtMentionsFromMessage(e.message)
             if (mentionedUserIds.length > 0) {
                 logger.info(`[AI-Plugin] 当前消息检测到 @ 成员: ${mentionedUserIds.join(', ')}`)
@@ -984,10 +1063,19 @@ export class ChatHandler extends plugin {
                 }
             }
 
+            let recentImageInfo = { available: false, count: 0 }
+            if (enabledTools.includes('draw_image')) {
+                recentImageInfo = await getRecentImageCacheInfo(e)
+                if (recentImageInfo.available && allImages.length === 0) {
+                    logger.info(`[AI-Plugin] 检测到最近图片缓存 ${recentImageInfo.count} 张，绘图工具可在本轮按需复用`)
+                }
+            }
+
             if (enabledTools.length > 0) {
                 const candidateUrls = extractUrlsFromText(userMessage, 10)
                 const preRouted = preRouteToolIntent(userMessage, enabledTools, {
                     hasImages: allImages.length > 0,
+                    hasRecentImages: recentImageInfo.available,
                     urls: candidateUrls
                 })
                 let toolAnalysis
@@ -1004,7 +1092,8 @@ export class ChatHandler extends plugin {
                         enabledTools,
                         candidateUrls,
                         mentionedUserIds,
-                        hasImages: allImages.length > 0
+                        hasImages: allImages.length > 0,
+                        hasRecentImages: recentImageInfo.available
                     })
                     if (mainToolPlan?.need_tools) {
                         logger.info(`[AI-Plugin] 主模型计划调用 ${mainToolPlan.tool_plan.length} 个工具，交给意图模型编译参数`)
@@ -1013,6 +1102,7 @@ export class ChatHandler extends plugin {
                             candidateUrls,
                             mentionedUserIds,
                             hasImages: allImages.length > 0,
+                            hasRecentImages: recentImageInfo.available,
                             maxTools: 5
                         })
                     } else {

@@ -181,10 +181,11 @@ class ToolRegistry {
         const candidateUrls = Array.isArray(options.candidateUrls) ? [...new Set(options.candidateUrls)].slice(0, 10) : []
         const mentionedUserIds = Array.isArray(options.mentionedUserIds) ? [...new Set(options.mentionedUserIds)].filter(Boolean) : []
         const hasImages = options.hasImages === true
+        const hasRecentImages = options.hasRecentImages === true
         const maxTools = Math.max(1, Number(options.maxTools) || 5)
         const plannedToolNames = plannedCalls.map(call => call.tool || call.name).filter(Boolean)
 
-        logger.info(`[AI-Plugin] 工具计划编译开始: 主模型计划=${plannedToolNames.join(', ') || '无'}, 可用工具=${enabledTools.join(', ')}, 有图片=${hasImages}, @成员=${mentionedUserIds.join(', ') || '无'}`)
+        logger.info(`[AI-Plugin] 工具计划编译开始: 主模型计划=${plannedToolNames.join(', ') || '无'}, 可用工具=${enabledTools.join(', ')}, 有图片=${hasImages}, 有近期图片=${hasRecentImages}, @成员=${mentionedUserIds.join(', ') || '无'}`)
 
         const compilePrompt = `当前时间：${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日。
 你是工具调用编译器，相当于主模型的协处理器。主模型已经读取完整上下文并决定了是否需要工具；你不要重新判断用户真实意图，只把主模型的工具计划编译成可执行 JSON。
@@ -198,7 +199,7 @@ ${JSON.stringify(functionSchemas, null, 2)}
 当前用户原始消息：
 ${options.userMessage || ''}
 
-当前消息是否包含图片：${hasImages ? '是' : '否'}。注意：参考图、引用图、@头像由相关工具自己从消息中提取，你不要编造图片内容。
+当前消息是否包含图片：${hasImages ? '是' : '否'}；最近图片缓存是否可用：${hasRecentImages ? '是' : '否'}。注意：参考图、引用图、@头像、最近图片缓存由相关工具自己提取，你不要编造图片内容。
 
 当前消息 @ 的成员：
 ${mentionedUserIds.length > 0 ? mentionedUserIds.map((id, index) => `${index + 1}. QQ：${id}`).join('\n') : '无'}
@@ -217,7 +218,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - 文件/目录路径可以保留主模型解析出的绝对路径、相对路径、别名或文件名片段，不要凭空发明路径。
 - shell_exec 只能编译主模型明确计划的具体命令；不要为了补全信息自己设计危险命令。
 - file_download 用于下载当前消息或引用消息里的媒体，不需要 URL；web_fetch 才需要完整 URL。
-- draw_image 的参考图由工具自动提取；角色参考图库参数按计划填写 character/characters/self_portrait。
+- draw_image 的参考图由工具自动提取（当前图、引用图、@头像、最近图片缓存）；角色参考图库参数按计划填写 character/characters/self_portrait。主模型已经计划 draw_image 时，不要仅因当前消息没有图片就丢弃调用；如果最近图片缓存可用，工具会按“刚才那张/这张图/用 p 模型处理/修图/去水印”等语义自行复用。
 - 群管理成员操作必须有明确对象；有 QQ 号或 @ 时可填 user_id，没有 QQ 但有昵称/群名片时可填 target，拿不准唯一目标时先编译 group_member_list 或 group_member_resolve。
 - 如果当前消息 @ 了唯一成员，且主模型计划的群管理操作目标是“这个人/被 @ 的人”，请直接把该 QQ 填入 user_id。
 - group_request_handle 处理的是入群申请；用户说“刚才那个/他/那个人”且主模型计划处理待审申请时，可以省略 user_id；用户用昵称、QQ、留言关键词或含糊原话指代申请人时，把关键词写入 target。
@@ -289,6 +290,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 
         const now = new Date()
         const hasImages = options.hasImages === true
+        const hasRecentImages = options.hasRecentImages === true
 
         // 构建工具描述
         const toolDescriptions = []
@@ -334,7 +336,7 @@ ${JSON.stringify(mainPlan, null, 2)}
         // 当前消息图片上下文：意图分析模型只接收文本，不看图；带图时避免从短文本脑补工具需求
         const imageContextBlock = hasImages
             ? '\n\n当前用户消息包含图片。注意：你看不到图片内容，图片理解会交给后续多模态主模型处理。若文字本身没有明确要求搜索、查天气、读文件、执行命令或抓取链接，不要仅凭短语/表情/图片上下文脑补工具调用，tools 应返回空数组。\n'
-            : ''
+            : (hasRecentImages ? '\n\n当前用户消息没有新图片，但最近图片缓存可用。若用户明确说“刚才那张/这张图/用 p 模型处理/修图/去水印/套预设”等，draw_image 可以复用最近图片；普通聊天不要因此调用工具。\n' : '')
 
         // 角色参考图库说明：角色外貌设定统一放在 data/characters/{角色ID}/profile.yaml
         const characterLibraryBlock = enabledTools.includes('draw_image')
@@ -380,7 +382,8 @@ ${toolDescriptions.join('\n')}
 - draw_image: {"prompt": "画图描述", "preset": "可选预设名", "quality": "可选 flash/pro/ultra", "self_portrait": "可选 true/false", "character": "可选单个角色ID或别名", "characters": "可选多个角色ID或别名数组"}
   - 画图要求：当用户明确要求"画/绘制/生成一张图/帮我画/做张图/用某某风格画"等时使用。prompt 填用户想画的内容描述。
   - 用户提到具体已有风格名（如"手办化""手办风"）时填 preset；不确定是否为预设就不要填 preset，直接用 prompt 描述。
-  - 参考图（用户带图、引用的图、@的成员头像）由工具自动从消息中提取，不需要你处理图片，也不要因为有图就改用其他工具。
+  - 参考图（用户带图、引用的图、@的成员头像、最近图片缓存）由工具自动从消息中提取，不需要你处理图片，也不要因为有图就改用其他工具。
+  - 用户明确要求对当前/最近图片进行修图、重绘、去水印、去二维码、套风格或"用 p/pro 模型处理"时可以调用；但不要承诺精准像素级编辑。
   - 只有用户确实想要生成/创作图片时才调用；普通聊天、发图让你看图说话、问问题都不要调用 draw_image。
   - 角色参考图库：当用户要求画单个角色（如诺亚/优香/真纪/莉音，或用户提到的其他明确角色名）时，把 character 填为用户说的角色名或别名；当用户要求同一张图里出现多个角色时，把 characters 填为角色名/别名数组（如 ["noa", "yuuka"]）。prompt 只填用户额外提出的动作、场景、镜头、风格要求。工具会自动从 data/characters/{角色ID}/profile.yaml 和图片加载参考，每个角色各取一张参考图。
   - 特别注意：当用户要求"画你自己/画一下你/画 AI 本人/给我看看你长什么样"等指向 AI 自身形象时，把 self_portrait 设为 true（等价于 character="noa"），prompt 只需填用户额外提出的动作/场景/风格（如"在海边""穿和服"），没有额外要求时 prompt 可留空。

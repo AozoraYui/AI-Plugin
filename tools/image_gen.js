@@ -126,16 +126,57 @@ async function collectReferenceImages(event) {
         logger.warn(`[AI-Plugin] 画图工具：获取引用图失败: ${err.message}`)
     }
     // 2. 当前消息中的图片
-    const currentImages = (event.message || []).filter(m => m.type === 'image').map(m => m.url)
+    const currentImages = (event.message || []).filter(m => m.type === 'image').map(m => m.data?.url || m.url).filter(Boolean)
     if (currentImages.length > 0) images = images.concat(currentImages)
     // 3. @成员头像（回复消息时跳过 QQ 自动加的第一个 @）
     const hasReply = event.source || event.message?.find(m => m.type === 'reply')
-    let atSegments = (event.message || []).filter(m => m.type === 'at' && m.qq)
+    let atSegments = (event.message || []).filter(m => m.type === 'at' && (m.qq || m.data?.qq))
     if (hasReply && atSegments.length > 0) atSegments = atSegments.slice(1)
     for (const atSeg of atSegments) {
-        try { images.push(await getAvatarUrl(atSeg.qq)) } catch { /* ignore */ }
+        try { images.push(await getAvatarUrl(atSeg.qq || atSeg.data?.qq)) } catch { /* ignore */ }
+    }
+    if (images.length > 0) {
+        logger.info(`[AI-Plugin] 画图工具：从当前/引用/@ 收集到 ${images.length} 张参考图`)
     }
     return { images, hasReply }
+}
+
+function shouldUseCachedReferenceImage(args = {}, event = {}) {
+    const text = [
+        args.prompt,
+        args.preset,
+        event.raw_message,
+        event.msg
+    ].filter(Boolean).join('\n')
+    return /(刚才|上次|之前|上一张|这张|那张|原图|参考图|图片|图里|截图|处理|修改|编辑|去掉|去除|移除|擦除|消除|水印|二维码|背景|重绘|修图|绘图功能|画图功能|调用绘图|调用画图|p模型|pro模型|inpaint|inpainting)/i.test(text)
+}
+
+async function loadCachedReferenceImages(event, args = {}) {
+    if (!shouldUseCachedReferenceImage(args, event)) return []
+    if (typeof redis === 'undefined' || !redis.get) return []
+
+    const keys = event.group_id
+        ? [
+            `AI-Plugin:lastImages:group:${event.group_id}:user:${event.user_id}`,
+            `AI-Plugin:lastImages:group:${event.group_id}`
+        ]
+        : [`AI-Plugin:lastImages:private:${event.user_id}`]
+
+    for (const key of keys) {
+        try {
+            const raw = await redis.get(key)
+            if (!raw) continue
+            const record = JSON.parse(raw)
+            const images = Array.isArray(record.images) ? record.images.filter(Boolean) : []
+            if (images.length > 0) {
+                logger.info(`[AI-Plugin] 画图工具：从最近图片缓存恢复 ${images.length} 张参考图 (${key})`)
+                return images
+            }
+        } catch (err) {
+            logger.warn(`[AI-Plugin] 画图工具：读取最近图片缓存失败: ${err.message}`)
+        }
+    }
+    return []
 }
 
 // 按预设名/别名查找预设（不区分大小写）
@@ -154,19 +195,19 @@ function findPreset(presetName) {
 export const imageGenTool = {
     name: 'draw_image',
     permission: 'everyone',
-    description: '调用插件自身的 AI 画图能力生成图片并直接发送到当前会话。适合用户说"画一个/帮我画/生成一张图/用某某风格画"等。支持参考图（用户带图、引用图片、@成员头像）和角色参考图库（data/characters）。支持预设风格名。',
+    description: '调用插件自身的 AI 画图能力生成图片并直接发送到当前会话。适合用户说"画一个/帮我画/生成一张图/用某某风格画"，也可尝试基于参考图重绘、修图、去水印/二维码或套预设（不保证精准像素级编辑）。支持参考图（用户带图、引用图片、@成员头像、最近图片缓存）和角色参考图库（data/characters）。支持预设风格名。',
 
     functionSchema: {
         type: 'function',
         function: {
             name: 'draw_image',
-            description: '生成图片并发送到当前会话。可带文字描述和/或预设风格名；参考图自动从消息中提取。',
+            description: '生成图片并发送到当前会话。可带文字描述和/或预设风格名；参考图自动从当前消息、引用消息、@头像或最近图片缓存中提取。',
             parameters: {
                 type: 'object',
                 properties: {
                     prompt: {
                         type: 'string',
-                        description: '画图的文字描述/提示词。用户要求画什么就填什么。若仅套用预设可留空。'
+                        description: '画图或参考图处理的文字描述/提示词。用户要求画什么、如何改图、保留什么、去掉什么就填什么。若仅套用预设可留空。'
                     },
                     preset: {
                         type: 'string',
@@ -243,6 +284,9 @@ export const imageGenTool = {
 
         // 收集参考图
         const { images: refImages, hasReply } = await collectReferenceImages(event)
+        if (refImages.length === 0) {
+            refImages.push(...await loadCachedReferenceImages(event, args))
+        }
         // 无参考图、无描述、无预设、也没有角色参考图时，无法判断画什么
         if (refImages.length === 0 && characterImages.length === 0 && !prompt && !preset) {
             return '【画图失败】没有可用的画图内容：请提供文字描述，或附带/引用图片，或@某位成员。'
@@ -391,4 +435,3 @@ export const imageGenTool = {
 
 // 自动注册
 toolRegistry.register(imageGenTool)
-
