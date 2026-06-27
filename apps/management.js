@@ -1,6 +1,33 @@
 import plugin from '../../../lib/plugins/plugin.js'
-import { Config } from '../utils/config.js'
+import fs from 'node:fs'
+import yaml from 'yaml'
+import { Config, MODELS_CONFIG_FILE } from '../utils/config.js'
 import { getAccessConfig, saveAccessConfig } from '../utils/access.js'
+
+function saveRuntimeSwitch(key, value) {
+    const fileContent = fs.readFileSync(MODELS_CONFIG_FILE, 'utf8')
+    const docs = yaml.parseAllDocuments(fileContent)
+    let targetDoc = docs.find(doc => doc?.toJS?.()?.[key] !== undefined)
+    if (!targetDoc) {
+        targetDoc = docs.find(doc => {
+            const value = doc?.toJS?.()
+            return value && typeof value === 'object' && !Array.isArray(value) && (
+                value.enable_web_search !== undefined ||
+                value.enable_web_fetch !== undefined ||
+                value.enable_file_read !== undefined ||
+                value.enable_shell_exec !== undefined ||
+                value.enable_file_transfer !== undefined ||
+                value.enable_ai_draw !== undefined ||
+                value.enable_group_admin !== undefined ||
+                value.show_thinking !== undefined ||
+                value.draw_review_after_generate !== undefined
+            )
+        }) || docs[docs.length - 1]
+    }
+    if (!targetDoc) throw new Error('models_config.yaml 为空')
+    targetDoc.set(key, value === true)
+    fs.writeFileSync(MODELS_CONFIG_FILE, docs.map(doc => doc.toString()).join('---\n'), 'utf8')
+}
 
 export class ManagementHandler extends plugin {
     constructor() {
@@ -18,6 +45,7 @@ export class ManagementHandler extends plugin {
                 { reg: /^#ai权限列表$/i, fnc: 'listAccessControl', permission: 'master' },
                 { reg: /^#ai信任群(添加|删除)\s*(\d+)$/i, fnc: 'modifyTrustedGroup', permission: 'master' },
                 { reg: /^#ai信任群列表$/i, fnc: 'listTrustedGroups', permission: 'master' },
+                { reg: /^#?ai(开启|关闭)群管理$/i, fnc: 'switchGroupAdmin', permission: 'master' },
                 { reg: /^#ai状态$/i, fnc: 'showStatus', permission: 'master' },
             ]
         })
@@ -129,6 +157,22 @@ export class ManagementHandler extends plugin {
         const forwardMsg = await this._buildModelListForwardMsg()
         await e.reply(forwardMsg)
         
+        return true
+    }
+
+    async switchGroupAdmin(e) {
+        const isTurnOn = e.msg.includes('开启')
+        try {
+            saveRuntimeSwitch('enable_group_admin', isTurnOn)
+            this.client.groupAdminConfig = { enabled: isTurnOn }
+            logger.info(`[AI-Plugin] 群管理开关已${isTurnOn ? '开启' : '关闭'}（运行时立即生效）`)
+            await e.reply(isTurnOn
+                ? '✅ 已开启群管理工具。群聊中主人或群管理员可让 AI 查询群成员、禁言/解禁、踢人、改名片、精华消息和处理入群申请。'
+                : '🚫 已关闭群管理工具。AI 不会再把群管理能力加入可用工具列表。')
+        } catch (err) {
+            logger.error('[AI-Plugin] 切换群管理开关失败:', err)
+            await e.reply(`❌ 切换失败: ${err.message}`)
+        }
         return true
     }
 
@@ -252,6 +296,7 @@ export class ManagementHandler extends plugin {
             const accessConfig = getAccessConfig()
             const accessMode = accessConfig.mode === 'whitelist' ? '白名单模式' : '黑名单模式'
             const thinkingMode = Config.show_thinking ? '✅ 开启 (Raw模式)' : '🚫 关闭 (自动清洗)'
+            const groupAdminMode = this.client.enableGroupAdmin ? '✅ 开启' : '🚫 关闭'
 
             const trustedGroups = Config.trustedGroups
             const trustedGroupCount = trustedGroups.length
@@ -270,6 +315,7 @@ export class ManagementHandler extends plugin {
                 '🔑 权限与模式',
                 `  - 权限控制: ${accessMode}`,
                 `  - AI思考过程: ${thinkingMode}`,
+                `  - 群管理工具: ${groupAdminMode}`,
                 `  - 信任群聊: ${trustedGroupCount} 个`,
                 '=============================='
             ].join('\n')

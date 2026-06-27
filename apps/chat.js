@@ -934,19 +934,31 @@ export class ChatHandler extends plugin {
                 enabledTools.push('draw_image')
             }
             // 群管理：开启 enable_group_admin 后，群聊中由「主人」或「当前群管理员/群主」触发
-            if (e.group_id && this.client.enableGroupAdmin) {
-                const operatorRole = await resolveGroupOperatorRole(e)
-                if (operatorRole === 'master' || operatorRole === 'owner' || operatorRole === 'admin') {
-                    enabledTools.push('group_mute')
-                    enabledTools.push('group_whole_mute')
-                    enabledTools.push('group_kick')
-                    enabledTools.push('group_set_card')
-                    enabledTools.push('group_set_title')
-                    enabledTools.push('group_essence')
-                    enabledTools.push('group_member_list')
-                    enabledTools.push('group_member_resolve')
-                    enabledTools.push('group_request_list')
-                    enabledTools.push('group_request_handle')
+            if (e.group_id) {
+                const looksLikeGroupAdminRequest = /(群管理|群管|群成员|成员列表|群里有哪些|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(userMessage)
+                if (!this.client.enableGroupAdmin) {
+                    if (looksLikeGroupAdminRequest) {
+                        logger.info('[AI-Plugin] 群管理工具未加入：enable_group_admin=false，可用「#ai开启群管理」开启')
+                    }
+                } else {
+                    const operatorRole = await resolveGroupOperatorRole(e)
+                    if (operatorRole === 'master' || operatorRole === 'owner' || operatorRole === 'admin') {
+                        enabledTools.push('group_mute')
+                        enabledTools.push('group_whole_mute')
+                        enabledTools.push('group_kick')
+                        enabledTools.push('group_set_card')
+                        enabledTools.push('group_set_title')
+                        enabledTools.push('group_essence')
+                        enabledTools.push('group_member_list')
+                        enabledTools.push('group_member_resolve')
+                        enabledTools.push('group_request_list')
+                        enabledTools.push('group_request_handle')
+                        if (looksLikeGroupAdminRequest) {
+                            logger.info(`[AI-Plugin] 群管理工具已加入：operatorRole=${operatorRole}`)
+                        }
+                    } else if (looksLikeGroupAdminRequest) {
+                        logger.info(`[AI-Plugin] 群管理工具未加入：操作者不是主人/群管理员，operatorRole=${operatorRole}`)
+                    }
                 }
             }
 
