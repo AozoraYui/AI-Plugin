@@ -156,6 +156,12 @@ function isImageQuestion(text) {
     return /(图|图片|截图|照片|表情|刚才那张|这张|那张|看一下|看看)/i.test(text || '')
 }
 
+function isContextSummaryQuestion(text) {
+    const value = String(text || '')
+    return /(之前|前面|刚才|刚刚|最近|上面|他们|大家|群里).{0,20}(聊|说|发|讨论|发生|干嘛|在干嘛|干了啥|聊了啥|说了啥|发了啥|什么情况)/i.test(value)
+        || /(聊了啥|聊了什么|说了啥|发了啥|发生了什么|什么情况|前情提要|总结.{0,12}群聊|群聊.{0,12}总结)/i.test(value)
+}
+
 function shouldTriggerNoa(e, normalizedText) {
     const botUin = getBotUin(e)
     const mentionedBot = e.message?.some(seg => seg.type === 'at' && String(seg.data?.qq || seg.qq) === botUin)
@@ -272,13 +278,14 @@ export class NoaChatHandler extends plugin {
         } catch (err) {
             logger.warn(`[AI-Plugin] [畅聊] 加载触发者个人记忆摘要失败: ${err.message}`)
         }
-        const imageUrls = isImageQuestion(normalized.normalizedText)
+        const shouldReadRecentImages = isImageQuestion(normalized.normalizedText) || isContextSummaryQuestion(normalized.normalizedText)
+        const imageUrls = shouldReadRecentImages
             ? collectRecentImageUrls(logs, Math.max(0, Number(Config.NOA_CHAT_MAX_CONTEXT_IMAGES) || 0))
             : []
         const imageParts = imageUrls.length > 0 ? await processImagesInBatches(imageUrls) : []
 
         if (imageUrls.length > 0) {
-            logger.info(`[AI-Plugin] [畅聊] 本轮按需读取最近图片 ${imageParts.length}/${imageUrls.length} 张`)
+            logger.info(`[AI-Plugin] [畅聊] 本轮按需读取最近图片 ${imageParts.length}/${imageUrls.length} 张，原因=${isImageQuestion(normalized.normalizedText) ? '图片相关提问' : '群聊上下文总结'}`)
         }
 
         const environmentHint = buildEnvironmentHint(e)
@@ -289,6 +296,7 @@ export class NoaChatHandler extends plugin {
 请基于下面的群聊上下文回复当前触发你的用户。你能看到最近群聊流水，但要注意：
 - 不要逐字复述大段历史，像正常群友一样自然接话。
 - 图片在长期记录里只以 [图片] 和元信息存在；如果本轮附带了图片输入，可以基于实际看到的图片回答。
+- 如果当前用户在问“之前聊了什么/发生了什么/前情提要”，请结合最近群聊文本和本轮附带的最近图片一起概括；没有记录就直接说明只能看到启用畅聊后捕获到的内容。
 - “触发者个人记忆摘要”只用于理解当前触发者的偏好、称呼和长期上下文；具体隐私边界以当前聊天环境提示为准。
 - 不要编造没有出现在上下文里的事实。
 - 如果上下文不足，就坦诚说不太确定。
