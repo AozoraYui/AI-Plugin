@@ -66,7 +66,7 @@ const defaultConfig = {
     // 全量锚点总结时单个分块的最大对话条数，超过此值时分块总结
     // 使用场景: utils/scheduler.js 中 _createFullCheckpoint 分块逻辑
     FULL_CHUNK_SIZE: 128,
-    // 对话历史达到此条数时自动触发增量总结
+    // 距上次增量总结达到此完整对话轮数时自动触发增量总结
     // 使用场景: apps/chat.js 中 handleChat 自动触发增量总结
     AUTO_SUMMARY_THRESHOLD: 8,
     // Redis 缓存过期时间（秒），用于缓存用户对话历史

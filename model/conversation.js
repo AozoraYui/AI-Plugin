@@ -344,6 +344,52 @@ export class ConversationManager {
         await Promise.all([redisPromise, dbPromise])
     }
 
+    async advanceAutoSummaryCounter(userId, increment = 1) {
+        const threshold = Number(Config.AUTO_SUMMARY_THRESHOLD)
+        if (!Number.isFinite(threshold) || threshold <= 0) {
+            return { disabled: true, count: 0, threshold: 0, shouldTrigger: false }
+        }
+
+        const redisKey = `ai-plugin:auto-summary-count:${userId}`
+        const cacheExpire = Config.REDIS_CACHE_EXPIRE_SECONDS
+
+        try {
+            let count
+            if (typeof redis.incrBy === 'function') {
+                count = await redis.incrBy(redisKey, increment)
+            } else if (typeof redis.incrby === 'function') {
+                count = await redis.incrby(redisKey, increment)
+            } else {
+                const current = Number(await redis.get(redisKey)) || 0
+                count = current + increment
+                await redis.set(redisKey, String(count), { EX: cacheExpire })
+            }
+
+            count = Number(count) || 0
+            await redis.expire(redisKey, cacheExpire)
+            return {
+                disabled: false,
+                count,
+                threshold,
+                shouldTrigger: count >= threshold
+            }
+        } catch (error) {
+            logger.error(`[AI-Plugin] 更新用户 ${userId} 自动增量总结计数失败:`, error)
+            return { disabled: false, count: 0, threshold, shouldTrigger: false, error }
+        }
+    }
+
+    async resetAutoSummaryCounter(userId) {
+        const redisKey = `ai-plugin:auto-summary-count:${userId}`
+        const cacheExpire = Config.REDIS_CACHE_EXPIRE_SECONDS
+
+        try {
+            await redis.set(redisKey, '0', { EX: cacheExpire })
+        } catch (error) {
+            logger.error(`[AI-Plugin] 重置用户 ${userId} 自动增量总结计数失败:`, error)
+        }
+    }
+
     _ensureSummaryCacheDir() {
         ensureDir(SUMMARY_CACHE_DIR)
     }

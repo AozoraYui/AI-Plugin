@@ -1431,12 +1431,20 @@ export class ChatHandler extends plugin {
                     const updatedHistory = [...history, { "role": "user", "parts": historyUserTurnParts }, { "role": "model", "parts": [{ "text": finalResponseText }] }]
                     await this.conversationManager.saveUserHistory(userId, updatedHistory)
 
-                    if (updatedHistory.length >= Config.AUTO_SUMMARY_THRESHOLD) {
-                        logger.info(`[AI-Plugin] 用户 ${userId} 对话已达 ${updatedHistory.length} 轮，自动触发增量总结`)
+                    const summaryCounter = await this.conversationManager.advanceAutoSummaryCounter(userId)
+                    if (summaryCounter.disabled) {
+                        logger.debug(`[AI-Plugin] 自动增量总结已关闭: AUTO_SUMMARY_THRESHOLD=${Config.AUTO_SUMMARY_THRESHOLD}`)
+                    } else if (!summaryCounter.error) {
+                        logger.info(`[AI-Plugin] 用户 ${userId} 自动增量总结计数: ${summaryCounter.count}/${summaryCounter.threshold} 轮`)
+                    }
+
+                    if (summaryCounter.shouldTrigger) {
+                        logger.info(`[AI-Plugin] 用户 ${userId} 距上次增量总结已达 ${summaryCounter.count} 轮，自动触发增量总结`)
                         const todayStr = getTodayDateStr()
                         try {
                             await this.conversationManager.createIncrementalCheckpoint(userId, todayStr, 0, modelGroupKey)
-                            logger.info(`[AI-Plugin] 用户 ${userId} 增量总结完成，保留对话历史`)
+                            await this.conversationManager.resetAutoSummaryCounter(userId)
+                            logger.info(`[AI-Plugin] 用户 ${userId} 增量总结完成，自动总结计数已重置，保留对话历史`)
                         } catch (summaryErr) {
                             logger.error(`[AI-Plugin] 自动增量总结失败:`, summaryErr)
                         }

@@ -110,6 +110,9 @@ export class AIScheduler {
             : ''
         await global.AIPluginConversationManager.db.saveSummaryCache(userId, summaryText, today, latestFullCheckpoint?.dateStr)
         logger.info(`[AI-Plugin] 为用户 ${userId} 创建增量总结成功: ${today}${tokenLog}`)
+        if (typeof global.AIPluginConversationManager.resetAutoSummaryCounter === 'function') {
+            await global.AIPluginConversationManager.resetAutoSummaryCounter(userId)
+        }
     }
 
     async _runMonthlyFullCheckpoint() {
