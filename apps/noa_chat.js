@@ -4,7 +4,7 @@ import { Config } from '../utils/config.js'
 import { checkAccess } from '../utils/access.js'
 import { getBeijingTimeStr, takeSourceMsg } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
-import { expandForwardMsg, extractCardInfo } from './chat.js'
+import { buildEnvironmentHint, expandForwardMsg, extractCardInfo } from './chat.js'
 
 const replyCooldown = new Map()
 const PERSONAL_MEMORY_MAX_CHARS = 2600
@@ -279,14 +279,16 @@ export class NoaChatHandler extends plugin {
             logger.info(`[AI-Plugin] [畅聊] 本轮按需读取最近图片 ${imageParts.length}/${imageUrls.length} 张`)
         }
 
+        const environmentHint = buildEnvironmentHint(e)
+        logger.info(`[AI-Plugin] [畅聊] 环境提示: ${environmentHint}`)
+
         const prompt = `你是 ${Config.AI_NAME}，正在一个 QQ 群里自然聊天。
 
 请基于下面的群聊上下文回复当前触发你的用户。你能看到最近群聊流水，但要注意：
 - 不要逐字复述大段历史，像正常群友一样自然接话。
 - 图片在长期记录里只以 [图片] 和元信息存在；如果本轮附带了图片输入，可以基于实际看到的图片回答。
-- “触发者个人记忆摘要”只用于理解当前触发者的偏好、称呼和长期上下文；这是个人记忆，不要在群里主动公开复述私聊细节、账号、路径、现实身份或敏感信息。
+- “触发者个人记忆摘要”只用于理解当前触发者的偏好、称呼和长期上下文；具体隐私边界以当前聊天环境提示为准。
 - 不要编造没有出现在上下文里的事实。
-- 涉及他人隐私、敏感信息、账号安全、现实身份时要克制，只说公开聊天里能确认的内容。
 - 如果上下文不足，就坦诚说不太确定。
 
 【当前时间】
@@ -300,6 +302,14 @@ ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}`
 
         const contents = [
             ...Config.personaPrimer,
+            {
+                role: 'user',
+                parts: [{ text: environmentHint }]
+            },
+            {
+                role: 'model',
+                parts: [{ text: '好的，我已经了解当前的聊天环境，会根据环境调整我的行为！' }]
+            },
             {
                 role: 'user',
                 parts: [{ text: prompt }, ...imageParts]

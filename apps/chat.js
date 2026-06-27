@@ -567,10 +567,10 @@ function normalizeShellCommand(command) {
     return String(command || '').replace(/\s+/g, ' ').trim()
 }
 
-function buildEnvironmentHint(e) {
+export function buildEnvironmentHint(e) {
     const trustedGroups = Config.trustedGroups
     const prompts = Config.Prompts
-    if (e.isGroup) {
+    if (e.isGroup || e.group_id) {
         const groupId = String(e.group_id)
         if (trustedGroups.includes(groupId)) {
             return expandPrompt(prompts?.environment?.trusted_group, { group_id: groupId }) || `【当前聊天环境】这是一个受信任的群聊环境（群号：${groupId}）。你可以正常交流，但仍需遵守基本的隐私保护规则。`
