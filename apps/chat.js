@@ -483,6 +483,128 @@ function normalizeShellCommand(command) {
     return String(command || '').replace(/\s+/g, ' ').trim()
 }
 
+function buildEnvironmentHint(e) {
+    const trustedGroups = Config.trustedGroups
+    const prompts = Config.Prompts
+    if (e.isGroup) {
+        const groupId = String(e.group_id)
+        if (trustedGroups.includes(groupId)) {
+            return expandPrompt(prompts?.environment?.trusted_group, { group_id: groupId }) || `【当前聊天环境】这是一个受信任的群聊环境（群号：${groupId}）。你可以正常交流，但仍需遵守基本的隐私保护规则。`
+        }
+        return expandPrompt(prompts?.environment?.public_group, { group_id: groupId }) || `【当前聊天环境】这是一个公开的 QQ 群聊（群号：${groupId}），属于公开场合。请严格遵守隐私保护规则，不要在与用户相关的对话中透露任何个人信息或敏感内容。`
+    }
+    return prompts?.environment?.private_chat || `【当前聊天环境】这是与用户的私聊对话，属于安全环境。可以正常交流。`
+}
+
+function formatHistoryForToolPlanner(history = [], maxTurns = 12, maxTextPerTurn = 700) {
+    const lines = []
+    for (const turn of history.slice(-maxTurns)) {
+        const role = turn.role === 'model' ? Config.AI_NAME : '用户'
+        const text = (turn.parts || [])
+            .filter(part => part.text)
+            .map(part => String(part.text).slice(0, maxTextPerTurn))
+            .join(' ')
+            .trim()
+        if (text) lines.push(`${role}: ${text}`)
+    }
+    return lines.join('\n')
+}
+
+async function askMainModelForToolPlan(client, modelGroupKey, providerFilter, options = {}) {
+    const {
+        userMessage = '',
+        history = [],
+        incrementalCheckpoint = '',
+        environmentHint = '',
+        enabledTools = [],
+        candidateUrls = [],
+        hasImages = false
+    } = options
+
+    if (!userMessage && !hasImages) return { need_tools: false, reason: '当前消息为空' }
+    if (!Array.isArray(enabledTools) || enabledTools.length === 0) return { need_tools: false, reason: '没有可用工具' }
+
+    const toolSummary = toolRegistry.getToolSummaryLines(enabledTools).join('\n')
+    const recentContext = formatHistoryForToolPlanner(history)
+    const urls = Array.isArray(candidateUrls) ? [...new Set(candidateUrls)].slice(0, 10) : []
+    const memoryBlock = incrementalCheckpoint
+        ? `\n\n【长期记忆摘要】\n${truncateForPrompt(incrementalCheckpoint, 1800)}`
+        : ''
+    const historyBlock = recentContext
+        ? `\n\n【最近对话】\n${truncateForPrompt(recentContext, 5000)}`
+        : ''
+    const urlBlock = urls.length > 0
+        ? `\n\n【当前消息/引用/转发中的候选链接】\n${urls.map((url, index) => `${index + 1}. ${url}`).join('\n')}`
+        : ''
+
+    logger.info(`[AI-Plugin] 主模型工具规划开始: 可用工具=${enabledTools.join(', ')}, 历史条数=${history.length}, 有记忆=${Boolean(incrementalCheckpoint)}, 有图片=${hasImages}`)
+
+    const prompt = `你现在处于工具规划阶段。你是主模型本人，需要基于完整上下文判断本轮是否需要调用工具；这不是最终回复。
+
+你的职责：
+- 读取历史、记忆、环境和当前消息，解析“刚刚那个目录/上面那个文件/继续看/这个链接”等指代。
+- 决定是否需要工具、需要哪些工具、调用顺序和关键参数线索。
+- 如果普通聊天、看图问答、情绪回应、解释概念等不需要工具，返回 need_tools=false。
+- 如果目标不明确且无法从上下文解析，不要猜路径/对象，返回 need_tools=false，并在 reason 中说明需要追问什么。
+
+可用工具：
+${toolSummary}
+
+规划约束：
+- 不要为了“可能有用”而调用工具；只有工具结果会直接影响回答时才计划工具。
+- 文件/目录优先使用 file_read/dir_read；shell_exec 只用于用户明确要求命令、诊断、搜索服务器或普通文件工具不足的场景。
+- 链接只在用户明确要求查看/总结/分析网页内容时计划 web_fetch；只是出现链接不代表需要抓取。
+- 当前消息包含图片：${hasImages ? '是' : '否'}。规划阶段不会收到图片内容；如果用户只是让你看图/描述图且没有明确工具需求，交给最终多模态/视觉流程，不要计划工具。
+- 只计划“可用工具”中列出的工具，最多 5 个。
+
+${environmentHint ? `【聊天环境】\n${environmentHint}` : ''}${memoryBlock}${historyBlock}${urlBlock}
+
+【当前用户消息】
+${userMessage || '（无文字，仅媒体消息）'}
+
+请严格输出 JSON，不要输出其他内容：
+{
+  "need_tools": true,
+  "reason": "为什么需要工具，以及如何从上下文解析了指代",
+  "resolved_request": "把用户当前真实需求改写成明确、不含指代的一句话",
+  "tool_plan": [
+    {
+      "tool": "工具名",
+      "purpose": "调用这个工具要获得什么",
+      "params_hint": {"参数名": "参数线索"}
+    }
+  ]
+}
+
+或：
+{
+  "need_tools": false,
+  "reason": "为什么不需要工具，或还缺什么信息",
+  "resolved_request": "当前理解到的用户需求",
+  "tool_plan": []
+}`
+
+    const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
+    const result = await client.makeRequest('chat', payload, modelGroupKey, 2048, providerFilter)
+    if (!result.success || !result.data) {
+        logger.warn(`[AI-Plugin] 主模型工具规划失败: ${result.error || '无返回'}`)
+        return { need_tools: false, reason: '主模型工具规划失败' }
+    }
+
+    const parsed = parseJsonObject(result.data)
+    if (!parsed) {
+        logger.warn(`[AI-Plugin] 主模型工具规划 JSON 解析失败: ${String(result.data).slice(0, 300)}`)
+        return { need_tools: false, reason: '主模型工具规划 JSON 解析失败' }
+    }
+
+    const plannedTools = Array.isArray(parsed.tool_plan) ? parsed.tool_plan : []
+    parsed.need_tools = parsed.need_tools === true && plannedTools.length > 0
+    parsed.tool_plan = plannedTools.slice(0, 5)
+    const modelInfo = result.platform ? `, 模型=${result.platform}` : ''
+    logger.info(`[AI-Plugin] 主模型工具规划完成${modelInfo}: need_tools=${parsed.need_tools}, tools=${parsed.tool_plan.map(t => t.tool).join(', ') || '无'}, reason=${String(parsed.reason || '').slice(0, 160)}`)
+    return parsed
+}
+
 async function askMainModelForNextShellCommand(client, modelGroupKey, providerFilter, userMessage, executedCommands, round) {
     const prompt = `你是服务器 Shell 补查决策器。请根据用户原始需求和已经执行过的工具结果，判断是否还需要再执行一条 Shell 命令来补充信息。
 
@@ -745,12 +867,35 @@ export class ChatHandler extends plugin {
                 }
             }
 
-            // 工具调用：LLM 统一路由（deepseek-v4-flash 分析意图，决定调用哪些工具）
+            const isSingleMode = e._singleMode === true
+            const userId = e.user_id
+            let history = []
+            let incrementalCheckpoint = null
+
+            if (!isSingleMode) {
+                const memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(userId)
+                history = memoryData.history
+                incrementalCheckpoint = memoryData.incrementalCheckpoint
+
+                if (incrementalCheckpoint) {
+                    logger.debug(`[AI-Plugin] 用户 ${userId} 加载增量总结记忆`)
+                }
+
+                const MAX_HISTORY_LENGTH = Config.MAX_HISTORY_LENGTH
+                if (history.length > MAX_HISTORY_LENGTH) {
+                    history = history.slice(-MAX_HISTORY_LENGTH)
+                    logger.debug(`[AI-Plugin] 用户 ${userId} 的历史过长，已截断至最近 ${MAX_HISTORY_LENGTH} 条`)
+                }
+            }
+
+            const environmentHint = buildEnvironmentHint(e)
+
+            // 工具调用：规则预路由优先；其余场景由主模型规划，意图模型只负责编译工具参数。
             const enabledTools = []
             // drawImageAttempted：本轮是否调用过画图工具（无论成败，工具内已发过"🎨正在生成"进度提示），
             // 用于跳过后续"思考中"占位，避免重复刷屏。
             let drawImageAttempted = false
-            const generatedDrawReviewImages = []
+            let generatedDrawReviewImages = []
             if (e._netFlag || this.client.enableWebSearch) {
                 enabledTools.push('web_search')
                 if (e.isMaster) enabledTools.push('web_fetch') // 搜索时主人允许抓取
@@ -804,18 +949,6 @@ export class ChatHandler extends plugin {
             }
 
             if (enabledTools.length > 0) {
-                // 为意图分析提供最近对话上下文（最多8轮 + 增量总结，仅非单次模式）
-                let recentHistory = []
-                let memorySummary = ''
-                if (!e._singleMode) {
-                    try {
-                        const memData = await this.conversationManager.getUserHistoryWithCheckpoint(e.user_id)
-                        recentHistory = (memData.history || []).slice(-8)
-                        memorySummary = memData.incrementalCheckpoint || ''
-                    } catch (err) {
-                        logger.warn(`[AI-Plugin] 加载意图分析上下文失败: ${err.message}`)
-                    }
-                }
                 const candidateUrls = extractUrlsFromText(userMessage, 10)
                 const preRouted = preRouteToolIntent(userMessage, enabledTools, {
                     hasImages: allImages.length > 0,
@@ -826,17 +959,46 @@ export class ChatHandler extends plugin {
                     toolAnalysis = preRouted
                     logger.info(`[AI-Plugin] 工具预路由命中: ${preRouted.tools.map(t => t.name).join(', ')} - ${preRouted.intent}`)
                 } else {
-                    toolAnalysis = await toolRegistry.analyzeToolIntent(userMessage, this.client, enabledTools, recentHistory, memorySummary, candidateUrls, {
+                    logger.info(`[AI-Plugin] 工具预路由未命中，进入主模型规划流程（CPU 决策，协处理器编译）`)
+                    const mainToolPlan = await askMainModelForToolPlan(this.client, modelGroupKey, providerFilter, {
+                        userMessage,
+                        history,
+                        incrementalCheckpoint,
+                        environmentHint,
+                        enabledTools,
+                        candidateUrls,
                         hasImages: allImages.length > 0
                     })
+                    if (mainToolPlan?.need_tools) {
+                        logger.info(`[AI-Plugin] 主模型计划调用 ${mainToolPlan.tool_plan.length} 个工具，交给意图模型编译参数`)
+                        toolAnalysis = await toolRegistry.compileToolPlan(mainToolPlan, this.client, enabledTools, {
+                            userMessage,
+                            candidateUrls,
+                            hasImages: allImages.length > 0,
+                            maxTools: 5
+                        })
+                    } else {
+                        logger.info(`[AI-Plugin] 主模型判断本轮无需工具: ${String(mainToolPlan?.reason || '').slice(0, 180)}`)
+                        toolAnalysis = {
+                            intent: mainToolPlan?.reason || '',
+                            tools: [],
+                            routedBy: 'main_model_plan',
+                            plan: mainToolPlan
+                        }
+                    }
                 }
                 const intent = toolAnalysis?.intent || ''
                 const toolCalls = Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools : []
                 const executedShellCommands = []
-                // 意图分析注入
-                if (intent) {
-                    userMessage = userMessage + `\n\n【意图分析】${intent}`
-                    logger.info(`[AI-Plugin] 意图分析: ${intent}`)
+                // 工具规划注入：只在实际调用工具时告诉最终回复模型本轮执行依据。
+                if (intent && toolCalls.length > 0) {
+                    userMessage = userMessage + `\n\n【工具规划】${intent}`
+                    logger.info(`[AI-Plugin] 工具规划: ${intent}`)
+                }
+                if (toolCalls.length > 0) {
+                    logger.info(`[AI-Plugin] 工具执行队列: ${toolCalls.map(call => `${call.name}(${JSON.stringify(call.args || {}).slice(0, 120)})`).join(' -> ')}`)
+                } else {
+                    logger.info('[AI-Plugin] 工具执行队列为空，本轮直接进入最终回复')
                 }
                 for (const call of toolCalls) {
                     const toolContext = { userId: e.user_id, groupId: e.group_id, event: e }
@@ -1010,9 +1172,6 @@ export class ChatHandler extends plugin {
                 }
             }
 
-            const isSingleMode = e._singleMode === true
-            const userId = e.user_id
-
             // 画图场景工具已发过"🎨正在生成"进度提示（无论成败），跳过"思考中"占位避免重复；
             // 普通思考占位由主人命令「#ai开启/关闭思考提示」控制，默认关闭。
             if (Config.show_thinking_notice === true && !drawImageAttempted) {
@@ -1023,25 +1182,6 @@ export class ChatHandler extends plugin {
                 }
             }
             await setMsgEmojiLike(e, 282)
-
-            let history = []
-            let incrementalCheckpoint = null
-
-            if (!isSingleMode) {
-                const memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(userId)
-                history = memoryData.history
-                incrementalCheckpoint = memoryData.incrementalCheckpoint
-
-                if (incrementalCheckpoint) {
-                    logger.debug(`[AI-Plugin] 用户 ${userId} 加载增量总结记忆`)
-                }
-
-                const MAX_HISTORY_LENGTH = Config.MAX_HISTORY_LENGTH
-                if (history.length > MAX_HISTORY_LENGTH) {
-                    history = history.slice(-MAX_HISTORY_LENGTH)
-                    logger.debug(`[AI-Plugin] 用户 ${userId} 的历史过长，已截断至最近 ${MAX_HISTORY_LENGTH} 条`)
-                }
-            }
 
             const currentUserTurnParts = []
 
@@ -1102,19 +1242,6 @@ export class ChatHandler extends plugin {
             contents.push(...history)
 
             // 添加聊天环境提示（放在历史之后，用户消息之前，确保最高优先级）
-            const trustedGroups = Config.trustedGroups
-            const prompts = Config.Prompts
-            let environmentHint = ""
-            if (e.isGroup) {
-                const groupId = String(e.group_id)
-                if (trustedGroups.includes(groupId)) {
-                    environmentHint = expandPrompt(prompts?.environment?.trusted_group, { group_id: groupId }) || `【当前聊天环境】这是一个受信任的群聊环境（群号：${groupId}）。你可以正常交流，但仍需遵守基本的隐私保护规则。`
-                } else {
-                    environmentHint = expandPrompt(prompts?.environment?.public_group, { group_id: groupId }) || `【当前聊天环境】这是一个公开的 QQ 群聊（群号：${groupId}），属于公开场合。请严格遵守隐私保护规则，不要在与用户相关的对话中透露任何个人信息或敏感内容。`
-                }
-            } else {
-                environmentHint = prompts?.environment?.private_chat || `【当前聊天环境】这是与用户的私聊对话，属于安全环境。可以正常交流。`
-            }
             logger.info(`[AI-Plugin] 环境提示: ${environmentHint}`)
             contents.push({
                 "role": "user",

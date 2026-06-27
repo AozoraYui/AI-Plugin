@@ -50,6 +50,26 @@ class ToolRegistry {
             .map(t => t.functionSchema)
     }
 
+    /** 获取指定工具的 Function Calling schema */
+    getFunctionSchemasFor(enabledTools = []) {
+        const enabled = new Set(enabledTools)
+        return [...this.tools.values()]
+            .filter(t => enabled.has(t.name) && t.functionSchema)
+            .map(t => t.functionSchema)
+    }
+
+    /** 获取指定工具的简短说明 */
+    getToolSummaryLines(enabledTools = []) {
+        const lines = []
+        for (const name of enabledTools) {
+            const tool = this.tools.get(name)
+            if (!tool) continue
+            const permNote = tool.permission === 'master' ? ' (仅主人)' : ''
+            lines.push(`- ${tool.name}${permNote}: ${tool.description || ''}`)
+        }
+        return lines
+    }
+
     /** 执行工具调用 */
     async execute(name, args, isMaster = false, context = {}) {
         const tool = this.tools.get(name)
@@ -82,6 +102,165 @@ class ToolRegistry {
             return tool.formatResult(data)
         }
         return JSON.stringify(data, null, 2)
+    }
+
+    _parseJsonFromText(text) {
+        const value = String(text || '').trim()
+        if (!value) return null
+
+        try {
+            return JSON.parse(value)
+        } catch { /* 尝试从回复中提取 JSON */ }
+
+        const arrMatch = value.match(/\[[\s\S]*\]/)
+        if (arrMatch) {
+            try { return JSON.parse(arrMatch[0]) } catch { /* 继续尝试对象 */ }
+        }
+
+        const objMatch = value.match(/\{[\s\S]*\}/)
+        if (objMatch) {
+            try { return JSON.parse(objMatch[0]) } catch { /* ignore */ }
+        }
+
+        return null
+    }
+
+    _normalizeToolCalls(parsed, enabledTools = []) {
+        if (!parsed) return []
+
+        let tools = Array.isArray(parsed) ? parsed : []
+        if (!tools.length && Array.isArray(parsed.tools)) tools = parsed.tools
+        if (!tools.length && Array.isArray(parsed.calls)) tools = parsed.calls
+        if (!tools.length && parsed && typeof parsed === 'object' && (parsed.tool || parsed.name)) {
+            tools = [parsed]
+        }
+
+        return tools.map(t => {
+            let args = t.args || t.params || t.parameters || t.arguments || {}
+            if (typeof args === 'string') {
+                try { args = JSON.parse(args) } catch { args = {} }
+            }
+            return {
+                name: t.name || t.tool,
+                args: args && typeof args === 'object' ? args : {}
+            }
+        }).filter(t => {
+            if (!t.name || !enabledTools.includes(t.name)) {
+                logger.warn(`[AI-Plugin] 工具编译 忽略非法工具: ${t.name}`)
+                return false
+            }
+            return true
+        })
+    }
+
+    /**
+     * 工具计划编译：主模型负责理解上下文和制定计划，本方法只把计划转成可执行工具参数。
+     * @param {object} mainPlan - 主模型输出的工具计划
+     * @param {object} client - AiClient 实例
+     * @param {string[]} enabledTools - 当前可用工具名
+     * @param {object} options - 当前消息辅助信息
+     * @returns {Promise<{intent: string, tools: Array<{name: string, args: object}>}>}
+     */
+    async compileToolPlan(mainPlan, client, enabledTools = [], options = {}) {
+        if (!mainPlan || enabledTools.length === 0) return { intent: '', tools: [] }
+
+        const plannedCalls = Array.isArray(mainPlan.tool_plan) ? mainPlan.tool_plan : []
+        if (mainPlan.need_tools !== true || plannedCalls.length === 0) {
+            return { intent: mainPlan.reason || '', tools: [] }
+        }
+
+        const now = new Date()
+        const functionSchemas = this.getFunctionSchemasFor(enabledTools)
+        const toolDescriptions = this.getToolSummaryLines(enabledTools)
+        const candidateUrls = Array.isArray(options.candidateUrls) ? [...new Set(options.candidateUrls)].slice(0, 10) : []
+        const hasImages = options.hasImages === true
+        const maxTools = Math.max(1, Number(options.maxTools) || 5)
+        const plannedToolNames = plannedCalls.map(call => call.tool || call.name).filter(Boolean)
+
+        logger.info(`[AI-Plugin] 工具计划编译开始: 主模型计划=${plannedToolNames.join(', ') || '无'}, 可用工具=${enabledTools.join(', ')}, 有图片=${hasImages}`)
+
+        const compilePrompt = `当前时间：${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日。
+你是工具调用编译器，相当于主模型的协处理器。主模型已经读取完整上下文并决定了是否需要工具；你不要重新判断用户真实意图，只把主模型的工具计划编译成可执行 JSON。
+
+可用工具：
+${toolDescriptions.join('\n')}
+
+工具 JSON Schema：
+${JSON.stringify(functionSchemas, null, 2)}
+
+当前用户原始消息：
+${options.userMessage || ''}
+
+当前消息是否包含图片：${hasImages ? '是' : '否'}。注意：参考图、引用图、@头像由相关工具自己从消息中提取，你不要编造图片内容。
+
+候选链接：
+${candidateUrls.length > 0 ? candidateUrls.map((url, index) => `${index + 1}. ${url}`).join('\n') : '无'}
+
+主模型工具计划：
+${JSON.stringify(mainPlan, null, 2)}
+
+编译规则：
+- 只输出 JSON，不要输出解释、Markdown 或代码块。
+- 输出格式必须是：{"intent":"一句话说明主模型计划","tools":[{"tool":"工具名","params":{...}}]}。
+- 只能使用“可用工具”中列出的工具，最多输出 ${maxTools} 个工具调用，并保持主模型计划中的顺序。
+- 不要新增主模型没有计划的工具；如果主模型计划含糊、参数不足且无法从原始消息/候选链接/计划中确定，返回 tools: []。
+- 文件/目录路径可以保留主模型解析出的绝对路径、相对路径、别名或文件名片段，不要凭空发明路径。
+- shell_exec 只能编译主模型明确计划的具体命令；不要为了补全信息自己设计危险命令。
+- file_download 用于下载当前消息或引用消息里的媒体，不需要 URL；web_fetch 才需要完整 URL。
+- draw_image 的参考图由工具自动提取；角色参考图库参数按计划填写 character/characters/self_portrait。
+- 群管理工具必须有明确对象；拿不准 user_id 时不要编译该调用。`
+
+        try {
+            const payload = {
+                contents: [
+                    { role: "user", parts: [{ text: compilePrompt }] }
+                ]
+            }
+
+            let result = null
+            if (client.webSearchIntentModels.length > 0) {
+                result = await client.quickIntentRequest(payload)
+                if (!result?.success) {
+                    logger.warn('[AI-Plugin] 工具计划编译专用模型失败，降级到 Flash 模型组')
+                }
+            }
+
+            if (!result?.success) {
+                result = await client.makeRequest('chat', payload, 'flash', 1024)
+            }
+
+            if (!result.success || !result.data) {
+                logger.warn('[AI-Plugin] 工具计划编译 LLM 调用失败')
+                return { intent: mainPlan.reason || '', tools: [] }
+            }
+
+            const analysisText = String(result.data || '').trim()
+            const modelInfo = result.platform ? ` [${result.platform}]` : ''
+            logger.info(`[AI-Plugin] 工具计划编译${modelInfo} 返回: "${analysisText.slice(0, 300)}"`)
+
+            const parsed = this._parseJsonFromText(analysisText)
+            if (!parsed) {
+                logger.warn('[AI-Plugin] 工具计划编译 JSON 解析失败')
+                return { intent: mainPlan.reason || '', tools: [] }
+            }
+
+            let validCalls = this._normalizeToolCalls(parsed, enabledTools).slice(0, maxTools)
+
+            if (hasImages && !this._hasExplicitWebSearchIntent(options.userMessage || '')) {
+                const before = validCalls.length
+                validCalls = validCalls.filter(t => t.name !== 'web_search')
+                if (before !== validCalls.length) {
+                    logger.info('[AI-Plugin] 带图消息缺少明确搜索意图，工具编译已过滤 web_search')
+                }
+            }
+
+            const intent = parsed.intent || mainPlan.resolved_request || mainPlan.reason || ''
+            logger.info(`[AI-Plugin] 工具计划编译决定调用 ${validCalls.length} 个工具: ${validCalls.map(t => t.name).join(', ')}`)
+            return { intent, tools: validCalls }
+        } catch (err) {
+            logger.warn('[AI-Plugin] 工具计划编译失败:', err)
+            return { intent: mainPlan.reason || '', tools: [] }
+        }
     }
 
     /**
