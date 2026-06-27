@@ -244,6 +244,17 @@ function extractUrlsFromText(text, limit = 10) {
     return urls
 }
 
+function extractAtMentionsFromMessage(message = []) {
+    const ids = []
+    for (const seg of message || []) {
+        if (seg?.type !== 'at') continue
+        const qq = seg.qq || seg.user_id || seg.data?.qq || seg.data?.user_id
+        if (!qq || String(qq) === 'all') continue
+        ids.push(String(qq))
+    }
+    return [...new Set(ids)]
+}
+
 function hasTool(enabledTools, name) {
     return Array.isArray(enabledTools) && enabledTools.includes(name)
 }
@@ -517,6 +528,7 @@ async function askMainModelForToolPlan(client, modelGroupKey, providerFilter, op
         environmentHint = '',
         enabledTools = [],
         candidateUrls = [],
+        mentionedUserIds = [],
         hasImages = false
     } = options
 
@@ -535,8 +547,12 @@ async function askMainModelForToolPlan(client, modelGroupKey, providerFilter, op
     const urlBlock = urls.length > 0
         ? `\n\n【当前消息/引用/转发中的候选链接】\n${urls.map((url, index) => `${index + 1}. ${url}`).join('\n')}`
         : ''
+    const mentions = Array.isArray(mentionedUserIds) ? [...new Set(mentionedUserIds)].filter(Boolean) : []
+    const mentionBlock = mentions.length > 0
+        ? `\n\n【当前消息 @ 的成员】\n${mentions.map((id, index) => `${index + 1}. QQ：${id}`).join('\n')}`
+        : ''
 
-    logger.info(`[AI-Plugin] 主模型工具规划开始: 可用工具=${enabledTools.join(', ')}, 历史条数=${history.length}, 有记忆=${Boolean(incrementalCheckpoint)}, 有图片=${hasImages}`)
+    logger.info(`[AI-Plugin] 主模型工具规划开始: 可用工具=${enabledTools.join(', ')}, 历史条数=${history.length}, 有记忆=${Boolean(incrementalCheckpoint)}, 有图片=${hasImages}, @成员=${mentions.join(', ') || '无'}`)
 
     const prompt = `你现在处于工具规划阶段。你是主模型本人，需要基于完整上下文判断本轮是否需要调用工具；这不是最终回复。
 
@@ -556,9 +572,10 @@ ${toolSummary}
 - 当前消息包含图片：${hasImages ? '是' : '否'}。规划阶段不会收到图片内容；如果用户只是让你看图/描述图且没有明确工具需求，交给最终多模态/视觉流程，不要计划工具。
 - 只计划“可用工具”中列出的工具，最多 5 个。
 - 群管理成员操作必须有明确目标；如果用户只给昵称/群名片且不确定 QQ 号，先计划 group_member_list 或 group_member_resolve。
+- 如果当前消息 @ 了唯一成员，用户说“这个人/他/她/这位/被 @ 的人”等指代时，应把该 @ 成员作为明确目标，可以直接计划对应群管理工具并在 params_hint 中写入 user_id。
 - 全员禁言、处理入群申请等高影响操作必须从用户原话中明确得到开启/解除、通过/拒绝方向；不明确时不要计划操作工具。
 
-${environmentHint ? `【聊天环境】\n${environmentHint}` : ''}${memoryBlock}${historyBlock}${urlBlock}
+${environmentHint ? `【聊天环境】\n${environmentHint}` : ''}${memoryBlock}${historyBlock}${urlBlock}${mentionBlock}
 
 【当前用户消息】
 ${userMessage || '（无文字，仅媒体消息）'}
@@ -853,6 +870,10 @@ export class ChatHandler extends plugin {
 
             const currentImages = e.message.filter(m => m.type === "image").map(m => m.data?.url || m.url).filter(url => url)
             if (currentImages.length > 0) allImages = allImages.concat(currentImages)
+            const mentionedUserIds = extractAtMentionsFromMessage(e.message)
+            if (mentionedUserIds.length > 0) {
+                logger.info(`[AI-Plugin] 当前消息检测到 @ 成员: ${mentionedUserIds.join(', ')}`)
+            }
 
             if (!userMessage && allImages.length === 0) return e.reply('请输入内容或发送图片呀', true)
 
@@ -981,6 +1002,7 @@ export class ChatHandler extends plugin {
                         environmentHint,
                         enabledTools,
                         candidateUrls,
+                        mentionedUserIds,
                         hasImages: allImages.length > 0
                     })
                     if (mainToolPlan?.need_tools) {
@@ -988,6 +1010,7 @@ export class ChatHandler extends plugin {
                         toolAnalysis = await toolRegistry.compileToolPlan(mainToolPlan, this.client, enabledTools, {
                             userMessage,
                             candidateUrls,
+                            mentionedUserIds,
                             hasImages: allImages.length > 0,
                             maxTools: 5
                         })

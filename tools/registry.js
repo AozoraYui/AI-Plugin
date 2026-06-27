@@ -179,11 +179,12 @@ class ToolRegistry {
         const functionSchemas = this.getFunctionSchemasFor(enabledTools)
         const toolDescriptions = this.getToolSummaryLines(enabledTools)
         const candidateUrls = Array.isArray(options.candidateUrls) ? [...new Set(options.candidateUrls)].slice(0, 10) : []
+        const mentionedUserIds = Array.isArray(options.mentionedUserIds) ? [...new Set(options.mentionedUserIds)].filter(Boolean) : []
         const hasImages = options.hasImages === true
         const maxTools = Math.max(1, Number(options.maxTools) || 5)
         const plannedToolNames = plannedCalls.map(call => call.tool || call.name).filter(Boolean)
 
-        logger.info(`[AI-Plugin] 工具计划编译开始: 主模型计划=${plannedToolNames.join(', ') || '无'}, 可用工具=${enabledTools.join(', ')}, 有图片=${hasImages}`)
+        logger.info(`[AI-Plugin] 工具计划编译开始: 主模型计划=${plannedToolNames.join(', ') || '无'}, 可用工具=${enabledTools.join(', ')}, 有图片=${hasImages}, @成员=${mentionedUserIds.join(', ') || '无'}`)
 
         const compilePrompt = `当前时间：${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日。
 你是工具调用编译器，相当于主模型的协处理器。主模型已经读取完整上下文并决定了是否需要工具；你不要重新判断用户真实意图，只把主模型的工具计划编译成可执行 JSON。
@@ -198,6 +199,9 @@ ${JSON.stringify(functionSchemas, null, 2)}
 ${options.userMessage || ''}
 
 当前消息是否包含图片：${hasImages ? '是' : '否'}。注意：参考图、引用图、@头像由相关工具自己从消息中提取，你不要编造图片内容。
+
+当前消息 @ 的成员：
+${mentionedUserIds.length > 0 ? mentionedUserIds.map((id, index) => `${index + 1}. QQ：${id}`).join('\n') : '无'}
 
 候选链接：
 ${candidateUrls.length > 0 ? candidateUrls.map((url, index) => `${index + 1}. ${url}`).join('\n') : '无'}
@@ -215,6 +219,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - file_download 用于下载当前消息或引用消息里的媒体，不需要 URL；web_fetch 才需要完整 URL。
 - draw_image 的参考图由工具自动提取；角色参考图库参数按计划填写 character/characters/self_portrait。
 - 群管理成员操作必须有明确对象；有 QQ 号或 @ 时可填 user_id，没有 QQ 但有昵称/群名片时可填 target，拿不准唯一目标时先编译 group_member_list 或 group_member_resolve。
+- 如果当前消息 @ 了唯一成员，且主模型计划的群管理操作目标是“这个人/被 @ 的人”，请直接把该 QQ 填入 user_id。
 - group_whole_mute 和 group_essence 的 enable、group_request_handle 的 approve 必须来自用户明确表达；不明确时不要编译这些高影响操作。`
 
         try {
