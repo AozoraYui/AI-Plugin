@@ -573,7 +573,7 @@ ${toolSummary}
 - 只计划“可用工具”中列出的工具，最多 5 个。
 - 群管理成员操作必须有明确目标；如果用户只给昵称/群名片且不确定 QQ 号，先计划 group_member_list 或 group_member_resolve。
 - 如果当前消息 @ 了唯一成员，用户说“这个人/他/她/这位/被 @ 的人”等指代时，应把该 @ 成员作为明确目标，可以直接计划对应群管理工具并在 params_hint 中写入 user_id。
-- 入群审核的申请人还不是群成员；用户说“通过刚才那个/同意他进群/拒绝那个人”时，可以计划 group_request_handle 并省略 user_id，由工具在当前群只有一条待审申请时定位。
+- 入群审核的申请人还不是群成员；用户说“通过刚才那个/同意他进群/拒绝那个人”时，可以计划 group_request_handle 并省略 user_id，由工具在当前群只有一条待审申请时定位；用户说“让幸福的进来/拒绝昵称里有xxx的”时，把昵称、QQ、留言关键词或用户原话写入 target。
 - 全员禁言、处理入群申请等高影响操作必须从用户原话中明确得到开启/解除、通过/拒绝方向；不明确时不要计划操作工具。
 
 ${environmentHint ? `【聊天环境】\n${environmentHint}` : ''}${memoryBlock}${historyBlock}${urlBlock}${mentionBlock}

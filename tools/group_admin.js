@@ -620,6 +620,54 @@ async function scanPendingRequests(groupId) {
     return list
 }
 
+function normalizeRequestMatchText(text) {
+    return String(text || '')
+        .toLowerCase()
+        .replace(/[，。！？、,.!?;；:：'"“”‘’`~|/\\()[\]{}<>《》【】_\-\s]/g, '')
+}
+
+function buildRequestMatchNeedles(target) {
+    const raw = normalizeRequestMatchText(target)
+    if (!raw) return []
+
+    const noiseWords = [
+        '那什么', '那个', '那个叫', '那个昵称', '那个名字', '这个', '这位', '那位',
+        '申请人', '加群申请', '入群申请', '进群申请', '申请', '加群', '入群', '进群',
+        '放进来', '放他进来', '放她进来', '让他进来', '让她进来',
+        '通过', '同意', '拒绝', '批准', '允许', '拉进来', '帮我', '帮忙',
+        '名字', '昵称', '叫', '是', '吧', '呀', '啊', '呢', '哈'
+    ]
+
+    const needles = new Set([raw])
+    let stripped = raw
+    for (const word of noiseWords) {
+        stripped = stripped.replaceAll(normalizeRequestMatchText(word), '')
+    }
+    if (stripped) needles.add(stripped)
+
+    return [...needles].filter(s => s.length >= 2 || /^\d{5,}$/.test(s))
+}
+
+function findPendingRequestByTarget(pending, target) {
+    const needles = buildRequestMatchNeedles(target)
+    if (needles.length === 0) return { matches: [] }
+
+    const matches = pending.filter(record => {
+        const fields = [
+            record.user_id,
+            record.nickname,
+            record.comment
+        ].map(normalizeRequestMatchText).filter(Boolean)
+
+        return needles.some(needle => fields.some(field => {
+            if (/^\d{5,}$/.test(needle)) return field === needle
+            return field.includes(needle) || needle.includes(field)
+        }))
+    })
+
+    return { matches, needles }
+}
+
 export const groupRequestListTool = {
     name: 'group_request_list',
     permission: 'everyone',
@@ -652,16 +700,17 @@ export const groupRequestListTool = {
 export const groupRequestHandleTool = {
     name: 'group_request_handle',
     permission: 'everyone',
-    description: '通过或拒绝某个加群申请。仅主人或群管理员可用，机器人需为管理员。适合"通过xxx的申请""同意那个人进群""拒绝xxx的入群申请"等。需先有待审申请；若当前群只有一条待审申请，可省略 user_id。',
+    description: '通过或拒绝某个加群申请。仅主人或群管理员可用，机器人需为管理员。适合"通过xxx的申请""同意那个人进群""拒绝xxx的入群申请"等。需先有待审申请；可用 user_id 精确定位，也可用 target 按昵称/留言模糊定位；若当前群只有一条待审申请，可省略定位参数。',
     functionSchema: {
         type: 'function',
         function: {
             name: 'group_request_handle',
-            description: '处理加群申请（通过/拒绝）。通过 user_id 定位申请。',
+            description: '处理加群申请（通过/拒绝）。通过 user_id 精确定位，或通过 target 在待审申请昵称/留言中模糊定位。',
             parameters: {
                 type: 'object',
                 properties: {
                     user_id: { type: 'string', description: '申请人的 QQ 号。只有一条待审申请且用户说"刚才那个/他/那个人"时可省略。' },
+                    target: { type: 'string', description: '申请人的昵称、QQ号、留言关键词或用户原话。多条待审申请时可用来模糊匹配，例如"幸福的"。' },
                     approve: { type: 'boolean', description: 'true 通过，false 拒绝。必须明确填写。' },
                     reason: { type: 'string', description: '拒绝理由（仅 approve=false 时有意义），可选。' }
                 },
@@ -677,17 +726,32 @@ export const groupRequestHandleTool = {
         if (!await botIsAdmin(event, group)) return '【处理申请失败】机器人不是该群管理员，无法处理加群申请。'
 
         let userId = String(args.user_id || '').trim()
+        const target = String(args.target || '').trim()
         if (typeof args.approve !== 'boolean') return '【处理申请失败】请明确说明是通过还是拒绝该申请。'
 
         if (typeof redis === 'undefined' || !redis.get) return '【处理申请失败】redis 不可用，无法读取申请记录。'
         if (!/^\d{5,}$/.test(userId)) {
             const pending = await scanPendingRequests(event.group_id)
             if (pending.length === 0) return '【处理申请失败】当前没有待审核的加群申请。'
-            if (pending.length > 1) {
+
+            if (target) {
+                const { matches } = findPendingRequestByTarget(pending, target)
+                if (matches.length === 1) {
+                    userId = String(matches[0].user_id)
+                } else if (matches.length > 1) {
+                    const lines = matches.map((r, i) => `${i + 1}. ${r.nickname || '未知'}(${r.user_id})${r.comment ? `，留言：${r.comment}` : ''}`).join('、')
+                    return `【处理申请失败】“${target}”匹配到多条待审核申请，请指定 QQ 号：${lines}`
+                } else if (pending.length > 1) {
+                    const lines = pending.map((r, i) => `${i + 1}. ${r.nickname || '未知'}(${r.user_id})${r.comment ? `，留言：${r.comment}` : ''}`).join('、')
+                    return `【处理申请失败】没有在待审核申请中匹配到“${target}”，请指定 QQ 号：${lines}`
+                }
+            }
+
+            if (!/^\d{5,}$/.test(userId) && pending.length > 1) {
                 const lines = pending.map((r, i) => `${i + 1}. ${r.nickname || '未知'}(${r.user_id})`).join('、')
                 return `【处理申请失败】当前有多条待审核申请，请指定 QQ 号：${lines}`
             }
-            userId = String(pending[0].user_id)
+            if (!/^\d{5,}$/.test(userId)) userId = String(pending[0].user_id)
         }
         const key = GROUP_REQUEST_KEY(event.group_id, userId)
         const raw = await redis.get(key)

@@ -220,7 +220,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - draw_image 的参考图由工具自动提取；角色参考图库参数按计划填写 character/characters/self_portrait。
 - 群管理成员操作必须有明确对象；有 QQ 号或 @ 时可填 user_id，没有 QQ 但有昵称/群名片时可填 target，拿不准唯一目标时先编译 group_member_list 或 group_member_resolve。
 - 如果当前消息 @ 了唯一成员，且主模型计划的群管理操作目标是“这个人/被 @ 的人”，请直接把该 QQ 填入 user_id。
-- group_request_handle 处理的是入群申请；用户说“刚才那个/他/那个人”且主模型计划处理待审申请时，可以省略 user_id。
+- group_request_handle 处理的是入群申请；用户说“刚才那个/他/那个人”且主模型计划处理待审申请时，可以省略 user_id；用户用昵称、QQ、留言关键词或含糊原话指代申请人时，把关键词写入 target。
 - group_whole_mute 和 group_essence 的 enable、group_request_handle 的 approve 必须来自用户明确表达；不明确时不要编译这些高影响操作。`
 
         try {
@@ -402,8 +402,8 @@ ${toolDescriptions.join('\n')}
   - 群成员解析要求：当用户想对某个成员做群管理，但只给了昵称、群名片或 @ 对象，且需要先确认具体 QQ 号时使用。用户已经 @ 成员时 target 可留空。
 - group_request_list: {}
   - 查看入群申请要求：用户问"有没有人申请进群/看看入群申请/谁要进群"时使用。
-- group_request_handle: {"user_id": "QQ号，可选", "approve": true/false, "reason": "可选拒绝理由"}
-  - 处理入群申请要求：用户要"通过/同意/拒绝某人的加群申请"时使用。approve=true 通过，false 拒绝；用户说"刚才那个/他/那个人"且没有 QQ 号时可以省略 user_id，由工具在当前群只有一条待审申请时自动定位。
+- group_request_handle: {"user_id": "QQ号，可选", "target": "昵称/QQ/留言关键词/用户原话，可选", "approve": true/false, "reason": "可选拒绝理由"}
+  - 处理入群申请要求：用户要"通过/同意/拒绝某人的加群申请"时使用。approve=true 通过，false 拒绝；用户说"刚才那个/他/那个人"且没有 QQ 号时可以省略 user_id，由工具在当前群只有一条待审申请时自动定位；多条申请时可填 target 做昵称/留言模糊匹配，例如"幸福的"。
   - 注意：以上 group_ 开头的工具都是「群管理」操作，仅主人或群管理员可触发。对禁言/踢人/改名片/设头衔等成员操作，优先使用真实 QQ 号或 @；如果只有昵称/群名片且不确定唯一目标，先调用 group_member_list 或 group_member_resolve，不要凭空编造 user_id。
 
 请严格按以下JSON格式输出，不要输出其他任何内容：
