@@ -7,6 +7,7 @@ import { processImagesInBatches } from '../utils/image.js'
 import { expandForwardMsg, extractCardInfo } from './chat.js'
 
 const replyCooldown = new Map()
+const PERSONAL_MEMORY_MAX_CHARS = 2600
 
 function truncateText(text, maxLength = 900) {
     const value = String(text || '').trim()
@@ -259,6 +260,16 @@ export class NoaChatHandler extends plugin {
         const limit = Math.max(10, Number(Config.NOA_CHAT_CONTEXT_LIMIT) || 60)
         const logs = await this.conversationManager.db.getRecentGroupMessageLogs(e.group_id, limit, { excludeCommands: true })
         const contextText = formatGroupContext(logs)
+        let personalMemory = ''
+        try {
+            const memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(normalized.userId)
+            personalMemory = truncateText(memoryData?.incrementalCheckpoint || '', PERSONAL_MEMORY_MAX_CHARS)
+            if (personalMemory) {
+                logger.info(`[AI-Plugin] [畅聊] 已加载触发者个人记忆摘要: 用户 ${normalized.userId}, 字符数=${personalMemory.length}`)
+            }
+        } catch (err) {
+            logger.warn(`[AI-Plugin] [畅聊] 加载触发者个人记忆摘要失败: ${err.message}`)
+        }
         const imageUrls = isImageQuestion(normalized.normalizedText)
             ? collectRecentImageUrls(logs, Math.max(0, Number(Config.NOA_CHAT_MAX_CONTEXT_IMAGES) || 0))
             : []
@@ -273,6 +284,7 @@ export class NoaChatHandler extends plugin {
 请基于下面的群聊上下文回复当前触发你的用户。你能看到最近群聊流水，但要注意：
 - 不要逐字复述大段历史，像正常群友一样自然接话。
 - 图片在长期记录里只以 [图片] 和元信息存在；如果本轮附带了图片输入，可以基于实际看到的图片回答。
+- “触发者个人记忆摘要”只用于理解当前触发者的偏好、称呼和长期上下文；这是个人记忆，不要在群里主动公开复述私聊细节、账号、路径、现实身份或敏感信息。
 - 不要编造没有出现在上下文里的事实。
 - 涉及他人隐私、敏感信息、账号安全、现实身份时要克制，只说公开聊天里能确认的内容。
 - 如果上下文不足，就坦诚说不太确定。
@@ -283,7 +295,7 @@ ${getBeijingTimeStr()}
 【最近群聊上下文】
 ${contextText || '暂无'}
 
-【当前触发消息】
+${personalMemory ? `【触发者个人记忆摘要】\n${personalMemory}\n\n` : ''}【当前触发消息】
 ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}`
 
         const contents = [
