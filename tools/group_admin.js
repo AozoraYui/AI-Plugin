@@ -28,6 +28,15 @@ function pickMember(group, event, userId) {
     return null
 }
 
+function normalizeRole(role) {
+    if (role === 'owner' || role === 'admin') return role
+    return 'member'
+}
+
+function getBotUin(event) {
+    return Number(event?.self_id || event?.bot?.uin || event?.bot?.self_id || (typeof Bot !== 'undefined' ? Bot.uin : 0)) || 0
+}
+
 // 获取成员信息（兼容 .info 缓存与 getInfo()）
 async function getMemberInfo(member) {
     if (!member) return null
@@ -38,18 +47,53 @@ async function getMemberInfo(member) {
     }
 }
 
+async function fetchMemberInfoByApi(event, userId) {
+    if (!event?.bot?.sendApi || !event.group_id || !userId) return null
+    try {
+        const res = await event.bot.sendApi('get_group_member_info', {
+            group_id: Number(event.group_id),
+            user_id: Number(userId),
+            no_cache: false
+        })
+        return res?.data || res
+    } catch {
+        return null
+    }
+}
+
+async function resolveMemberInfo(group, event, userId) {
+    const member = pickMember(group, event, userId)
+    const info = await getMemberInfo(member)
+    if (info) return info
+    return fetchMemberInfoByApi(event, userId)
+}
+
 // 判断触发者是否有管理权限：主人 或 当前群管理员/群主
-function getOperatorRole(event) {
+export async function resolveGroupOperatorRole(event) {
     if (event.isMaster) return 'master'
     const role = event.sender?.role || event.member?.role
     if (role === 'owner' || event.member?.is_owner) return 'owner'
     if (role === 'admin' || event.member?.is_admin) return 'admin'
+    const group = pickGroup(event)
+    const info = group && event.user_id ? await resolveMemberInfo(group, event, event.user_id) : null
+    const resolvedRole = normalizeRole(info?.role)
+    if (resolvedRole === 'owner' || resolvedRole === 'admin') return resolvedRole
     return 'member'
 }
 
 // 判断机器人在群里是否为管理员/群主
-function botIsAdmin(group) {
-    return group?.is_admin === true || group?.is_owner === true
+async function resolveBotRole(event, group) {
+    if (group?.is_owner === true) return 'owner'
+    if (group?.is_admin === true) return 'admin'
+    const botUin = getBotUin(event)
+    if (!botUin) return 'member'
+    const info = await resolveMemberInfo(group, event, botUin)
+    return normalizeRole(info?.role)
+}
+
+async function botIsAdmin(event, group) {
+    const role = await resolveBotRole(event, group)
+    return role === 'owner' || role === 'admin'
 }
 
 // 解析时长字符串/数字 + 单位 → 秒
@@ -67,27 +111,118 @@ async function checkTargetAllowed(event, group, targetId) {
     if (masters.includes(Number(targetId)) && !event.isMaster) {
         return { ok: false, reason: '该操作对主人无效' }
     }
-    const targetMember = pickMember(group, event, targetId)
-    const info = await getMemberInfo(targetMember)
+    if (Number(targetId) === getBotUin(event)) {
+        return { ok: false, reason: '不能对机器人自己执行该操作' }
+    }
+    const info = await resolveMemberInfo(group, event, targetId)
     if (!info) return { ok: false, reason: `群里没有找到 QQ ${targetId} 这个人` }
     if (info.role === 'owner') return { ok: false, reason: '不能对群主执行该操作' }
     if (info.role === 'admin') {
         if (!event.isMaster) return { ok: false, reason: '只有主人才能对管理员执行该操作' }
-        if (!group?.is_owner) return { ok: false, reason: '机器人需要群主权限才能操作管理员' }
+        const botRole = await resolveBotRole(event, group)
+        if (botRole !== 'owner') return { ok: false, reason: '机器人需要群主权限才能操作管理员' }
     }
     return { ok: true, info }
 }
 
 // 工具执行前的统一前置校验：群聊 + 操作者权限 + bot 管理权限
-function preCheck(event) {
+async function preCheck(event, options = {}) {
+    const requireBotAdmin = options.requireBotAdmin !== false
+    const requireBotOwner = options.requireBotOwner === true
     if (!event) return { error: '缺少会话上下文。' }
     if (!event.group_id) return { error: '群管理功能仅在群聊中可用。' }
-    const opRole = getOperatorRole(event)
+    const opRole = await resolveGroupOperatorRole(event)
     if (opRole === 'member') return { error: '权限不足：只有主人或群管理员才能使用群管理功能。' }
     const group = pickGroup(event)
     if (!group) return { error: '无法获取群对象。' }
-    if (!botIsAdmin(group)) return { error: '机器人不是该群的管理员，无法执行管理操作。请先把机器人设为管理员。' }
-    return { group, opRole }
+    const botRole = await resolveBotRole(event, group)
+    if (requireBotOwner && botRole !== 'owner') return { error: '机器人不是该群的群主，无法执行此操作。' }
+    if (requireBotAdmin && botRole !== 'owner' && botRole !== 'admin') return { error: '机器人不是该群的管理员，无法执行管理操作。请先把机器人设为管理员。' }
+    return { group, opRole, botRole }
+}
+
+function normalizeMemberInfo(info = {}) {
+    const userId = String(info.user_id || info.userId || info.uin || info.uid || '').trim()
+    return {
+        userId,
+        nickname: info.nickname || info.nick || '',
+        card: info.card || info.card_name || '',
+        role: normalizeRole(info.role),
+        title: info.title || info.special_title || ''
+    }
+}
+
+async function getGroupMembers(event, group) {
+    if (group?.getMemberMap) {
+        try {
+            const map = await group.getMemberMap()
+            if (map?.values) return [...map.values()].map(normalizeMemberInfo).filter(m => m.userId)
+        } catch { /* fallback */ }
+    }
+    if (group?.memberMap?.values) {
+        const list = [...group.memberMap.values()].map(normalizeMemberInfo).filter(m => m.userId)
+        if (list.length > 0) return list
+    }
+    if (event?.bot?.sendApi) {
+        try {
+            const res = await event.bot.sendApi('get_group_member_list', { group_id: Number(event.group_id) })
+            const data = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
+            return data.map(normalizeMemberInfo).filter(m => m.userId)
+        } catch { /* ignore */ }
+    }
+    return []
+}
+
+function extractMentionedUserIds(event) {
+    const ids = []
+    for (const seg of event?.message || []) {
+        const qq = seg?.qq || seg?.data?.qq || seg?.user_id || seg?.data?.user_id
+        if (seg?.type === 'at' && qq && String(qq) !== 'all') ids.push(String(qq))
+    }
+    return [...new Set(ids)]
+}
+
+function memberDisplayName(member) {
+    return member.card || member.nickname || member.userId
+}
+
+function matchMembers(members, query) {
+    const q = String(query || '').trim().toLowerCase()
+    if (!q) return []
+    const exact = members.filter(m =>
+        m.userId === q ||
+        String(m.card || '').toLowerCase() === q ||
+        String(m.nickname || '').toLowerCase() === q
+    )
+    if (exact.length > 0) return exact
+    return members.filter(m =>
+        String(m.card || '').toLowerCase().includes(q) ||
+        String(m.nickname || '').toLowerCase().includes(q) ||
+        m.userId.includes(q)
+    )
+}
+
+async function resolveTargetUserId(args, event, group) {
+    const direct = String(args.user_id || '').trim()
+    if (/^\d{5,}$/.test(direct)) return { ok: true, userId: direct }
+
+    const mentions = extractMentionedUserIds(event)
+    if (!direct && mentions.length === 1) return { ok: true, userId: mentions[0] }
+    if (!direct && mentions.length > 1) return { ok: false, reason: `消息里 @ 了 ${mentions.length} 个人，请明确要操作哪一位。` }
+
+    const target = String(args.target || args.user_name || args.nickname || args.name || direct || '').trim()
+    if (/^\d{5,}$/.test(target)) return { ok: true, userId: target }
+    if (!target) return { ok: false, reason: '请提供正确的 QQ 号，或 @ 要操作的群成员。' }
+
+    const members = await getGroupMembers(event, group)
+    if (members.length === 0) return { ok: false, reason: '无法读取群成员列表，不能按昵称定位目标。请改用 QQ 号或 @ 成员。' }
+    const matches = matchMembers(members, target)
+    if (matches.length === 0) return { ok: false, reason: `没有找到昵称/群名片匹配「${target}」的群成员。` }
+    if (matches.length > 1) {
+        const names = matches.slice(0, 8).map(m => `${memberDisplayName(m)}(${m.userId})`).join('、')
+        return { ok: false, reason: `匹配到多个成员，请用 QQ 号或 @ 明确目标：${names}` }
+    }
+    return { ok: true, userId: matches[0].userId, member: matches[0] }
 }
 
 export const groupMuteTool = {
@@ -103,21 +238,23 @@ export const groupMuteTool = {
                 type: 'object',
                 properties: {
                     user_id: { type: 'string', description: '被操作成员的 QQ 号。可从 @ 或消息中获取。' },
+                    target: { type: 'string', description: '可选。目标成员的昵称、群名片、QQ号或用户原话；没有 user_id 但用户 @ 了某人时可留空。' },
                     time: { type: 'number', description: '禁言时长数值；填 0 表示解除禁言。' },
                     unit: { type: 'string', description: '时长单位：秒/分钟/小时/天。默认分钟。', enum: ['秒', '分钟', '小时', '天'] }
                 },
-                required: ['user_id']
+                required: []
             }
         }
     },
     async execute(args = {}, context = {}) {
         const event = context.event
-        const pc = preCheck(event)
+        const pc = await preCheck(event)
         if (pc.error) return `【禁言失败】${pc.error}`
         const { group } = pc
 
-        const userId = String(args.user_id || '').trim()
-        if (!/^\d{5,}$/.test(userId)) return '【禁言失败】请提供正确的 QQ 号。'
+        const target = await resolveTargetUserId(args, event, group)
+        if (!target.ok) return `【禁言失败】${target.reason}`
+        const userId = target.userId
 
         const isUnmute = Number(args.time) === 0
         const seconds = isUnmute ? 0 : parseDuration(args.time ?? 10, args.unit)
@@ -168,9 +305,10 @@ export const groupWholeMuteTool = {
     },
     async execute(args = {}, context = {}) {
         const event = context.event
-        const pc = preCheck(event)
+        if (typeof args.enable !== 'boolean') return '【全员禁言失败】请明确说明是开启还是解除全员禁言。'
+        const pc = await preCheck(event)
         if (pc.error) return `【全员禁言失败】${pc.error}`
-        const enable = args.enable !== false
+        const enable = args.enable
         try {
             await pc.group.muteAll(enable)
             return { ok: true, enable }
@@ -198,20 +336,22 @@ export const groupKickTool = {
                 type: 'object',
                 properties: {
                     user_id: { type: 'string', description: '被踢成员的 QQ 号。' },
+                    target: { type: 'string', description: '可选。目标成员的昵称、群名片、QQ号或用户原话；没有 user_id 但用户 @ 了某人时可留空。' },
                     block: { type: 'boolean', description: '是否拉黑，true 表示不再接受其加群申请。默认 false。' }
                 },
-                required: ['user_id']
+                required: []
             }
         }
     },
     async execute(args = {}, context = {}) {
         const event = context.event
-        const pc = preCheck(event)
+        const pc = await preCheck(event)
         if (pc.error) return `【踢人失败】${pc.error}`
         const { group } = pc
 
-        const userId = String(args.user_id || '').trim()
-        if (!/^\d{5,}$/.test(userId)) return '【踢人失败】请提供正确的 QQ 号。'
+        const target = await resolveTargetUserId(args, event, group)
+        if (!target.ok) return `【踢人失败】${target.reason}`
+        const userId = target.userId
 
         const chk = await checkTargetAllowed(event, group, userId)
         if (!chk.ok) return `【踢人失败】${chk.reason}`
@@ -246,19 +386,23 @@ export const groupSetCardTool = {
                 type: 'object',
                 properties: {
                     user_id: { type: 'string', description: '成员 QQ 号。' },
+                    target: { type: 'string', description: '可选。目标成员的昵称、群名片、QQ号或用户原话；没有 user_id 但用户 @ 了某人时可留空。' },
                     card: { type: 'string', description: '新群名片；留空字符串表示清除名片。' }
                 },
-                required: ['user_id']
+                required: []
             }
         }
     },
     async execute(args = {}, context = {}) {
         const event = context.event
-        const pc = preCheck(event)
+        const pc = await preCheck(event)
         if (pc.error) return `【改名片失败】${pc.error}`
         const { group } = pc
-        const userId = String(args.user_id || '').trim()
-        if (!/^\d{5,}$/.test(userId)) return '【改名片失败】请提供正确的 QQ 号。'
+        const target = await resolveTargetUserId(args, event, group)
+        if (!target.ok) return `【改名片失败】${target.reason}`
+        const userId = target.userId
+        const chk = await checkTargetAllowed(event, group, userId)
+        if (!chk.ok) return `【改名片失败】${chk.reason}`
         const card = String(args.card ?? '')
         try {
             await group.setCard(Number(userId), card)
@@ -287,20 +431,23 @@ export const groupSetTitleTool = {
                 type: 'object',
                 properties: {
                     user_id: { type: 'string', description: '成员 QQ 号。' },
+                    target: { type: 'string', description: '可选。目标成员的昵称、群名片、QQ号或用户原话；没有 user_id 但用户 @ 了某人时可留空。' },
                     title: { type: 'string', description: '专属头衔文本；留空表示清除。' }
                 },
-                required: ['user_id']
+                required: []
             }
         }
     },
     async execute(args = {}, context = {}) {
         const event = context.event
-        const pc = preCheck(event)
+        const pc = await preCheck(event, { requireBotOwner: true })
         if (pc.error) return `【设头衔失败】${pc.error}`
         const { group } = pc
-        if (!group.is_owner) return '【设头衔失败】设置专属头衔需要机器人为群主。'
-        const userId = String(args.user_id || '').trim()
-        if (!/^\d{5,}$/.test(userId)) return '【设头衔失败】请提供正确的 QQ 号。'
+        const target = await resolveTargetUserId(args, event, group)
+        if (!target.ok) return `【设头衔失败】${target.reason}`
+        const userId = target.userId
+        const chk = await checkTargetAllowed(event, group, userId)
+        if (!chk.ok) return `【设头衔失败】${chk.reason}`
         const title = String(args.title ?? '')
         try {
             await group.setTitle(Number(userId), title)
@@ -328,20 +475,21 @@ export const groupEssenceTool = {
             parameters: {
                 type: 'object',
                 properties: {
-                    enable: { type: 'boolean', description: 'true 设为精华，false 取消精华。默认 true。' }
+                    enable: { type: 'boolean', description: 'true 设为精华，false 取消精华。必须明确填写。' }
                 },
-                required: []
+                required: ['enable']
             }
         }
     },
     async execute(args = {}, context = {}) {
         const event = context.event
-        const pc = preCheck(event)
+        if (typeof args.enable !== 'boolean') return '【精华消息失败】请明确说明是设为精华还是取消精华。'
+        const pc = await preCheck(event)
         if (pc.error) return `【精华消息失败】${pc.error}`
         // 取被引用消息的 message_id
         const messageId = event.source?.message_id || event.source?.seq || event.reply_id
         if (!messageId) return '【精华消息失败】请「引用」要操作的那条消息后再下达指令。'
-        const enable = args.enable !== false
+        const enable = args.enable
         try {
             const bot = event.bot || (typeof Bot !== 'undefined' ? Bot : null)
             if (enable) {
@@ -360,6 +508,99 @@ export const groupEssenceTool = {
         if (typeof data === 'string') return data
         if (!data?.ok) return String(data || '')
         return `\n\n【操作成功】已${data.enable ? '将该消息设为精华' : '取消该消息的精华'}。请如实告知操作者。`
+    }
+}
+
+export const groupMemberListTool = {
+    name: 'group_member_list',
+    permission: 'everyone',
+    description: '查看当前 QQ 群成员列表或按昵称/群名片搜索成员。仅主人或群管理员可用。适合"群里有哪些成员""查一下群成员""找一下昵称叫xxx的人"等。',
+    functionSchema: {
+        type: 'function',
+        function: {
+            name: 'group_member_list',
+            description: '列出或搜索当前群成员。仅主人或群管理员可用。',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string', description: '可选，按昵称、群名片或 QQ 号搜索成员；不填则列出成员列表。' },
+                    limit: { type: 'number', description: '可选，最多返回多少名成员，默认 80，最大 200。' }
+                },
+                required: []
+            }
+        }
+    },
+    async execute(args = {}, context = {}) {
+        const event = context.event
+        const pc = await preCheck(event, { requireBotAdmin: false })
+        if (pc.error) return `【群成员查询失败】${pc.error}`
+        const members = await getGroupMembers(event, pc.group)
+        if (members.length === 0) return '【群成员查询失败】无法读取群成员列表，当前协议端可能不支持。'
+
+        const query = String(args.query || '').trim()
+        const limit = Math.min(Math.max(Number(args.limit) || 80, 1), 200)
+        const matched = query ? matchMembers(members, query) : members
+        return {
+            ok: true,
+            query,
+            total: members.length,
+            matched: matched.length,
+            limit,
+            members: matched.slice(0, limit)
+        }
+    },
+    formatResult(data) {
+        if (typeof data === 'string') return data
+        if (!data?.ok) return String(data || '')
+        if (data.matched === 0) return `\n\n【群成员查询结果】没有找到匹配「${data.query}」的成员。请如实告知操作者。`
+        const title = data.query
+            ? `【群成员查询结果】全群 ${data.total} 人，匹配「${data.query}」共 ${data.matched} 人`
+            : `【群成员列表】全群 ${data.total} 人`
+        const lines = data.members.map((m, i) => {
+            const names = [m.card ? `群名片：${m.card}` : '', m.nickname ? `昵称：${m.nickname}` : ''].filter(Boolean).join('，') || '无名称'
+            const role = m.role === 'owner' ? '群主' : (m.role === 'admin' ? '管理员' : '成员')
+            return `${i + 1}. ${names}，QQ：${m.userId}，身份：${role}${m.title ? `，头衔：${m.title}` : ''}`
+        })
+        const omitted = data.matched > data.members.length ? `\n（仅显示前 ${data.members.length} 人，仍有 ${data.matched - data.members.length} 人未列出。）` : ''
+        return `\n\n${title}：\n${lines.join('\n')}${omitted}\n【转述要求】请按上面实际结果回复，不要编造成员。`
+    }
+}
+
+export const groupMemberResolveTool = {
+    name: 'group_member_resolve',
+    permission: 'everyone',
+    description: '把用户说的成员昵称、群名片、QQ号或 @ 对象解析为明确群成员。仅主人或群管理员可用。适合执行群管理前确认目标。',
+    functionSchema: {
+        type: 'function',
+        function: {
+            name: 'group_member_resolve',
+            description: '解析群成员目标，返回匹配到的成员 QQ、昵称、群名片和身份。',
+            parameters: {
+                type: 'object',
+                properties: {
+                    target: { type: 'string', description: '用户提到的目标成员昵称、群名片、QQ号或原话。用户已 @ 成员时可留空。' }
+                },
+                required: []
+            }
+        }
+    },
+    async execute(args = {}, context = {}) {
+        const event = context.event
+        const pc = await preCheck(event, { requireBotAdmin: false })
+        if (pc.error) return `【群成员解析失败】${pc.error}`
+
+        const target = await resolveTargetUserId(args, event, pc.group)
+        if (!target.ok) return `【群成员解析失败】${target.reason}`
+        const info = await resolveMemberInfo(pc.group, event, target.userId)
+        const member = normalizeMemberInfo(info || { user_id: target.userId })
+        return { ok: true, member }
+    },
+    formatResult(data) {
+        if (typeof data === 'string') return data
+        if (!data?.ok) return String(data || '')
+        const m = data.member
+        const role = m.role === 'owner' ? '群主' : (m.role === 'admin' ? '管理员' : '成员')
+        return `\n\n【群成员解析结果】目标成员：${memberDisplayName(m)}，QQ：${m.userId}，身份：${role}${m.title ? `，头衔：${m.title}` : ''}。请基于这个明确目标继续回答或执行后续操作。`
     }
 }
 
@@ -394,7 +635,7 @@ export const groupRequestListTool = {
     async execute(args = {}, context = {}) {
         const event = context.event
         if (!event?.group_id) return '【查看申请失败】仅在群聊中可用。'
-        if (getOperatorRole(event) === 'member') return '【查看申请失败】权限不足：仅主人或群管理员可用。'
+        if (await resolveGroupOperatorRole(event) === 'member') return '【查看申请失败】权限不足：仅主人或群管理员可用。'
         const list = await scanPendingRequests(event.group_id)
         return { ok: true, list }
     },
@@ -421,22 +662,23 @@ export const groupRequestHandleTool = {
                 type: 'object',
                 properties: {
                     user_id: { type: 'string', description: '申请人的 QQ 号。' },
-                    approve: { type: 'boolean', description: 'true 通过，false 拒绝。默认 true。' },
+                    approve: { type: 'boolean', description: 'true 通过，false 拒绝。必须明确填写。' },
                     reason: { type: 'string', description: '拒绝理由（仅 approve=false 时有意义），可选。' }
                 },
-                required: ['user_id']
+                required: ['user_id', 'approve']
             }
         }
     },
     async execute(args = {}, context = {}) {
         const event = context.event
         if (!event?.group_id) return '【处理申请失败】仅在群聊中可用。'
-        if (getOperatorRole(event) === 'member') return '【处理申请失败】权限不足：仅主人或群管理员可用。'
+        if (await resolveGroupOperatorRole(event) === 'member') return '【处理申请失败】权限不足：仅主人或群管理员可用。'
         const group = pickGroup(event)
-        if (!botIsAdmin(group)) return '【处理申请失败】机器人不是该群管理员，无法处理加群申请。'
+        if (!await botIsAdmin(event, group)) return '【处理申请失败】机器人不是该群管理员，无法处理加群申请。'
 
         const userId = String(args.user_id || '').trim()
         if (!/^\d{5,}$/.test(userId)) return '【处理申请失败】请提供正确的申请人 QQ 号。'
+        if (typeof args.approve !== 'boolean') return '【处理申请失败】请明确说明是通过还是拒绝该申请。'
 
         if (typeof redis === 'undefined' || !redis.get) return '【处理申请失败】redis 不可用，无法读取申请记录。'
         const key = GROUP_REQUEST_KEY(event.group_id, userId)
@@ -446,7 +688,7 @@ export const groupRequestHandleTool = {
         let record
         try { record = JSON.parse(raw) } catch { return '【处理申请失败】申请记录已损坏。' }
 
-        const approve = args.approve !== false
+        const approve = args.approve
         const reason = approve ? '' : String(args.reason || '')
         try {
             const bot = event.bot || (typeof Bot !== 'undefined' ? Bot : null)
@@ -479,5 +721,7 @@ toolRegistry.register(groupKickTool)
 toolRegistry.register(groupSetCardTool)
 toolRegistry.register(groupSetTitleTool)
 toolRegistry.register(groupEssenceTool)
+toolRegistry.register(groupMemberListTool)
+toolRegistry.register(groupMemberResolveTool)
 toolRegistry.register(groupRequestListTool)
 toolRegistry.register(groupRequestHandleTool)

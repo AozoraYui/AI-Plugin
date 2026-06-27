@@ -26,7 +26,7 @@ export class AIGroupRequest extends plugin {
 
             // 仅在「AI插件已开启群管理功能」时记录，避免无谓占用 redis
             const client = global.AIPluginClient
-            if (client && client.enableGroupAdmin === false) return false
+            if (!client || client.enableGroupAdmin === false) return false
 
             let nickname = e.nickname
             if (!nickname) {

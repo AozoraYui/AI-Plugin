@@ -87,7 +87,13 @@ class ToolRegistry {
         logger.info(`[AI-Plugin] 调用工具: ${name}, 参数: ${JSON.stringify(args)}`)
         try {
             const result = await tool.execute(args, context)
-            logger.info(`[AI-Plugin] 工具 ${name} 执行成功`)
+            const businessFailed = (result && typeof result === 'object' && result.ok === false)
+                || (typeof result === 'string' && /^【[^】]+失败】/.test(result))
+            if (businessFailed) {
+                logger.warn(`[AI-Plugin] 工具 ${name} 业务失败: ${typeof result === 'string' ? result : JSON.stringify(result).slice(0, 300)}`)
+            } else {
+                logger.info(`[AI-Plugin] 工具 ${name} 执行成功`)
+            }
             return { success: true, data: result }
         } catch (err) {
             logger.error(`[AI-Plugin] 工具 ${name} 执行失败:`, err)
@@ -208,7 +214,8 @@ ${JSON.stringify(mainPlan, null, 2)}
 - shell_exec 只能编译主模型明确计划的具体命令；不要为了补全信息自己设计危险命令。
 - file_download 用于下载当前消息或引用消息里的媒体，不需要 URL；web_fetch 才需要完整 URL。
 - draw_image 的参考图由工具自动提取；角色参考图库参数按计划填写 character/characters/self_portrait。
-- 群管理工具必须有明确对象；拿不准 user_id 时不要编译该调用。`
+- 群管理成员操作必须有明确对象；有 QQ 号或 @ 时可填 user_id，没有 QQ 但有昵称/群名片时可填 target，拿不准唯一目标时先编译 group_member_list 或 group_member_resolve。
+- group_whole_mute 和 group_essence 的 enable、group_request_handle 的 approve 必须来自用户明确表达；不明确时不要编译这些高影响操作。`
 
         try {
             const payload = {
@@ -383,11 +390,15 @@ ${toolDescriptions.join('\n')}
   - 设头衔要求：用户要"给xxx一个专属头衔yyy/取消头衔"时使用。title 留空表示清除。
 - group_essence: {"enable": true/false}
   - 精华消息要求：用户「引用某条消息」并说"设为精华/加精/取消精华"时使用。enable=true 加精，false 取消。
+- group_member_list: {"query": "可选，昵称/群名片/QQ号", "limit": 可选数量}
+  - 群成员查询要求：用户问"群里有哪些成员/查看群成员/找昵称xxx的人"时使用。query 留空列出成员列表；有目标词时填 query 搜索。
+- group_member_resolve: {"target": "可选，昵称/群名片/QQ号/用户原话"}
+  - 群成员解析要求：当用户想对某个成员做群管理，但只给了昵称、群名片或 @ 对象，且需要先确认具体 QQ 号时使用。用户已经 @ 成员时 target 可留空。
 - group_request_list: {}
   - 查看入群申请要求：用户问"有没有人申请进群/看看入群申请/谁要进群"时使用。
 - group_request_handle: {"user_id": "QQ号", "approve": true/false, "reason": "可选拒绝理由"}
   - 处理入群申请要求：用户要"通过/同意/拒绝某人的加群申请"时使用。approve=true 通过，false 拒绝。
-  - 注意：以上 group_ 开头的工具都是「群管理」操作，仅主人或群管理员可触发，请准确区分用户究竟想做哪一种操作，user_id 必须是真实 QQ 号，拿不准就不要调用。
+  - 注意：以上 group_ 开头的工具都是「群管理」操作，仅主人或群管理员可触发。对禁言/踢人/改名片/设头衔等成员操作，优先使用真实 QQ 号或 @；如果只有昵称/群名片且不确定唯一目标，先调用 group_member_list 或 group_member_resolve，不要凭空编造 user_id。
 
 请严格按以下JSON格式输出，不要输出其他任何内容：
 {"intent": "用户意图分析（一句话概括用户想做什么、隐含需求等）", "tools": [{"tool": "工具名", "params": {...}}]}

@@ -7,8 +7,7 @@ import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, resolveModelGroup, resolveModelDisplay, resolveProviderPriority } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
-import { toolRegistry } from '../tools/index.js'
-import { relayImagesToVision } from '../tools/index.js'
+import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import yaml from 'yaml'
 
 function extractCardInfo(data) {
@@ -556,6 +555,8 @@ ${toolSummary}
 - 链接只在用户明确要求查看/总结/分析网页内容时计划 web_fetch；只是出现链接不代表需要抓取。
 - 当前消息包含图片：${hasImages ? '是' : '否'}。规划阶段不会收到图片内容；如果用户只是让你看图/描述图且没有明确工具需求，交给最终多模态/视觉流程，不要计划工具。
 - 只计划“可用工具”中列出的工具，最多 5 个。
+- 群管理成员操作必须有明确目标；如果用户只给昵称/群名片且不确定 QQ 号，先计划 group_member_list 或 group_member_resolve。
+- 全员禁言、处理入群申请等高影响操作必须从用户原话中明确得到开启/解除、通过/拒绝方向；不明确时不要计划操作工具。
 
 ${environmentHint ? `【聊天环境】\n${environmentHint}` : ''}${memoryBlock}${historyBlock}${urlBlock}
 
@@ -934,15 +935,16 @@ export class ChatHandler extends plugin {
             }
             // 群管理：开启 enable_group_admin 后，群聊中由「主人」或「当前群管理员/群主」触发
             if (e.group_id && this.client.enableGroupAdmin) {
-                const senderRole = e.sender?.role || e.member?.role
-                const isGroupAdmin = senderRole === 'owner' || senderRole === 'admin' || e.member?.is_admin || e.member?.is_owner
-                if (e.isMaster || isGroupAdmin) {
+                const operatorRole = await resolveGroupOperatorRole(e)
+                if (operatorRole === 'master' || operatorRole === 'owner' || operatorRole === 'admin') {
                     enabledTools.push('group_mute')
                     enabledTools.push('group_whole_mute')
                     enabledTools.push('group_kick')
                     enabledTools.push('group_set_card')
                     enabledTools.push('group_set_title')
                     enabledTools.push('group_essence')
+                    enabledTools.push('group_member_list')
+                    enabledTools.push('group_member_resolve')
                     enabledTools.push('group_request_list')
                     enabledTools.push('group_request_handle')
                 }
@@ -1075,7 +1077,7 @@ export class ChatHandler extends plugin {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为群文件工具的实际执行结果，请如实、完整地告知主人，逐条列出每一个文件，不要只挑部分/代表文件，不要编造文件名或结果。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
-                        } else if (['group_mute', 'group_whole_mute', 'group_kick', 'group_set_card', 'group_set_title', 'group_essence', 'group_request_list', 'group_request_handle'].includes(call.name)) {
+                        } else if (['group_mute', 'group_whole_mute', 'group_kick', 'group_set_card', 'group_set_title', 'group_essence', 'group_member_list', 'group_member_resolve', 'group_request_list', 'group_request_handle'].includes(call.name)) {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为群管理工具的实际执行结果，请如实转告操作者，不要编造结果。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)

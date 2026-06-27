@@ -14,7 +14,8 @@ export { fileDownloadTool } from './file_download.js'
 export { groupFileListTool, groupFileDownloadTool } from './group_file.js'
 export {
     groupMuteTool, groupWholeMuteTool, groupKickTool, groupSetCardTool,
-    groupSetTitleTool, groupEssenceTool, groupRequestListTool, groupRequestHandleTool
+    groupSetTitleTool, groupEssenceTool, groupMemberListTool, groupMemberResolveTool,
+    groupRequestListTool, groupRequestHandleTool, resolveGroupOperatorRole
 } from './group_admin.js'
 export { imageGenTool } from './image_gen.js'
 export { shellExecTool } from './shell_exec.js'
