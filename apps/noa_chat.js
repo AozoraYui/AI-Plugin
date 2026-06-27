@@ -2,12 +2,13 @@ import crypto from 'node:crypto'
 import plugin from '../../../lib/plugins/plugin.js'
 import { Config } from '../utils/config.js'
 import { checkAccess } from '../utils/access.js'
-import { getBeijingTimeStr, takeSourceMsg } from '../utils/common.js'
+import { getBeijingTimeStr, getTodayDateStr, takeSourceMsg } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
 import { buildEnvironmentHint, expandForwardMsg, extractCardInfo } from './chat.js'
 
 const replyCooldown = new Map()
 const PERSONAL_MEMORY_MAX_CHARS = 2600
+const PERSONAL_HISTORY_CONTEXT_MAX_CHARS = 2600
 
 function truncateText(text, maxLength = 900) {
     const value = String(text || '').trim()
@@ -260,9 +261,10 @@ export class NoaChatHandler extends plugin {
         const limit = Math.max(10, Number(Config.NOA_CHAT_CONTEXT_LIMIT) || 60)
         const logs = await this.conversationManager.db.getRecentGroupMessageLogs(e.group_id, limit, { excludeCommands: true })
         const contextText = formatGroupContext(logs)
+        let memoryData = null
         let personalMemory = ''
         try {
-            const memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(normalized.userId)
+            memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(normalized.userId)
             personalMemory = truncateText(memoryData?.incrementalCheckpoint || '', PERSONAL_MEMORY_MAX_CHARS)
             if (personalMemory) {
                 logger.info(`[AI-Plugin] [畅聊] 已加载触发者个人记忆摘要: 用户 ${normalized.userId}, 字符数=${personalMemory.length}`)
@@ -324,6 +326,7 @@ ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}`
 
         const replyText = cleanModelText(result.data)
         await e.reply(replyText, true)
+        await this.saveNoaChatToPersonalHistory(e, normalized, contextText, replyText, memoryData?.history)
 
         try {
             await this.conversationManager.db.saveGroupMessageLog({
@@ -338,6 +341,49 @@ ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}`
             })
         } catch (err) {
             logger.warn(`[AI-Plugin] [畅聊] 保存 AI 回复到群流水失败: ${err.message}`)
+        }
+    }
+
+    async saveNoaChatToPersonalHistory(e, normalized, contextText, replyText, existingHistory = null) {
+        const userId = String(normalized.userId)
+        try {
+            const history = Array.isArray(existingHistory)
+                ? existingHistory
+                : (await this.conversationManager.getUserHistoryWithCheckpoint(userId)).history
+            const groupName = e.group_name || e.group?.name || e.sender?.group_name || `群 ${normalized.groupId}`
+            const memoryText = [
+                '【畅聊模式记录】以下内容来自群聊畅聊模式，已同步到个人对话记忆，供后续普通 #c 对话延续上下文。',
+                `群聊：${groupName}(${normalized.groupId})`,
+                `触发者：${normalized.nickname}(${userId})`,
+                `触发消息：${normalized.normalizedText}`,
+                contextText ? `当时最近群聊上下文：\n${truncateText(contextText, PERSONAL_HISTORY_CONTEXT_MAX_CHARS)}` : '',
+                '注意：这是一段群聊公开上下文记录，回复时仍需遵守当前聊天环境的隐私规则。'
+            ].filter(Boolean).join('\n')
+
+            const updatedHistory = [
+                ...history,
+                { role: 'user', parts: [{ text: memoryText }] },
+                { role: 'model', parts: [{ text: replyText }] }
+            ]
+            await this.conversationManager.saveUserHistory(userId, updatedHistory)
+            logger.info(`[AI-Plugin] [畅聊] 已同步畅聊记录到用户 ${userId} 的普通对话记忆`)
+
+            const summaryCounter = await this.conversationManager.advanceAutoSummaryCounter(userId)
+            if (summaryCounter.disabled) {
+                logger.debug(`[AI-Plugin] [畅聊] 自动增量总结已关闭: AUTO_SUMMARY_THRESHOLD=${Config.AUTO_SUMMARY_THRESHOLD}`)
+            } else if (!summaryCounter.error) {
+                logger.info(`[AI-Plugin] [畅聊] 用户 ${userId} 自动增量总结计数: ${summaryCounter.count}/${summaryCounter.threshold} 轮`)
+            }
+
+            if (summaryCounter.shouldTrigger) {
+                logger.info(`[AI-Plugin] [畅聊] 用户 ${userId} 距上次增量总结已达 ${summaryCounter.count} 轮，自动触发增量总结`)
+                const todayStr = getTodayDateStr()
+                await this.conversationManager.createIncrementalCheckpoint(userId, todayStr, 0, 'flash')
+                await this.conversationManager.resetAutoSummaryCounter(userId)
+                logger.info(`[AI-Plugin] [畅聊] 用户 ${userId} 增量总结完成，自动总结计数已重置`)
+            }
+        } catch (err) {
+            logger.warn(`[AI-Plugin] [畅聊] 同步畅聊记录到普通对话记忆失败: ${err.message}`)
         }
     }
 }
