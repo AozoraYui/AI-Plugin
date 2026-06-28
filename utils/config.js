@@ -106,6 +106,14 @@ const defaultConfig = {
     SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS: 24000,
     // child_process exec 最大缓冲区
     SHELL_EXEC_MAX_BUFFER: 20971520,
+    // tmux 持久 Shell 会话开关（默认关闭，主人专用）
+    enable_shell_session: false,
+    // tmux 持久 Shell 会话名称
+    SHELL_SESSION_NAME: 'ai-shell',
+    // 默认读取最近多少行 tmux 窗口输出
+    SHELL_SESSION_CAPTURE_LINES: 200,
+    // 单次注入模型的 tmux 窗口输出最大字符数
+    SHELL_SESSION_MAX_OUTPUT_CHARS: 24000,
     version: 'v1.0.0'
 }
 
@@ -407,6 +415,14 @@ export const Config = {
     set SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS(val) { config.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS = Number(val) || defaultConfig.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS },
     get SHELL_EXEC_MAX_BUFFER() { return config.SHELL_EXEC_MAX_BUFFER ?? defaultConfig.SHELL_EXEC_MAX_BUFFER },
     set SHELL_EXEC_MAX_BUFFER(val) { config.SHELL_EXEC_MAX_BUFFER = Number(val) || defaultConfig.SHELL_EXEC_MAX_BUFFER },
+    get enable_shell_session() { return config.enable_shell_session ?? defaultConfig.enable_shell_session },
+    set enable_shell_session(val) { config.enable_shell_session = val === true },
+    get SHELL_SESSION_NAME() { return config.SHELL_SESSION_NAME ?? defaultConfig.SHELL_SESSION_NAME },
+    set SHELL_SESSION_NAME(val) { config.SHELL_SESSION_NAME = val || defaultConfig.SHELL_SESSION_NAME },
+    get SHELL_SESSION_CAPTURE_LINES() { return config.SHELL_SESSION_CAPTURE_LINES ?? defaultConfig.SHELL_SESSION_CAPTURE_LINES },
+    set SHELL_SESSION_CAPTURE_LINES(val) { config.SHELL_SESSION_CAPTURE_LINES = Number(val) || defaultConfig.SHELL_SESSION_CAPTURE_LINES },
+    get SHELL_SESSION_MAX_OUTPUT_CHARS() { return config.SHELL_SESSION_MAX_OUTPUT_CHARS ?? defaultConfig.SHELL_SESSION_MAX_OUTPUT_CHARS },
+    set SHELL_SESSION_MAX_OUTPUT_CHARS(val) { config.SHELL_SESSION_MAX_OUTPUT_CHARS = Number(val) || defaultConfig.SHELL_SESSION_MAX_OUTPUT_CHARS },
     presets,
     reloadPresets() {
         this.presets = loadPresetsSync()

@@ -22,5 +22,6 @@ export {
 } from './group_admin.js'
 export { imageGenTool } from './image_gen.js'
 export { shellExecTool } from './shell_exec.js'
+export { shellSessionTool } from './shell_session.js'
 export { webFetchTool } from './web_fetch.js'
 export { weatherTool } from './weather.js'

@@ -1,0 +1,143 @@
+/**
+ * 持久 Shell 会话工具
+ * 仅主人可用；通过 tmux 维护一个独立的 ai-shell 窗口。
+ */
+
+import { toolRegistry } from './registry.js'
+import { Config } from '../utils/config.js'
+import {
+    captureShellSession,
+    clearShellSession,
+    closeShellSession,
+    ensureShellSession,
+    interruptShellSession,
+    restartShellSession,
+    sendToShellSession
+} from '../utils/shell_session.js'
+
+const ACTION_LABELS = {
+    status: '查看状态',
+    read: '读取窗口',
+    send: '发送输入',
+    interrupt: '中断任务',
+    clear: '清屏',
+    restart: '重启会话',
+    close: '关闭会话'
+}
+
+function normalizeAction(action = 'read') {
+    const value = String(action || '').trim().toLowerCase()
+    if (['status', 'read', 'send', 'interrupt', 'clear', 'restart', 'close'].includes(value)) return value
+    return 'read'
+}
+
+function limitLines(lines) {
+    const value = Number(lines)
+    if (!Number.isFinite(value)) return Config.SHELL_SESSION_CAPTURE_LINES
+    return Math.min(Math.max(Math.trunc(value), 20), 2000)
+}
+
+export const shellSessionTool = {
+    name: 'shell_session',
+    permission: 'master',
+    description: '操作持久 tmux Shell 会话（默认 ai-shell）：读取窗口、发送命令、Ctrl-C 中断、清屏、重启或关闭。仅主人，需开启 enable_shell_session。适合长任务、dev server、tail 日志和交互式排查。',
+
+    functionSchema: {
+        type: 'function',
+        function: {
+            name: 'shell_session',
+            description: '操作主人专用的持久 tmux Shell 会话。会话名由配置 SHELL_SESSION_NAME 控制，默认 ai-shell。',
+            parameters: {
+                type: 'object',
+                properties: {
+                    action: {
+                        type: 'string',
+                        enum: ['status', 'read', 'send', 'interrupt', 'clear', 'restart', 'close'],
+                        description: '操作类型：status 查看/确保会话，read 读取窗口输出，send 输入命令或文本，interrupt 发送 Ctrl-C，clear 清屏，restart 重启会话，close 关闭会话。'
+                    },
+                    input: {
+                        type: 'string',
+                        description: 'action=send 时必填，要输入到 tmux 会话的命令或文本。'
+                    },
+                    enter: {
+                        type: 'boolean',
+                        description: 'action=send 时是否自动回车，默认 true。需要只输入不执行时设为 false。'
+                    },
+                    lines: {
+                        type: 'number',
+                        description: '读取最近多少行窗口内容，默认使用 SHELL_SESSION_CAPTURE_LINES，范围 20-2000。'
+                    },
+                    cwd: {
+                        type: 'string',
+                        description: '创建或重启会话时的工作目录；已有会话不会被 cd。'
+                    }
+                },
+                required: ['action']
+            }
+        }
+    },
+
+    async execute(args = {}, context = {}) {
+        const event = context.event
+        if (!context.isMaster && !event?.isMaster) {
+            return { ok: false, error: '权限不足：持久 Shell 会话仅限主人使用。' }
+        }
+        if (global.AIPluginClient?.enableShellSession !== true) {
+            return { ok: false, error: '持久 Shell 会话未启用。请先在 models_config.yaml 设置 enable_shell_session: true。' }
+        }
+
+        const action = normalizeAction(args.action)
+        let result
+        if (action === 'status') {
+            result = await ensureShellSession({ cwd: args.cwd })
+        } else if (action === 'read') {
+            result = await captureShellSession({
+                cwd: args.cwd,
+                lines: limitLines(args.lines),
+                maxOutputChars: Config.SHELL_SESSION_MAX_OUTPUT_CHARS
+            })
+        } else if (action === 'send') {
+            result = await sendToShellSession({
+                cwd: args.cwd,
+                input: args.input,
+                enter: args.enter !== false
+            })
+        } else if (action === 'interrupt') {
+            result = await interruptShellSession({ cwd: args.cwd })
+        } else if (action === 'clear') {
+            result = await clearShellSession({ cwd: args.cwd })
+        } else if (action === 'restart') {
+            result = await restartShellSession({ cwd: args.cwd })
+        } else if (action === 'close') {
+            result = await closeShellSession()
+        }
+
+        if (result?.ok) {
+            logger.info(`[AI-Plugin] shell_session ${action} 完成: session=${result.sessionName || Config.SHELL_SESSION_NAME}`)
+        } else {
+            logger.warn(`[AI-Plugin] shell_session ${action} 失败: ${result?.error || '未知错误'}`)
+        }
+
+        return { action, actionLabel: ACTION_LABELS[action] || action, ...result }
+    },
+
+    formatResult(data) {
+        if (!data || typeof data !== 'object') return String(data || '')
+        const name = data.sessionName || Config.SHELL_SESSION_NAME
+        if (data.ok === false) {
+            return `\n\n【Shell会话失败】动作: ${data.actionLabel || data.action || '未知'}\n会话: ${name}\n原因: ${data.error || '未知错误'}`
+        }
+
+        let output = `\n\n【Shell会话结果】\n动作: ${data.actionLabel || data.action}\n会话: ${name}\n状态: 成功`
+        if (data.created) output += `\n提示: 会话不存在，已自动创建。`
+        if (data.cwd) output += `\n目录: ${data.cwd}`
+        if (data.closed !== undefined) output += `\n是否关闭: ${data.closed ? '是' : '否'}`
+        if (data.enter !== undefined) output += `\n是否回车: ${data.enter ? '是' : '否'}`
+        if (data.truncated) output += `\n提示: 输出较长，仅显示末尾 ${Config.SHELL_SESSION_MAX_OUTPUT_CHARS} 字符。`
+        if (data.output) output += `\n\n--- tmux窗口输出 ---\n${data.output}`
+        output += `\n【Shell会话结果结束】\n`
+        return output
+    }
+}
+
+toolRegistry.register(shellSessionTool)

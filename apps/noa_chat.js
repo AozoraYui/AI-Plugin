@@ -496,7 +496,7 @@ function extractUrlsFromText(text, limit = 10) {
 function shouldRouteNoaTools(text, urls = []) {
     const value = String(text || '')
     if (urls.length > 0 && /(看|看看|打开|总结|分析|解释|读|抓取|链接|网页|网站)/i.test(value)) return true
-    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|代发|转达|帮我.{0,20}(群|发|说|告诉)|画|绘制|生成|作图|手办化|图片处理|修图|执行|运行|调用|命令|shell|终端|命令行|脚本|插件更新|更新插件|\b(?:git|pull|push|status|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head)\b|之前|前面|刚才|刚刚|最近|他们|大家|群里|别的群|其他群|其它群|跨群|前情提要|聊了啥|说了啥|发生了什么|什么情况|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
+    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|代发|转达|帮我.{0,20}(群|发|说|告诉)|tmux|ai-shell|shell会话|shell窗口|独立shell|画|绘制|生成|作图|手办化|图片处理|修图|执行|运行|调用|命令|shell|终端|命令行|脚本|插件更新|更新插件|\b(?:git|pull|push|status|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head)\b|之前|前面|刚才|刚刚|最近|他们|大家|群里|别的群|其他群|其它群|跨群|前情提要|聊了啥|说了啥|发生了什么|什么情况|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
 }
 
 function hasExplicitHighImpactIntent(toolName, text) {
@@ -509,7 +509,8 @@ function hasExplicitHighImpactIntent(toolName, text) {
         group_set_title: /(头衔|专属头衔|设置.{0,8}头衔|取消.{0,8}头衔)/i,
         group_essence: /(精华|加精|设为精华|取消精华)/i,
         group_request_handle: /(通过|同意|批准|允许|拒绝|放.{0,16}进来|让.{0,16}进来|准.{0,8}进).{0,24}(申请|入群|进群|加群|进来)?|(?:申请|入群|进群|加群).{0,24}(通过|同意|批准|允许|拒绝)/i,
-        group_send_message: /(帮我|替我|代我|转达|在.{1,40}群.{0,8}(说|发|发送|告诉)|去.{1,40}群.{0,8}(说|发|发送|告诉)|到.{1,40}群.{0,8}(说|发|发送|告诉))/i
+        group_send_message: /(帮我|替我|代我|转达|在.{1,40}群.{0,8}(说|发|发送|告诉)|去.{1,40}群.{0,8}(说|发|发送|告诉)|到.{1,40}群.{0,8}(说|发|发送|告诉))/i,
+        shell_session: /(tmux|ai-shell|shell\s*session|shell会话|shell窗口|独立shell|终端会话)/i
     }
     const pattern = patterns[toolName]
     return pattern ? pattern.test(value) : true
@@ -524,7 +525,8 @@ function filterNoaToolCalls(toolCalls = [], toolRoutingText = '') {
         'group_set_title',
         'group_essence',
         'group_request_handle',
-        'group_send_message'
+        'group_send_message',
+        'shell_session'
     ])
     const filtered = []
     for (const call of toolCalls) {
@@ -552,13 +554,16 @@ async function buildNoaEnabledTools(e, client) {
             enabledTools.push('group_send_message')
         }
     }
-    const fileReadEnabled = e.isMaster && client.enableFileRead
+    const fileReadEnabled = e.isMaster && (client.enableFileRead || client.enableShellSession)
     const shellEnabled = e.isMaster && client.enableShellExec
     if (fileReadEnabled || shellEnabled) {
         enabledTools.push('file_read', 'dir_read')
     }
     if (shellEnabled) {
         enabledTools.push('shell_exec')
+    }
+    if (e.isMaster && client.enableShellSession) {
+        enabledTools.push('shell_session')
     }
     if (e.isMaster && client.enableFileTransfer) {
         enabledTools.push('file_send', 'file_download')
@@ -607,7 +612,7 @@ function formatNoaToolInjection(toolName, result) {
     if (toolName === 'web_search' || toolName === 'web_fetch') {
         return `\n\n【畅聊工具结果：联网信息】请基于以下实际联网结果回答，不要编造。${formattedResult}`
     }
-    if (toolName === 'file_read' || toolName === 'dir_read' || toolName === 'shell_exec') {
+    if (toolName === 'file_read' || toolName === 'dir_read' || toolName === 'shell_exec' || toolName === 'shell_session') {
         return `\n\n【畅聊工具结果：服务器信息】请严格基于以下实际结果回答，不要编造未执行的内容。${formattedResult}`
     }
     if (toolName === 'file_send' || toolName === 'file_download' || toolName === 'group_file_list' || toolName === 'group_file_download') {

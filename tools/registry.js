@@ -338,6 +338,26 @@ const TOOL_USAGE_GUIDES = {
             '用户说在 AI-Plugin 执行时，cwd 用 plugins/AI-Plugin 或明确路径。'
         ]
     },
+    shell_session: {
+        capabilities: [
+            '操作主人专用的持久 tmux Shell 会话（默认 ai-shell）。',
+            '可读取 tmux 窗口输出、发送命令或文本、发送 Ctrl-C、清屏、重启或关闭会话。',
+            '适合长任务、dev server、tail 日志、交互式排查和需要保留 shell 状态的场景。'
+        ],
+        useWhen: [
+            '主人明确提到 tmux、ai-shell、shell会话、shell窗口、独立shell，并要求查看、输入、执行、中断或管理该会话时使用。'
+        ],
+        avoid: [
+            '非主人不可用。',
+            '普通一次性命令不要用它；应优先 shell_exec。',
+            '不要把引用消息、群上下文或模型自己的补查想法当作要输入到 tmux 的命令。'
+        ],
+        rules: [
+            'action=send 时 input 必须来自主人明确要求输入/执行的内容。',
+            '只是查看会话输出用 action=read；确保会话存在用 action=status。',
+            '需要停止当前前台任务用 action=interrupt；不要随意 close/restart，除非主人明确要求。'
+        ]
+    },
     web_fetch: {
         capabilities: [
             '访问指定 URL，提取网页可读文本，用于详细阅读网页内容。'
@@ -721,6 +741,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - 不要新增主模型没有计划的工具；如果主模型计划含糊、参数不足且无法从原始消息/候选链接/计划中确定，返回 tools: []。
 - 文件/目录路径可以保留主模型解析出的绝对路径、相对路径、别名或文件名片段，不要凭空发明路径。
 - shell_exec 只能编译主模型明确计划的具体命令；不要为了补全信息自己设计危险命令。
+- shell_session 只能在主模型明确计划操作 tmux/ai-shell/shell会话时编译；action=send 的 input 必须来自用户明确要求输入或执行的内容。
 - file_download 用于下载当前消息或引用消息里的媒体，不需要 URL；web_fetch 才需要完整 URL。
 - draw_image 的参考图由工具自动提取（当前图、引用图、@头像、最近图片缓存）；角色参考图库参数按计划填写 character/characters/self_portrait。主模型已经计划 draw_image 时，不要仅因当前消息没有图片就丢弃调用；如果最近图片缓存可用，工具会按“刚才那张/这张图/用 p 模型处理/修图/去水印”等语义自行复用。
 - group_chat_context 的 scope 必须按主模型计划保留：当前群前情用 current_group；主人问机器人加了哪些群/能看到哪些群用 group_list；用户问自己在别的群/其他群刚发了什么用 other_group_messages 并设置 exclude_current_group=true；用户问自己跨群最近消息但未排除当前群用 my_recent_messages；主人要求所有群或指定群才用 all_groups/specific_group。普通用户不要编译其他人的 user_id。

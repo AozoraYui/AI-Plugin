@@ -3,6 +3,7 @@ import path from 'node:path'
 import yaml from 'yaml'
 import { Config, MODELS_CONFIG_FILE, MODEL_STATUS_FILE, DISABLED_MODELS_FILE, TEMPLATE_DIR_EXPORT } from '../utils/config.js'
 import { fetchWithProxy } from '../utils/common.js'
+import { ensureShellSession } from '../utils/shell_session.js'
 import { toolRegistry } from '../tools/index.js'
 
 // 熔断常量
@@ -22,6 +23,7 @@ export class AiClient {
         this.webFetchConfig = { enabled: false }
         this.fileReadConfig = { enabled: false }
         this.shellExecConfig = { enabled: false }
+        this.shellSessionConfig = { enabled: false }
         this.groupSendConfig = { enabled: false }
         this.weatherApiKey = null
         this.openWeatherMapApiKey = null
@@ -155,6 +157,11 @@ export class AiClient {
         return this.shellExecConfig?.enabled === true
     }
 
+    /** 是否启用 tmux 持久 Shell 会话（主人专用） */
+    get enableShellSession() {
+        return this.shellSessionConfig?.enabled === true
+    }
+
     /** 是否启用文件收发（上传服务器文件到会话 / 下载会话媒体到服务器，仅主人） */
     get enableFileTransfer() {
         return this.fileTransferConfig?.enabled === true
@@ -178,6 +185,20 @@ export class AiClient {
     /** 是否启用畅聊模式（群消息捕获 + 触发词回复） */
     get enableNoaChat() {
         return this.noaChatConfig?.enabled === true
+    }
+
+    ensureShellSessionOnStartup() {
+        ensureShellSession({ sessionName: Config.SHELL_SESSION_NAME, cwd: process.cwd() })
+            .then(result => {
+                if (result.ok) {
+                    logger.info(`[AI-Plugin] tmux Shell 会话 ${result.sessionName} ${result.created ? '已创建' : '已存在'}，启动检查完成`)
+                } else {
+                    logger.warn(`[AI-Plugin] tmux Shell 会话启动检查失败: ${result.error || '未知错误'}`)
+                }
+            })
+            .catch(err => {
+                logger.warn(`[AI-Plugin] tmux Shell 会话启动检查异常: ${err.message}`)
+            })
     }
 
     /** 搜索意图分析专用模型列表 */
@@ -330,6 +351,10 @@ export class AiClient {
                 value.enable_web_fetch !== undefined ||
                 value.enable_file_read !== undefined ||
                 value.enable_shell_exec !== undefined ||
+                value.enable_shell_session !== undefined ||
+                value.SHELL_SESSION_NAME !== undefined ||
+                value.SHELL_SESSION_CAPTURE_LINES !== undefined ||
+                value.SHELL_SESSION_MAX_OUTPUT_CHARS !== undefined ||
                 value.enable_file_transfer !== undefined ||
                 value.enable_ai_draw !== undefined ||
                 value.enable_group_admin !== undefined ||
@@ -428,6 +453,7 @@ export class AiClient {
                 // 提取 enable_file_read（默认关闭）
                 this.fileReadConfig = { enabled: rawConfig.enable_file_read === true }
                 this.shellExecConfig = { enabled: rawConfig.enable_shell_exec === true }
+                this.shellSessionConfig = { enabled: rawConfig.enable_shell_session === true }
                 this.fileTransferConfig = { enabled: rawConfig.enable_file_transfer === true }
                 this.aiDrawConfig = { enabled: rawConfig.enable_ai_draw === true }
                 this.groupAdminConfig = { enabled: rawConfig.enable_group_admin === true }
@@ -436,6 +462,7 @@ export class AiClient {
                 Config.show_thinking = rawConfig.show_thinking === true
                 Config.show_thinking_notice = rawConfig.show_thinking_notice === true
                 Config.draw_review_after_generate = rawConfig.draw_review_after_generate === true
+                Config.enable_shell_session = rawConfig.enable_shell_session === true
                 Config.enable_group_send = rawConfig.enable_group_send === true
                 Config.enable_noa_chat = rawConfig.enable_noa_chat === true
                 for (const key of ['NOA_CHAT_CONTEXT_LIMIT', 'NOA_CHAT_REPLY_COOLDOWN_MS', 'NOA_CHAT_MAX_CONTEXT_IMAGES', 'NOA_CHAT_AUTO_READ_IMAGE_LIMIT', 'NOA_CHAT_IMAGE_BATCH_SIZE']) {
@@ -444,7 +471,7 @@ export class AiClient {
                 if (Array.isArray(rawConfig.NOA_CHAT_TRIGGER_KEYWORDS)) {
                     Config.NOA_CHAT_TRIGGER_KEYWORDS = rawConfig.NOA_CHAT_TRIGGER_KEYWORDS
                 }
-                for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_FOLLOWUP_MAX_ROUNDS', 'SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS', 'SHELL_EXEC_MAX_BUFFER']) {
+                for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_FOLLOWUP_MAX_ROUNDS', 'SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS', 'SHELL_EXEC_MAX_BUFFER', 'SHELL_SESSION_NAME', 'SHELL_SESSION_CAPTURE_LINES', 'SHELL_SESSION_MAX_OUTPUT_CHARS']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
                 if (this.enableFileRead) {
@@ -454,6 +481,10 @@ export class AiClient {
                 }
                 if (this.enableShellExec) {
                     logger.warn('[AI-Plugin] Shell 执行工具已启用：AI 可在主人请求下执行服务器命令（含文件读取）')
+                }
+                if (this.enableShellSession) {
+                    logger.warn(`[AI-Plugin] 持久 Shell 会话已启用：将使用 tmux 会话 ${Config.SHELL_SESSION_NAME}`)
+                    this.ensureShellSessionOnStartup()
                 }
                 if (this.enableFileTransfer) {
                     logger.info('[AI-Plugin] 文件收发已启用：主人可让 AI 上传白名单文件到会话、下载会话媒体到白名单目录')

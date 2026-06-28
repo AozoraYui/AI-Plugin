@@ -164,6 +164,8 @@ enable_web_search: false
 enable_web_fetch: false
 # enable_file_read: false  # 默认关闭，可使用 #cf 临时启用只读文件工具
 # enable_shell_exec: false # 默认关闭；独立开关，开启后即允许主人让 AI 执行 Shell（无需 enable_file_read）
+# enable_shell_session: false # 默认关闭；持久 tmux Shell 会话，主人专用，默认会话名 ai-shell
+# SHELL_SESSION_NAME: ai-shell
 # enable_file_transfer: false # 文件收发/群文件工具，主人专用
 # enable_ai_draw: false       # 对话/畅聊中联动画图工具
 # enable_group_admin: false   # 群管理工具，主人或当前群管理员可用，机器人需有对应权限
@@ -299,6 +301,7 @@ AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单
 | 目录浏览 | 全局开关开启后自动检测，或使用 `#cf` 临时强制浏览 | 列出文件和子目录，受白名单限制；支持“data目录/上次那个目录”等自然语言指代 |
 | 目录+文件全读 | 全局开关开启后自动检测，或使用 `#cf` 临时强制读取 | 递归读取所有文本文件，自动跳过二进制和超大文件 |
 | Shell 执行 | `enable_shell_exec: true` 后，主人对话中自动按意图调用 | 执行服务器 shell 命令并返回 stdout/stderr，适合 `grep`/`rg`/`find` 查文件、日志排查、服务诊断；具备完整服务器权限 |
+| 持久 Shell 会话 | `enable_shell_session: true` 后，主人明确提到 tmux/ai-shell/shell会话时调用 | 操作独立 tmux 会话（默认 `ai-shell`）：读取窗口、输入命令、Ctrl-C 中断、清屏、重启或关闭；适合长任务和交互式排查 |
 | 文件上传 | `enable_file_transfer: true` 后，主人对话中按意图调用 | 把白名单目录内的文件/文件夹发送到当前会话；文件夹自动打包为 tar.gz；支持文件名模糊匹配 |
 | 文件下载 | `enable_file_transfer: true` 后，主人对话中按意图调用 | 把当前消息或引用消息里的图片/视频/语音/文件保存到白名单目录；支持合并转发递归提取 |
 | 群文件浏览 | `enable_file_transfer: true` 后，主人群聊中按意图调用 | 列出当前群"群文件区"的文件与文件夹，支持进入子文件夹查看 |
@@ -313,6 +316,7 @@ AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单
 >  文件读取默认关闭，可使用 `#cf` 临时启用，或在 `models_config.yaml` 中设置 `enable_file_read: true` 全局开启。
 >  开启后可以直接说“看下日志”“读一下模型配置”“data目录有什么”“看看上次那个目录”，无需每次输入绝对路径。
 > ⚠️ Shell 执行默认关闭，且不会被 `#cf` 临时打开；独立开关，只需设置 `enable_shell_exec: true`（无需 `enable_file_read`），并且仅主人可用。开启后 AI 可执行完整服务器命令，请谨慎使用。
+> 🖥️ 持久 Shell 会话默认关闭，独立开关 `enable_shell_session: true`，仅主人可用。开启后启动时会检查 tmux 会话 `ai-shell`，不存在就创建；你也可以在服务器上 `tmux attach -t ai-shell` 直接接管。
 > 📤 文件收发默认关闭，独立开关 `enable_file_transfer: true`，仅主人可用。上传/下载路径均受 `file_roots.yaml` 白名单约束：上传只能发白名单内的文件，下载只能存到白名单目录。
 > 🗣️ 代发群消息默认关闭，独立开关 `enable_group_send: true`，仅主人可用；也可用 `#ai开启代发` / `#ai关闭代发` 运行时切换。目标群必须唯一，默认加“【主人转达】”前缀，不支持 CQ 码。
 > 🎨 AI 画图默认关闭，独立开关 `enable_ai_draw: true`，开启后所有人可在对话中用自然语言让 AI 画图（等同 `#draw`），支持参考图与预设风格名。
@@ -479,7 +483,8 @@ AI-Plugin/
 13. **作图兼容**：chat/completions 不支持图片时自动重试 `/images/edits`（multipart 传图）或 `/images/generations`（纯文本）
 14. **文件读取安全**：AI 只能读取 `file_roots.yaml` 白名单目录下的文件，无法写入、修改或删除
 15. **Shell 执行风险**：Shell 工具默认关闭，需 `enable_shell_exec: true` 开启（独立开关，无需 `enable_file_read`）且仅主人可用；开启后具备完整服务器命令权限
-16. **指令自定义**：可在 `models_config.yaml` 中修改 `chat_command`/`draw_command` 缩短指令
+16. **持久 Shell 会话风险**：tmux 会话工具默认关闭，需 `enable_shell_session: true` 开启且仅主人可用；会话状态会保留，适合长任务，但也意味着命令可能持续运行
+17. **指令自定义**：可在 `models_config.yaml` 中修改 `chat_command`/`draw_command` 缩短指令
 
 ## 🤝 贡献
 

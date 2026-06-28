@@ -334,6 +334,7 @@ export class ManagementHandler extends plugin {
             const accessConfig = getAccessConfig()
             const accessMode = accessConfig.mode === 'whitelist' ? '白名单模式' : '黑名单模式'
             const thinkingMode = Config.show_thinking ? '✅ 开启 (Raw模式)' : '🚫 关闭 (自动清洗)'
+            const shellSessionMode = this.client.enableShellSession ? `✅ 开启 (${Config.SHELL_SESSION_NAME})` : '🚫 关闭'
             const groupAdminMode = this.client.enableGroupAdmin ? '✅ 开启' : '🚫 关闭'
             const groupSendMode = this.client.enableGroupSend ? '✅ 开启' : '🚫 关闭'
             const noaChatMode = (this.client.enableNoaChat || Config.enable_noa_chat) ? '✅ 开启' : '🚫 关闭'
@@ -355,6 +356,7 @@ export class ManagementHandler extends plugin {
                 '🔑 权限与模式',
                 `  - 权限控制: ${accessMode}`,
                 `  - AI思考过程: ${thinkingMode}`,
+                `  - 持久Shell会话: ${shellSessionMode}`,
                 `  - 群管理工具: ${groupAdminMode}`,
                 `  - 群消息代发: ${groupSendMode}`,
                 `  - 畅聊模式: ${noaChatMode}`,

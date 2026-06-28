@@ -72,6 +72,10 @@ export class HelpHandler extends plugin {
   需在 models_config.yaml 开启 enable_shell_exec: true（独立开关，无需 enable_file_read）。
   开启后 AI 可根据你的意图执行服务器 Shell 命令，例如 grep/rg 查文件、查看日志、诊断服务状态。
   注意：Shell 具备完整服务器权限，不会被 #f 临时开关单独启用。
+> 🖥️ 持久 Shell 会话（主人专用）
+  需在 models_config.yaml 开启 enable_shell_session: true（独立开关）。
+  开启后使用 tmux 会话 ai-shell；机器人启动时若不存在会自动创建。
+  明确说“在 ai-shell 执行...”“看看 shell会话输出”“中断 tmux”时触发。
 > 📤 文件收发（主人专用）
   需在 models_config.yaml 开启 enable_file_transfer: true（独立开关）。
   上传：让 AI 把白名单目录内的文件/文件夹发到当前会话（文件夹自动打包为 tar.gz）。
@@ -257,6 +261,7 @@ export class HelpHandler extends plugin {
   #cf /root/Yunzai/plugins/AI-Plugin → 读取本地文件/目录
   #cvn 这是个啥 → 同时启用两者
   Shell 执行需 enable_shell_exec 开启（独立开关），且仅主人可用，不会被 #cf 临时启用
+  持久 Shell 会话需 enable_shell_session 开启，默认使用 tmux 会话 ai-shell
 
 > 🎨 作图技巧
   - 预设命令加模型组前缀切换模型（#p手办化 / #u手办化）

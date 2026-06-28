@@ -452,6 +452,42 @@ function parseShellCommand(text) {
     return ''
 }
 
+function parseShellSessionRequest(text) {
+    const value = String(text || '').trim()
+    const sessionWords = '(?:tmux|ai-shell|shell\\s*session|shell会话|shell窗口|独立shell|终端会话)'
+    if (!new RegExp(sessionWords, 'i').test(value)) return null
+
+    if (new RegExp(`(?:状态|在不在|有没有|是否存在|创建|打开|启动|确保).{0,20}${sessionWords}`, 'i').test(value)) {
+        return { action: 'status' }
+    }
+    if (new RegExp(`(?:读取|读一下|看看|查看|显示).{0,20}${sessionWords}.{0,20}(?:输出|内容|窗口)?`, 'i').test(value)) {
+        return { action: 'read' }
+    }
+    if (/(?:中断|停止|打断|ctrl\+?c|Ctrl\+?C|发送C-c)/i.test(value)) {
+        return { action: 'interrupt' }
+    }
+    if (new RegExp(`(?:清屏|清空).{0,20}${sessionWords}`, 'i').test(value)) {
+        return { action: 'clear' }
+    }
+    if (new RegExp(`(?:重启|重置|重新创建).{0,20}${sessionWords}`, 'i').test(value)) {
+        return { action: 'restart' }
+    }
+    if (new RegExp(`(?:关闭|销毁|结束).{0,20}${sessionWords}`, 'i').test(value)) {
+        return { action: 'close' }
+    }
+
+    const patterns = [
+        /(?:在|往|向|给)?(?:tmux|ai-shell|shell\s*session|shell会话|shell窗口|独立shell|终端会话)(?:里|中|窗口)?(?:执行|运行|输入|发送|打入)\s*[：:，,\s]*(?<input>[\s\S]{1,4000})$/i,
+        /(?:执行|运行|输入|发送|打入)\s*[：:，,\s]*(?<input>[\s\S]{1,4000}?)(?:\s*(?:到|进|在|给)\s*(?:tmux|ai-shell|shell\s*session|shell会话|shell窗口|独立shell|终端会话)(?:里|中|窗口)?)$/i
+    ]
+    for (const pattern of patterns) {
+        const match = value.match(pattern)
+        const input = match?.groups?.input?.trim()
+        if (input) return { action: 'send', input, enter: !/(?:不回车|不要回车|先别执行|只输入)/i.test(value) }
+    }
+    return null
+}
+
 function preRouteToolIntent(userMessage, enabledTools, options = {}) {
     const text = String(userMessage || '').trim()
     if (!text) return null
@@ -552,7 +588,19 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         }
     }
 
-    // 4) 主人明确给出 shell 命令：直接走 shell_exec。
+    // 4) 主人明确要求操作持久 tmux Shell 会话：走 shell_session。
+    if (hasTool(enabledTools, 'shell_session')) {
+        const shellSessionArgs = parseShellSessionRequest(text)
+        if (shellSessionArgs) {
+            return {
+                intent: '规则预路由：主人明确要求操作持久 tmux Shell 会话。',
+                tools: [{ name: 'shell_session', args: shellSessionArgs }],
+                routedBy: 'rule'
+            }
+        }
+    }
+
+    // 5) 主人明确给出一次性 shell 命令：直接走 shell_exec。
     if (hasTool(enabledTools, 'shell_exec')) {
         const command = parseShellCommand(text)
         if (command) {
@@ -564,7 +612,7 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         }
     }
 
-    // 5) 明确要求查看/总结链接内容：直接走 web_fetch（仅在工具已启用时）。
+    // 6) 明确要求查看/总结链接内容：直接走 web_fetch（仅在工具已启用时）。
     if (hasTool(enabledTools, 'web_fetch') && urls.length > 0) {
         const fetchIntent = /(?:看|看看|打开|读取|抓取|总结|分析|解释|概括).{0,20}(?:链接|网页|网址|页面|内容|这个)/i.test(text)
             || /(?:这个|这条|上面).{0,8}(?:链接|网页|网址).{0,12}(?:讲|说|内容|总结|看看|分析)/i.test(text)
@@ -577,7 +625,7 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         }
     }
 
-    // 6) 群聊流水查询：当前群前情和“我在别的群刚说了什么”是明确可查的畅聊数据。
+    // 7) 群聊流水查询：当前群前情和“我在别的群刚说了什么”是明确可查的畅聊数据。
     if (hasTool(enabledTools, 'group_chat_context')) {
         const asksGroupList = isMaster && /(加了哪些群|加入了哪些群|在哪些群|能看到哪些群|可见群|群列表|所有群列表|有哪些群|有什么群|机器人.*群|你.*群)/i.test(text)
         if (asksGroupList) {
@@ -724,6 +772,7 @@ ${toolSummary}
 规划约束：
 - 不要为了“可能有用”而调用工具；只有工具结果会直接影响回答时才计划工具。
 - 文件/目录优先使用 file_read/dir_read；shell_exec 只用于用户明确要求命令、诊断、搜索服务器或普通文件工具不足的场景。
+- 持久 Shell 会话只在主人明确提到 tmux、ai-shell、shell会话、shell窗口、独立shell 时使用 shell_session；普通一次性命令仍优先 shell_exec。
 - 链接只在用户明确要求查看/总结/分析网页内容时计划 web_fetch；只是出现链接不代表需要抓取。
 - 用户询问天气但当前消息没写城市时，如果长期记忆摘要或最近对话中明确给出了用户常住地/所在地/所在城市，可以计划 weather 并在 params_hint 写入该城市；没有明确地点时不要猜，返回 need_tools=false 并说明需要追问城市。
 - 当前消息包含图片：${hasImages ? '是' : '否'}；最近图片缓存可用：${hasRecentImages ? '是' : '否'}。规划阶段不会收到图片内容；如果用户只是让你看图/描述图且没有明确工具需求，交给最终多模态/视觉流程，不要计划工具。
@@ -1122,7 +1171,7 @@ export class ChatHandler extends plugin {
             }
             enabledTools.push('weather') // 天气查询，所有用户可用
             // 文件读取：主人开启 enable_file_read 或带 f flag
-            const fileReadEnabled = e.isMaster && (e._fileReadFlag || this.client.enableFileRead)
+            const fileReadEnabled = e.isMaster && (e._fileReadFlag || this.client.enableFileRead || this.client.enableShellSession)
             // Shell 执行：主人开启 enable_shell_exec（独立于 file_read），开启即默认具备文件读取能力
             const shellEnabled = e.isMaster && this.client.enableShellExec
             if (fileReadEnabled || shellEnabled) {
@@ -1131,6 +1180,9 @@ export class ChatHandler extends plugin {
             }
             if (shellEnabled) {
                 enabledTools.push('shell_exec')
+            }
+            if (e.isMaster && this.client.enableShellSession) {
+                enabledTools.push('shell_session')
             }
             // 文件收发：主人开启 enable_file_transfer 后可上传白名单文件到会话 / 下载会话媒体到白名单目录
             if (e.isMaster && this.client.enableFileTransfer) {
@@ -1315,6 +1367,10 @@ export class ChatHandler extends plugin {
                             userMessage = userMessage + '\n\n【重要指令】以上为服务器 Shell 命令的实际执行结果。请严格基于 stdout/stderr/退出码回答，不要编造未执行的结果。' + formattedResult
                             executedShellCommands.push(normalizeShellCommand(result.data?.command || call.args?.command))
                             logger.warn(`[AI-Plugin] shell_exec 完成，结果已注入`)
+                        } else if (call.name === 'shell_session') {
+                            const formattedResult = toolRegistry.formatToolResult('shell_session', result.data)
+                            userMessage = userMessage + '\n\n【重要指令】以上为持久 tmux Shell 会话的实际操作结果。请严格基于 tmux 窗口输出和动作结果回答，不要编造未执行的结果。' + formattedResult
+                            logger.warn(`[AI-Plugin] shell_session 完成，结果已注入`)
                         } else if (call.name === 'file_send' || call.name === 'file_download') {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为文件收发工具的实际执行结果，请如实告知主人操作结果，不要编造。' + formattedResult

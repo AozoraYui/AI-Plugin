@@ -139,6 +139,14 @@ enable_web_fetch: false
 #   独立开关：无需再开 enable_file_read，开启后自动具备文件读取能力
 #   支持多轮补查：AI 可根据上一条命令结果决定下一步命令
 #
+# enable_shell_session: 是否启用持久 tmux Shell 会话（默认 false）
+#   ⚠ 高危能力，主人专用；用于让 AI 操作一个独立 tmux 窗口
+#   机器人启动时会检查 SHELL_SESSION_NAME 指定的会话；不存在则自动创建
+#   普通一次性命令仍走 shell_exec；只有明确提到 tmux/ai-shell/shell会话时才走持久会话
+#   SHELL_SESSION_NAME: tmux 会话名（默认 ai-shell）
+#   SHELL_SESSION_CAPTURE_LINES: 读取 tmux 窗口时默认回看行数（默认 200）
+#   SHELL_SESSION_MAX_OUTPUT_CHARS: 单次注入模型的 tmux 输出最大字符数（默认 24000）
+#
 # 以下为可调上限（注释即用默认值，单位见名）：
 #   SHELL_EXEC_TIMEOUT_MS            单条命令默认超时（默认 60000）
 #   SHELL_EXEC_MAX_TIMEOUT_MS        单条命令超时上限（默认 240000）
@@ -186,6 +194,7 @@ enable_web_fetch: false
 # ================================================
 # enable_file_read: false
 # enable_shell_exec: false
+# enable_shell_session: false         # 持久 tmux Shell 会话，主人专用；默认会话名 ai-shell
 # enable_file_transfer: false
 # enable_ai_draw: false
 # enable_group_admin: false
@@ -204,6 +213,9 @@ enable_web_fetch: false
 # SHELL_EXEC_MAX_OUTPUT_CHARS: 24000
 # SHELL_EXEC_FOLLOWUP_MAX_ROUNDS: 5
 # SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS: 24000
+# SHELL_SESSION_NAME: ai-shell
+# SHELL_SESSION_CAPTURE_LINES: 200
+# SHELL_SESSION_MAX_OUTPUT_CHARS: 24000
 
 # ================================================
 # 天气查询配置
