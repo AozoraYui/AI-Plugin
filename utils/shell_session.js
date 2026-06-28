@@ -152,7 +152,7 @@ export async function sendToShellSession(options = {}) {
     }
 
     try {
-        await execTmux(['send-keys', '-t', sessionName, '--', input])
+        await execTmux(['send-keys', '-t', sessionName, '-l', '--', input])
         if (options.enter !== false) {
             await execTmux(['send-keys', '-t', sessionName, 'C-m'])
         }
