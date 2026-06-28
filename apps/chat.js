@@ -438,6 +438,7 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
     const hasImages = options.hasImages === true
     const hasRecentImages = options.hasRecentImages === true
     const hasImageContext = hasImages || hasRecentImages
+    const isMaster = options.isMaster === true
 
     // 1) 明确画图/角色图：直接走 draw_image，避免让小模型在长工具说明里猜。
     if (hasTool(enabledTools, 'draw_image')) {
@@ -542,6 +543,41 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         }
     }
 
+    // 6) 群聊流水查询：当前群前情和“我在别的群刚说了什么”是明确可查的畅聊数据。
+    if (hasTool(enabledTools, 'group_chat_context')) {
+        const asksOwnOtherGroup = /(我|俺|咱).{0,18}(别的群|其他群|其它群|别群|跨群).{0,24}(发|说|聊|消息|看到|看见|记得|知道)/i.test(text)
+            || /(别的群|其他群|其它群|别群|跨群).{0,18}(我|俺|咱).{0,24}(发|说|聊|消息|看到|看见|记得|知道)/i.test(text)
+        if (asksOwnOtherGroup) {
+            return {
+                intent: '规则预路由：用户询问自己在其他群的已捕获消息。',
+                tools: [{ name: 'group_chat_context', args: { scope: 'other_group_messages', exclude_current_group: true, limit: 40 } }],
+                routedBy: 'rule'
+            }
+        }
+
+        const asksAllGroups = isMaster && /(所有群|全部群|跨群|各群|别的群|其他群|其它群).{0,20}(聊了啥|聊了什么|说了啥|发了啥|发生了什么|前情|总结|流水|记录|消息)/i.test(text)
+        if (asksAllGroups) {
+            return {
+                intent: '规则预路由：主人询问跨群已捕获聊天流水。',
+                tools: [{ name: 'group_chat_context', args: { scope: 'all_groups', limit: 60 } }],
+                routedBy: 'rule'
+            }
+        }
+
+        const hasCrossGroupWords = /(所有群|全部群|跨群|各群|别的群|其他群|其它群|别群)/i.test(text)
+        const asksCurrentGroupContext = !hasCrossGroupWords && (
+            /(刚才|刚刚|之前|前面|最近|他们|大家|群里).{0,24}(聊了啥|聊了什么|说了啥|发了啥|发生了什么|什么情况|前情|总结)/i.test(text)
+            || /(聊了啥|聊了什么|说了啥|发了啥|发生了什么|前情提要|总结.{0,12}群聊)/i.test(text)
+        )
+        if (asksCurrentGroupContext) {
+            return {
+                intent: '规则预路由：用户询问当前群最近聊天上下文。',
+                tools: [{ name: 'group_chat_context', args: { scope: 'current_group', limit: 40 } }],
+                routedBy: 'rule'
+            }
+        }
+    }
+
     return null
 }
 
@@ -605,7 +641,8 @@ async function askMainModelForToolPlan(client, modelGroupKey, providerFilter, op
         candidateUrls = [],
         mentionedUserIds = [],
         hasImages = false,
-        hasRecentImages = false
+        hasRecentImages = false,
+        isMaster = false
     } = options
 
     if (!userMessage && !hasImages) return { need_tools: false, reason: '当前消息为空' }
@@ -647,7 +684,10 @@ ${toolSummary}
 - 链接只在用户明确要求查看/总结/分析网页内容时计划 web_fetch；只是出现链接不代表需要抓取。
 - 当前消息包含图片：${hasImages ? '是' : '否'}；最近图片缓存可用：${hasRecentImages ? '是' : '否'}。规划阶段不会收到图片内容；如果用户只是让你看图/描述图且没有明确工具需求，交给最终多模态/视觉流程，不要计划工具。
 - draw_image 可以自动提取当前消息图、引用图、@头像，也可以在用户说“刚才那张/这张图/用 p 模型处理/修图/去水印/二维码/套预设”等时复用最近图片缓存。用户明确要求基于图片生成、重绘、修图、去水印或套风格时，可以计划 draw_image，但不要承诺精准像素级编辑。
-- 用户问“刚才/之前/他们/大家/群里聊了什么、发生了什么、前情提要、总结最近群聊”时，优先计划 group_chat_context 读取畅聊捕获的本群公开群流水。
+- 当前操作者是否主人：${isMaster ? '是' : '否'}。
+- 用户问“刚才/之前/他们/大家/群里聊了什么、发生了什么、前情提要、总结最近群聊”时，优先计划 group_chat_context 读取畅聊捕获的本群公开群流水，params_hint 写 scope=current_group。
+- 用户问“我刚在别的群/其他群发了什么”“你看到我在别的群说的话吗”时，计划 group_chat_context，params_hint 写 scope=other_group_messages、exclude_current_group=true；这只查询当前触发者自己的跨群消息。
+- 只有当前操作者是主人且用户明确要求跨群/所有群/指定群的已捕获流水时，才计划 group_chat_context 的 scope=all_groups 或 specific_group；非主人不要计划读取其他人的跨群消息。
 - 用户问“这个人是谁/@某某有什么外号/谁是杂鱼/谁被叫过xxx/本群怎么称呼某人”时，计划 group_member_aliases 查询本群称呼记忆；这类结果只代表群内公开聊天里的称呼记录，不是真实身份断言。
 - 只计划“可用工具”中列出的工具，最多 5 个。
 - 群管理成员操作必须有明确目标；如果用户只给昵称/群名片且不确定 QQ 号，先计划 group_member_list 或 group_member_resolve。
@@ -1101,7 +1141,8 @@ export class ChatHandler extends plugin {
                 const preRouted = preRouteToolIntent(userMessage, enabledTools, {
                     hasImages: allImages.length > 0,
                     hasRecentImages: recentImageInfo.available,
-                    urls: candidateUrls
+                    urls: candidateUrls,
+                    isMaster: e.isMaster === true
                 })
                 let toolAnalysis
                 if (preRouted) {
@@ -1118,7 +1159,8 @@ export class ChatHandler extends plugin {
                         candidateUrls,
                         mentionedUserIds,
                         hasImages: allImages.length > 0,
-                        hasRecentImages: recentImageInfo.available
+                        hasRecentImages: recentImageInfo.available,
+                        isMaster: e.isMaster === true
                     })
                     if (mainToolPlan?.need_tools) {
                         logger.info(`[AI-Plugin] 主模型计划调用 ${mainToolPlan.tool_plan.length} 个工具，交给意图模型编译参数`)
@@ -1230,7 +1272,7 @@ export class ChatHandler extends plugin {
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (call.name === 'group_chat_context') {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
-                            userMessage = userMessage + '\n\n【重要指令】以上为畅聊模式捕获的当前群公开聊天流水。请严格基于这些记录回答用户关于“之前聊了什么/发生了什么/前情提要”的问题；如果记录不足，要明确说明只能看到已捕获的部分。' + formattedResult
+                            userMessage = userMessage + '\n\n【重要指令】以上为畅聊模式捕获的公开聊天流水或跨群个人消息查询结果。请严格基于这些记录回答用户关于“之前聊了什么/发生了什么/前情提要/别的群刚说了什么”的问题；如果记录不足，要明确说明只能看到已捕获的部分，并遵守工具结果中的范围与隐私提示。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (call.name === 'group_member_aliases') {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)

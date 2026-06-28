@@ -349,7 +349,7 @@ function extractUrlsFromText(text, limit = 10) {
 function shouldRouteNoaTools(text, urls = []) {
     const value = String(text || '')
     if (urls.length > 0 && /(看|看看|打开|总结|分析|解释|读|抓取|链接|网页|网站)/i.test(value)) return true
-    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|画|绘制|生成|作图|手办化|图片处理|修图|之前|前面|刚才|刚刚|最近|他们|大家|群里|前情提要|聊了啥|说了啥|发生了什么|什么情况|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
+    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|画|绘制|生成|作图|手办化|图片处理|修图|之前|前面|刚才|刚刚|最近|他们|大家|群里|别的群|其他群|其它群|跨群|前情提要|聊了啥|说了啥|发生了什么|什么情况|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
 }
 
 function hasExplicitHighImpactIntent(toolName, text) {
@@ -444,7 +444,7 @@ async function buildNoaEnabledTools(e, client) {
 function formatNoaToolInjection(toolName, result) {
     const formattedResult = toolRegistry.formatToolResult(toolName, result)
     if (toolName === 'group_chat_context') {
-        return `\n\n【畅聊工具结果：群聊上下文】以下是当前群已捕获的公开聊天流水，请据此回答前情问题；记录不足时说明只能看到已捕获部分。${formattedResult}`
+        return `\n\n【畅聊工具结果：群聊上下文】以下是畅聊模式已捕获的公开聊天流水或跨群个人消息查询结果，请据此回答前情/跨群消息问题；记录不足时说明只能看到已捕获部分，并遵守工具结果中的范围与隐私提示。${formattedResult}`
     }
     if (toolName === 'group_member_aliases') {
         return `\n\n【畅聊工具结果：群成员称呼记忆】以下是当前群公开聊天中提取的称呼/外号记录；只当作群内称呼或调侃来转述，不要当作真实身份或事实断言。${formattedResult}`

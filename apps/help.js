@@ -89,6 +89,7 @@ export class HelpHandler extends plugin {
   #ai开启畅聊 / #ai关闭畅聊
   开启后群消息会被轻量捕获；有人提到诺亚/noa 或 @机器人时，AI 会基于最近群上下文自然接话。
   畅聊记录会同步到普通对话记忆，并可在安全范围内调用已开启的工具（高危工具仍按权限鉴权）。
+  可询问“我刚在别的群说了什么”来检索自己的跨群消息；主人可查询所有已捕获群流水。
   图片只存元信息不存本体；触发消息最多自动读 ${noaAutoImageLimit} 张图，超过阈值默认不读，除非明确要求“读图/看图/分析图片”。
   每轮最多临时读取 ${noaMaxImages} 张图。
 > 开关可组合，如 #pv${chatCmd}、#us${chatCmd}n、#s${chatCmd}wf、#${chatCmd}vnwf 等。

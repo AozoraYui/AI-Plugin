@@ -52,6 +52,23 @@ function migrateLegacyDatabase() {
     }
 }
 
+function normalizeGroupMessageRow(row) {
+    return {
+        groupId: row.group_id,
+        messageId: row.message_id,
+        seq: row.seq,
+        userId: row.user_id,
+        nickname: row.nickname,
+        normalizedText: row.normalized_text,
+        imageMeta: (() => {
+            try { return JSON.parse(row.image_meta || '[]') } catch { return [] }
+        })(),
+        isCommand: row.is_command === 1,
+        isBot: row.is_bot === 1,
+        createdAt: row.created_at
+    }
+}
+
 export class AIDatabase {
     constructor() {
         migrateLegacyDatabase()
@@ -119,6 +136,18 @@ export class AIDatabase {
 
                 CREATE INDEX IF NOT EXISTS idx_group_logs_group_user
                 ON group_message_logs(group_id, user_id);
+
+                CREATE INDEX IF NOT EXISTS idx_group_logs_user_created
+                ON group_message_logs(user_id, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_group_logs_created
+                ON group_message_logs(created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_group_logs_user_recent
+                ON group_message_logs(user_id, id);
+
+                CREATE INDEX IF NOT EXISTS idx_group_logs_group_recent
+                ON group_message_logs(group_id, id);
 
                 -- 群成员称呼/外号记忆（来自本群公开聊天，不作为事实断言）
                 CREATE TABLE IF NOT EXISTS group_member_aliases (
@@ -409,21 +438,62 @@ export class AIDatabase {
                     reject(err)
                     return
                 }
-                const normalized = rows.reverse().map(row => ({
-                    groupId: row.group_id,
-                    messageId: row.message_id,
-                    seq: row.seq,
-                    userId: row.user_id,
-                    nickname: row.nickname,
-                    normalizedText: row.normalized_text,
-                    imageMeta: (() => {
-                        try { return JSON.parse(row.image_meta || '[]') } catch { return [] }
-                    })(),
-                    isCommand: row.is_command === 1,
-                    isBot: row.is_bot === 1,
-                    createdAt: row.created_at
-                }))
+                const normalized = rows.reverse().map(normalizeGroupMessageRow)
                 resolve(normalized)
+            })
+        })
+    }
+
+    getGroupMessageLogs(options = {}) {
+        return new Promise((resolve, reject) => {
+            const params = []
+            let query = `
+                SELECT group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at
+                FROM group_message_logs
+                WHERE 1 = 1
+            `
+
+            const groupIds = Array.isArray(options.groupIds)
+                ? [...new Set(options.groupIds.map(id => String(id)).filter(Boolean))]
+                : []
+            if (options.groupId) {
+                query += ' AND group_id = ?'
+                params.push(String(options.groupId))
+            } else if (groupIds.length > 0) {
+                query += ` AND group_id IN (${groupIds.map(() => '?').join(',')})`
+                params.push(...groupIds)
+            }
+
+            if (options.excludeGroupId) {
+                query += ' AND group_id != ?'
+                params.push(String(options.excludeGroupId))
+            }
+
+            if (options.userId) {
+                query += ' AND user_id = ?'
+                params.push(String(options.userId))
+            }
+
+            if (options.excludeCommands === true) {
+                query += ' AND is_command = 0'
+            }
+
+            const q = String(options.query || '').trim()
+            if (q) {
+                const like = `%${q}%`
+                query += ' AND (normalized_text LIKE ? OR nickname LIKE ? OR user_id LIKE ? OR group_id LIKE ?)'
+                params.push(like, like, like, like)
+            }
+
+            query += ' ORDER BY id DESC LIMIT ?'
+            params.push(Math.max(1, Math.min(Number(options.limit) || 60, 300)))
+
+            this.db.all(query, params, (err, rows) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(rows.reverse().map(normalizeGroupMessageRow))
             })
         })
     }

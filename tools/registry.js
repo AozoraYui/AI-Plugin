@@ -86,7 +86,7 @@ class ToolRegistry {
 
         logger.info(`[AI-Plugin] 调用工具: ${name}, 参数: ${JSON.stringify(args)}`)
         try {
-            const result = await tool.execute(args, context)
+            const result = await tool.execute(args, { ...context, isMaster })
             const businessFailed = (result && typeof result === 'object' && result.ok === false)
                 || (typeof result === 'string' && /^【[^】]+失败】/.test(result))
             if (businessFailed) {
@@ -219,6 +219,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - shell_exec 只能编译主模型明确计划的具体命令；不要为了补全信息自己设计危险命令。
 - file_download 用于下载当前消息或引用消息里的媒体，不需要 URL；web_fetch 才需要完整 URL。
 - draw_image 的参考图由工具自动提取（当前图、引用图、@头像、最近图片缓存）；角色参考图库参数按计划填写 character/characters/self_portrait。主模型已经计划 draw_image 时，不要仅因当前消息没有图片就丢弃调用；如果最近图片缓存可用，工具会按“刚才那张/这张图/用 p 模型处理/修图/去水印”等语义自行复用。
+- group_chat_context 的 scope 必须按主模型计划保留：当前群前情用 current_group；用户问自己在别的群/其他群刚发了什么用 other_group_messages 并设置 exclude_current_group=true；用户问自己跨群最近消息但未排除当前群用 my_recent_messages；主人要求所有群或指定群才用 all_groups/specific_group。普通用户不要编译其他人的 user_id。
 - 群管理成员操作必须有明确对象；有 QQ 号或 @ 时可填 user_id，没有 QQ 但有昵称/群名片时可填 target，拿不准唯一目标时先编译 group_member_list 或 group_member_resolve。
 - 如果当前消息 @ 了唯一成员，且主模型计划的群管理操作目标是“这个人/被 @ 的人”，请直接把该 QQ 填入 user_id。
 - group_request_handle 处理的是入群申请；用户说“刚才那个/他/那个人”且主模型计划处理待审申请时，可以省略 user_id；用户用昵称、QQ、留言关键词或含糊原话指代申请人时，把关键词写入 target。
@@ -379,8 +380,12 @@ ${toolDescriptions.join('\n')}
   - 群文件浏览要求：当用户想"看看群文件有哪些/列一下群文件/群文件里有什么"时使用。要进某个子文件夹就填 folder_name，否则留空看根目录。当用户想"连文件夹里的文件也一起看/全部列出来/包括子文件夹"时把 recursive 设为 true。注意这是 QQ"群文件区"，不是聊天消息里的文件。
 - group_file_download: {"file_name": "可选，群文件名", "save_dir": "可选，保存目录"}
   - 群文件下载要求：当用户要求把"群文件里的某个文件"下载/保存到服务器某目录时使用。file_name 填用户说的文件名（可为片段）。若用户是"引用了一条群文件消息"再说"下载这个/帮我下载到xxx/把这个存到服务器"，或者说"把刚才那个群文件/上次引用的文件下载到xxx"，file_name 都可以留空——工具会自动从被引用的群文件消息提取，或回退到最近引用过的群文件名。这是从 QQ 群文件区下载，区别于 file_download（后者下载聊天消息里的媒体）。
-- group_chat_context: {"limit": "可选，读取最近多少条群消息", "query": "可选，关键词"}
-  - 群聊上下文要求：用户问"刚才/之前/他们/大家/群里聊了什么、发生了什么、前情提要、总结最近群聊"时使用。query 只在用户问特定话题、昵称、QQ 或关键词时填写。
+- group_chat_context: {"scope": "current_group/my_recent_messages/other_group_messages/all_groups/specific_group", "limit": "可选，读取最近多少条群消息", "query": "可选，关键词", "group_id": "可选群号", "user_id": "可选用户QQ", "exclude_current_group": "可选true/false"}
+  - 群聊上下文要求：用户问"刚才/之前/他们/大家/群里聊了什么、发生了什么、前情提要、总结最近群聊"时使用。
+  - 默认 scope=current_group，只查当前群。
+  - 用户问"我刚在别的群/其他群发了什么""你看到我在别的群的消息吗"时，用 scope=other_group_messages 或 scope=my_recent_messages，并设置 exclude_current_group=true；普通用户只能查自己的跨群消息，不要填其他人的 user_id。
+  - 主人明确要求跨群/所有群/某个群的已捕获流水时，可用 scope=all_groups 或 specific_group，并可填 group_id/user_id/query。
+  - query 只在用户问特定话题、昵称、QQ 或关键词时填写。
 - group_member_aliases: {"target_user_id": "可选，成员QQ", "query": "可选，外号/称呼/QQ/来源昵称关键词", "limit": "可选数量"}
   - 群成员称呼记忆要求：用户问"这个人是谁""@某某有什么外号/称呼""杂鱼是谁""谁被叫过xxx"等本群称呼、外号、调侃称呼时使用。用户 @ 了成员或给出 QQ 时填 target_user_id；只给外号/关键词时填 query。查询结果只表示本群公开聊天里有人这样称呼过，不代表真实身份或事实断言。
 - draw_image: {"prompt": "画图描述", "preset": "可选预设名", "quality": "可选 flash/pro/ultra", "self_portrait": "可选 true/false", "character": "可选单个角色ID或别名", "characters": "可选多个角色ID或别名数组"}
@@ -411,7 +416,7 @@ ${toolDescriptions.join('\n')}
   - 查看入群申请要求：用户问"有没有人申请进群/看看入群申请/谁要进群"时使用。
 - group_request_handle: {"user_id": "QQ号，可选", "target": "昵称/QQ/留言关键词/用户原话，可选", "approve": true/false, "reason": "可选拒绝理由"}
   - 处理入群申请要求：用户要"通过/同意/拒绝某人的加群申请"时使用。approve=true 通过，false 拒绝；用户说"刚才那个/他/那个人"且没有 QQ 号时可以省略 user_id，由工具在当前群只有一条待审申请时自动定位；多条申请时可填 target 做昵称/留言模糊匹配，例如"幸福的"。
-  - 注意：以上 group_ 开头的工具都是「群管理」操作，仅主人或群管理员可触发。对禁言/踢人/改名片/设头衔等成员操作，优先使用真实 QQ 号或 @；如果只有昵称/群名片且不确定唯一目标，先调用 group_member_list 或 group_member_resolve，不要凭空编造 user_id。
+  - 注意：group_chat_context 和 group_member_aliases 是只读上下文工具；group_mute/group_whole_mute/group_kick/group_set_card/group_set_title/group_essence/group_member_list/group_member_resolve/group_request_list/group_request_handle 属于群管理相关工具，仅在权限允许时可用。对禁言/踢人/改名片/设头衔等成员操作，优先使用真实 QQ 号或 @；如果只有昵称/群名片且不确定唯一目标，先调用 group_member_list 或 group_member_resolve，不要凭空编造 user_id。
 
 请严格按以下JSON格式输出，不要输出其他任何内容：
 {"intent": "用户意图分析（一句话概括用户想做什么、隐含需求等）", "tools": [{"tool": "工具名", "params": {...}}]}
