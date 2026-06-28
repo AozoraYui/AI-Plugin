@@ -436,6 +436,7 @@ ${toolDescriptions.join('\n')}
 - shell_exec: {"command": "要执行的shell命令", "cwd": "可选工作目录", "timeout_ms": 可选超时毫秒, "max_output_chars": 可选最大输出字符数}
   - Shell 工具参数要求：仅当用户明确要求查看/搜索/诊断/操作服务器，且普通 file_read/dir_read 不足以完成时使用。
   - Shell 拥有完整服务器命令权限。可以使用 grep/rg/find/ls/cat/git/systemctl/docker 等命令；命令必须具体、可执行，不要编造不存在的路径。
+  - 用户说“在 AI-Plugin/ai-plugin/插件目录执行 git pull/status/log”等时，command 填用户要求的 git 命令，cwd 填 "plugins/AI-Plugin"。
   - 优先选择只读/查询命令完成排查；只有用户明确要求修改、删除、安装、重启等操作时，才生成有副作用的命令。
   - 如果用户意图需要连续多步操作，可以一次返回多个 shell_exec 调用，但不要返回无限运行或交互式命令。
   - 文件工具参数要求：用户给出绝对路径时直接使用；用户说“日志/配置/模型配置/插件目录/云崽data/data目录”等常用说法时，可直接把这些自然语言关键词填入 path，工具会在白名单内解析。
