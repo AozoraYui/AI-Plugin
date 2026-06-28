@@ -8,6 +8,7 @@ import { checkAccess } from '../utils/access.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, resolveModelGroup, resolveModelDisplay, resolveProviderPriority } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases } from '../utils/group_alias.js'
+import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import yaml from 'yaml'
 
@@ -782,7 +783,7 @@ ${toolSummary}
 - 用户问“刚才/之前/他们/大家/群里聊了什么、发生了什么、前情提要、总结最近群聊”时，优先计划 group_chat_context 读取畅聊捕获的本群公开群流水，params_hint 写 scope=current_group。
 - 主人问“你加了哪些群/能看到哪些群/群列表/有哪些群”时，计划 group_chat_context，params_hint 写 scope=group_list；私聊中也可以使用。
 - 用户问“我刚在别的群/其他群发了什么”“你看到我在别的群说的话吗”时，计划 group_chat_context，params_hint 写 scope=other_group_messages、exclude_current_group=true；这只查询当前触发者自己的跨群消息。
-- 只有当前操作者是主人且用户明确要求跨群/所有群/指定群的已捕获流水时，才计划 group_chat_context 的 scope=all_groups 或 specific_group；非主人不要计划读取其他人的跨群消息。
+- 只有当前操作者是主人且用户明确要求跨群/所有群/指定群的已捕获流水时，才计划 group_chat_context 的 scope=all_groups 或 specific_group；非主人不要计划读取其他人的跨群消息。主人按群名问某个群但你暂时没有群号时，可在 params_hint 里把群名写入 query，工具会尝试解析群号。
 - 用户问“这个人是谁/@某某有什么外号/谁是杂鱼/谁被叫过xxx/本群怎么称呼某人”时，计划 group_member_aliases 查询本群称呼记忆；这类结果只代表群内公开聊天里的称呼记录，不是真实身份断言。
 - 主人明确要求“帮我在某群说/发/转达某段文本”时，才计划 group_send_message；必须有目标群和明确消息内容。不要替主人编写、润色或补全要发送的内容，目标群不明确时不要计划。
 - 只计划“可用工具”中列出的工具，最多 5 个。
@@ -1385,7 +1386,20 @@ export class ChatHandler extends plugin {
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (call.name === 'group_chat_context') {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
-                            userMessage = userMessage + '\n\n【重要指令】以上为畅聊模式捕获的公开聊天流水或跨群个人消息查询结果。请严格基于这些记录回答用户关于“之前聊了什么/发生了什么/前情提要/别的群刚说了什么”的问题；如果记录不足，要明确说明只能看到已捕获的部分，并遵守工具结果中的范围与隐私提示。' + formattedResult
+                            let imageSummaryBlock = ''
+                            if (shouldReadGroupContextImages(originalUserMessage, result.data?.logs || [])) {
+                                try {
+                                    const imageSummary = await buildGroupContextImageSummary(this.client, result.data.logs, originalUserMessage)
+                                    imageSummaryBlock = formatGroupContextImageSummary(imageSummary)
+                                    if (imageSummary.summaryText) {
+                                        logger.info(`[AI-Plugin] group_chat_context 图片预读完成: ${imageSummary.processedCount}/${imageSummary.requestedCount}`)
+                                    }
+                                } catch (err) {
+                                    imageSummaryBlock = '\n\n【群聊上下文读图失败】尝试读取工具结果中的图片时失败；请不要描述未实际看到的图片内容。'
+                                    logger.warn(`[AI-Plugin] group_chat_context 图片预读失败: ${err.message}`)
+                                }
+                            }
+                            userMessage = userMessage + '\n\n【重要指令】以上为畅聊模式捕获的公开聊天流水或跨群个人消息查询结果。请严格基于这些记录回答用户关于“之前聊了什么/发生了什么/前情提要/别的群刚说了什么”的问题；如果记录里包含图片且下面提供了“群聊上下文图片预读摘要”，可以结合摘要回答；如果没有摘要，就只能说明有图片元信息，不能编造图片内容。记录不足时要明确说明只能看到已捕获的部分，并遵守工具结果中的范围与隐私提示。' + formattedResult + imageSummaryBlock
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (call.name === 'group_member_aliases') {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
