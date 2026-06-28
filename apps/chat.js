@@ -657,7 +657,7 @@ async function askMainModelForToolPlan(client, modelGroupKey, providerFilter, op
     if (!userMessage && !hasImages) return { need_tools: false, reason: '当前消息为空' }
     if (!Array.isArray(enabledTools) || enabledTools.length === 0) return { need_tools: false, reason: '没有可用工具' }
 
-    const toolSummary = toolRegistry.getToolSummaryLines(enabledTools).join('\n')
+    const toolSummary = toolRegistry.getToolDetailedLines(enabledTools).join('\n\n')
     const recentContext = formatHistoryForToolPlanner(history)
     const urls = Array.isArray(candidateUrls) ? [...new Set(candidateUrls)].slice(0, 10) : []
     const memoryBlock = incrementalCheckpoint
@@ -674,7 +674,7 @@ async function askMainModelForToolPlan(client, modelGroupKey, providerFilter, op
         ? `\n\n【当前消息 @ 的成员】\n${mentions.map((id, index) => `${index + 1}. QQ：${id}`).join('\n')}`
         : ''
 
-    logger.info(`[AI-Plugin] 主模型工具规划开始: 可用工具=${enabledTools.join(', ')}, 历史条数=${history.length}, 有记忆=${Boolean(incrementalCheckpoint)}, 有图片=${hasImages}, 有近期图片=${hasRecentImages}, @成员=${mentions.join(', ') || '无'}`)
+    logger.info(`[AI-Plugin] 主模型工具规划开始: 可用工具=${enabledTools.join(', ')}, 详细说明=${toolSummary.length}字, 历史条数=${history.length}, 有记忆=${Boolean(incrementalCheckpoint)}, 有图片=${hasImages}, 有近期图片=${hasRecentImages}, @成员=${mentions.join(', ') || '无'}`)
 
     const prompt = `你现在处于工具规划阶段。你是主模型本人，需要基于完整上下文判断本轮是否需要调用工具；这不是最终回复。
 

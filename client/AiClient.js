@@ -429,7 +429,7 @@ export class AiClient {
                 Config.show_thinking_notice = rawConfig.show_thinking_notice === true
                 Config.draw_review_after_generate = rawConfig.draw_review_after_generate === true
                 Config.enable_noa_chat = rawConfig.enable_noa_chat === true
-                for (const key of ['NOA_CHAT_CONTEXT_LIMIT', 'NOA_CHAT_REPLY_COOLDOWN_MS', 'NOA_CHAT_MAX_CONTEXT_IMAGES', 'NOA_CHAT_AUTO_READ_IMAGE_LIMIT']) {
+                for (const key of ['NOA_CHAT_CONTEXT_LIMIT', 'NOA_CHAT_REPLY_COOLDOWN_MS', 'NOA_CHAT_MAX_CONTEXT_IMAGES', 'NOA_CHAT_AUTO_READ_IMAGE_LIMIT', 'NOA_CHAT_IMAGE_BATCH_SIZE']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
                 if (Array.isArray(rawConfig.NOA_CHAT_TRIGGER_KEYWORDS)) {

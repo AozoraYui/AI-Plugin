@@ -20,6 +20,8 @@ export class HelpHandler extends plugin {
         const drawCmd = Config.DRAW_COMMAND
         const noaAutoImageLimit = Config.NOA_CHAT_AUTO_READ_IMAGE_LIMIT
         const noaMaxImages = Config.NOA_CHAT_MAX_CONTEXT_IMAGES
+        const noaMaxImagesText = noaMaxImages === Infinity ? '不限制' : `${noaMaxImages} 张图`
+        const noaImageBatchSize = Config.NOA_CHAT_IMAGE_BATCH_SIZE
         const msg1_header = `
 你好，欢迎使用 AI 插件
 这里是${aiName}，你的多模型智能助手`
@@ -92,7 +94,7 @@ export class HelpHandler extends plugin {
   可询问“我刚在别的群说了什么”来检索自己的跨群消息；主人可查询所有已捕获群流水。
   主人在私聊中也可以问“你加了哪些群/能看到哪些群”，查看机器人可见或已捕获群列表。
   图片只存元信息不存本体；触发消息最多自动读 ${noaAutoImageLimit} 张图，超过阈值默认不读，除非明确要求“读图/看图/分析图片”。
-  每轮最多临时读取 ${noaMaxImages} 张图。
+  每轮最多临时读取 ${noaMaxImagesText}；超过 ${noaImageBatchSize} 张会先分批读图摘要再回复。
 > 开关可组合，如 #pv${chatCmd}、#us${chatCmd}n、#s${chatCmd}wf、#${chatCmd}vnwf 等。
 
 > #导出${aiName}记忆
@@ -238,7 +240,7 @@ export class HelpHandler extends plugin {
 - - - - - - - - - - - - - - - - -
 > 📷 图片支持
   所有对话指令都支持发送图片，支持引用消息、合并转发展开。
-  畅聊模式也能临时读图：单条触发消息不超过 ${noaAutoImageLimit} 张图会自动读取，更多图片需明确说“诺亚读图/看图”。
+  畅聊模式也能临时读图：单条触发消息不超过 ${noaAutoImageLimit} 张图会自动读取，更多图片需明确说“诺亚读图/看图”；多图会按批读取。
 > 🌐 临时开关
   默认关闭联网搜索、网页抓取和文件读取，避免无意义的 Token 消耗。
   需要时添加 v (Vision)、n (Net)、w (Web)、f (File) 开关临时启用：

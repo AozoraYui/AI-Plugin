@@ -87,6 +87,7 @@ const defaultConfig = {
     NOA_CHAT_REPLY_COOLDOWN_MS: 8000,
     NOA_CHAT_MAX_CONTEXT_IMAGES: 3,
     NOA_CHAT_AUTO_READ_IMAGE_LIMIT: 2,
+    NOA_CHAT_IMAGE_BATCH_SIZE: 3,
     // ========== 文件读取与 Shell 工具配置 ==========
     // 单次读取文件最大大小（字节），默认 8MB
     FILE_MAX_SIZE: 8388608,
@@ -115,6 +116,25 @@ function buildPersonaPrimer(aiName, prompts) {
         { "role": "user", "parts": [{ "text": userInstruction }] },
         { "role": "model", "parts": [{ "text": modelConfirmation }] }
     ]
+}
+
+function parseImageLimit(val, defaultValue) {
+    if (val === null || val === undefined || val === '') return defaultValue
+    if (val === Infinity) return Infinity
+    if (typeof val === 'string') {
+        const normalized = val.trim().toLowerCase()
+        if (['unlimited', 'infinite', 'infinity', 'inf', 'all', 'no_limit', 'nolimit', '无限', '不限', '不限制', '全部', '所有'].includes(normalized)) {
+            return Infinity
+        }
+    }
+    const num = Number(val)
+    if (num === Infinity || num === -Infinity || num < 0) return Infinity
+    return Number.isFinite(num) && num >= 0 ? Math.floor(num) : defaultValue
+}
+
+function parsePositiveInteger(val, defaultValue) {
+    const num = Number(val)
+    return Number.isFinite(num) && num > 0 ? Math.floor(num) : defaultValue
 }
 
 export function expandPrompt(template, vars = {}) {
@@ -360,14 +380,15 @@ export const Config = {
     set NOA_CHAT_REPLY_COOLDOWN_MS(val) { config.NOA_CHAT_REPLY_COOLDOWN_MS = Number(val) || defaultConfig.NOA_CHAT_REPLY_COOLDOWN_MS },
     get NOA_CHAT_MAX_CONTEXT_IMAGES() { return config.NOA_CHAT_MAX_CONTEXT_IMAGES ?? defaultConfig.NOA_CHAT_MAX_CONTEXT_IMAGES },
     set NOA_CHAT_MAX_CONTEXT_IMAGES(val) {
-        const num = Number(val)
-        config.NOA_CHAT_MAX_CONTEXT_IMAGES = Number.isFinite(num) && num >= 0 ? num : defaultConfig.NOA_CHAT_MAX_CONTEXT_IMAGES
+        config.NOA_CHAT_MAX_CONTEXT_IMAGES = parseImageLimit(val, defaultConfig.NOA_CHAT_MAX_CONTEXT_IMAGES)
     },
     get NOA_CHAT_AUTO_READ_IMAGE_LIMIT() { return config.NOA_CHAT_AUTO_READ_IMAGE_LIMIT ?? defaultConfig.NOA_CHAT_AUTO_READ_IMAGE_LIMIT },
     set NOA_CHAT_AUTO_READ_IMAGE_LIMIT(val) {
         const num = Number(val)
         config.NOA_CHAT_AUTO_READ_IMAGE_LIMIT = Number.isFinite(num) && num >= 0 ? num : defaultConfig.NOA_CHAT_AUTO_READ_IMAGE_LIMIT
     },
+    get NOA_CHAT_IMAGE_BATCH_SIZE() { return config.NOA_CHAT_IMAGE_BATCH_SIZE ?? defaultConfig.NOA_CHAT_IMAGE_BATCH_SIZE },
+    set NOA_CHAT_IMAGE_BATCH_SIZE(val) { config.NOA_CHAT_IMAGE_BATCH_SIZE = parsePositiveInteger(val, defaultConfig.NOA_CHAT_IMAGE_BATCH_SIZE) },
     get FILE_ROOTS() { return loadedFileRoots ?? defaultConfig.FILE_ROOTS },
     get FILE_MAX_SIZE() { return config.FILE_MAX_SIZE ?? defaultConfig.FILE_MAX_SIZE },
     get FILE_READ_ALL_MAX_TOTAL() { return config.FILE_READ_ALL_MAX_TOTAL ?? defaultConfig.FILE_READ_ALL_MAX_TOTAL },

@@ -166,8 +166,13 @@ enable_web_fetch: false
 # enable_noa_chat: 是否启用畅聊模式（默认 false）
 #   开启后，插件会轻量捕获可访问群聊的消息流水（文本化内容 + 图片元信息，不存图片本体）
 #   当群里有人提到「诺亚/noa/AI名称」或 @ 机器人时，AI 会基于最近群上下文自然回复
-#   触发畅聊的单条消息含图数不超过 NOA_CHAT_AUTO_READ_IMAGE_LIMIT 时会自动临时读图
-#   超过阈值则默认不读，除非用户明确要求读图；每轮最多读取 NOA_CHAT_MAX_CONTEXT_IMAGES 张，不会把 base64 写入数据库
+#   NOA_CHAT_CONTEXT_LIMIT: 每次回复注入最近多少条本群畅聊流水；只影响本轮上下文，不会删除数据库记录
+#   NOA_CHAT_REPLY_COOLDOWN_MS: 同一群两次畅聊主动回复之间的冷却时间，避免刷屏
+#   NOA_CHAT_AUTO_READ_IMAGE_LIMIT: 自动读图阈值；触发消息含图数 <= 该值时自动临时读图，超过则需明确说“读图/看图/分析图片”
+#   NOA_CHAT_MAX_CONTEXT_IMAGES: 本轮最多读取多少张图；3 表示最多读 3 张，不是超过 3 张就分批；0 表示禁用畅聊读图
+#   NOA_CHAT_MAX_CONTEXT_IMAGES 可设为 unlimited / -1 表示本轮读图数量不限制
+#   NOA_CHAT_IMAGE_BATCH_SIZE: 分批读图批大小；待读图片超过该值时，会按批预读成文字摘要后再最终回复
+#   畅聊只保存图片元信息，不会把图片本体或 base64 写入数据库
 #
 # show_thinking: 是否显示 AI 思考过程（Raw 模式；false 时自动清洗思考内容，默认 false）
 # show_thinking_notice: 是否在普通对话请求模型前发送“xx思考中”占位提示（默认 false）
@@ -179,11 +184,12 @@ enable_web_fetch: false
 # enable_file_transfer: false
 # enable_ai_draw: false
 # enable_group_admin: false
-# enable_noa_chat: false
-# NOA_CHAT_CONTEXT_LIMIT: 60
-# NOA_CHAT_REPLY_COOLDOWN_MS: 8000
-# NOA_CHAT_MAX_CONTEXT_IMAGES: 3
-# NOA_CHAT_AUTO_READ_IMAGE_LIMIT: 2
+# enable_noa_chat: false              # 是否开启畅聊捕获与自然触发回复
+# NOA_CHAT_CONTEXT_LIMIT: 60          # 每次回复读取最近 60 条本群畅聊流水作为上下文
+# NOA_CHAT_REPLY_COOLDOWN_MS: 8000    # 同一群畅聊回复冷却 8000ms，防止连续触发刷屏
+# NOA_CHAT_MAX_CONTEXT_IMAGES: 3      # 本轮最多读 3 张图；unlimited / -1 为不限制，0 为禁用读图
+# NOA_CHAT_AUTO_READ_IMAGE_LIMIT: 2   # 单条触发消息最多 2 张图时自动读图，超过则需明确要求读图
+# NOA_CHAT_IMAGE_BATCH_SIZE: 3        # 待读图片超过 3 张时，每批 3 张先生成读图摘要再回复
 # show_thinking: false
 # show_thinking_notice: false
 # draw_review_after_generate: false

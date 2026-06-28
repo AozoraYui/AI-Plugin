@@ -3,6 +3,365 @@
  * 管理所有内置工具，支持 Function Calling schema 生成和结果格式化
  */
 
+const TOOL_USAGE_GUIDES = {
+    web_search: {
+        capabilities: [
+            '联网检索实时或不确定信息，返回搜索结果摘要和来源链接。',
+            '适合最新新闻、版本/价格/政策/资料、百科事实校验、需要外部信息的问题。'
+        ],
+        avoid: [
+            '用户只是普通聊天、看图问答、让你分析已提供内容时不要搜索。',
+            '消息里只是出现链接但用户没要求查资料时不要搜索；需要读链接正文用 web_fetch。'
+        ],
+        rules: [
+            'query 要精确简洁，优先保留用户关心的实体、时间、地点和关键词。'
+        ]
+    },
+    vision_relay: {
+        capabilities: [
+            '用 Vision 模型先描述图片，再把描述交给纯文本模型。',
+            '这是内部图文转述能力，通常由对话流程自动使用。'
+        ],
+        avoid: [
+            '普通工具路由一般不要主动计划它；多模态模型可直接看图。'
+        ]
+    },
+    system_info: {
+        capabilities: [
+            '读取服务器 CPU、内存、负载、磁盘、温度等运行状态。'
+        ],
+        useWhen: [
+            '主人询问服务器状态、系统负载、资源占用、磁盘空间、运行环境时使用。'
+        ],
+        avoid: [
+            '不要用来查询插件业务日志或文件内容；那类需求用 file_read/dir_read/shell_exec。'
+        ]
+    },
+    file_read: {
+        capabilities: [
+            '读取白名单目录内单个文本文件，或对路径做只读查看。',
+            '支持绝对路径、相对路径、常用别名、文件名片段和最近成功路径。'
+        ],
+        useWhen: [
+            '主人让你看某个日志、配置、代码文件、README、脚本内容时优先用它。'
+        ],
+        avoid: [
+            '不要用于执行命令、搜索大量文件、发送文件或保存媒体。'
+        ],
+        rules: [
+            '完全不知道目标路径时不要编造，先追问或用 dir_read 看目录。'
+        ]
+    },
+    dir_read: {
+        capabilities: [
+            '列出白名单目录的文件/子目录，可选 read_all 读取目录下所有文本文件。',
+            '适合了解目录结构、检查插件目录、查看某目录有哪些文件。'
+        ],
+        avoid: [
+            '只是读取一个明确文件时用 file_read；需要 shell 搜索或 git 命令时用 shell_exec。'
+        ],
+        rules: [
+            'read_all 只在用户明确要求全面检查目录内容时设 true。'
+        ]
+    },
+    file_send: {
+        capabilities: [
+            '把服务器白名单目录内的文件或文件夹发送到当前 QQ 会话。',
+            '文件夹会自动打包为 tar.gz；图片文件可按用户要求作为图片发送。'
+        ],
+        useWhen: [
+            '主人说“把某文件发我/发到群里/发一下日志/配置/脚本”时使用。'
+        ],
+        avoid: [
+            '不要用于下载当前消息里的图片/文件；那是 file_download。',
+            '目标不明确时先用 dir_read/file_read 确认。'
+        ]
+    },
+    file_download: {
+        capabilities: [
+            '把当前消息或引用消息中的图片、视频、语音、普通文件保存到服务器白名单目录。',
+            '不需要 URL，工具会从消息或引用消息里自动提取媒体。'
+        ],
+        useWhen: [
+            '主人说“把这张图存服务器/下载引用的文件/保存这些媒体”时使用。'
+        ],
+        avoid: [
+            '不要用于下载 QQ 群文件区里的文件；那是 group_file_download。',
+            '不要用于抓网页链接；那是 web_fetch。'
+        ],
+        rules: [
+            '未指定目录时 save_dir 留空；只有用户明确要求统一后缀时才填 force_ext。'
+        ]
+    },
+    group_file_list: {
+        capabilities: [
+            '浏览当前 QQ 群的群文件区，列出文件和文件夹。',
+            '可进入指定子文件夹，也可递归展开所有子文件夹。'
+        ],
+        useWhen: [
+            '主人问“群文件有哪些/群文件里有什么/列一下群文件”时使用。'
+        ],
+        avoid: [
+            '不要用于查看聊天消息里的文件；群文件区和聊天文件不是同一类。'
+        ],
+        rules: [
+            '用户说“包括子文件夹/全部列出来/递归”时 recursive=true。'
+        ]
+    },
+    group_file_download: {
+        capabilities: [
+            '把当前 QQ 群文件区里的指定群文件下载到服务器白名单目录。',
+            '可按文件名片段匹配；引用群文件消息时 file_name 可留空自动提取。'
+        ],
+        useWhen: [
+            '主人说“把群文件里的 xxx 下载/保存到服务器”时使用。'
+        ],
+        avoid: [
+            '不要用于下载聊天消息里的图片/视频/普通附件；那是 file_download。'
+        ]
+    },
+    group_chat_context: {
+        capabilities: [
+            '读取畅聊模式捕获的公开群消息流水，包括文本化内容和图片元信息。',
+            '可总结当前群前情、查询触发者自己的跨群消息、给主人列出可见/已捕获群列表。',
+            '主人可查询所有已捕获群或指定群流水；普通用户只能查当前群或自己的跨群消息。'
+        ],
+        useWhen: [
+            '用户问“刚才/之前/他们/大家/群里聊了什么/发生了什么/前情提要”时使用。',
+            '主人问“你加了哪些群/能看到哪些群/其他群刚才发生了什么”时使用。'
+        ],
+        avoid: [
+            '它不读取图片本体，只能看到图片元信息；不要把它当作读图工具。',
+            '普通用户不要查询其他人的跨群消息。'
+        ],
+        rules: [
+            '当前群前情 scope=current_group；主人群列表 scope=group_list；用户自己的其他群消息 scope=other_group_messages 且 exclude_current_group=true。'
+        ]
+    },
+    group_member_aliases: {
+        capabilities: [
+            '查询当前群公开聊天中记录过的成员称呼、外号、调侃称呼和来源。',
+            '可按 @/QQ 精确查，也可按外号、称呼、来源昵称或关键词模糊查。'
+        ],
+        useWhen: [
+            '用户问“这个人是谁/@某某有什么外号/杂鱼是谁/谁被叫过 xxx”时使用。'
+        ],
+        avoid: [
+            '不要当作真实身份或事实判断；结果只表示群里曾经这样称呼过。',
+            '不要用于列出真实群成员列表；那是 group_member_list。'
+        ]
+    },
+    group_mute: {
+        capabilities: [
+            '禁言或解除禁言当前群指定成员。time=0 表示解除禁言。'
+        ],
+        useWhen: [
+            '操作者具备权限且明确说“禁言/解禁/闭嘴/禁言 N 分钟”时使用。'
+        ],
+        avoid: [
+            '目标成员不明确时不要直接操作，先用 group_member_resolve/list。',
+            '不要因为玩笑或描述性内容自行禁言。'
+        ],
+        rules: [
+            '优先使用 @ 或 QQ 得到 user_id；只有昵称/名片时填 target 或先解析。'
+        ]
+    },
+    group_whole_mute: {
+        capabilities: [
+            '开启或解除当前群全员禁言。'
+        ],
+        useWhen: [
+            '操作者具备权限且明确要求“开启/解除全员禁言、全体禁言”时使用。'
+        ],
+        avoid: [
+            '方向不明确时不要调用；这是高影响操作。'
+        ],
+        rules: [
+            'enable=true 开启，enable=false 解除，必须来自用户原话明确表达。'
+        ]
+    },
+    group_kick: {
+        capabilities: [
+            '把指定成员踢出当前群，可选 block=true 拉黑不再接受其加群申请。'
+        ],
+        useWhen: [
+            '操作者具备权限且明确说“踢出/移出群/踢了/踢出并拉黑”时使用。'
+        ],
+        avoid: [
+            '目标不明确或只是提到某人时不要操作，先解析成员。',
+            '入群申请未入群的人不能用 kick，处理申请用 group_request_handle。'
+        ]
+    },
+    group_set_card: {
+        capabilities: [
+            '修改或清除当前群指定成员的群名片/群昵称。'
+        ],
+        useWhen: [
+            '操作者具备权限且明确说“把某人的群名片/群昵称改成 xxx”时使用。'
+        ],
+        avoid: [
+            '不要用于修改 QQ 昵称或 AI 名称，只能改当前群名片。'
+        ],
+        rules: [
+            'card 为空字符串表示清除名片；目标不明确先解析。'
+        ]
+    },
+    group_set_title: {
+        capabilities: [
+            '设置或清除当前群指定成员的专属头衔。'
+        ],
+        useWhen: [
+            '操作者具备权限且明确说“给某人头衔 xxx/取消头衔”时使用。'
+        ],
+        avoid: [
+            '机器人不是群主时通常无法成功；不要把它当作群名片修改。'
+        ],
+        rules: [
+            'title 为空字符串表示清除头衔。'
+        ]
+    },
+    group_essence: {
+        capabilities: [
+            '把被引用的当前群消息设为精华或取消精华。'
+        ],
+        useWhen: [
+            '用户引用一条消息并明确说“设为精华/加精/取消精华”时使用。'
+        ],
+        avoid: [
+            '没有引用目标消息时不要调用；方向不明确时不要调用。'
+        ]
+    },
+    group_member_list: {
+        capabilities: [
+            '查看当前 QQ 群成员列表，或按昵称、群名片、QQ 搜索成员。',
+            '返回成员 QQ、昵称/名片和身份信息，供确认对象或回答成员列表问题。'
+        ],
+        useWhen: [
+            '操作者具备权限且问“群里有哪些成员/查看群成员/找昵称 xxx 的人”时使用。',
+            '群管理目标只有昵称且可能重名时，可先用它搜索。'
+        ],
+        avoid: [
+            '不要用于查询外号称呼记忆；那是 group_member_aliases。'
+        ]
+    },
+    group_member_resolve: {
+        capabilities: [
+            '把用户说的昵称、群名片、QQ 或 @ 对象解析为明确群成员。'
+        ],
+        useWhen: [
+            '执行禁言、踢人、改名片、设头衔前，目标不是明确 QQ/@ 时使用。'
+        ],
+        avoid: [
+            '只是想列成员时用 group_member_list；只是问外号时用 group_member_aliases。'
+        ]
+    },
+    group_request_list: {
+        capabilities: [
+            '查看当前群待审核的加群申请，包括申请人、昵称、留言和记录时间。'
+        ],
+        useWhen: [
+            '用户问“有没有人申请进群/看看入群申请/谁要进群”时使用。'
+        ],
+        avoid: [
+            '不要用于已在群内的成员操作；群内成员用群管理成员工具。'
+        ]
+    },
+    group_request_handle: {
+        capabilities: [
+            '通过或拒绝当前群某个待审核加群申请。',
+            '可用 user_id 精确定位，也可用 target 按昵称、QQ、留言关键词模糊定位；只有一条待审申请时可省略定位。'
+        ],
+        useWhen: [
+            '用户明确说“通过/同意/允许/拒绝某人的加群申请/让 xxx 进来”时使用。'
+        ],
+        avoid: [
+            'approve 方向不明确时不要调用；这是高影响操作。',
+            '已入群成员不能用它踢出或管理。'
+        ],
+        rules: [
+            'approve=true 通过，false 拒绝；多条申请时尽量填写 target，如“幸福的”。'
+        ]
+    },
+    draw_image: {
+        capabilities: [
+            '调用插件画图能力生成图片并直接发送到当前会话。',
+            '支持文字生图、预设风格、参考图重绘/修图/去水印/去二维码/套风格、@头像、最近图片缓存。',
+            '支持角色参考图库：character、characters、self_portrait。'
+        ],
+        useWhen: [
+            '用户明确要求“画/生成图片/做张图/套预设/手办化/把这张图改成…”时使用。'
+        ],
+        avoid: [
+            '用户只是发图让你看、描述、回答图片问题时不要调用；交给多模态最终回复。',
+            '不要承诺精准像素级编辑，工具只能尝试图像生成/重绘。'
+        ],
+        rules: [
+            'prompt 写用户想画或想怎么改；preset 只在用户明确提到已有预设时填。',
+            '用户要求画 AI 本人/你自己时 self_portrait=true；单角色用 character，多角色用 characters。'
+        ]
+    },
+    shell_exec: {
+        capabilities: [
+            '在服务器执行 Shell 命令并返回 stdout/stderr，支持 cwd、超时和分页输出。',
+            '可用于 rg/grep/find/ls/cat/git/systemctl/docker 等诊断、搜索、更新或用户明确要求的操作。'
+        ],
+        useWhen: [
+            '主人明确要求执行命令、git pull/status、查日志、搜索文件、诊断服务、普通文件工具不足时使用。'
+        ],
+        avoid: [
+            '非主人不可用；不要为了补全信息自行设计危险命令。',
+            '读取明确单文件优先 file_read；列目录优先 dir_read。'
+        ],
+        rules: [
+            '命令必须具体可执行；有副作用命令只在用户明确要求时使用。',
+            '用户说在 AI-Plugin 执行时，cwd 用 plugins/AI-Plugin 或明确路径。'
+        ]
+    },
+    web_fetch: {
+        capabilities: [
+            '访问指定 URL，提取网页可读文本，用于详细阅读网页内容。'
+        ],
+        useWhen: [
+            '主人明确要求打开、总结、分析、解释某个链接，或搜索后需要进一步看网页详情时使用。'
+        ],
+        avoid: [
+            '只是出现链接但用户没有阅读需求时不要抓取。',
+            '搜索未知网页用 web_search；下载文件/媒体不用 web_fetch。'
+        ]
+    },
+    weather: {
+        capabilities: [
+            '查询指定城市实时天气和未来几天预报，包含温度、天气状况、风向风力等。',
+            '国内城市可用高德，国际/英文城市可用 OpenWeatherMap 降级。'
+        ],
+        useWhen: [
+            '用户问天气、气温、下雨下雪、带伞、冷不冷热不热、穿什么时使用。'
+        ],
+        avoid: [
+            '没有城市且上下文/记忆也没有明确所在地时不要猜，先追问城市。'
+        ],
+        rules: [
+            '国外城市或中文外文地名尽量转换为英文城市名，如 New York、Tokyo、London。'
+        ]
+    }
+}
+
+function getFunctionDef(tool) {
+    const schema = tool?.functionSchema
+    if (!schema) return null
+    return schema.function || schema
+}
+
+function formatType(prop = {}) {
+    if (Array.isArray(prop.type)) return prop.type.join('|')
+    if (prop.type === 'array' && prop.items?.type) return `array<${prop.items.type}>`
+    return prop.type || 'any'
+}
+
+function formatEnum(prop = {}) {
+    return Array.isArray(prop.enum) && prop.enum.length > 0 ? `，可选：${prop.enum.join('/')}` : ''
+}
+
 class ToolRegistry {
     constructor() {
         this.tools = new Map()
@@ -139,6 +498,60 @@ class ToolRegistry {
         return lines
     }
 
+    _formatToolParameters(tool) {
+        const fn = getFunctionDef(tool)
+        const params = fn?.parameters || {}
+        const properties = params.properties || {}
+        const required = new Set(params.required || [])
+        const entries = Object.entries(properties)
+
+        if (entries.length === 0) return ['参数：无']
+
+        return [
+            '参数：',
+            ...entries.map(([key, prop]) => {
+                const requiredText = required.has(key) ? '必填' : '可选'
+                const description = prop.description ? `：${prop.description}` : ''
+                return `  - ${key} (${requiredText}, ${formatType(prop)}${formatEnum(prop)})${description}`
+            })
+        ]
+    }
+
+    _formatGuideSection(title, items = []) {
+        if (!Array.isArray(items) || items.length === 0) return []
+        return [
+            `${title}：`,
+            ...items.map(item => `  - ${item}`)
+        ]
+    }
+
+    _formatToolDetailedLine(name, tool) {
+        const permNote = tool.permission === 'master' ? '仅主人' : '按当前会话权限'
+        const guide = TOOL_USAGE_GUIDES[name] || {}
+        const lines = [
+            `- ${name}（${permNote}）`,
+            `  简述：${tool.description || getFunctionDef(tool)?.description || '无'}`
+        ]
+
+        lines.push(...this._formatGuideSection('  能力', guide.capabilities))
+        lines.push(...this._formatGuideSection('  适用', guide.useWhen))
+        lines.push(...this._formatGuideSection('  不要误用', guide.avoid))
+        lines.push(...this._formatGuideSection('  关键规则', guide.rules))
+        lines.push(...this._formatToolParameters(tool).map(line => `  ${line}`))
+        return lines.join('\n')
+    }
+
+    /** 获取指定工具的详细说明：给主模型规划和工具编译模型使用 */
+    getToolDetailedLines(enabledTools = []) {
+        const lines = []
+        for (const name of enabledTools) {
+            const tool = this.tools.get(name)
+            if (!tool) continue
+            lines.push(this._formatToolDetailedLine(name, tool))
+        }
+        return lines
+    }
+
     /** 执行工具调用 */
     async execute(name, args, isMaster = false, context = {}) {
         const tool = this.tools.get(name)
@@ -246,7 +659,8 @@ class ToolRegistry {
 
         const now = new Date()
         const functionSchemas = this.getFunctionSchemasFor(enabledTools)
-        const toolDescriptions = this.getToolSummaryLines(enabledTools)
+        const toolDescriptions = this.getToolDetailedLines(enabledTools)
+        const toolDescriptionText = toolDescriptions.join('\n\n')
         const candidateUrls = Array.isArray(options.candidateUrls) ? [...new Set(options.candidateUrls)].slice(0, 10) : []
         const mentionedUserIds = Array.isArray(options.mentionedUserIds) ? [...new Set(options.mentionedUserIds)].filter(Boolean) : []
         const hasImages = options.hasImages === true
@@ -254,13 +668,13 @@ class ToolRegistry {
         const maxTools = Math.max(1, Number(options.maxTools) || 5)
         const plannedToolNames = plannedCalls.map(call => call.tool || call.name).filter(Boolean)
 
-        logger.info(`[AI-Plugin] 工具计划编译开始: 主模型计划=${plannedToolNames.join(', ') || '无'}, 可用工具=${enabledTools.join(', ')}, 有图片=${hasImages}, 有近期图片=${hasRecentImages}, @成员=${mentionedUserIds.join(', ') || '无'}`)
+        logger.info(`[AI-Plugin] 工具计划编译开始: 主模型计划=${plannedToolNames.join(', ') || '无'}, 可用工具=${enabledTools.join(', ')}, 详细说明=${toolDescriptionText.length}字, 有图片=${hasImages}, 有近期图片=${hasRecentImages}, @成员=${mentionedUserIds.join(', ') || '无'}`)
 
         const compilePrompt = `当前时间：${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日。
 你是工具调用编译器，相当于主模型的协处理器。主模型已经读取完整上下文并决定了是否需要工具；你不要重新判断用户真实意图，只把主模型的工具计划编译成可执行 JSON。
 
 可用工具：
-${toolDescriptions.join('\n')}
+${toolDescriptionText}
 
 工具 JSON Schema：
 ${JSON.stringify(functionSchemas, null, 2)}
@@ -362,14 +776,9 @@ ${JSON.stringify(mainPlan, null, 2)}
         const hasImages = options.hasImages === true
         const hasRecentImages = options.hasRecentImages === true
 
-        // 构建工具描述
-        const toolDescriptions = []
-        for (const name of enabledTools) {
-            const tool = this.tools.get(name)
-            if (!tool) continue
-            const permNote = tool.permission === 'master' ? ' (仅主人)' : ''
-            toolDescriptions.push(`- ${tool.name}${permNote}: ${tool.description || ''}`)
-        }
+        const toolDescriptions = this.getToolDetailedLines(enabledTools)
+        const toolDescriptionText = toolDescriptions.join('\n\n')
+        logger.info(`[AI-Plugin] 工具路由使用详细工具说明: 工具数=${enabledTools.length}, 详细说明=${toolDescriptionText.length}字`)
 
         // 构建最近对话上下文（只提取文本，忽略图片）
         let contextBlock = ''
@@ -423,89 +832,23 @@ ${JSON.stringify(mainPlan, null, 2)}
         const analysisPrompt = `当前时间：${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日。你是一个意图分析助手。分析用户消息，输出意图分析和需要调用的工具。
 
 可用工具：
-${toolDescriptions.join('\n')}
+${toolDescriptionText}
 
-各工具参数格式：
-- web_search: {"query": "搜索关键词"}
-- system_info: {}
-- weather: {"city": "城市名"}
-  - 天气工具参数要求：如果用户查询的是国外城市，或使用中文外文地名（如纽约、伦敦、巴黎、东京、洛杉矶），请尽量转换为 OpenWeatherMap 可识别的英文城市名（如 New York、London、Paris、Tokyo、Los Angeles）后填入 city。
-  - 如果当前天气请求没有写城市，但历史记忆摘要或最近上下文明确给出了用户常住地/所在地/所在城市，可使用该地点查询；没有明确地点时再返回空工具并追问城市。
-- file_read: {"path": "文件/目录路径或别名", "read_all": true或false}
-- dir_read: {"path": "目录路径或别名", "read_all": true或false}
-- shell_exec: {"command": "要执行的shell命令", "cwd": "可选工作目录", "timeout_ms": 可选超时毫秒, "max_output_chars": 可选最大输出字符数}
-  - Shell 工具参数要求：仅当用户明确要求查看/搜索/诊断/操作服务器，且普通 file_read/dir_read 不足以完成时使用。
-  - Shell 拥有完整服务器命令权限。可以使用 grep/rg/find/ls/cat/git/systemctl/docker 等命令；命令必须具体、可执行，不要编造不存在的路径。
-  - 用户说“在 AI-Plugin/ai-plugin/插件目录执行 git pull/status/log”等时，command 填用户要求的 git 命令，cwd 填 "plugins/AI-Plugin"。
-  - 优先选择只读/查询命令完成排查；只有用户明确要求修改、删除、安装、重启等操作时，才生成有副作用的命令。
-  - 如果用户意图需要连续多步操作，可以一次返回多个 shell_exec 调用，但不要返回无限运行或交互式命令。
-  - 文件工具参数要求：用户给出绝对路径时直接使用；用户说“日志/配置/模型配置/插件目录/云崽data/data目录”等常用说法时，可直接把这些自然语言关键词填入 path，工具会在白名单内解析。
-  - 用户给出相对路径、文件名片段，或说“上次那个文件/那个目录”时，也可以填入对应片段或原话，工具会结合最近成功路径与白名单目录尝试定位。
-  - 如果完全无法判断目标文件/目录，不要编造路径，tools 返回空数组，并在 intent 中说明需要向用户追问目标范围。
-- web_fetch: {"url": "完整URL"}
-  - 网页抓取要求：当用户明确要求查看、总结、解释、分析链接内容时，可以优先使用候选链接中的 URL 调用 web_fetch。
-  - 如果消息或引用/转发里只是出现链接，但用户没有阅读网页内容的需求，不要仅因为有链接就调用 web_fetch。
-- file_send: {"path": "要发送的文件/文件夹路径或文件名片段", "as_image": "可选 true/false"}
-  - 文件发送要求：当用户要求把服务器上的某个文件/文件夹"发给我/发到群里/发出来"时使用。path 可填用户说的文件名、片段或别名，工具会在白名单内查找并发送（文件夹自动打包）。
-  - as_image：仅当用户明确说"以图片形式/作为图片/直接发图/发成图片"发送服务器上的图片文件时设为 true；否则不要填或设为 false，按普通文件发送。
-  - 若用户只是模糊描述（如"把那个日志发我"），可先用 dir_read/file_read 确认目标，再用 file_send 发送确认到的文件。
-- file_download: {"save_dir": "可选，保存目录", "force_ext": "可选，统一后缀如.png"}
-  - 文件下载要求：当用户要求把当前消息或其引用消息里的图片/视频/语音/文件"下载/保存到服务器"时使用。无需填 URL，工具会自动从消息中提取媒体。
-  - 文件名固定按顺序命名为 0、1、2、3…，后缀默认保持每个文件原本的类型，这是默认行为，无需任何参数。
-  - save_dir：用户明确说了要存到哪个目录（如"存到/root/xxx""下载到resources/tmp"）才填，文件会直接存进该目录；用户没指定目录时就留空，工具会自动存到默认位置 resources/noa/时间戳 子目录。
-  - force_ext：仅当用户特别要求"全部存成gif/统一改成png/都保存为xxx格式"时才填该后缀（如".gif"），否则一律留空保持原后缀。
-- group_file_list: {"folder_name": "可选，子文件夹名", "recursive": 可选true/false}
-  - 群文件浏览要求：当用户想"看看群文件有哪些/列一下群文件/群文件里有什么"时使用。要进某个子文件夹就填 folder_name，否则留空看根目录。当用户想"连文件夹里的文件也一起看/全部列出来/包括子文件夹"时把 recursive 设为 true。注意这是 QQ"群文件区"，不是聊天消息里的文件。
-- group_file_download: {"file_name": "可选，群文件名", "save_dir": "可选，保存目录"}
-  - 群文件下载要求：当用户要求把"群文件里的某个文件"下载/保存到服务器某目录时使用。file_name 填用户说的文件名（可为片段）。若用户是"引用了一条群文件消息"再说"下载这个/帮我下载到xxx/把这个存到服务器"，或者说"把刚才那个群文件/上次引用的文件下载到xxx"，file_name 都可以留空——工具会自动从被引用的群文件消息提取，或回退到最近引用过的群文件名。这是从 QQ 群文件区下载，区别于 file_download（后者下载聊天消息里的媒体）。
-- group_chat_context: {"scope": "current_group/my_recent_messages/other_group_messages/all_groups/specific_group/group_list", "limit": "可选，读取最近多少条群消息或群列表数量", "query": "可选，关键词", "group_id": "可选群号", "user_id": "可选用户QQ", "exclude_current_group": "可选true/false"}
-  - 群聊上下文要求：用户问"刚才/之前/他们/大家/群里聊了什么、发生了什么、前情提要、总结最近群聊"时使用。
-  - 主人问"你加了哪些群/能看到哪些群/群列表/有哪些群"时，用 scope=group_list；这会优先读取机器人实时群列表，失败时退回已捕获群。
-  - 默认 scope=current_group，只查当前群。
-  - 用户问"我刚在别的群/其他群发了什么""你看到我在别的群的消息吗"时，用 scope=other_group_messages 或 scope=my_recent_messages，并设置 exclude_current_group=true；普通用户只能查自己的跨群消息，不要填其他人的 user_id。
-  - 主人明确要求跨群/所有群/某个群的已捕获流水时，可用 scope=all_groups 或 specific_group，并可填 group_id/user_id/query。
-  - query 只在用户问特定话题、昵称、QQ 或关键词时填写。
-- group_member_aliases: {"target_user_id": "可选，成员QQ", "query": "可选，外号/称呼/QQ/来源昵称关键词", "limit": "可选数量"}
-  - 群成员称呼记忆要求：用户问"这个人是谁""@某某有什么外号/称呼""杂鱼是谁""谁被叫过xxx"等本群称呼、外号、调侃称呼时使用。用户 @ 了成员或给出 QQ 时填 target_user_id；只给外号/关键词时填 query。查询结果只表示本群公开聊天里有人这样称呼过，不代表真实身份或事实断言。
-- draw_image: {"prompt": "画图描述", "preset": "可选预设名", "quality": "可选 flash/pro/ultra", "self_portrait": "可选 true/false", "character": "可选单个角色ID或别名", "characters": "可选多个角色ID或别名数组"}
-  - 画图要求：当用户明确要求"画/绘制/生成一张图/帮我画/做张图/用某某风格画"等时使用。prompt 填用户想画的内容描述。
-  - 用户提到具体已有风格名（如"手办化""手办风"）时填 preset；不确定是否为预设就不要填 preset，直接用 prompt 描述。
-  - 参考图（用户带图、引用的图、@的成员头像、最近图片缓存）由工具自动从消息中提取，不需要你处理图片，也不要因为有图就改用其他工具。
-  - 用户明确要求对当前/最近图片进行修图、重绘、去水印、去二维码、套风格或"用 p/pro 模型处理"时可以调用；但不要承诺精准像素级编辑。
-  - 只有用户确实想要生成/创作图片时才调用；普通聊天、发图让你看图说话、问问题都不要调用 draw_image。
-  - 角色参考图库：当用户要求画单个角色（如诺亚/优香/真纪/莉音，或用户提到的其他明确角色名）时，把 character 填为用户说的角色名或别名；当用户要求同一张图里出现多个角色时，把 characters 填为角色名/别名数组（如 ["noa", "yuuka"]）。prompt 只填用户额外提出的动作、场景、镜头、风格要求。工具会自动从 data/characters/{角色ID}/profile.yaml 和图片加载参考，每个角色各取一张参考图。
-  - 特别注意：当用户要求"画你自己/画一下你/画 AI 本人/给我看看你长什么样"等指向 AI 自身形象时，把 self_portrait 设为 true（等价于 character="noa"），prompt 只需填用户额外提出的动作/场景/风格（如"在海边""穿和服"），没有额外要求时 prompt 可留空。
-- group_mute: {"user_id": "QQ号", "time": 时长数值, "unit": "秒/分钟/小时/天"}
-  - 禁言/解禁要求：用户要"禁言某人/把xxx禁言N分钟/闭嘴/解除xxx的禁言"时使用。被操作者的 QQ 号从 @ 或消息中获取。解除禁言时 time 填 0。
-- group_whole_mute: {"enable": true/false}
-  - 全员禁言要求：用户要"开启/解除全员禁言、全体禁言"时使用。enable=true 开启，false 解除。
-- group_kick: {"user_id": "QQ号", "block": true/false}
-  - 踢人要求：用户要"把xxx踢了/踢出群/移出群聊"时使用。要求"拉黑/不再让进"时 block=true。
-- group_set_card: {"user_id": "QQ号", "card": "新名片"}
-  - 改名片要求：用户要"把xxx的群名片/群昵称改成yyy"时使用。card 留空表示清除名片。
-- group_set_title: {"user_id": "QQ号", "title": "头衔"}
-  - 设头衔要求：用户要"给xxx一个专属头衔yyy/取消头衔"时使用。title 留空表示清除。
-- group_essence: {"enable": true/false}
-  - 精华消息要求：用户「引用某条消息」并说"设为精华/加精/取消精华"时使用。enable=true 加精，false 取消。
-- group_member_list: {"query": "可选，昵称/群名片/QQ号", "limit": 可选数量}
-  - 群成员查询要求：用户问"群里有哪些成员/查看群成员/找昵称xxx的人"时使用。query 留空列出成员列表；有目标词时填 query 搜索。
-- group_member_resolve: {"target": "可选，昵称/群名片/QQ号/用户原话"}
-  - 群成员解析要求：当用户想对某个成员做群管理，但只给了昵称、群名片或 @ 对象，且需要先确认具体 QQ 号时使用。用户已经 @ 成员时 target 可留空。
-- group_request_list: {}
-  - 查看入群申请要求：用户问"有没有人申请进群/看看入群申请/谁要进群"时使用。
-- group_request_handle: {"user_id": "QQ号，可选", "target": "昵称/QQ/留言关键词/用户原话，可选", "approve": true/false, "reason": "可选拒绝理由"}
-  - 处理入群申请要求：用户要"通过/同意/拒绝某人的加群申请"时使用。approve=true 通过，false 拒绝；用户说"刚才那个/他/那个人"且没有 QQ 号时可以省略 user_id，由工具在当前群只有一条待审申请时自动定位；多条申请时可填 target 做昵称/留言模糊匹配，例如"幸福的"。
-  - 注意：group_chat_context 和 group_member_aliases 是只读上下文工具；group_mute/group_whole_mute/group_kick/group_set_card/group_set_title/group_essence/group_member_list/group_member_resolve/group_request_list/group_request_handle 属于群管理相关工具，仅在权限允许时可用。对禁言/踢人/改名片/设头衔等成员操作，优先使用真实 QQ 号或 @；如果只有昵称/群名片且不确定唯一目标，先调用 group_member_list 或 group_member_resolve，不要凭空编造 user_id。
+补充路由规则：
+- 上方每个工具说明已列出能力、适用场景、不要误用的边界和参数要求；请优先按这些说明选择工具和填写参数。
+- 如果用户消息不需要任何工具，tools 返回空数组 []。
+- 只使用“可用工具”中列出的工具，不要调用未列出的工具。
+- 文件/目录工具不强制要求绝对路径；可使用用户原话中的路径、别名、相对路径或文件名片段，由工具在白名单内解析。
+- 搜索关键词要精确、简洁，不超过 128 字。
+- 带图片但没有明确工具需求时，不要脑补工具调用；图片理解交给后续多模态流程。
+- 高影响群管理操作必须有明确对象和明确动作方向；不明确时返回 tools: [] 或先用只读解析/列表工具确认。
 
 请严格按以下JSON格式输出，不要输出其他任何内容：
 {"intent": "用户意图分析（一句话概括用户想做什么、隐含需求等）", "tools": [{"tool": "工具名", "params": {...}}]}
 
 规则：
-- 如果用户消息不需要任何工具，tools 返回空数组 []
 - intent 字段必填，简要分析用户意图
-- 只使用上述"可用工具"列表中列出的工具，不要调用未列出的工具
-- 文件/目录工具不强制要求用户提供绝对路径；可使用用户原话中的路径、别名、相对路径或文件名片段，由工具在白名单内解析
-- 搜索关键词要求精确、简洁，不超过128字`
+- 参数字段必须使用工具说明中的参数名；不需要或无法确定的可选参数不要编造`
 
         try {
             const analysisPayload = {

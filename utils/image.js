@@ -44,16 +44,25 @@ export async function processImageForAI(imageUrl) {
     }
 }
 
+function normalizeImageLimit(value, fallback) {
+    if (value === Infinity) return Infinity
+    const num = Number(value)
+    if (num === Infinity) return Infinity
+    return Number.isFinite(num) && num >= 0 ? Math.floor(num) : fallback
+}
+
 /**
  * 分批处理多张图片，返回 inline_data 数组。
- * 自动限制最大图片数量和每批并发数。
+ * 默认限制最大图片数量；调用方可传入 maxImages 覆盖数量限制。
  */
-export async function processImagesInBatches(imageUrls) {
-    const imagesToProcess = imageUrls.slice(0, Config.MAX_IMAGES_PER_MESSAGE)
+export async function processImagesInBatches(imageUrls, options = {}) {
+    const maxImages = normalizeImageLimit(options.maxImages, Config.MAX_IMAGES_PER_MESSAGE)
+    const imagesToProcess = maxImages === Infinity ? imageUrls.slice() : imageUrls.slice(0, maxImages)
+    const processingBatchSize = Math.max(1, Number(Config.IMAGE_PROCESSING_BATCH_SIZE) || 1)
     const validImages = []
 
-    for (let i = 0; i < imagesToProcess.length; i += Config.IMAGE_PROCESSING_BATCH_SIZE) {
-        const batch = imagesToProcess.slice(i, i + Config.IMAGE_PROCESSING_BATCH_SIZE)
+    for (let i = 0; i < imagesToProcess.length; i += processingBatchSize) {
+        const batch = imagesToProcess.slice(i, i + processingBatchSize)
         const batchPromises = batch.map(url => processImageForAI(url))
         const batchResults = await Promise.all(batchPromises)
         validImages.push(...batchResults.filter(img => img !== null))

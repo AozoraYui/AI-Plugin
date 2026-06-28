@@ -169,11 +169,12 @@ enable_web_fetch: false
 # enable_group_admin: false   # 群管理工具，主人或当前群管理员可用，机器人需有对应权限
 
 # 畅聊模式（可选）
-# enable_noa_chat: false
-# NOA_CHAT_CONTEXT_LIMIT: 60
-# NOA_CHAT_REPLY_COOLDOWN_MS: 8000
-# NOA_CHAT_MAX_CONTEXT_IMAGES: 3
-# NOA_CHAT_AUTO_READ_IMAGE_LIMIT: 2
+# enable_noa_chat: false              # 是否开启畅聊捕获与自然触发回复
+# NOA_CHAT_CONTEXT_LIMIT: 60          # 每次回复读取最近 60 条本群畅聊流水作为上下文
+# NOA_CHAT_REPLY_COOLDOWN_MS: 8000    # 同一群畅聊回复冷却 8000ms，防止连续触发刷屏
+# NOA_CHAT_MAX_CONTEXT_IMAGES: 3      # 本轮最多读 3 张图；unlimited / -1 为不限制，0 为禁用读图
+# NOA_CHAT_AUTO_READ_IMAGE_LIMIT: 2   # 单条触发消息最多 2 张图时自动读图，超过则需明确要求读图
+# NOA_CHAT_IMAGE_BATCH_SIZE: 3        # 待读图片超过 3 张时，每批 3 张先生成读图摘要再回复
 ```
 
 **`draw_presets.yaml`** - 作图预设配置
@@ -267,7 +268,8 @@ name: 诺亚
 
 > 💡 畅聊模式只保存文本化消息和图片元信息，不保存图片本体或 base64。
 >  触发消息含 1-2 张图时会自动临时读取；超过 `NOA_CHAT_AUTO_READ_IMAGE_LIMIT` 默认不读，除非明确要求读图。
->  每轮最多临时读取 `NOA_CHAT_MAX_CONTEXT_IMAGES` 张图，读取结果只用于本轮回复。
+>  每轮最多临时读取 `NOA_CHAT_MAX_CONTEXT_IMAGES` 张图；`3` 表示最多读 3 张，不是超过 3 张就分批；该值可设为 `unlimited` 或 `-1` 表示不限制，`0` 表示禁用畅聊读图。
+>  当待读图片超过 `NOA_CHAT_IMAGE_BATCH_SIZE` 时，会先按批读取并生成图片摘要，再把摘要注入最终回复，避免一次请求塞入过多图片。
 >  跨群检索默认只允许查询触发者自己的消息；只有主人可查询所有已捕获群或指定群流水。
 >  畅聊回复会同步到触发者普通对话记忆；工具调用仍按原权限鉴权，高危群管工具需要 `enable_group_admin: true` 且操作者具备权限。
 
