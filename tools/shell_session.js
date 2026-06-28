@@ -100,7 +100,8 @@ export const shellSessionTool = {
             result = await sendToShellSession({
                 cwd: args.cwd,
                 input: args.input,
-                enter: args.enter !== false
+                enter: args.enter !== false,
+                userMessage: context.userMessage || context.originalUserMessage || ''
             })
         } else if (action === 'interrupt') {
             result = await interruptShellSession({ cwd: args.cwd })
@@ -125,12 +126,29 @@ export const shellSessionTool = {
         if (!data || typeof data !== 'object') return String(data || '')
         const name = data.sessionName || Config.SHELL_SESSION_NAME
         if (data.ok === false) {
-            return `\n\n【Shell会话失败】动作: ${data.actionLabel || data.action || '未知'}\n会话: ${name}\n原因: ${data.error || '未知错误'}`
+            let output = `\n\n【Shell会话失败】动作: ${data.actionLabel || data.action || '未知'}\n会话: ${name}\n原因: ${data.error || '未知错误'}`
+            if (data.directorySafety?.safetyBlocked) {
+                output += `\n\n【目录安全检查】已阻止执行，命令没有发送到 tmux。`
+                output += `\n当前目录: ${data.directorySafety.currentDirectory}`
+                output += `\n生效目录: ${data.directorySafety.effectiveDirectory}`
+                output += `\n期望目录: ${data.directorySafety.expectedDirectory}`
+                output += `\n处理建议: 请反问主人下一步要切换到哪个目录或是否仍要继续。`
+            }
+            return output
         }
 
         let output = `\n\n【Shell会话结果】\n动作: ${data.actionLabel || data.action}\n会话: ${name}\n状态: 成功`
         if (data.created) output += `\n提示: 会话不存在，已自动创建。`
+        if (data.directorySafety?.safetyBlocked) {
+            output += `\n\n【目录安全检查】已阻止执行，命令没有发送到 tmux。`
+            output += `\n原因: ${data.directorySafety.reason}`
+            output += `\n当前目录: ${data.directorySafety.currentDirectory}`
+            output += `\n生效目录: ${data.directorySafety.effectiveDirectory}`
+            output += `\n期望目录: ${data.directorySafety.expectedDirectory}`
+            output += `\n处理建议: 请反问主人下一步要切换到哪个目录或是否仍要继续。`
+        }
         if (data.cwd) output += `\n目录: ${data.cwd}`
+        if (data.currentDirectory) output += `\n当前目录: ${data.currentDirectory}`
         if (data.closed !== undefined) output += `\n是否关闭: ${data.closed ? '是' : '否'}`
         if (data.enter !== undefined) output += `\n是否回车: ${data.enter ? '是' : '否'}`
         if (data.truncated) output += `\n提示: 输出较长，仅显示末尾 ${Config.SHELL_SESSION_MAX_OUTPUT_CHARS} 字符。`

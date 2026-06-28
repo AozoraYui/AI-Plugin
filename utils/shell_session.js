@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import path from 'node:path'
 import { Config } from './config.js'
+import { validateShellDirectorySafety } from './shell_safety.js'
 
 const TMUX_TIMEOUT_MS = 5000
 
@@ -30,6 +31,15 @@ export function normalizeShellSessionName(name = Config.SHELL_SESSION_NAME) {
     return value
 }
 
+async function readPaneCurrentPath(sessionName, fallback = process.cwd()) {
+    try {
+        const { stdout } = await execTmux(['display-message', '-p', '-t', sessionName, '#{pane_current_path}'])
+        return path.resolve(stdout.trim() || fallback || process.cwd())
+    } catch {
+        return path.resolve(fallback || process.cwd())
+    }
+}
+
 export async function hasShellSession(sessionName = Config.SHELL_SESSION_NAME) {
     const name = normalizeShellSessionName(sessionName)
     try {
@@ -52,12 +62,13 @@ export async function ensureShellSession(options = {}) {
     const status = await hasShellSession(sessionName)
     if (!status.ok) return status
     if (status.exists) {
-        return { ok: true, exists: true, created: false, sessionName, cwd }
+        const currentDirectory = await readPaneCurrentPath(sessionName, cwd)
+        return { ok: true, exists: true, created: false, sessionName, cwd, currentDirectory }
     }
 
     try {
         await execTmux(['new-session', '-d', '-s', sessionName, '-c', cwd])
-        return { ok: true, exists: true, created: true, sessionName, cwd }
+        return { ok: true, exists: true, created: true, sessionName, cwd, currentDirectory: cwd }
     } catch (err) {
         if (err.code === 'ENOENT') {
             return { ok: false, exists: false, sessionName, cwd, error: '未找到 tmux，请先在服务器安装 tmux。' }
@@ -81,6 +92,7 @@ export async function captureShellSession(options = {}) {
         return {
             ok: true,
             sessionName,
+            currentDirectory: ensured.currentDirectory || await readPaneCurrentPath(sessionName, ensured.cwd),
             lines,
             output,
             truncated: stdout.length > maxChars,
@@ -89,6 +101,14 @@ export async function captureShellSession(options = {}) {
     } catch (err) {
         return { ok: false, sessionName, error: err.stderr || err.message || String(err) }
     }
+}
+
+export async function getShellSessionCurrentPath(options = {}) {
+    const sessionName = normalizeShellSessionName(options.sessionName || Config.SHELL_SESSION_NAME)
+    const ensured = await ensureShellSession({ sessionName, cwd: options.cwd })
+    if (!ensured.ok) return ensured
+    const currentDirectory = ensured.currentDirectory || await readPaneCurrentPath(sessionName, ensured.cwd)
+    return { ok: true, sessionName, currentDirectory }
 }
 
 export async function sendToShellSession(options = {}) {
@@ -100,13 +120,33 @@ export async function sendToShellSession(options = {}) {
 
     const ensured = await ensureShellSession({ sessionName, cwd: options.cwd })
     if (!ensured.ok) return ensured
+    const pathStatus = await getShellSessionCurrentPath({ sessionName, cwd: options.cwd })
+    if (!pathStatus.ok) return pathStatus
+
+    const directorySafety = validateShellDirectorySafety({
+        command: input,
+        cwd: pathStatus.currentDirectory,
+        userMessage: options.userMessage || '',
+        toolName: 'shell_session'
+    })
+    if (!directorySafety.ok) {
+        return {
+            ok: false,
+            sessionName,
+            input,
+            enter: options.enter !== false,
+            currentDirectory: pathStatus.currentDirectory,
+            error: `${directorySafety.reason} 已停止输入，命令没有发送到 tmux。请先向主人确认下一步应该切换到哪个目录或如何处理。`,
+            directorySafety
+        }
+    }
 
     try {
         await execTmux(['send-keys', '-t', sessionName, '--', input])
         if (options.enter !== false) {
             await execTmux(['send-keys', '-t', sessionName, 'C-m'])
         }
-        return { ok: true, sessionName, input, enter: options.enter !== false }
+        return { ok: true, sessionName, input, enter: options.enter !== false, currentDirectory: pathStatus.currentDirectory, directorySafety }
     } catch (err) {
         return { ok: false, sessionName, error: err.stderr || err.message || String(err) }
     }

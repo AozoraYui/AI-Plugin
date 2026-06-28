@@ -954,6 +954,7 @@ export class ChatHandler extends plugin {
         const prefix = match[1].toLowerCase()
         const flags = match[2].toLowerCase()
         let userMessage = match[3].trim()
+        const originalUserMessage = userMessage
 
         // 从 prefix 和 flags 中提取 v/n/w/f flag（handleSingleChat 可能已设置）
         const allFlags = prefix + flags
@@ -1301,7 +1302,7 @@ export class ChatHandler extends plugin {
                     logger.info('[AI-Plugin] 工具执行队列为空，本轮直接进入最终回复')
                 }
                 for (const call of toolCalls) {
-                    const toolContext = { userId: e.user_id, groupId: e.group_id, event: e }
+                    const toolContext = { userId: e.user_id, groupId: e.group_id, event: e, userMessage: originalUserMessage, originalUserMessage }
                     const result = await toolRegistry.execute(call.name, call.args, e.isMaster, toolContext)
                     if (result.success) {
                         if (call.name === 'draw_image') {
@@ -1405,7 +1406,7 @@ export class ChatHandler extends plugin {
                 }
 
                 if (e.isMaster && enabledTools.includes('shell_exec') && executedShellCommands.length > 0) {
-                    const toolContext = { userId: e.user_id, groupId: e.group_id, event: e }
+                    const toolContext = { userId: e.user_id, groupId: e.group_id, event: e, userMessage: originalUserMessage, originalUserMessage }
                     const seenCommands = new Set(executedShellCommands.filter(Boolean))
                     // 翻页续读使用 "命令@offset" 作为去重键，允许同命令不同分页继续
                     const seenPagedKeys = new Set()

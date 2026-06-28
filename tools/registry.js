@@ -337,7 +337,8 @@ const TOOL_USAGE_GUIDES = {
         rules: [
             '命令必须具体可执行；有副作用命令只在用户明确要求时使用。',
             '用户说在 AI-Plugin 执行时，cwd 用 plugins/AI-Plugin 或明确路径。',
-            '用户要求更新当前插件时，command 通常为 git pull；cwd 用 plugins/AI-Plugin 或当前插件实际路径。'
+            '用户要求更新当前插件时，command 通常为 git pull；cwd 用 plugins/AI-Plugin 或当前插件实际路径。',
+            '如果工具结果提示目录安全检查阻止执行，必须停止，不要换命令重试，应反问主人下一步要切到哪个目录或是否继续。'
         ]
     },
     shell_session: {
@@ -357,7 +358,8 @@ const TOOL_USAGE_GUIDES = {
         rules: [
             'action=send 时 input 必须来自主人明确要求输入/执行的内容。',
             '只是查看会话输出用 action=read；确保会话存在用 action=status。',
-            '需要停止当前前台任务用 action=interrupt；不要随意 close/restart，除非主人明确要求。'
+            '需要停止当前前台任务用 action=interrupt；不要随意 close/restart，除非主人明确要求。',
+            '如果工具结果提示目录安全检查阻止执行，必须停止，不要继续发送命令，应反问主人下一步要切到哪个目录或是否继续。'
         ]
     },
     web_fetch: {
@@ -744,6 +746,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - 文件/目录路径可以保留主模型解析出的绝对路径、相对路径、别名或文件名片段，不要凭空发明路径。
 - shell_exec 只能编译主模型明确计划的具体命令；不要为了补全信息自己设计危险命令。主人要求更新当前 AI-Plugin/插件时，可编译为 command="git pull" 并设置 cwd 为插件目录。
 - shell_session 只能在主模型明确计划操作 tmux/ai-shell/shell会话时编译；action=send 的 input 必须来自用户明确要求输入或执行的内容。
+- shell_exec/shell_session 若返回目录安全检查阻止执行，后续不要再编译新的 Shell 命令绕过检查，应让主模型反问主人。
 - file_download 用于下载当前消息或引用消息里的媒体，不需要 URL；web_fetch 才需要完整 URL。
 - draw_image 的参考图由工具自动提取（当前图、引用图、@头像、最近图片缓存）；角色参考图库参数按计划填写 character/characters/self_portrait。主模型已经计划 draw_image 时，不要仅因当前消息没有图片就丢弃调用；如果最近图片缓存可用，工具会按“刚才那张/这张图/用 p 模型处理/修图/去水印”等语义自行复用。
 - group_chat_context 的 scope 必须按主模型计划保留：当前群前情用 current_group；主人问机器人加了哪些群/能看到哪些群用 group_list；用户问自己在别的群/其他群刚发了什么用 other_group_messages 并设置 exclude_current_group=true；用户问自己跨群最近消息但未排除当前群用 my_recent_messages；主人要求所有群或指定群才用 all_groups/specific_group。普通用户不要编译其他人的 user_id。

@@ -76,6 +76,7 @@ export class HelpHandler extends plugin {
   需在 models_config.yaml 开启 enable_shell_session: true（独立开关）。
   开启后使用 tmux 会话 ai-shell；机器人启动时若不存在会自动创建。
   明确说“在 ai-shell 执行...”“看看 shell会话输出”“中断 tmux”时触发。
+  执行会改动状态的命令前会检查目录语义；目录不对会停止执行并反问你下一步。
 > 📤 文件收发（主人专用）
   需在 models_config.yaml 开启 enable_file_transfer: true（独立开关）。
   上传：让 AI 把白名单目录内的文件/文件夹发到当前会话（文件夹自动打包为 tar.gz）。

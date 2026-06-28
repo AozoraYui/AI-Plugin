@@ -765,7 +765,9 @@ export class NoaChatHandler extends plugin {
                     const result = await toolRegistry.execute(call.name, call.args || {}, e.isMaster, {
                         userId: normalized.userId,
                         groupId: normalized.groupId,
-                        event: e
+                        event: e,
+                        userMessage: toolRoutingText,
+                        originalUserMessage: toolRoutingText
                     })
                     if (result.success) {
                         toolContextText += formatNoaToolInjection(call.name, result.data)

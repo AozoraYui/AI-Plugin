@@ -7,6 +7,7 @@ import { exec } from 'node:child_process'
 import path from 'node:path'
 import { toolRegistry } from './registry.js'
 import { Config } from '../utils/config.js'
+import { validateShellDirectorySafety } from '../utils/shell_safety.js'
 
 function paginateText(text, offset, pageSize) {
     const full = String(text || '')
@@ -94,11 +95,34 @@ export const shellExecTool = {
         }
     },
 
-    async execute(args = {}) {
+    async execute(args = {}, context = {}) {
         const command = String(args.command || '').trim()
         if (!command) return '【Shell执行失败】未提供 command。'
 
         const cwd = args.cwd ? path.resolve(String(args.cwd)) : process.cwd()
+        const directorySafety = validateShellDirectorySafety({
+            command,
+            cwd,
+            userMessage: context.userMessage || context.originalUserMessage || '',
+            toolName: 'shell_exec'
+        })
+        if (!directorySafety.ok) {
+            logger.warn(`[AI-Plugin] shell_exec 目录安全拦截: ${directorySafety.reason} command=${command}, cwd=${cwd}, expected=${directorySafety.expectedDirectory}, effective=${directorySafety.effectiveDirectory}`)
+            return {
+                ok: false,
+                command,
+                cwd,
+                success: false,
+                code: null,
+                signal: null,
+                timedOut: false,
+                elapsed: '0.00',
+                stdout: '',
+                stderr: '',
+                error: `${directorySafety.reason} 已停止执行。请先向主人确认下一步应该切换到哪个目录或如何处理。`,
+                directorySafety
+            }
+        }
         // 单页大小：仍受 SHELL_EXEC_MAX_OUTPUT_CHARS 约束，避免单次请求超出模型上下文
         const pageSize = Math.min(
             Math.max(Number(args.max_output_chars) || Config.SHELL_EXEC_MAX_OUTPUT_CHARS, 1000),
@@ -130,6 +154,14 @@ export const shellExecTool = {
         if (!data || typeof data !== 'object') return String(data || '')
         const status = data.success ? '成功' : '失败'
         let output = `\n\n【Shell执行结果】\n命令: ${data.command}\n目录: ${data.cwd}\n状态: ${status}`
+        if (data.directorySafety?.safetyBlocked) {
+            output += `\n\n【目录安全检查】已阻止执行，命令没有运行。`
+            output += `\n原因: ${data.directorySafety.reason}`
+            output += `\n当前目录: ${data.directorySafety.currentDirectory}`
+            output += `\n生效目录: ${data.directorySafety.effectiveDirectory}`
+            output += `\n期望目录: ${data.directorySafety.expectedDirectory}`
+            output += `\n处理建议: 请反问主人下一步要切换到哪个目录或是否仍要继续。`
+        }
         output += `\n退出码: ${data.code}`
         if (data.signal) output += `\n信号: ${data.signal}`
         if (data.timedOut) output += `\n是否超时: 是`
