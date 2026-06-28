@@ -327,7 +327,8 @@ const TOOL_USAGE_GUIDES = {
             '可用于 rg/grep/find/ls/cat/git/systemctl/docker 等诊断、搜索、更新或用户明确要求的操作。'
         ],
         useWhen: [
-            '主人明确要求执行命令、git pull/status、查日志、搜索文件、诊断服务、普通文件工具不足时使用。'
+            '主人明确要求执行命令、git pull/status、查日志、搜索文件、诊断服务、普通文件工具不足时使用。',
+            '主人要求“更新插件/更新一下插件/拉取最新代码/AI-Plugin 更新”时，可用 git pull 更新当前插件仓库。'
         ],
         avoid: [
             '非主人不可用；不要为了补全信息自行设计危险命令。',
@@ -335,7 +336,8 @@ const TOOL_USAGE_GUIDES = {
         ],
         rules: [
             '命令必须具体可执行；有副作用命令只在用户明确要求时使用。',
-            '用户说在 AI-Plugin 执行时，cwd 用 plugins/AI-Plugin 或明确路径。'
+            '用户说在 AI-Plugin 执行时，cwd 用 plugins/AI-Plugin 或明确路径。',
+            '用户要求更新当前插件时，command 通常为 git pull；cwd 用 plugins/AI-Plugin 或当前插件实际路径。'
         ]
     },
     shell_session: {
@@ -740,7 +742,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - 只能使用“可用工具”中列出的工具，最多输出 ${maxTools} 个工具调用，并保持主模型计划中的顺序。
 - 不要新增主模型没有计划的工具；如果主模型计划含糊、参数不足且无法从原始消息/候选链接/计划中确定，返回 tools: []。
 - 文件/目录路径可以保留主模型解析出的绝对路径、相对路径、别名或文件名片段，不要凭空发明路径。
-- shell_exec 只能编译主模型明确计划的具体命令；不要为了补全信息自己设计危险命令。
+- shell_exec 只能编译主模型明确计划的具体命令；不要为了补全信息自己设计危险命令。主人要求更新当前 AI-Plugin/插件时，可编译为 command="git pull" 并设置 cwd 为插件目录。
 - shell_session 只能在主模型明确计划操作 tmux/ai-shell/shell会话时编译；action=send 的 input 必须来自用户明确要求输入或执行的内容。
 - file_download 用于下载当前消息或引用消息里的媒体，不需要 URL；web_fetch 才需要完整 URL。
 - draw_image 的参考图由工具自动提取（当前图、引用图、@头像、最近图片缓存）；角色参考图库参数按计划填写 character/characters/self_portrait。主模型已经计划 draw_image 时，不要仅因当前消息没有图片就丢弃调用；如果最近图片缓存可用，工具会按“刚才那张/这张图/用 p 模型处理/修图/去水印”等语义自行复用。

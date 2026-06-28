@@ -184,7 +184,7 @@ async function normalizeGroupMessage(e) {
 }
 
 function isImageQuestion(text) {
-    return /(图|图片|截图|照片|表情|刚才那张|这张|那张|看一下|看看)/i.test(text || '')
+    return /(图|图片|截图|照片|表情|刚才那张|刚才那些|这张|这几张|这些图|那张|那几张|那些图|上面那张|上面那些)/i.test(text || '')
 }
 
 function isExplicitImageReadRequest(text, hasCurrentImages = false) {
@@ -496,7 +496,15 @@ function extractUrlsFromText(text, limit = 10) {
 function shouldRouteNoaTools(text, urls = []) {
     const value = String(text || '')
     if (urls.length > 0 && /(看|看看|打开|总结|分析|解释|读|抓取|链接|网页|网站)/i.test(value)) return true
-    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|代发|转达|帮我.{0,20}(群|发|说|告诉)|tmux|ai-shell|shell会话|shell窗口|独立shell|画|绘制|生成|作图|手办化|图片处理|修图|执行|运行|调用|命令|shell|终端|命令行|脚本|插件更新|更新插件|\b(?:git|pull|push|status|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head)\b|之前|前面|刚才|刚刚|最近|他们|大家|群里|别的群|其他群|其它群|跨群|前情提要|聊了啥|说了啥|发生了什么|什么情况|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
+    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|代发|转达|帮我.{0,20}(群|发|说|告诉)|tmux|ai-shell|shell会话|shell窗口|独立shell|画|绘制|生成|作图|手办化|图片处理|修图|执行|运行|调用|命令|shell|终端|命令行|脚本|插件.{0,8}更新|更新.{0,8}插件|\b(?:git|pull|push|status|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head)\b|之前|前面|刚才|刚刚|最近|他们|大家|群里|别的群|其他群|其它群|跨群|前情提要|聊了啥|说了啥|发生了什么|什么情况|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
+}
+
+function shouldLetNoaToolModelJudge(text, isMaster = false) {
+    if (!isMaster) return false
+    const value = String(text || '').trim()
+    if (!value || value.length < 4) return false
+    if (/^(?:诺亚|noa|喏亚|诺娅)[~～!！。,.，\s]*$/i.test(value)) return false
+    return /(帮我|麻烦|拜托|能不能|可以|请|想让|给我|把|查|看|读|写|发|画|做|处理|执行|运行|调用|命令|更新|拉取|下载|保存|总结|整理|告诉|列出|找|搜|打开|修|改|删|踢|禁言|通过|拒绝|放.*进来)/i.test(value)
 }
 
 function hasExplicitHighImpactIntent(toolName, text) {
@@ -733,8 +741,10 @@ export class NoaChatHandler extends plugin {
             if (normalized.normalizedText !== toolRoutingText) {
                 logger.debug(`[AI-Plugin] [畅聊][安全] 工具路由仅使用当前触发消息文本，完整上下文长度=${normalized.normalizedText.length}, 指令长度=${toolRoutingText.length}`)
             }
-            if (enabledTools.length > 0 && shouldRouteNoaTools(toolRoutingText, candidateUrls)) {
-                logger.info(`[AI-Plugin] [畅聊] 工具路由开始: 可用工具=${enabledTools.join(', ')}`)
+            const routeByKeyword = shouldRouteNoaTools(toolRoutingText, candidateUrls)
+            const routeByMasterRequest = shouldLetNoaToolModelJudge(toolRoutingText, e.isMaster)
+            if (enabledTools.length > 0 && (routeByKeyword || routeByMasterRequest)) {
+                logger.info(`[AI-Plugin] [畅聊] 工具路由开始: 可用工具=${enabledTools.join(', ')}, 触发=${routeByKeyword ? '规则命中' : '主人请求兜底'}`)
                 const toolAnalysis = await toolRegistry.analyzeToolIntent(
                     toolRoutingText,
                     this.client,
