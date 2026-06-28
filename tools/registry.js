@@ -14,6 +14,75 @@ class ToolRegistry {
         return /(搜索|搜一下|查一下|查询|联网|上网|最新|新闻|资料|百科|官网|价格|汇率|天气|在哪里|附近|周边|推荐.*(?:店|餐厅|酒店|景点)|(?:店|餐厅|酒店|景点).*推荐)/i.test(String(text || ''))
     }
 
+    _isWeatherRequest(text) {
+        return /(天气|气温|温度|下雨|下雪|预报|冷不冷|热不热|带伞|穿什么)/i.test(String(text || ''))
+    }
+
+    _cleanWeatherCityCandidate(raw) {
+        let value = String(raw || '').trim()
+        value = value
+            .replace(/^[,，。；;、\s"'“”‘’()（）【】]+|[,，。；;、\s"'“”‘’()（）【】]+$/g, '')
+            .replace(/^(?:中国|国内|国外|城市|地区|地点|位置|所在地|常住地|现居地|住址|在|到|去|查|查一下|一下|查询|看看?|帮我|明天|今天|后天|今晚|现在|当前)+/i, '')
+            .replace(/(?:明天|今天|后天|今晚|现在|当前).*$/i, '')
+            .replace(/(?:的)?(?:天气|气温|温度|预报|下雨|下雪|冷不冷|热不热|带伞|穿什么).*$/i, '')
+            .trim()
+
+        value = value.replace(/^(?:在|是|为|:|：)+/, '').trim()
+        value = value.replace(/^(?:广东|浙江|江苏|四川|湖北|湖南|陕西|河南|山东|福建|安徽|江西|辽宁|吉林|黑龙江|云南|贵州|广西|海南|甘肃|宁夏|青海|新疆|西藏|内蒙古|山西|河北|台湾)省?/, '').trim()
+        value = value.replace(/(?:这边|那里|这里|附近|周边|本地|当地)$/i, '').trim()
+
+        if (!value || value.length < 2 || value.length > 40) return ''
+        if (/[#@<>{}\[\]`$\\/]/.test(value)) return ''
+        if (/(明天|今天|后天|现在|当前|天气|气温|温度|哪里|哪儿|哪个|什么|一下|帮我|查询|群聊|消息|上下文|记忆|用户|AI)/i.test(value)) return ''
+
+        const knownCities = new Set([
+            '北京', '上海', '天津', '重庆', '广州', '深圳', '中山', '珠海', '佛山', '东莞', '惠州', '杭州', '宁波', '南京', '苏州', '无锡', '成都', '武汉', '长沙', '西安', '郑州', '济南', '青岛', '厦门', '福州', '合肥', '南昌', '沈阳', '大连', '哈尔滨', '长春', '昆明', '贵阳', '南宁', '海口', '兰州', '银川', '西宁', '乌鲁木齐', '拉萨', '呼和浩特', '太原', '石家庄', '香港', '澳门', '台北'
+        ])
+        if (/^[a-zA-Z][a-zA-Z\s,.'-]{1,39}$/.test(value)) return value.replace(/\s+/g, ' ')
+        if (knownCities.has(value.replace(/[市县区]$/, ''))) return value.replace(/[市县区]$/, '')
+        if (/^[\u4e00-\u9fa5]{2,12}(?:省|市|县|区|州|盟|旗|镇)$/.test(value)) return value.replace(/[省市县区镇]$/, '')
+        if (/^[\u4e00-\u9fa5]{2,6}$/.test(value) && knownCities.has(value)) return value
+        return ''
+    }
+
+    _extractWeatherCityHints(userMessage = '', memorySummary = '', recentHistory = []) {
+        const hints = []
+        const add = (raw) => {
+            const city = this._cleanWeatherCityCandidate(raw)
+            if (city && !hints.includes(city)) hints.push(city)
+        }
+
+        const currentText = String(userMessage || '')
+        const explicitPatterns = [
+            /(?:查|查询|看看?|帮我查|天气|气温|温度|预报).{0,10}?([a-zA-Z][a-zA-Z\s,.'-]{1,39}|[\u4e00-\u9fa5]{2,12}?)(?:明天|今天|后天|今晚|未来)?(?:的)?(?:天气|气温|温度|预报|下雨|下雪)/gi,
+            /([a-zA-Z][a-zA-Z\s,.'-]{1,39}|[\u4e00-\u9fa5]{2,12}?)(?:明天|今天|后天|今晚|未来)(?:的)?(?:天气|气温|温度|预报|下雨|下雪)/gi,
+            /([a-zA-Z][a-zA-Z\s,.'-]{1,39}|[\u4e00-\u9fa5]{2,12}?)(?:的)?(?:天气|气温|温度|预报|下雨|下雪)/gi
+        ]
+        for (const pattern of explicitPatterns) {
+            for (const match of currentText.matchAll(pattern)) add(match[1])
+        }
+
+        const contextTexts = []
+        if (memorySummary) contextTexts.push(String(memorySummary))
+        for (const turn of recentHistory || []) {
+            const text = (turn.parts || []).filter(p => p.text).map(p => p.text).join('\n')
+            if (text) contextTexts.push(text)
+        }
+
+        const contextPatterns = [
+            /(?:用户|主人|由依|我|本人)?(?:目前|现在|长期|常住|现居|居住|住|住在|位于|来自|所在地|所在城市|城市|地区|位置|定位|家在|人在)[^，。；;\n]{0,8}(?:是|为|在|:|：)?\s*([a-zA-Z][a-zA-Z\s,.'-]{1,39}|[\u4e00-\u9fa5]{2,16})/gi,
+            /(?:常住地|现居地|所在地|所在城市|城市|地区|位置|定位)[：:是为\s]*([a-zA-Z][a-zA-Z\s,.'-]{1,39}|[\u4e00-\u9fa5]{2,16})/gi,
+            /(?:在|住在|常住在|现居于|位于)([a-zA-Z][a-zA-Z\s,.'-]{1,39}|[\u4e00-\u9fa5]{2,16})(?:生活|工作|上学|居住|附近|这边|当地|本地)?/gi
+        ]
+        for (const text of contextTexts) {
+            for (const pattern of contextPatterns) {
+                for (const match of text.matchAll(pattern)) add(match[1])
+            }
+        }
+
+        return hints.slice(0, 3)
+    }
+
     /** 设置天气 API Key（由 AiClient 初始化时调用） */
     setWeatherApiKey(apiKey) {
         this.weatherApiKey = apiKey
@@ -320,12 +389,19 @@ ${JSON.stringify(mainPlan, null, 2)}
             }
         }
 
-        // 构建记忆总结上下文（增量总结，截取前1000字控制token）
+        // 构建记忆总结上下文（增量总结，截取前2600字；天气等工具需要长期地点线索）
         let summaryBlock = ''
         if (memorySummary) {
-            const trimmed = memorySummary.slice(0, 1000)
+            const trimmed = memorySummary.slice(0, 2600)
             summaryBlock = `\n\n用户与AI的历史记忆摘要（帮助理解长期上下文，如提到过的话题、偏好、路径等）：\n${trimmed}\n`
         }
+
+        const weatherCityHints = enabledTools.includes('weather') && this._isWeatherRequest(userMessage)
+            ? this._extractWeatherCityHints(userMessage, memorySummary, recentHistory)
+            : []
+        const weatherHintBlock = weatherCityHints.length > 0
+            ? `\n\n【天气地点上下文候选】如果用户询问天气但当前消息没有明确城市，可以优先使用这些从当前消息/长期记忆/最近上下文中抽取到的地点：${weatherCityHints.join('、')}。如果用户明确说了其他城市，以用户当前消息为准。\n`
+            : ''
 
         // 构建候选链接上下文（来自当前消息、引用消息、合并转发及嵌套合并转发）
         let candidateUrlBlock = ''
@@ -354,6 +430,7 @@ ${toolDescriptions.join('\n')}
 - system_info: {}
 - weather: {"city": "城市名"}
   - 天气工具参数要求：如果用户查询的是国外城市，或使用中文外文地名（如纽约、伦敦、巴黎、东京、洛杉矶），请尽量转换为 OpenWeatherMap 可识别的英文城市名（如 New York、London、Paris、Tokyo、Los Angeles）后填入 city。
+  - 如果当前天气请求没有写城市，但历史记忆摘要或最近上下文明确给出了用户常住地/所在地/所在城市，可使用该地点查询；没有明确地点时再返回空工具并追问城市。
 - file_read: {"path": "文件/目录路径或别名", "read_all": true或false}
 - dir_read: {"path": "目录路径或别名", "read_all": true或false}
 - shell_exec: {"command": "要执行的shell命令", "cwd": "可选工作目录", "timeout_ms": 可选超时毫秒, "max_output_chars": 可选最大输出字符数}
@@ -431,7 +508,7 @@ ${toolDescriptions.join('\n')}
         try {
             const analysisPayload = {
                 contents: [
-                    { role: "user", parts: [{ text: analysisPrompt + imageContextBlock + characterLibraryBlock + summaryBlock + contextBlock + candidateUrlBlock + `\n\n用户消息：\n${userMessage}` }] }
+                    { role: "user", parts: [{ text: analysisPrompt + imageContextBlock + characterLibraryBlock + summaryBlock + weatherHintBlock + contextBlock + candidateUrlBlock + `\n\n用户消息：\n${userMessage}` }] }
                 ]
             }
 
@@ -491,7 +568,7 @@ ${toolDescriptions.join('\n')}
             }))
 
             // 提取意图分析
-            const intent = parsed.intent || ''
+            let intent = parsed.intent || ''
 
             // 过滤非法工具调用
             let validCalls = tools.filter(t => {
@@ -501,6 +578,25 @@ ${toolDescriptions.join('\n')}
                 }
                 return true
             })
+
+            if (enabledTools.includes('weather') && this._isWeatherRequest(userMessage)) {
+                const firstHint = weatherCityHints[0]
+                let filledWeather = false
+                validCalls = validCalls.map(call => {
+                    if (call.name !== 'weather') return call
+                    const city = call.args?.city || call.args?.query || ''
+                    if (city || !firstHint) return call
+                    filledWeather = true
+                    return { ...call, args: { ...call.args, city: firstHint } }
+                })
+                if (validCalls.length === 0 && firstHint) {
+                    validCalls = [{ name: 'weather', args: { city: firstHint } }]
+                    intent = `规则兜底：用户询问天气，当前消息未提供城市，但上下文地点候选为「${firstHint}」，直接查询该城市天气。`
+                    logger.info(`[AI-Plugin] 天气工具路由兜底命中上下文城市: ${firstHint}`)
+                } else if (filledWeather) {
+                    logger.info(`[AI-Plugin] 天气工具参数已用上下文城市补全: ${firstHint}`)
+                }
+            }
 
             // 带图消息的意图分析模型看不到图片，短文本容易脑补搜索；没有明确搜索/查询意图时禁止自动搜索
             if (hasImages && !this._hasExplicitWebSearchIntent(userMessage)) {
