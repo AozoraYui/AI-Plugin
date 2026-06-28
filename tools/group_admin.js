@@ -37,6 +37,10 @@ function getBotUin(event) {
     return Number(event?.self_id || event?.bot?.uin || event?.bot?.self_id || (typeof Bot !== 'undefined' ? Bot.uin : 0)) || 0
 }
 
+function groupAdminFeatureEnabled() {
+    return global.AIPluginClient?.enableGroupAdmin === true
+}
+
 // 获取成员信息（兼容 .info 缓存与 getInfo()）
 async function getMemberInfo(member) {
     if (!member) return null
@@ -129,6 +133,7 @@ async function checkTargetAllowed(event, group, targetId) {
 async function preCheck(event, options = {}) {
     const requireBotAdmin = options.requireBotAdmin !== false
     const requireBotOwner = options.requireBotOwner === true
+    if (!groupAdminFeatureEnabled()) return { error: '群管理工具未启用。' }
     if (!event) return { error: '缺少会话上下文。' }
     if (!event.group_id) return { error: '群管理功能仅在群聊中可用。' }
     const opRole = await resolveGroupOperatorRole(event)
@@ -683,6 +688,7 @@ export const groupRequestListTool = {
     async execute(args = {}, context = {}) {
         const event = context.event
         if (!event?.group_id) return '【查看申请失败】仅在群聊中可用。'
+        if (!groupAdminFeatureEnabled()) return '【查看申请失败】群管理工具未启用。'
         if (await resolveGroupOperatorRole(event) === 'member') return '【查看申请失败】权限不足：仅主人或群管理员可用。'
         const list = await scanPendingRequests(event.group_id)
         return { ok: true, list }
@@ -721,6 +727,7 @@ export const groupRequestHandleTool = {
     async execute(args = {}, context = {}) {
         const event = context.event
         if (!event?.group_id) return '【处理申请失败】仅在群聊中可用。'
+        if (!groupAdminFeatureEnabled()) return '【处理申请失败】群管理工具未启用。'
         if (await resolveGroupOperatorRole(event) === 'member') return '【处理申请失败】权限不足：仅主人或群管理员可用。'
         const group = pickGroup(event)
         if (!await botIsAdmin(event, group)) return '【处理申请失败】机器人不是该群管理员，无法处理加群申请。'
