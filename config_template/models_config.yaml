@@ -148,6 +148,7 @@ enable_web_fetch: false
 #   SHELL_SESSION_NAME: tmux 会话名（默认 ai-shell）
 #   SHELL_SESSION_CAPTURE_LINES: 读取 tmux 窗口时默认回看行数（默认 200）
 #   SHELL_SESSION_MAX_OUTPUT_CHARS: 单次注入模型的 tmux 输出最大字符数（默认 24000）
+#   SHELL_SESSION_AFTER_SEND_DELAY_MS: action=send 后自动回读窗口前等待多久（默认 1200ms，只读快照，不等待长任务结束）
 #
 # 以下为可调上限（注释即用默认值，单位见名）：
 #   SHELL_EXEC_TIMEOUT_MS            单条命令默认超时（默认 60000）

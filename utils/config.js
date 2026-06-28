@@ -114,6 +114,8 @@ const defaultConfig = {
     SHELL_SESSION_CAPTURE_LINES: 200,
     // 单次注入模型的 tmux 窗口输出最大字符数
     SHELL_SESSION_MAX_OUTPUT_CHARS: 24000,
+    // action=send 后自动回读 tmux 窗口前等待多久；只抓快照，不等待长任务结束
+    SHELL_SESSION_AFTER_SEND_DELAY_MS: 1200,
     version: 'v1.0.0'
 }
 

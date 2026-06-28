@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import plugin from '../../../lib/plugins/plugin.js'
 import { Config } from '../utils/config.js'
 import { checkAccess } from '../utils/access.js'
-import { getBeijingTimeStr, getTodayDateStr, takeSourceMsg } from '../utils/common.js'
+import { formatDBTimestampToBeijing, getBeijingTimeStr, getTodayDateStr, takeSourceMsg } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
 import { buildEnvironmentHint, expandForwardMsg, extractCardInfo } from './chat.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedUserIds } from '../utils/group_alias.js'
@@ -219,7 +219,7 @@ function formatGroupContext(logs = []) {
     for (const log of logs) {
         const name = log.isBot ? Config.AI_NAME : (log.nickname || `用户${log.userId}`)
         const imageHint = log.imageMeta?.length ? `（含 ${log.imageMeta.length} 张图片）` : ''
-        lines.push(`[${log.createdAt}] ${name}(${log.userId}): ${truncateText(log.normalizedText, 700)}${imageHint}`)
+        lines.push(`[${formatDBTimestampToBeijing(log.createdAt)}] ${name}(${log.userId}): ${truncateText(log.normalizedText, 700)}${imageHint}`)
     }
     return lines.join('\n')
 }

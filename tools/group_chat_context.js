@@ -4,6 +4,7 @@
  */
 
 import { toolRegistry } from './registry.js'
+import { formatDBTimestampToBeijing } from '../utils/common.js'
 
 function normalizeLimit(limit) {
     const n = Number(limit)
@@ -37,7 +38,7 @@ function formatLogLine(log, options = {}) {
     const name = log.isBot ? 'AI' : (log.nickname || `用户${log.userId}`)
     const imageHint = log.imageMeta?.length ? `（含 ${log.imageMeta.length} 张图片）` : ''
     const groupHint = options.showGroupId ? `群${log.groupId} ` : ''
-    return `[${log.createdAt}] ${groupHint}${name}(${log.userId}): ${truncateText(log.normalizedText, 700)}${imageHint}`
+    return `[${formatDBTimestampToBeijing(log.createdAt)}] ${groupHint}${name}(${log.userId}): ${truncateText(log.normalizedText, 700)}${imageHint}`
 }
 
 function getActorUserId(context = {}, event = {}) {
@@ -304,7 +305,7 @@ export const groupChatContextTool = {
                 const name = group.groupName ? `「${group.groupName}」` : '群名未知'
                 const live = group.source === 'live' ? '实时可见' : '已捕获'
                 const member = group.memberCount !== null && group.memberCount !== undefined ? `，成员 ${group.memberCount}${group.maxMemberCount ? `/${group.maxMemberCount}` : ''}` : ''
-                const captured = group.messageCount ? `，已捕获 ${group.messageCount} 条，最近 ${group.lastMessageAt || '未知'}` : ''
+                const captured = group.messageCount ? `，已捕获 ${group.messageCount} 条，最近 ${formatDBTimestampToBeijing(group.lastMessageAt)}` : ''
                 return `${index + 1}. ${name}（${group.groupId}，${live}${member}${captured}）`
             })
             return `\n\n【群聊上下文】机器人可见/已捕获群共 ${groups.length} 个${queryNote}：${errNote}\n${lines.join('\n')}`

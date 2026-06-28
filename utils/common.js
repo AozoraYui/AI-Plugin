@@ -119,6 +119,17 @@ export function getBeijingTimeStr() {
     return beijingStr.replace('T', ' ') + ' (北京时间)'
 }
 
+export function formatDBTimestampToBeijing(value) {
+    if (!value) return '未知时间'
+    const raw = String(value).trim()
+    const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T')
+    const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized)
+    const date = new Date(hasZone ? normalized : `${normalized}Z`)
+    if (Number.isNaN(date.getTime())) return raw
+    const beijingStr = date.toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai', hour12: false })
+    return `${beijingStr.replace('T', ' ')} (北京时间)`
+}
+
 export function getDBTimestamp() {
     const now = new Date()
     const year = now.getUTCFullYear()

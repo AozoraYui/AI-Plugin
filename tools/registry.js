@@ -345,6 +345,7 @@ const TOOL_USAGE_GUIDES = {
         capabilities: [
             '操作主人专用的持久 tmux Shell 会话（默认 ai-shell）。',
             '可读取 tmux 窗口输出、发送命令或文本、发送 Ctrl-C、清屏、重启或关闭会话。',
+            'action=send 默认会在发送并回车后短暂等待并回读窗口快照，短命令通常可直接得到输出。',
             '适合长任务、dev server、tail 日志、交互式排查和需要保留 shell 状态的场景。'
         ],
         useWhen: [
@@ -357,6 +358,7 @@ const TOOL_USAGE_GUIDES = {
         ],
         rules: [
             'action=send 时 input 必须来自主人明确要求输入/执行的内容。',
+            'action=send 返回的 tmux窗口输出就是发送后的最新窗口快照；若输出为空或任务仍在运行，再用 action=read 读取。',
             '只是查看会话输出用 action=read；确保会话存在用 action=status。',
             '需要停止当前前台任务用 action=interrupt；不要随意 close/restart，除非主人明确要求。',
             '如果工具结果提示目录安全检查阻止执行，必须停止，不要继续发送命令，应反问主人下一步要切到哪个目录或是否继续。'

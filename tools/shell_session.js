@@ -65,7 +65,15 @@ export const shellSessionTool = {
                     },
                     lines: {
                         type: 'number',
-                        description: '读取最近多少行窗口内容，默认使用 SHELL_SESSION_CAPTURE_LINES，范围 20-2000。'
+                        description: '读取最近多少行窗口内容；action=send 后自动回读也会使用该行数。默认使用 SHELL_SESSION_CAPTURE_LINES，范围 20-2000。'
+                    },
+                    read_after_send: {
+                        type: 'boolean',
+                        description: 'action=send 时是否在发送并回车后自动读取 tmux 窗口输出，默认 true。长任务只会读取快照，不会等待任务结束。'
+                    },
+                    after_send_delay_ms: {
+                        type: 'number',
+                        description: 'action=send 自动回读前等待的毫秒数，默认使用 SHELL_SESSION_AFTER_SEND_DELAY_MS。'
                     },
                     cwd: {
                         type: 'string',
@@ -101,7 +109,11 @@ export const shellSessionTool = {
                 cwd: args.cwd,
                 input: args.input,
                 enter: args.enter !== false,
-                userMessage: context.userMessage || context.originalUserMessage || ''
+                userMessage: context.userMessage || context.originalUserMessage || '',
+                readAfterSend: args.read_after_send !== false,
+                afterSendDelayMs: args.after_send_delay_ms,
+                lines: limitLines(args.lines),
+                maxOutputChars: Config.SHELL_SESSION_MAX_OUTPUT_CHARS
             })
         } else if (action === 'interrupt') {
             result = await interruptShellSession({ cwd: args.cwd })
@@ -151,6 +163,8 @@ export const shellSessionTool = {
         if (data.currentDirectory) output += `\n当前目录: ${data.currentDirectory}`
         if (data.closed !== undefined) output += `\n是否关闭: ${data.closed ? '是' : '否'}`
         if (data.enter !== undefined) output += `\n是否回车: ${data.enter ? '是' : '否'}`
+        if (data.readAfterSend) output += `\n自动回读: 是，等待 ${data.afterSendDelayMs || 0}ms 后读取窗口快照`
+        if (data.readError) output += `\n回读失败: ${data.readError}`
         if (data.truncated) output += `\n提示: 输出较长，仅显示末尾 ${Config.SHELL_SESSION_MAX_OUTPUT_CHARS} 字符。`
         if (data.output) output += `\n\n--- tmux窗口输出 ---\n${data.output}`
         output += `\n【Shell会话结果结束】\n`

@@ -23,6 +23,16 @@ function execTmux(args = [], options = {}) {
     })
 }
 
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function normalizeDelay(ms) {
+    const value = Number(ms)
+    if (!Number.isFinite(value)) return Config.SHELL_SESSION_AFTER_SEND_DELAY_MS
+    return Math.min(Math.max(Math.trunc(value), 0), 10000)
+}
+
 export function normalizeShellSessionName(name = Config.SHELL_SESSION_NAME) {
     const value = String(name || 'ai-shell').trim()
     if (!/^[A-Za-z0-9_.-]{1,64}$/.test(value)) {
@@ -146,7 +156,33 @@ export async function sendToShellSession(options = {}) {
         if (options.enter !== false) {
             await execTmux(['send-keys', '-t', sessionName, 'C-m'])
         }
-        return { ok: true, sessionName, input, enter: options.enter !== false, currentDirectory: pathStatus.currentDirectory, directorySafety }
+        const shouldReadAfterSend = options.readAfterSend !== false && options.enter !== false
+        let snapshot = null
+        if (shouldReadAfterSend) {
+            const delayMs = normalizeDelay(options.afterSendDelayMs)
+            if (delayMs > 0) await sleep(delayMs)
+            snapshot = await captureShellSession({
+                sessionName,
+                cwd: options.cwd,
+                lines: options.lines || Config.SHELL_SESSION_CAPTURE_LINES,
+                maxOutputChars: options.maxOutputChars || Config.SHELL_SESSION_MAX_OUTPUT_CHARS
+            })
+        }
+        return {
+            ok: true,
+            sessionName,
+            input,
+            enter: options.enter !== false,
+            currentDirectory: snapshot?.currentDirectory || pathStatus.currentDirectory,
+            directorySafety,
+            readAfterSend: shouldReadAfterSend,
+            afterSendDelayMs: shouldReadAfterSend ? normalizeDelay(options.afterSendDelayMs) : 0,
+            output: snapshot?.ok ? snapshot.output : '',
+            truncated: snapshot?.truncated || false,
+            totalChars: snapshot?.totalChars || 0,
+            lines: snapshot?.lines,
+            readError: snapshot && !snapshot.ok ? snapshot.error : ''
+        }
     } catch (err) {
         return { ok: false, sessionName, error: err.stderr || err.message || String(err) }
     }
