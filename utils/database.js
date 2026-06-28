@@ -498,6 +498,47 @@ export class AIDatabase {
         })
     }
 
+    getGroupMessageLogGroups(options = {}) {
+        return new Promise((resolve, reject) => {
+            const params = []
+            let query = `
+                SELECT
+                    group_id,
+                    COUNT(*) AS message_count,
+                    COUNT(DISTINCT user_id) AS user_count,
+                    MAX(created_at) AS last_message_at
+                FROM group_message_logs
+                WHERE 1 = 1
+            `
+
+            if (options.excludeCommands === true) {
+                query += ' AND is_command = 0'
+            }
+
+            const q = String(options.query || '').trim()
+            if (q) {
+                query += ' AND group_id LIKE ?'
+                params.push(`%${q}%`)
+            }
+
+            query += ' GROUP BY group_id ORDER BY last_message_at DESC LIMIT ?'
+            params.push(Math.max(1, Math.min(Number(options.limit) || 120, 500)))
+
+            this.db.all(query, params, (err, rows) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(rows.map(row => ({
+                    groupId: row.group_id,
+                    messageCount: row.message_count || 0,
+                    userCount: row.user_count || 0,
+                    lastMessageAt: row.last_message_at || ''
+                })))
+            })
+        })
+    }
+
     saveGroupMemberAlias(record) {
         return new Promise((resolve, reject) => {
             const updatedAt = getDBTimestamp()

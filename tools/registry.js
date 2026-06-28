@@ -288,7 +288,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - shell_exec 只能编译主模型明确计划的具体命令；不要为了补全信息自己设计危险命令。
 - file_download 用于下载当前消息或引用消息里的媒体，不需要 URL；web_fetch 才需要完整 URL。
 - draw_image 的参考图由工具自动提取（当前图、引用图、@头像、最近图片缓存）；角色参考图库参数按计划填写 character/characters/self_portrait。主模型已经计划 draw_image 时，不要仅因当前消息没有图片就丢弃调用；如果最近图片缓存可用，工具会按“刚才那张/这张图/用 p 模型处理/修图/去水印”等语义自行复用。
-- group_chat_context 的 scope 必须按主模型计划保留：当前群前情用 current_group；用户问自己在别的群/其他群刚发了什么用 other_group_messages 并设置 exclude_current_group=true；用户问自己跨群最近消息但未排除当前群用 my_recent_messages；主人要求所有群或指定群才用 all_groups/specific_group。普通用户不要编译其他人的 user_id。
+- group_chat_context 的 scope 必须按主模型计划保留：当前群前情用 current_group；主人问机器人加了哪些群/能看到哪些群用 group_list；用户问自己在别的群/其他群刚发了什么用 other_group_messages 并设置 exclude_current_group=true；用户问自己跨群最近消息但未排除当前群用 my_recent_messages；主人要求所有群或指定群才用 all_groups/specific_group。普通用户不要编译其他人的 user_id。
 - 群管理成员操作必须有明确对象；有 QQ 号或 @ 时可填 user_id，没有 QQ 但有昵称/群名片时可填 target，拿不准唯一目标时先编译 group_member_list 或 group_member_resolve。
 - 如果当前消息 @ 了唯一成员，且主模型计划的群管理操作目标是“这个人/被 @ 的人”，请直接把该 QQ 填入 user_id。
 - group_request_handle 处理的是入群申请；用户说“刚才那个/他/那个人”且主模型计划处理待审申请时，可以省略 user_id；用户用昵称、QQ、留言关键词或含糊原话指代申请人时，把关键词写入 target。
@@ -458,8 +458,9 @@ ${toolDescriptions.join('\n')}
   - 群文件浏览要求：当用户想"看看群文件有哪些/列一下群文件/群文件里有什么"时使用。要进某个子文件夹就填 folder_name，否则留空看根目录。当用户想"连文件夹里的文件也一起看/全部列出来/包括子文件夹"时把 recursive 设为 true。注意这是 QQ"群文件区"，不是聊天消息里的文件。
 - group_file_download: {"file_name": "可选，群文件名", "save_dir": "可选，保存目录"}
   - 群文件下载要求：当用户要求把"群文件里的某个文件"下载/保存到服务器某目录时使用。file_name 填用户说的文件名（可为片段）。若用户是"引用了一条群文件消息"再说"下载这个/帮我下载到xxx/把这个存到服务器"，或者说"把刚才那个群文件/上次引用的文件下载到xxx"，file_name 都可以留空——工具会自动从被引用的群文件消息提取，或回退到最近引用过的群文件名。这是从 QQ 群文件区下载，区别于 file_download（后者下载聊天消息里的媒体）。
-- group_chat_context: {"scope": "current_group/my_recent_messages/other_group_messages/all_groups/specific_group", "limit": "可选，读取最近多少条群消息", "query": "可选，关键词", "group_id": "可选群号", "user_id": "可选用户QQ", "exclude_current_group": "可选true/false"}
+- group_chat_context: {"scope": "current_group/my_recent_messages/other_group_messages/all_groups/specific_group/group_list", "limit": "可选，读取最近多少条群消息或群列表数量", "query": "可选，关键词", "group_id": "可选群号", "user_id": "可选用户QQ", "exclude_current_group": "可选true/false"}
   - 群聊上下文要求：用户问"刚才/之前/他们/大家/群里聊了什么、发生了什么、前情提要、总结最近群聊"时使用。
+  - 主人问"你加了哪些群/能看到哪些群/群列表/有哪些群"时，用 scope=group_list；这会优先读取机器人实时群列表，失败时退回已捕获群。
   - 默认 scope=current_group，只查当前群。
   - 用户问"我刚在别的群/其他群发了什么""你看到我在别的群的消息吗"时，用 scope=other_group_messages 或 scope=my_recent_messages，并设置 exclude_current_group=true；普通用户只能查自己的跨群消息，不要填其他人的 user_id。
   - 主人明确要求跨群/所有群/某个群的已捕获流水时，可用 scope=all_groups 或 specific_group，并可填 group_id/user_id/query。

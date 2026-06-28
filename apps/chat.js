@@ -545,6 +545,15 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
 
     // 6) 群聊流水查询：当前群前情和“我在别的群刚说了什么”是明确可查的畅聊数据。
     if (hasTool(enabledTools, 'group_chat_context')) {
+        const asksGroupList = isMaster && /(加了哪些群|加入了哪些群|在哪些群|能看到哪些群|可见群|群列表|所有群列表|有哪些群|有什么群|机器人.*群|你.*群)/i.test(text)
+        if (asksGroupList) {
+            return {
+                intent: '规则预路由：主人询问机器人可见或已捕获的群列表。',
+                tools: [{ name: 'group_chat_context', args: { scope: 'group_list', limit: 120 } }],
+                routedBy: 'rule'
+            }
+        }
+
         const asksOwnOtherGroup = /(我|俺|咱).{0,18}(别的群|其他群|其它群|别群|跨群).{0,24}(发|说|聊|消息|看到|看见|记得|知道)/i.test(text)
             || /(别的群|其他群|其它群|别群|跨群).{0,18}(我|俺|咱).{0,24}(发|说|聊|消息|看到|看见|记得|知道)/i.test(text)
         if (asksOwnOtherGroup) {
@@ -687,6 +696,7 @@ ${toolSummary}
 - draw_image 可以自动提取当前消息图、引用图、@头像，也可以在用户说“刚才那张/这张图/用 p 模型处理/修图/去水印/二维码/套预设”等时复用最近图片缓存。用户明确要求基于图片生成、重绘、修图、去水印或套风格时，可以计划 draw_image，但不要承诺精准像素级编辑。
 - 当前操作者是否主人：${isMaster ? '是' : '否'}。
 - 用户问“刚才/之前/他们/大家/群里聊了什么、发生了什么、前情提要、总结最近群聊”时，优先计划 group_chat_context 读取畅聊捕获的本群公开群流水，params_hint 写 scope=current_group。
+- 主人问“你加了哪些群/能看到哪些群/群列表/有哪些群”时，计划 group_chat_context，params_hint 写 scope=group_list；私聊中也可以使用。
 - 用户问“我刚在别的群/其他群发了什么”“你看到我在别的群说的话吗”时，计划 group_chat_context，params_hint 写 scope=other_group_messages、exclude_current_group=true；这只查询当前触发者自己的跨群消息。
 - 只有当前操作者是主人且用户明确要求跨群/所有群/指定群的已捕获流水时，才计划 group_chat_context 的 scope=all_groups 或 specific_group；非主人不要计划读取其他人的跨群消息。
 - 用户问“这个人是谁/@某某有什么外号/谁是杂鱼/谁被叫过xxx/本群怎么称呼某人”时，计划 group_member_aliases 查询本群称呼记忆；这类结果只代表群内公开聊天里的称呼记录，不是真实身份断言。
@@ -1096,8 +1106,10 @@ export class ChatHandler extends plugin {
             if (this.client.enableAiDraw) {
                 enabledTools.push('draw_image')
             }
-            if (e.group_id) {
+            if (e.group_id || e.isMaster) {
                 enabledTools.push('group_chat_context')
+            }
+            if (e.group_id) {
                 enabledTools.push('group_member_aliases')
             }
             // 群管理：开启 enable_group_admin 后，群聊中由「主人」或「当前群管理员/群主」触发
