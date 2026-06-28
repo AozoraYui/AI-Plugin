@@ -772,7 +772,8 @@ ${toolSummary}
 规划约束：
 - 不要为了“可能有用”而调用工具；只有工具结果会直接影响回答时才计划工具。
 - 文件/目录优先使用 file_read/dir_read；shell_exec 只用于用户明确要求命令、诊断、搜索服务器或普通文件工具不足的场景。
-- 持久 Shell 会话只在主人明确提到 tmux、ai-shell、shell会话、shell窗口、独立shell 时使用 shell_session；普通一次性命令仍优先 shell_exec。
+- 普通快速一次性命令优先 shell_exec；预计耗时较长、持续输出、需要保留状态或用户明确提到 tmux/ai-shell/shell会话/独立shell 时，优先计划 shell_session。如果 shell_exec 未启用但 shell_session 可用，主人明确要求执行服务器命令时也可以计划 shell_session。
+- 用户要求 nmap/局域网/内网入网设备扫描时，不要猜 192.168.0.0/24 或 192.168.1.0/24；应先计划 shell_exec 获取本机网络信息（如 ip route get 1.1.1.1、ip -o -4 addr show scope global、ip route show default），再由 Shell 补查根据实际 CIDR 执行 nmap -sn。若只能用 shell_session，应发送能自动推断 iface/cidr 的命令，避免扫描公网或无关网段。
 - 链接只在用户明确要求查看/总结/分析网页内容时计划 web_fetch；只是出现链接不代表需要抓取。
 - 用户询问天气但当前消息没写城市时，如果长期记忆摘要或最近对话中明确给出了用户常住地/所在地/所在城市，可以计划 weather 并在 params_hint 写入该城市；没有明确地点时不要猜，返回 need_tools=false 并说明需要追问城市。
 - 当前消息包含图片：${hasImages ? '是' : '否'}；最近图片缓存可用：${hasRecentImages ? '是' : '否'}。规划阶段不会收到图片内容；如果用户只是让你看图/描述图且没有明确工具需求，交给最终多模态/视觉流程，不要计划工具。
@@ -846,6 +847,8 @@ async function askMainModelForNextShellCommand(client, modelGroupKey, providerFi
 - 每轮最多返回一条命令。
 - 禁止交互式、长期运行、无限输出命令。
 - 优先使用只读/查询命令，例如 pwd、ls、find、rg、grep、cat、tail、git status、git diff、df、free、ps。
+- 用户要求 nmap/局域网/内网入网设备扫描时：如果现有结果还没有明确本机 CIDR，先用只读命令获取网络信息，例如 "ip route get 1.1.1.1; ip -o -4 addr show scope global; ip route show default"，不要猜 192.168.0.0/24 或 192.168.1.0/24。
+- 已拿到本机局域网 CIDR 后，才可执行 "nmap -sn <CIDR>" 统计在线设备；不要扫描公网地址或与本机无关的网段，除非主人明确指定。nmap 可能较慢，timeout_ms 可设置为 120000~240000。
 - 【精确取数】数据量大时，优先用 jq/grep/awk/sed 只提取需要的字段或行，不要直接 cat 整个大文件，以减少数据量、避免浪费。
 - 【翻页续读】如果上一条命令的结果提示"输出未读完"并给出了 offset_chars，且你确实需要后续完整内容，可返回相同的 command 并带上提示的 offset_chars 继续读取下一页（这种翻页不算重复命令）。
 - 除翻页外，不要重复已执行的相同命令。

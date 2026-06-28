@@ -73,7 +73,15 @@ export const shellSessionTool = {
                     },
                     after_send_delay_ms: {
                         type: 'number',
-                        description: 'action=send 自动回读前等待的毫秒数，默认使用 SHELL_SESSION_AFTER_SEND_DELAY_MS。'
+                        description: 'action=send 自动回读第一次检查前等待的毫秒数，默认使用 SHELL_SESSION_AFTER_SEND_DELAY_MS。'
+                    },
+                    after_send_timeout_ms: {
+                        type: 'number',
+                        description: 'action=send 自动回读最多等待多久，默认 64000ms；期间检测到窗口出现新输出就返回，超时则返回当前快照。'
+                    },
+                    after_send_poll_ms: {
+                        type: 'number',
+                        description: 'action=send 自动回读轮询间隔，默认 1000ms。'
                     },
                     cwd: {
                         type: 'string',
@@ -112,6 +120,8 @@ export const shellSessionTool = {
                 userMessage: context.userMessage || context.originalUserMessage || '',
                 readAfterSend: args.read_after_send !== false,
                 afterSendDelayMs: args.after_send_delay_ms,
+                afterSendTimeoutMs: args.after_send_timeout_ms,
+                afterSendPollMs: args.after_send_poll_ms,
                 lines: limitLines(args.lines),
                 maxOutputChars: Config.SHELL_SESSION_MAX_OUTPUT_CHARS
             })
@@ -163,7 +173,11 @@ export const shellSessionTool = {
         if (data.currentDirectory) output += `\n当前目录: ${data.currentDirectory}`
         if (data.closed !== undefined) output += `\n是否关闭: ${data.closed ? '是' : '否'}`
         if (data.enter !== undefined) output += `\n是否回车: ${data.enter ? '是' : '否'}`
-        if (data.readAfterSend) output += `\n自动回读: 是，等待 ${data.afterSendDelayMs || 0}ms 后读取窗口快照`
+        if (data.readAfterSend) {
+            output += `\n自动回读: 是，先等 ${data.afterSendDelayMs || 0}ms，最多等待 ${data.afterSendTimeoutMs || 0}ms，轮询 ${data.afterSendPollMs || 0}ms`
+            output += `\n回读状态: ${data.outputChanged ? '检测到新输出' : (data.waitTimedOut ? '等待超时，返回当前快照' : '已读取快照')}`
+            if (data.readAttempts) output += `，检查 ${data.readAttempts} 次，耗时 ${data.waitElapsedMs || 0}ms`
+        }
         if (data.readError) output += `\n回读失败: ${data.readError}`
         if (data.truncated) output += `\n提示: 输出较长，仅显示末尾 ${Config.SHELL_SESSION_MAX_OUTPUT_CHARS} 字符。`
         if (data.output) output += `\n\n--- tmux窗口输出 ---\n${data.output}`

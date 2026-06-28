@@ -33,6 +33,76 @@ function normalizeDelay(ms) {
     return Math.min(Math.max(Math.trunc(value), 0), 10000)
 }
 
+function normalizeWaitTimeout(ms) {
+    const value = Number(ms)
+    if (!Number.isFinite(value)) return Config.SHELL_SESSION_AFTER_SEND_TIMEOUT_MS
+    return Math.min(Math.max(Math.trunc(value), 0), Config.SHELL_SESSION_AFTER_SEND_TIMEOUT_MS)
+}
+
+function normalizePollInterval(ms) {
+    const value = Number(ms)
+    if (!Number.isFinite(value)) return Config.SHELL_SESSION_AFTER_SEND_POLL_MS
+    return Math.min(Math.max(Math.trunc(value), 250), 5000)
+}
+
+function hasMeaningfulOutputChange(beforeOutput = '', afterOutput = '', input = '') {
+    const before = String(beforeOutput || '').trimEnd()
+    const after = String(afterOutput || '').trimEnd()
+    if (!after || after === before) return false
+
+    let delta = ''
+    if (after.startsWith(before)) {
+        delta = after.slice(before.length)
+    } else {
+        // 窗口滚动或截断时无法精确切片，只要末尾发生变化就认为有新内容。
+        const beforeTail = before.slice(-2000)
+        const afterTail = after.slice(-2000)
+        if (beforeTail === afterTail) return false
+        delta = afterTail
+    }
+
+    const cleanedDelta = delta.replace(/\r/g, '').trim()
+    if (!cleanedDelta) return false
+    const cleanedInput = String(input || '').replace(/\r/g, '').trim()
+    if (!cleanedInput) return true
+    if (cleanedDelta === cleanedInput) return false
+    if (cleanedDelta.startsWith(cleanedInput) && !cleanedDelta.slice(cleanedInput.length).trim()) return false
+    return true
+}
+
+async function waitForShellSessionOutput(options = {}) {
+    const startedAt = Date.now()
+    const timeoutMs = normalizeWaitTimeout(options.timeoutMs)
+    const pollMs = normalizePollInterval(options.pollMs)
+    const initialDelayMs = normalizeDelay(options.initialDelayMs)
+    const deadline = startedAt + timeoutMs
+    let attempts = 0
+    let snapshot = null
+
+    if (initialDelayMs > 0) await sleep(initialDelayMs)
+
+    while (true) {
+        attempts++
+        snapshot = await captureShellSession({
+            sessionName: options.sessionName,
+            cwd: options.cwd,
+            lines: options.lines,
+            maxOutputChars: options.maxOutputChars
+        })
+        if (!snapshot.ok) return { snapshot, attempts, outputChanged: false, waitTimedOut: false, elapsedMs: Date.now() - startedAt }
+
+        if (hasMeaningfulOutputChange(options.beforeOutput, snapshot.output, options.input)) {
+            return { snapshot, attempts, outputChanged: true, waitTimedOut: false, elapsedMs: Date.now() - startedAt }
+        }
+
+        const remainingMs = deadline - Date.now()
+        if (remainingMs <= 0 || timeoutMs <= 0) {
+            return { snapshot, attempts, outputChanged: false, waitTimedOut: true, elapsedMs: Date.now() - startedAt }
+        }
+        await sleep(Math.min(pollMs, remainingMs))
+    }
+}
+
 export function normalizeShellSessionName(name = Config.SHELL_SESSION_NAME) {
     const value = String(name || 'ai-shell').trim()
     if (!/^[A-Za-z0-9_.-]{1,64}$/.test(value)) {
@@ -152,21 +222,34 @@ export async function sendToShellSession(options = {}) {
     }
 
     try {
+        const beforeSnapshot = options.readAfterSend !== false && options.enter !== false
+            ? await captureShellSession({
+                sessionName,
+                cwd: options.cwd,
+                lines: options.lines || Config.SHELL_SESSION_CAPTURE_LINES,
+                maxOutputChars: options.maxOutputChars || Config.SHELL_SESSION_MAX_OUTPUT_CHARS
+            })
+            : null
         await execTmux(['send-keys', '-t', sessionName, '-l', '--', input])
         if (options.enter !== false) {
             await execTmux(['send-keys', '-t', sessionName, 'C-m'])
         }
         const shouldReadAfterSend = options.readAfterSend !== false && options.enter !== false
         let snapshot = null
+        let waitResult = null
         if (shouldReadAfterSend) {
-            const delayMs = normalizeDelay(options.afterSendDelayMs)
-            if (delayMs > 0) await sleep(delayMs)
-            snapshot = await captureShellSession({
+            waitResult = await waitForShellSessionOutput({
                 sessionName,
                 cwd: options.cwd,
+                input,
+                beforeOutput: beforeSnapshot?.ok ? beforeSnapshot.output : '',
+                initialDelayMs: options.afterSendDelayMs,
+                timeoutMs: options.afterSendTimeoutMs,
+                pollMs: options.afterSendPollMs,
                 lines: options.lines || Config.SHELL_SESSION_CAPTURE_LINES,
                 maxOutputChars: options.maxOutputChars || Config.SHELL_SESSION_MAX_OUTPUT_CHARS
             })
+            snapshot = waitResult.snapshot
         }
         return {
             ok: true,
@@ -177,6 +260,12 @@ export async function sendToShellSession(options = {}) {
             directorySafety,
             readAfterSend: shouldReadAfterSend,
             afterSendDelayMs: shouldReadAfterSend ? normalizeDelay(options.afterSendDelayMs) : 0,
+            afterSendTimeoutMs: shouldReadAfterSend ? normalizeWaitTimeout(options.afterSendTimeoutMs) : 0,
+            afterSendPollMs: shouldReadAfterSend ? normalizePollInterval(options.afterSendPollMs) : 0,
+            outputChanged: waitResult?.outputChanged || false,
+            waitTimedOut: waitResult?.waitTimedOut || false,
+            waitElapsedMs: waitResult?.elapsedMs || 0,
+            readAttempts: waitResult?.attempts || 0,
             output: snapshot?.ok ? snapshot.output : '',
             truncated: snapshot?.truncated || false,
             totalChars: snapshot?.totalChars || 0,

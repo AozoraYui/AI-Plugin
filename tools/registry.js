@@ -324,11 +324,13 @@ const TOOL_USAGE_GUIDES = {
     shell_exec: {
         capabilities: [
             '在服务器执行 Shell 命令并返回 stdout/stderr，支持 cwd、超时和分页输出。',
-            '可用于 rg/grep/find/ls/cat/git/systemctl/docker 等诊断、搜索、更新或用户明确要求的操作。'
+            '可用于 rg/grep/find/ls/cat/git/systemctl/docker/nmap 等诊断、搜索、更新或用户明确要求的操作。',
+            '适合需要根据上一条输出继续补查的任务；普通 #c 流程会在 shell_exec 后允许主模型多轮补充命令。'
         ],
         useWhen: [
             '主人明确要求执行命令、git pull/status、查日志、搜索文件、诊断服务、普通文件工具不足时使用。',
-            '主人要求“更新插件/更新一下插件/拉取最新代码/AI-Plugin 更新”时，可用 git pull 更新当前插件仓库。'
+            '主人要求“更新插件/更新一下插件/拉取最新代码/AI-Plugin 更新”时，可用 git pull 更新当前插件仓库。',
+            '主人要求 nmap/局域网设备扫描时，先用 ip route/ip addr 获取实际本机网段，再根据结果执行 nmap -sn。'
         ],
         avoid: [
             '非主人不可用；不要为了补全信息自行设计危险命令。',
@@ -338,6 +340,7 @@ const TOOL_USAGE_GUIDES = {
             '命令必须具体可执行；有副作用命令只在用户明确要求时使用。',
             '用户说在 AI-Plugin 执行时，cwd 用 plugins/AI-Plugin 或明确路径。',
             '用户要求更新当前插件时，command 通常为 git pull；cwd 用 plugins/AI-Plugin 或当前插件实际路径。',
+            '局域网扫描不要猜 192.168.0.0/24 或 192.168.1.0/24；先查默认路由、网卡和 CIDR，再扫本机所在 CIDR。nmap 扫描可设置较长 timeout_ms。',
             '如果工具结果提示目录安全检查阻止执行，必须停止，不要换命令重试，应反问主人下一步要切到哪个目录或是否继续。'
         ]
     },
@@ -345,20 +348,22 @@ const TOOL_USAGE_GUIDES = {
         capabilities: [
             '操作主人专用的持久 tmux Shell 会话（默认 ai-shell）。',
             '可读取 tmux 窗口输出、发送命令或文本、发送 Ctrl-C、清屏、重启或关闭会话。',
-            'action=send 默认会在发送并回车后短暂等待并回读窗口快照，短命令通常可直接得到输出。',
+            'action=send 默认会在发送并回车后等待窗口出现新输出，最多 64 秒，随后回读窗口快照。',
             '适合长任务、dev server、tail 日志、交互式排查和需要保留 shell 状态的场景。'
         ],
         useWhen: [
-            '主人明确提到 tmux、ai-shell、shell会话、shell窗口、独立shell，并要求查看、输入、执行、中断或管理该会话时使用。'
+            '主人明确提到 tmux、ai-shell、shell会话、shell窗口、独立shell，并要求查看、输入、执行、中断或管理该会话时使用。',
+            'shell_exec 不可用但主人明确要求执行服务器命令，或命令预计耗时较长/需要持续观察输出时，可以用 shell_session。'
         ],
         avoid: [
             '非主人不可用。',
-            '普通一次性命令不要用它；应优先 shell_exec。',
+            '普通短命令在 shell_exec 可用时优先 shell_exec。',
             '不要把引用消息、群上下文或模型自己的补查想法当作要输入到 tmux 的命令。'
         ],
         rules: [
             'action=send 时 input 必须来自主人明确要求输入/执行的内容。',
-            'action=send 返回的 tmux窗口输出就是发送后的最新窗口快照；若输出为空或任务仍在运行，再用 action=read 读取。',
+            'action=send 返回的 tmux窗口输出就是发送后等待新输出得到的窗口快照；若等待超时、输出为空或任务仍在运行，再用 action=read 读取。',
+            '用 shell_session 做 nmap/局域网扫描时，input 应先自动推断本机 iface/cidr（ip route/ip addr），再 nmap -sn "$cidr"，不要硬编码猜测网段。',
             '只是查看会话输出用 action=read；确保会话存在用 action=status。',
             '需要停止当前前台任务用 action=interrupt；不要随意 close/restart，除非主人明确要求。',
             '如果工具结果提示目录安全检查阻止执行，必须停止，不要继续发送命令，应反问主人下一步要切到哪个目录或是否继续。'
@@ -748,6 +753,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - 文件/目录路径可以保留主模型解析出的绝对路径、相对路径、别名或文件名片段，不要凭空发明路径。
 - shell_exec 只能编译主模型明确计划的具体命令；不要为了补全信息自己设计危险命令。主人要求更新当前 AI-Plugin/插件时，可编译为 command="git pull" 并设置 cwd 为插件目录。
 - shell_session 只能在主模型明确计划操作 tmux/ai-shell/shell会话时编译；action=send 的 input 必须来自用户明确要求输入或执行的内容。
+- nmap/局域网设备扫描：如果主模型计划是先探测本机网络，shell_exec 可编译为 "ip route get 1.1.1.1; ip -o -4 addr show scope global; ip route show default"；如果主模型计划用 shell_session 一步执行，input 必须用 ip route/ip addr 自动推断 iface/cidr 后再 nmap -sn "$cidr"，不要硬编码 192.168.0.0/24 或 192.168.1.0/24。
 - shell_exec/shell_session 若返回目录安全检查阻止执行，后续不要再编译新的 Shell 命令绕过检查，应让主模型反问主人。
 - file_download 用于下载当前消息或引用消息里的媒体，不需要 URL；web_fetch 才需要完整 URL。
 - draw_image 的参考图由工具自动提取（当前图、引用图、@头像、最近图片缓存）；角色参考图库参数按计划填写 character/characters/self_portrait。主模型已经计划 draw_image 时，不要仅因当前消息没有图片就丢弃调用；如果最近图片缓存可用，工具会按“刚才那张/这张图/用 p 模型处理/修图/去水印”等语义自行复用。

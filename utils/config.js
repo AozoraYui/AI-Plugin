@@ -116,6 +116,10 @@ const defaultConfig = {
     SHELL_SESSION_MAX_OUTPUT_CHARS: 24000,
     // action=send 后自动回读 tmux 窗口前等待多久；只抓快照，不等待长任务结束
     SHELL_SESSION_AFTER_SEND_DELAY_MS: 1200,
+    // action=send 后最多等待多久直到 tmux 窗口出现新输出；超过则返回当前快照
+    SHELL_SESSION_AFTER_SEND_TIMEOUT_MS: 64000,
+    // action=send 后等待输出的轮询间隔
+    SHELL_SESSION_AFTER_SEND_POLL_MS: 1000,
     version: 'v1.0.0'
 }
 

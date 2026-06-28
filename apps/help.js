@@ -76,7 +76,7 @@ export class HelpHandler extends plugin {
   需在 models_config.yaml 开启 enable_shell_session: true（独立开关）。
   开启后使用 tmux 会话 ai-shell；机器人启动时若不存在会自动创建。
   明确说“在 ai-shell 执行...”“看看 shell会话输出”“中断 tmux”时触发。
-  发送命令后会自动短暂回读窗口快照，短命令可直接看到输出。
+  发送命令后最多等待 64 秒直到窗口出现新输出，再把窗口快照交给 AI。
   执行会改动状态的命令前会检查目录语义；目录不对会停止执行并反问你下一步。
 > 📤 文件收发（主人专用）
   需在 models_config.yaml 开启 enable_file_transfer: true（独立开关）。
@@ -263,7 +263,7 @@ export class HelpHandler extends plugin {
   #cf /root/Yunzai/plugins/AI-Plugin → 读取本地文件/目录
   #cvn 这是个啥 → 同时启用两者
   Shell 执行需 enable_shell_exec 开启（独立开关），且仅主人可用，不会被 #cf 临时启用
-  持久 Shell 会话需 enable_shell_session 开启，默认使用 tmux 会话 ai-shell，发送命令后会自动回读快照
+  持久 Shell 会话需 enable_shell_session 开启，默认使用 tmux 会话 ai-shell，发送命令后会等待新输出并自动回读快照
 
 > 🎨 作图技巧
   - 预设命令加模型组前缀切换模型（#p手办化 / #u手办化）
