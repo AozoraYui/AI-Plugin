@@ -151,6 +151,27 @@ const TOOL_USAGE_GUIDES = {
             '不要用于列出真实群成员列表；那是 group_member_list。'
         ]
     },
+    group_send_message: {
+        capabilities: [
+            '代主人向指定 QQ 群发送一条纯文本消息。',
+            '目标群可用群号精确指定，也可用群名/关键词在机器人可见群里唯一匹配。',
+            '默认会加“【主人转达】”前缀；只有主人明确要求原样发送时才可 as_is=true。'
+        ],
+        useWhen: [
+            '主人明确说“帮我在 xx 群说一下 xxx”“去某群发一句 xxx”“帮我转达到 xx 群 xxx”时使用。'
+        ],
+        avoid: [
+            '非主人不可用；普通用户不能代发。',
+            '目标群不明确、匹配多个、消息内容不明确时不要发送。',
+            '不要发送模型自己补全/总结/润色出来的内容；message 必须来自用户明确要求。',
+            '不要用于群管理通知或伪装主人本人；默认保留转达前缀。'
+        ],
+        rules: [
+            '优先填写 group_id；没有群号时 target 填用户说的群名关键词。',
+            'message 只填要发送的纯文本，不允许 CQ 码。',
+            '只有用户明确说“原样/不要前缀/直接发原文”时 as_is=true。'
+        ]
+    },
     group_mute: {
         capabilities: [
             '禁言或解除禁言当前群指定成员。time=0 表示解除禁言。'
@@ -703,6 +724,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - file_download 用于下载当前消息或引用消息里的媒体，不需要 URL；web_fetch 才需要完整 URL。
 - draw_image 的参考图由工具自动提取（当前图、引用图、@头像、最近图片缓存）；角色参考图库参数按计划填写 character/characters/self_portrait。主模型已经计划 draw_image 时，不要仅因当前消息没有图片就丢弃调用；如果最近图片缓存可用，工具会按“刚才那张/这张图/用 p 模型处理/修图/去水印”等语义自行复用。
 - group_chat_context 的 scope 必须按主模型计划保留：当前群前情用 current_group；主人问机器人加了哪些群/能看到哪些群用 group_list；用户问自己在别的群/其他群刚发了什么用 other_group_messages 并设置 exclude_current_group=true；用户问自己跨群最近消息但未排除当前群用 my_recent_messages；主人要求所有群或指定群才用 all_groups/specific_group。普通用户不要编译其他人的 user_id。
+- group_send_message 必须来自主人明确要求“在某群发/说/转达某段文本”；目标群和 message 都要明确。没有唯一目标群或没有明确消息内容时不要编译。除非用户明确说原样/不要前缀，否则不要设置 as_is=true。
 - 群管理成员操作必须有明确对象；有 QQ 号或 @ 时可填 user_id，没有 QQ 但有昵称/群名片时可填 target，拿不准唯一目标时先编译 group_member_list 或 group_member_resolve。
 - 如果当前消息 @ 了唯一成员，且主模型计划的群管理操作目标是“这个人/被 @ 的人”，请直接把该 QQ 填入 user_id。
 - group_request_handle 处理的是入群申请；用户说“刚才那个/他/那个人”且主模型计划处理待审申请时，可以省略 user_id；用户用昵称、QQ、留言关键词或含糊原话指代申请人时，把关键词写入 target。

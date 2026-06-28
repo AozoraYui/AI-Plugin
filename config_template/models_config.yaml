@@ -163,6 +163,11 @@ enable_web_fetch: false
 #   禁言/解禁、全员禁言、踢人、改群名片、设专属头衔、精华消息、入群审核（通过/拒绝加群申请）
 #   前提：机器人本身需为该群管理员（设头衔需群主）；入群申请由插件自动记录 1 小时供审核
 #
+# enable_group_send: 是否启用代发群消息（默认 false）
+#   仅主人可用；开启后主人可让 AI 向指定 QQ 群发送一条纯文本
+#   适合“帮我在测试群说一下今晚不测了”这类明确转达场景
+#   目标群必须唯一；默认加“【主人转达】”前缀；不支持 CQ 码
+#
 # enable_noa_chat: 是否启用畅聊模式（默认 false）
 #   开启后，插件会轻量捕获可访问群聊的消息流水（文本化内容 + 图片元信息，不存图片本体）
 #   当群里有人提到「诺亚/noa/AI名称」或 @ 机器人时，AI 会基于最近群上下文自然回复
@@ -184,6 +189,7 @@ enable_web_fetch: false
 # enable_file_transfer: false
 # enable_ai_draw: false
 # enable_group_admin: false
+# enable_group_send: false            # 代发群消息，主人专用；高风险跨群发言，默认关闭
 # enable_noa_chat: false              # 是否开启畅聊捕获与自然触发回复
 # NOA_CHAT_CONTEXT_LIMIT: 60          # 每次回复读取最近 60 条本群畅聊流水作为上下文
 # NOA_CHAT_REPLY_COOLDOWN_MS: 8000    # 同一群畅聊回复冷却 8000ms，防止连续触发刷屏

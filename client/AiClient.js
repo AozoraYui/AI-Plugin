@@ -22,6 +22,7 @@ export class AiClient {
         this.webFetchConfig = { enabled: false }
         this.fileReadConfig = { enabled: false }
         this.shellExecConfig = { enabled: false }
+        this.groupSendConfig = { enabled: false }
         this.weatherApiKey = null
         this.openWeatherMapApiKey = null
         this.loadModelsConfig()
@@ -167,6 +168,11 @@ export class AiClient {
     /** 是否启用群管理（禁言/踢人/入群审核等，主人或群管理员可在对话中触发） */
     get enableGroupAdmin() {
         return this.groupAdminConfig?.enabled === true
+    }
+
+    /** 是否启用代发群消息（仅主人，向指定群发送纯文本） */
+    get enableGroupSend() {
+        return this.groupSendConfig?.enabled === true
     }
 
     /** 是否启用畅聊模式（群消息捕获 + 触发词回复） */
@@ -327,6 +333,7 @@ export class AiClient {
                 value.enable_file_transfer !== undefined ||
                 value.enable_ai_draw !== undefined ||
                 value.enable_group_admin !== undefined ||
+                value.enable_group_send !== undefined ||
                 value.enable_noa_chat !== undefined ||
                 value.show_thinking !== undefined ||
                 value.show_thinking_notice !== undefined ||
@@ -424,10 +431,12 @@ export class AiClient {
                 this.fileTransferConfig = { enabled: rawConfig.enable_file_transfer === true }
                 this.aiDrawConfig = { enabled: rawConfig.enable_ai_draw === true }
                 this.groupAdminConfig = { enabled: rawConfig.enable_group_admin === true }
+                this.groupSendConfig = { enabled: rawConfig.enable_group_send === true }
                 this.noaChatConfig = { enabled: rawConfig.enable_noa_chat === true }
                 Config.show_thinking = rawConfig.show_thinking === true
                 Config.show_thinking_notice = rawConfig.show_thinking_notice === true
                 Config.draw_review_after_generate = rawConfig.draw_review_after_generate === true
+                Config.enable_group_send = rawConfig.enable_group_send === true
                 Config.enable_noa_chat = rawConfig.enable_noa_chat === true
                 for (const key of ['NOA_CHAT_CONTEXT_LIMIT', 'NOA_CHAT_REPLY_COOLDOWN_MS', 'NOA_CHAT_MAX_CONTEXT_IMAGES', 'NOA_CHAT_AUTO_READ_IMAGE_LIMIT', 'NOA_CHAT_IMAGE_BATCH_SIZE']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
@@ -454,6 +463,9 @@ export class AiClient {
                 }
                 if (this.enableGroupAdmin) {
                     logger.info('[AI-Plugin] 群管理已启用：主人或群管理员可让 AI 执行禁言/踢人/入群审核等操作')
+                }
+                if (this.enableGroupSend) {
+                    logger.warn('[AI-Plugin] 群消息代发已启用：主人可让 AI 向指定群发送纯文本消息')
                 }
                 if (this.enableNoaChat) {
                     logger.info('[AI-Plugin] 畅聊模式已启用：群消息将被轻量捕获，触发词命中时 AI 会基于群上下文回复')

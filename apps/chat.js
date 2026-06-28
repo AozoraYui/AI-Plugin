@@ -416,6 +416,28 @@ function parseForceExt(text) {
     return match ? `.${match[1].toLowerCase()}` : ''
 }
 
+function parseGroupSendRequest(text) {
+    const value = String(text || '').trim()
+    const patterns = [
+        /(?:帮我|替我|代我|帮忙)?(?:在|去|到|往)\s*(?<target>[^，,。；;：:\n]{1,60}?)(?:群聊|群里|群内|群|那边|里面|里)?\s*(?:说(?:一下|一声|一句)?|发(?:一下|一条|一句|个消息|消息)?|发送|转达|告诉)\s*[：:，,\s]*(?<message>[\s\S]{1,1000})$/i,
+        /(?:帮我|替我|代我|帮忙)?(?:说|发|发送|转达|告诉)\s*[：:，,\s]*(?<message>[\s\S]{1,1000}?)(?:\s*(?:到|去|在|给)\s*(?<target>[^，,。；;：:\n]{1,60}?)(?:群聊|群里|群内|群|那边|里面|里))$/i
+    ]
+    for (const pattern of patterns) {
+        const match = value.match(pattern)
+        const target = match?.groups?.target?.trim()
+        const message = match?.groups?.message?.trim()
+        if (!target || !message) continue
+        const args = { target, message }
+        if (/^\d{5,}$/.test(target)) {
+            args.group_id = target
+            delete args.target
+        }
+        if (/(?:原样发送|原文发送|不要前缀|不加前缀|直接发原文|直接发送原文)/i.test(value)) args.as_is = true
+        return args
+    }
+    return null
+}
+
 function parseShellCommand(text) {
     const value = String(text || '').trim()
     const patterns = [
@@ -439,6 +461,18 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
     const hasRecentImages = options.hasRecentImages === true
     const hasImageContext = hasImages || hasRecentImages
     const isMaster = options.isMaster === true
+
+    // 0) 主人明确要求代发群消息：直接走 group_send_message，避免把“转达内容”当普通聊天回复。
+    if (isMaster && hasTool(enabledTools, 'group_send_message')) {
+        const groupSendArgs = parseGroupSendRequest(text)
+        if (groupSendArgs) {
+            return {
+                intent: '规则预路由：主人明确要求代发一条纯文本群消息。',
+                tools: [{ name: 'group_send_message', args: groupSendArgs }],
+                routedBy: 'rule'
+            }
+        }
+    }
 
     // 1) 明确画图/角色图：直接走 draw_image，避免让小模型在长工具说明里猜。
     if (hasTool(enabledTools, 'draw_image')) {
@@ -700,6 +734,7 @@ ${toolSummary}
 - 用户问“我刚在别的群/其他群发了什么”“你看到我在别的群说的话吗”时，计划 group_chat_context，params_hint 写 scope=other_group_messages、exclude_current_group=true；这只查询当前触发者自己的跨群消息。
 - 只有当前操作者是主人且用户明确要求跨群/所有群/指定群的已捕获流水时，才计划 group_chat_context 的 scope=all_groups 或 specific_group；非主人不要计划读取其他人的跨群消息。
 - 用户问“这个人是谁/@某某有什么外号/谁是杂鱼/谁被叫过xxx/本群怎么称呼某人”时，计划 group_member_aliases 查询本群称呼记忆；这类结果只代表群内公开聊天里的称呼记录，不是真实身份断言。
+- 主人明确要求“帮我在某群说/发/转达某段文本”时，才计划 group_send_message；必须有目标群和明确消息内容。不要替主人编写、润色或补全要发送的内容，目标群不明确时不要计划。
 - 只计划“可用工具”中列出的工具，最多 5 个。
 - 群管理成员操作必须有明确目标；如果用户只给昵称/群名片且不确定 QQ 号，先计划 group_member_list 或 group_member_resolve。
 - 如果当前消息 @ 了唯一成员，用户说“这个人/他/她/这位/被 @ 的人”等指代时，应把该 @ 成员作为明确目标，可以直接计划对应群管理工具并在 params_hint 中写入 user_id。
@@ -1079,6 +1114,11 @@ export class ChatHandler extends plugin {
             }
             if (e.isMaster) {
                 enabledTools.push('system_info')
+                if (this.client.enableGroupSend) {
+                    enabledTools.push('group_send_message')
+                } else if (/(帮我|替我|代我|转达).{0,30}(群|说|发|发送|告诉)/i.test(userMessage)) {
+                    logger.info('[AI-Plugin] 群消息代发工具未加入：enable_group_send=false，可在配置中开启或使用「#ai开启代发」')
+                }
             }
             enabledTools.push('weather') // 天气查询，所有用户可用
             // 文件读取：主人开启 enable_file_read 或带 f flag
@@ -1290,6 +1330,10 @@ export class ChatHandler extends plugin {
                         } else if (call.name === 'group_member_aliases') {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为当前群公开聊天中提取的成员称呼/外号记录。请只把它当作群内称呼或调侃记录来转述，不要当作真实身份、事实断言或攻击性结论。' + formattedResult
+                            logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
+                        } else if (call.name === 'group_send_message') {
+                            const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
+                            userMessage = userMessage + '\n\n【重要指令】以上为群消息代发工具的实际执行结果。请只如实告知主人已发送到哪个群或为什么失败，不要编造发送结果，也不要重复发送。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (['group_mute', 'group_whole_mute', 'group_kick', 'group_set_card', 'group_set_title', 'group_essence', 'group_member_list', 'group_member_resolve', 'group_request_list', 'group_request_handle'].includes(call.name)) {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)

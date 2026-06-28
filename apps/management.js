@@ -19,6 +19,7 @@ function saveRuntimeSwitch(key, value) {
                 value.enable_file_transfer !== undefined ||
                 value.enable_ai_draw !== undefined ||
                 value.enable_group_admin !== undefined ||
+                value.enable_group_send !== undefined ||
                 value.enable_noa_chat !== undefined ||
                 value.show_thinking !== undefined ||
                 value.draw_review_after_generate !== undefined
@@ -47,6 +48,7 @@ export class ManagementHandler extends plugin {
                 { reg: /^#ai信任群(添加|删除)\s*(\d+)$/i, fnc: 'modifyTrustedGroup', permission: 'master' },
                 { reg: /^#ai信任群列表$/i, fnc: 'listTrustedGroups', permission: 'master' },
                 { reg: /^#?ai(开启|关闭)群管理$/i, fnc: 'switchGroupAdmin', permission: 'master' },
+                { reg: /^#?ai(开启|关闭)代发$/i, fnc: 'switchGroupSend', permission: 'master' },
                 { reg: /^#?ai(开启|关闭)畅聊$/i, fnc: 'switchNoaChat', permission: 'master' },
                 { reg: /^#ai状态$/i, fnc: 'showStatus', permission: 'master' },
             ]
@@ -195,6 +197,23 @@ export class ManagementHandler extends plugin {
         return true
     }
 
+    async switchGroupSend(e) {
+        const isTurnOn = e.msg.includes('开启')
+        try {
+            saveRuntimeSwitch('enable_group_send', isTurnOn)
+            Config.enable_group_send = isTurnOn
+            this.client.groupSendConfig = { enabled: isTurnOn }
+            logger.info(`[AI-Plugin] 群消息代发开关已${isTurnOn ? '开启' : '关闭'}（运行时立即生效）`)
+            await e.reply(isTurnOn
+                ? '✅ 已开启群消息代发工具。主人可让 AI 向指定群发送纯文本；目标群必须唯一，默认加“【主人转达】”前缀。'
+                : '🚫 已关闭群消息代发工具。AI 不会再把跨群代发能力加入可用工具列表。')
+        } catch (err) {
+            logger.error('[AI-Plugin] 切换群消息代发开关失败:', err)
+            await e.reply(`❌ 切换失败: ${err.message}`)
+        }
+        return true
+    }
+
     async _buildModelListForwardMsg() {
         const thinkingStatus = Config.show_thinking ? "✅ 开启 (显示思考过程)" : "🚫 关闭 (自动过滤思考)"
         
@@ -316,6 +335,7 @@ export class ManagementHandler extends plugin {
             const accessMode = accessConfig.mode === 'whitelist' ? '白名单模式' : '黑名单模式'
             const thinkingMode = Config.show_thinking ? '✅ 开启 (Raw模式)' : '🚫 关闭 (自动清洗)'
             const groupAdminMode = this.client.enableGroupAdmin ? '✅ 开启' : '🚫 关闭'
+            const groupSendMode = this.client.enableGroupSend ? '✅ 开启' : '🚫 关闭'
             const noaChatMode = (this.client.enableNoaChat || Config.enable_noa_chat) ? '✅ 开启' : '🚫 关闭'
 
             const trustedGroups = Config.trustedGroups
@@ -336,6 +356,7 @@ export class ManagementHandler extends plugin {
                 `  - 权限控制: ${accessMode}`,
                 `  - AI思考过程: ${thinkingMode}`,
                 `  - 群管理工具: ${groupAdminMode}`,
+                `  - 群消息代发: ${groupSendMode}`,
                 `  - 畅聊模式: ${noaChatMode}`,
                 `  - 信任群聊: ${trustedGroupCount} 个`,
                 '=============================='

@@ -78,6 +78,10 @@ export class HelpHandler extends plugin {
   下载：让 AI 把当前消息或引用消息里的图片/视频/语音/文件保存到白名单目录。
   群文件：让 AI 浏览当前群的群文件区，或按文件名把群文件下载到白名单目录（仅群聊）。
   路径受 file_roots.yaml 白名单约束，仅主人可用。
+> 🗣️ 代发群消息（主人专用）
+  需在 models_config.yaml 开启 enable_group_send: true（独立开关），也可用 #ai开启代发 / #ai关闭代发 运行时切换。
+  可让 AI 代你向指定群发送纯文本，例如“帮我在测试群说一下今晚不测了”。
+  目标群必须唯一，默认会加“【主人转达】”前缀；不支持 CQ 码。
 > 🎨 AI 对话画图
   需在 models_config.yaml 开启 enable_ai_draw: true（独立开关）。
   开启后所有人可在对话中用自然语言让 AI 画图（等同 #draw）。
@@ -216,6 +220,10 @@ export class HelpHandler extends plugin {
   从信任列表移除指定群聊。
 > #ai信任群列表
   查看当前所有信任的群聊。
+> #ai开启代发 / #ai关闭代发
+  切换代发群消息工具（主人专用，高风险跨群发言，默认关闭）。
+> #ai开启畅聊 / #ai关闭畅聊
+  切换畅聊模式。
 
 【 其他 】
 > #ai状态

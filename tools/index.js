@@ -14,6 +14,7 @@ export { fileDownloadTool } from './file_download.js'
 export { groupFileListTool, groupFileDownloadTool } from './group_file.js'
 export { groupChatContextTool } from './group_chat_context.js'
 export { groupMemberAliasesTool } from './group_member_aliases.js'
+export { groupSendMessageTool } from './group_send.js'
 export {
     groupMuteTool, groupWholeMuteTool, groupKickTool, groupSetCardTool,
     groupSetTitleTool, groupEssenceTool, groupMemberListTool, groupMemberResolveTool,
