@@ -86,6 +86,7 @@ const defaultConfig = {
     NOA_CHAT_CONTEXT_LIMIT: 60,
     NOA_CHAT_REPLY_COOLDOWN_MS: 8000,
     NOA_CHAT_MAX_CONTEXT_IMAGES: 3,
+    NOA_CHAT_AUTO_READ_IMAGE_LIMIT: 2,
     // ========== 文件读取与 Shell 工具配置 ==========
     // 单次读取文件最大大小（字节），默认 8MB
     FILE_MAX_SIZE: 8388608,
@@ -358,7 +359,15 @@ export const Config = {
     get NOA_CHAT_REPLY_COOLDOWN_MS() { return config.NOA_CHAT_REPLY_COOLDOWN_MS ?? defaultConfig.NOA_CHAT_REPLY_COOLDOWN_MS },
     set NOA_CHAT_REPLY_COOLDOWN_MS(val) { config.NOA_CHAT_REPLY_COOLDOWN_MS = Number(val) || defaultConfig.NOA_CHAT_REPLY_COOLDOWN_MS },
     get NOA_CHAT_MAX_CONTEXT_IMAGES() { return config.NOA_CHAT_MAX_CONTEXT_IMAGES ?? defaultConfig.NOA_CHAT_MAX_CONTEXT_IMAGES },
-    set NOA_CHAT_MAX_CONTEXT_IMAGES(val) { config.NOA_CHAT_MAX_CONTEXT_IMAGES = Number(val) || defaultConfig.NOA_CHAT_MAX_CONTEXT_IMAGES },
+    set NOA_CHAT_MAX_CONTEXT_IMAGES(val) {
+        const num = Number(val)
+        config.NOA_CHAT_MAX_CONTEXT_IMAGES = Number.isFinite(num) && num >= 0 ? num : defaultConfig.NOA_CHAT_MAX_CONTEXT_IMAGES
+    },
+    get NOA_CHAT_AUTO_READ_IMAGE_LIMIT() { return config.NOA_CHAT_AUTO_READ_IMAGE_LIMIT ?? defaultConfig.NOA_CHAT_AUTO_READ_IMAGE_LIMIT },
+    set NOA_CHAT_AUTO_READ_IMAGE_LIMIT(val) {
+        const num = Number(val)
+        config.NOA_CHAT_AUTO_READ_IMAGE_LIMIT = Number.isFinite(num) && num >= 0 ? num : defaultConfig.NOA_CHAT_AUTO_READ_IMAGE_LIMIT
+    },
     get FILE_ROOTS() { return loadedFileRoots ?? defaultConfig.FILE_ROOTS },
     get FILE_MAX_SIZE() { return config.FILE_MAX_SIZE ?? defaultConfig.FILE_MAX_SIZE },
     get FILE_READ_ALL_MAX_TOTAL() { return config.FILE_READ_ALL_MAX_TOTAL ?? defaultConfig.FILE_READ_ALL_MAX_TOTAL },
