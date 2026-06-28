@@ -86,6 +86,7 @@ export async function checkAccess(e) {
     const config = getAccessConfig()
     const unauthorizedMsg = "抱歉哦，" + Config.AI_NAME + "暂时还不能在这里或为你提供这项服务呢~ (´-ω-`)"
     const userId = String(e.user_id)
+    const isGroup = e.isGroup === true || Boolean(e.group_id)
 
     // 用户黑名单全局拦截（无论群聊还是私聊）
     if (config.blacklist_users.includes(userId)) {
@@ -93,7 +94,7 @@ export async function checkAccess(e) {
         return false
     }
 
-    if (e.isGroup) {
+    if (isGroup) {
         const groupId = String(e.group_id)
         // 白名单用户可以豁免群黑名单
         if (config.whitelist_users.includes(userId)) {
@@ -115,7 +116,7 @@ export async function checkAccess(e) {
         // 私聊：白名单模式下还需在白名单中
         if (config.mode === 'whitelist') {
             if (!config.whitelist_users.includes(userId)) {
-                e.reply(unauthorizedMsg, true)
+                if (typeof e.reply === 'function') await e.reply(unauthorizedMsg, true)
                 return false
             }
         }
