@@ -1098,9 +1098,13 @@ export class ChatHandler extends plugin {
                 logger.info(`[AI-Plugin] 当前消息检测到 @ 成员: ${mentionedUserIds.join(', ')}`)
             }
             let groupAliasMemoryText = ''
+            let groupAliasCaptureText = ''
             if (e.group_id) {
                 try {
-                    await captureGroupMemberAliases(this.conversationManager.db, e, userMessage)
+                    const savedAliasRecords = await captureGroupMemberAliases(this.conversationManager.db, e, userMessage)
+                    if (savedAliasRecords.length > 0) {
+                        groupAliasCaptureText = `【本轮称呼记录写入成功】\n${savedAliasRecords.map(record => `QQ ${record.targetUserId} 已记录称呼「${record.alias}」${record.isJoke ? '（调侃称呼）' : ''}。`).join('\n')}\n请只在看到这段写入成功提示时才说已经记住；否则不要声称已写入称呼记忆。`
+                    }
                 } catch (err) {
                     logger.warn(`[AI-Plugin] [称呼记忆] 记录失败: ${err.message}`)
                 }
@@ -1114,6 +1118,9 @@ export class ChatHandler extends plugin {
                         logger.warn(`[AI-Plugin] [称呼记忆] 加载失败: ${err.message}`)
                     }
                 }
+            }
+            if (groupAliasCaptureText) {
+                userMessage = `${userMessage}\n\n${groupAliasCaptureText}`
             }
 
             if (!userMessage && allImages.length === 0) return e.reply('请输入内容或发送图片呀', true)

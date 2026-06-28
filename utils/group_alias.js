@@ -1,7 +1,9 @@
 const ALIAS_MAX_LENGTH = 24
+const ALIAS_TARGET_CACHE_TTL_SECONDS = 600
 
 const JOKE_ALIAS_RE = /(杂鱼|笨蛋|傻|蠢|菜|屑|废物|坏东西|小东西|憨|呆|笨|逊|菜鸡|弱鸡)/i
 const BAD_ALIAS_RE = /(禁言|解禁|踢|移出|拉黑|通过|拒绝|申请|入群|加群|群管|群管理|精华|名片|头衔|谁|什么|为什么|怎么|吗|呢|是否|有没有|能不能|可不可以|帮我|你觉得|看看|查一下|查询|搜索)/i
+const aliasTargetMemory = new Map()
 
 function escapeRegex(text) {
     return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -91,6 +93,87 @@ function buildAliasPatterns(targetUserId) {
     ]
 }
 
+function buildFollowupAliasPatterns() {
+    return [
+        /(?:我们|大家|群里|这边)?\s*(?:一般|平时|通常|都|会)?\s*(?:管|叫|喊|称呼)\s*(?:他|她|ta|TA|这人|这个人|那人|那个人|这位|那位|对方)\s*(?:叫|叫做|称作|称为|为|作|做|成)?\s*([^，。！？!?、；;\n]{1,30})/i,
+        /(?:他|她|ta|TA|这人|这个人|那人|那个人|这位|那位|对方)\s*(?:一般|平时|通常)?\s*(?:叫|叫做|称作|称为|被叫|被称为)\s*([^，。！？!?、；;\n]{1,30})/i
+    ]
+}
+
+function extractFollowupAlias(text = '') {
+    for (const regex of buildFollowupAliasPatterns()) {
+        const match = String(text || '').match(regex)
+        const alias = normalizeAliasText(match?.[1])
+        if (isAliasSafe(alias)) return alias
+    }
+    return ''
+}
+
+function aliasTargetCacheKey(groupId, sourceUserId) {
+    return `AI-Plugin:lastAliasTarget:${groupId}:${sourceUserId}`
+}
+
+function normalizeAliasTargetRecord(record = {}) {
+    const groupId = String(record.groupId || '').trim()
+    const sourceUserId = String(record.sourceUserId || '').trim()
+    const targetUserId = String(record.targetUserId || '').trim()
+    if (!groupId || !sourceUserId || !targetUserId) return null
+    return {
+        groupId,
+        sourceUserId,
+        targetUserId,
+        targetNickname: record.targetNickname || '',
+        createdAt: Number(record.createdAt) || Date.now()
+    }
+}
+
+export async function rememberGroupAliasTarget(event, targetUserId, options = {}) {
+    const record = normalizeAliasTargetRecord({
+        groupId: event?.group_id,
+        sourceUserId: options.sourceUserId || event?.user_id,
+        targetUserId,
+        targetNickname: options.targetNickname || '',
+        createdAt: Date.now()
+    })
+    if (!record) return false
+
+    const key = aliasTargetCacheKey(record.groupId, record.sourceUserId)
+    aliasTargetMemory.set(key, record)
+    if (typeof redis !== 'undefined' && redis?.set) {
+        try {
+            await redis.set(key, JSON.stringify(record), { EX: ALIAS_TARGET_CACHE_TTL_SECONDS })
+        } catch (err) {
+            logger.warn(`[AI-Plugin] [称呼记忆] 缓存最近查询目标失败: ${err.message}`)
+        }
+    }
+    return true
+}
+
+async function getRememberedGroupAliasTarget(event) {
+    const groupId = event?.group_id ? String(event.group_id) : ''
+    const sourceUserId = event?.user_id ? String(event.user_id) : ''
+    if (!groupId || !sourceUserId) return null
+
+    const key = aliasTargetCacheKey(groupId, sourceUserId)
+    let record = null
+    if (typeof redis !== 'undefined' && redis?.get) {
+        try {
+            const raw = await redis.get(key)
+            if (raw) record = normalizeAliasTargetRecord(JSON.parse(raw))
+        } catch (err) {
+            logger.warn(`[AI-Plugin] [称呼记忆] 读取最近查询目标失败: ${err.message}`)
+        }
+    }
+    if (!record) record = normalizeAliasTargetRecord(aliasTargetMemory.get(key) || {})
+    if (!record) return null
+
+    if (Date.now() - record.createdAt > ALIAS_TARGET_CACHE_TTL_SECONDS * 1000) {
+        aliasTargetMemory.delete(key)
+        return null
+    }
+    return record
+}
+
 export function extractGroupMemberAliasRecords(input = {}) {
     const text = normalizeTextWithMentions(input.message || [], input.text || '')
     if (!text) return []
@@ -126,7 +209,7 @@ export async function captureGroupMemberAliases(db, event, text = '', options = 
     if (!db?.saveGroupMemberAlias || !event?.group_id || !event?.message) return []
 
     const botUserId = String(event.self_id || event.bot?.uin || event.bot?.self_id || (typeof Bot !== 'undefined' ? Bot.uin : '') || '')
-    const records = extractGroupMemberAliasRecords({
+    let records = extractGroupMemberAliasRecords({
         text,
         message: event.message,
         groupId: event.group_id,
@@ -134,6 +217,24 @@ export async function captureGroupMemberAliases(db, event, text = '', options = 
         sourceNickname: options.sourceNickname || event.sender?.card || event.sender?.nickname || event.member?.card || event.member?.nickname || '',
         botUserId
     })
+
+    if (records.length === 0) {
+        const rememberedTarget = await getRememberedGroupAliasTarget(event)
+        const alias = rememberedTarget ? extractFollowupAlias(text) : ''
+        if (rememberedTarget && alias) {
+            const isJoke = JOKE_ALIAS_RE.test(alias)
+            records = [{
+                groupId: String(event.group_id || ''),
+                targetUserId: rememberedTarget.targetUserId,
+                alias,
+                sourceUserId: event.user_id ? String(event.user_id) : '',
+                sourceNickname: options.sourceNickname || event.sender?.card || event.sender?.nickname || event.member?.card || event.member?.nickname || '',
+                note: isJoke ? '群内调侃称呼，来自上一轮称呼查询的连续指代，不能当作事实断言' : '群内称呼/外号记录，来自上一轮称呼查询的连续指代',
+                isJoke,
+                confidence: isJoke ? 0.55 : 0.72
+            }]
+        }
+    }
 
     const saved = []
     for (const record of records) {

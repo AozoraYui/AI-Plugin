@@ -4,7 +4,7 @@
  */
 
 import { toolRegistry } from './registry.js'
-import { formatGroupAliasRecords } from '../utils/group_alias.js'
+import { formatGroupAliasRecords, rememberGroupAliasTarget } from '../utils/group_alias.js'
 
 function normalizeLimit(limit) {
     const n = Number(limit)
@@ -61,6 +61,10 @@ export const groupMemberAliasesTool = {
         const records = targetUserId
             ? await db.getGroupMemberAliases(event.group_id, [targetUserId], { limit })
             : await db.findGroupMemberAliases(event.group_id, query, { limit })
+
+        if (targetUserId) {
+            await rememberGroupAliasTarget(event, targetUserId, { sourceUserId: context.userId || event.user_id })
+        }
 
         return {
             ok: true,

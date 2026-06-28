@@ -669,7 +669,10 @@ export class NoaChatHandler extends plugin {
         }
 
         try {
-            await captureGroupMemberAliases(this.conversationManager.db, e, normalized.normalizedText, { sourceNickname: normalized.nickname })
+            const savedAliasRecords = await captureGroupMemberAliases(this.conversationManager.db, e, normalized.normalizedText, { sourceNickname: normalized.nickname })
+            if (savedAliasRecords.length > 0) {
+                normalized.aliasCaptureText = `【本轮称呼记录写入成功】\n${savedAliasRecords.map(record => `QQ ${record.targetUserId} 已记录称呼「${record.alias}」${record.isJoke ? '（调侃称呼）' : ''}。`).join('\n')}\n请只在看到这段写入成功提示时才说已经记住；否则不要声称已写入称呼记忆。`
+            }
         } catch (err) {
             logger.warn(`[AI-Plugin] [畅聊][称呼记忆] 记录失败: ${err.message}`)
         }
@@ -819,7 +822,7 @@ ${getBeijingTimeStr()}
 ${contextText || '暂无'}
 
 ${imageReadNotes.length > 0 ? `【本轮读图策略】\n${imageReadNotes.join('\n')}\n\n` : ''}${imageContext.summaryText ? `【本轮分批读图摘要】\n${imageContext.summaryText}\n\n` : ''}${groupAliasMemoryText ? `${groupAliasMemoryText}\n\n` : ''}${personalMemory ? `【触发者个人记忆摘要】\n${personalMemory}\n\n` : ''}${toolContextText ? `【本轮工具结果】${toolContextText}\n\n` : ''}【当前触发消息】
-${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}`
+${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}${normalized.aliasCaptureText ? `\n\n${normalized.aliasCaptureText}` : ''}`
 
         const contents = [
             ...Config.personaPrimer,
