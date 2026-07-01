@@ -10,6 +10,7 @@ import { processImagesInBatches } from '../utils/image.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
+import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
 import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasNegatedDrawIntent, parseGroupSendRequest } from '../utils/tool_intent.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
@@ -1076,6 +1077,7 @@ export class ChatHandler extends plugin {
                 }
             }
             const hasLocalImageInput = localImageInput.imageParts.length > 0
+            let avatarImageInput = { imageParts: [], noteText: '', targets: [], failures: [] }
             // drawImageAttempted：本轮是否调用过画图工具（无论成败，工具内已发过"🎨正在生成"进度提示），
             // 用于跳过后续"思考中"占位，避免重复刷屏。
             let drawImageAttempted = false
@@ -1433,6 +1435,16 @@ export class ChatHandler extends plugin {
                 }
             }
 
+            avatarImageInput = await buildAvatarImageInputContext(e, currentToolInstruction || originalUserMessage || userMessage, {
+                maxImages: Config.MAX_IMAGES_PER_MESSAGE
+            })
+            if (avatarImageInput.noteText) {
+                userMessage = `${userMessage}\n\n${avatarImageInput.noteText}`
+            }
+            if (avatarImageInput.imageParts.length > 0) {
+                logger.info(`[AI-Plugin] 已附加头像图片输入: ${avatarImageInput.imageParts.length} 张`)
+            }
+
             // Vision Relay：flag v 强制启用，否则按全局配置 + 模型是否需要转述
             const useVisionRelay = e._visionFlag || (this.client.enableVisionRelay && this.client._checkModelGroupNeedsVisionRelay(modelGroupKey, providerFilter))
             if (allImages.length > 0) {
@@ -1478,6 +1490,23 @@ export class ChatHandler extends plugin {
                     logger.warn('[AI-Plugin] Vision Relay: 本地图片转述失败，保留原始图片发送给主模型')
                 }
             }
+            if (avatarImageInput.imageParts.length > 0 && useVisionRelay) {
+                const visionModels = this.client.visionModels
+                logger.info(`[AI-Plugin] Vision Relay: 检测到 ${avatarImageInput.imageParts.length} 张头像图片输入，开始转述`)
+                let description = ''
+                for (const visionConf of visionModels) {
+                    description = await relayImagesToVision(avatarImageInput.imageParts, userMessage, this.client, visionConf)
+                    if (description) break
+                    logger.warn(`[AI-Plugin] Vision Relay: ${visionConf.provider_id}/${visionConf.model_id} 头像图片转述失败，尝试下一个`)
+                }
+                if (description) {
+                    userMessage = (userMessage || '') + '\n\n【以下是对本轮头像图片输入的详细描述，请基于此描述回答用户的头像问题：】\n' + description + '\n【头像图片描述结束】\n'
+                    avatarImageInput.imageParts = []
+                    logger.info('[AI-Plugin] Vision Relay: 头像图片转述完成，图片已替换为文本描述')
+                } else {
+                    logger.warn('[AI-Plugin] Vision Relay: 头像图片转述失败，保留原始头像图片发送给主模型')
+                }
+            }
 
             // 画图场景工具已发过"🎨正在生成"进度提示（无论成败），跳过"思考中"占位避免重复；
             // 普通思考占位由主人命令「#ai开启/关闭思考提示」控制，默认关闭。
@@ -1516,6 +1545,9 @@ export class ChatHandler extends plugin {
             }
             if (localImageInput.imageParts.length > 0) {
                 currentUserTurnParts.push(...localImageInput.imageParts)
+            }
+            if (avatarImageInput.imageParts.length > 0) {
+                currentUserTurnParts.push(...avatarImageInput.imageParts)
             }
             if (generatedDrawReviewImages.length > 0) {
                 currentUserTurnParts.push(...generatedDrawReviewImages)

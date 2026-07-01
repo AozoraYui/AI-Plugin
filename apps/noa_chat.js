@@ -8,6 +8,7 @@ import { buildEnvironmentHint, expandForwardMsg, extractCardInfo } from '../util
 import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedUserIds } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
+import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { filterToolCallsByIntent } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 
@@ -766,6 +767,7 @@ export class NoaChatHandler extends plugin {
             }
         }
         const hasLocalImageInput = localImageInput.imageParts.length > 0
+        let avatarImageInput = { imageParts: [], noteText: '', targets: [], failures: [] }
         const imageReadPlan = buildImageReadPlan(normalized, logs)
         for (const line of imageReadPlan.logLines) logger.info(line)
         const imageContext = await prepareNoaImageContext(this.client, imageReadPlan, normalized)
@@ -866,6 +868,13 @@ export class NoaChatHandler extends plugin {
             logger.warn(`[AI-Plugin] [畅聊] 工具路由/执行失败: ${err.message}`)
         }
 
+        avatarImageInput = await buildAvatarImageInputContext(e, normalized.instructionText || normalized.currentText || normalized.normalizedText || '', {
+            maxImages: Config.MAX_IMAGES_PER_MESSAGE
+        })
+        if (avatarImageInput.imageParts.length > 0) {
+            logger.info(`[AI-Plugin] [畅聊] 已附加头像图片输入: ${avatarImageInput.imageParts.length} 张`)
+        }
+
         const prompt = `你是 ${Config.AI_NAME}，正在一个 QQ 群里自然聊天。
 
 请基于下面的群聊上下文回复当前触发你的用户。你能看到最近群聊流水，但要注意：
@@ -885,7 +894,7 @@ ${getBeijingTimeStr()}
 【最近群聊上下文】
 ${contextText || '暂无'}
 
-${imageReadNotes.length > 0 ? `【本轮读图策略】\n${imageReadNotes.join('\n')}\n\n` : ''}${imageContext.summaryText ? `【本轮分批读图摘要】\n${imageContext.summaryText}\n\n` : ''}${localImageInput.noteText ? `${localImageInput.noteText}\n\n` : ''}${groupAliasMemoryText ? `${groupAliasMemoryText}\n\n` : ''}${personalMemory ? `【触发者个人记忆摘要】\n${personalMemory}\n\n` : ''}${toolContextText ? `【本轮工具结果】${toolContextText}\n\n` : ''}【当前触发消息】
+${imageReadNotes.length > 0 ? `【本轮读图策略】\n${imageReadNotes.join('\n')}\n\n` : ''}${imageContext.summaryText ? `【本轮分批读图摘要】\n${imageContext.summaryText}\n\n` : ''}${localImageInput.noteText ? `${localImageInput.noteText}\n\n` : ''}${avatarImageInput.noteText ? `${avatarImageInput.noteText}\n\n` : ''}${groupAliasMemoryText ? `${groupAliasMemoryText}\n\n` : ''}${personalMemory ? `【触发者个人记忆摘要】\n${personalMemory}\n\n` : ''}${toolContextText ? `【本轮工具结果】${toolContextText}\n\n` : ''}【当前触发消息】
 ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}${normalized.aliasCaptureText ? `\n\n${normalized.aliasCaptureText}` : ''}`
 
         const contents = [
@@ -900,7 +909,7 @@ ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}${norm
             },
             {
                 role: 'user',
-                parts: [{ text: prompt }, ...imageParts, ...localImageInput.imageParts]
+                parts: [{ text: prompt }, ...imageParts, ...localImageInput.imageParts, ...avatarImageInput.imageParts]
             }
         ]
 
