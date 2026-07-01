@@ -10,7 +10,7 @@ import { processImagesInBatches } from '../utils/image.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
-import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitGroupChatContextIntent, hasNegatedDrawIntent, parseGroupSendRequest } from '../utils/tool_intent.js'
+import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasNegatedDrawIntent, parseGroupSendRequest } from '../utils/tool_intent.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import yaml from 'yaml'
 
@@ -323,6 +323,7 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
     const hasRecentImages = options.hasRecentImages === true
     const hasImageContext = hasImages || hasRecentImages
     const isMaster = options.isMaster === true
+    const hasGroup = options.hasGroup === true
 
     // 0) 主人明确要求代发群消息：直接走 group_send_message，避免把“转达内容”当普通聊天回复。
     if (isMaster && hasTool(enabledTools, 'group_send_message')) {
@@ -453,9 +454,9 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         }
     }
 
-    // 7) 群聊流水查询：当前群前情和“我在别的群刚说了什么”是明确可查的畅聊数据。
+    // 7) 群聊流水查询：自然询问“刚才聊啥”也可自动读取；跨群仍由主人权限限制。
     if (hasTool(enabledTools, 'group_chat_context')) {
-        if (!hasExplicitGroupChatContextIntent(routeText)) return null
+        if (!hasExplicitGroupChatContextIntent(routeText) && !hasGroupChatContextQuestion(routeText)) return null
 
         const asksGroupList = isMaster && /(加了哪些群|加入了哪些群|在哪些群|能看到哪些群|可见群|群列表|所有群列表|有哪些群|有什么群|机器人.*群|你.*群)/i.test(routeText)
         if (asksGroupList) {
@@ -476,7 +477,7 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
             }
         }
 
-        const asksAllGroups = isMaster && /(所有群|全部群|跨群|各群|别的群|其他群|其它群).{0,20}(聊了啥|聊了什么|说了啥|发了啥|发生了什么|前情|总结|流水|记录|消息)/i.test(routeText)
+        const asksAllGroups = isMaster && /(所有群|全部群|跨群|各群|别的群|其他群|其它群|别群).{0,28}(聊了啥|聊了什么|说了啥|说了什么|发了啥|发了什么|发生了什么|什么情况|咋了|怎么了|前情|总结|流水|记录|消息)/i.test(routeText)
         if (asksAllGroups) {
             return {
                 intent: '规则预路由：主人询问跨群已捕获聊天流水。',
@@ -486,9 +487,10 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         }
 
         const hasCrossGroupWords = /(所有群|全部群|跨群|各群|别的群|其他群|其它群|别群)/i.test(routeText)
-        const asksCurrentGroupContext = !hasCrossGroupWords && (
+        const asksCurrentGroupContext = hasGroup && !hasCrossGroupWords && (
             /(刚才|刚刚|之前|前面|最近|他们|大家|群里).{0,24}(聊了啥|聊了什么|说了啥|发了啥|发生了什么|什么情况|前情|总结)/i.test(routeText)
             || /(聊了啥|聊了什么|说了啥|发了啥|发生了什么|前情提要|总结.{0,12}群聊)/i.test(routeText)
+            || hasGroupChatContextQuestion(routeText)
         )
         if (asksCurrentGroupContext) {
             return {
@@ -603,7 +605,7 @@ ${toolSummary}
 - draw_image 可以自动提取当前消息图、引用图、@头像，也可以在用户说“刚才那张/这张图/用 p 模型处理/修图/去水印/二维码/套预设”等时复用最近图片缓存。用户明确要求基于图片生成、重绘、修图、去水印或套风格时，可以计划 draw_image，但不要承诺精准像素级编辑。
 - 如果当前消息包含引用/转发内容，判断是否画图时只能看“用户本条指令”，不要因为引用聊天记录里出现“作图/做图/画/AI做图”等词就计划 draw_image；“不是让你画图/不要画/别生成图”等否定句必须返回 need_tools=false。
 - 当前操作者是否主人：${isMaster ? '是' : '否'}。
-- 只有用户明确要求“读取/查看/查询/总结/整理群聊记录、消息流水、畅聊记录、群上下文、前情”时，才计划 group_chat_context 读取畅聊捕获的群流水；单纯问“他们刚才说了啥/刚刚发生了什么”但没有明确要求读记录时，不要计划工具，应说明需要读取群聊记录才知道。
+- 用户询问“他们刚才聊了啥/群里刚刚发生了什么/最近前情/总结一下刚才群聊”时，可计划 group_chat_context 自动读取畅聊捕获的群流水；不要求用户额外说“读取记录”。
 - 主人问“你加了哪些群/能看到哪些群/群列表/有哪些群”时，计划 group_chat_context，params_hint 写 scope=group_list；私聊中也可以使用。
 - 用户问“我刚在别的群/其他群发了什么”“你看到我在别的群说的话吗”时，计划 group_chat_context，params_hint 写 scope=other_group_messages、exclude_current_group=true；这只查询当前触发者自己的跨群消息。
 - 只有当前操作者是主人且用户明确要求跨群/所有群/指定群的已捕获流水时，才计划 group_chat_context 的 scope=all_groups 或 specific_group；非主人不要计划读取其他人的跨群消息。主人按群名问某个群但你暂时没有群号时，可在 params_hint 里把群名写入 query，工具会尝试解析群号。
@@ -1087,7 +1089,8 @@ export class ChatHandler extends plugin {
                     hasImages: allImages.length > 0,
                     hasRecentImages: recentImageInfo.available,
                     urls: candidateUrls,
-                    isMaster: e.isMaster === true
+                    isMaster: e.isMaster === true,
+                    hasGroup: Boolean(e.group_id)
                 })
                 let toolAnalysis
                 if (preRouted) {
