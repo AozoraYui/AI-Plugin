@@ -4,10 +4,225 @@
  */
 
 import { toolRegistry } from './registry.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const DEFAULT_MAX_CHARS = 16000
 const REQUEST_TIMEOUT_MS = 30000
+const BROWSER_TIMEOUT_MS = 45000
 const MAX_RESPONSE_SIZE = 10 * 1024 * 1024 // 10MB
+const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+const DEFAULT_HEADERS = {
+    'User-Agent': BROWSER_USER_AGENT,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.5',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+}
+
+let yunzaiPuppeteerRenderer = null
+let yunzaiPuppeteerUnavailable = false
+let directBrowserPromise = null
+
+function truncateContent(text, maxChars, suffix = '\n...(已截断)') {
+    if (!text || text.length <= maxChars) return text || ''
+    return text.slice(0, maxChars) + suffix
+}
+
+function isBrowserFallbackStatus(status) {
+    return [403, 406, 418, 503].includes(Number(status))
+}
+
+function isLikelyBotWall(text = '', html = '') {
+    const source = `${text}\n${html}`.toLowerCase()
+    if (!source.trim()) return true
+
+    const strongPatterns = [
+        'checking your browser',
+        'verify you are human',
+        'just a moment',
+        'attention required',
+        'cf-browser-verification',
+        'cloudflare ray id',
+        'ddos-guard',
+        'akamai bot manager',
+        'captcha',
+        'recaptcha',
+        'hcaptcha',
+        'access denied',
+        'request blocked',
+        'enable javascript',
+        'please enable javascript',
+        '人机验证',
+        '安全验证',
+        '验证码',
+        '访问被拒绝',
+        '请开启javascript',
+        '请启用javascript',
+    ]
+    if (strongPatterns.some(pattern => source.includes(pattern))) return true
+
+    return false
+}
+
+function isLikelyShellHtml(text = '', html = '') {
+    const trimmedText = String(text || '').trim()
+    if (trimmedText.length >= 300) return false
+    const scriptCount = (String(html || '').match(/<script[\s>]/gi) || []).length
+    const appRoot = /id=["'](?:app|root|__next|nuxt|vite-root)["']/i.test(html)
+    return scriptCount >= 3 || appRoot
+}
+
+function getYunzaiPuppeteerPath() {
+    const candidates = [
+        path.join(process.cwd(), 'renderers/puppeteer/lib/puppeteer.js'),
+        path.join(process.cwd(), '../renderers/puppeteer/lib/puppeteer.js'),
+        path.join(process.cwd(), '../../renderers/puppeteer/lib/puppeteer.js'),
+    ]
+    return candidates.find(file => fs.existsSync(file))
+}
+
+async function createBrowserPage() {
+    if (!yunzaiPuppeteerUnavailable) {
+        try {
+            const rendererPath = getYunzaiPuppeteerPath()
+            if (rendererPath) {
+                if (!yunzaiPuppeteerRenderer) {
+                    const Puppeteer = (await import(pathToFileURL(rendererPath).href)).default
+                    yunzaiPuppeteerRenderer = new Puppeteer({})
+                }
+                const browser = await yunzaiPuppeteerRenderer.browserInit()
+                if (browser) {
+                    return {
+                        page: await browser.newPage(),
+                        provider: 'Yunzai puppeteer'
+                    }
+                }
+            } else {
+                yunzaiPuppeteerUnavailable = true
+            }
+        } catch (err) {
+            yunzaiPuppeteerUnavailable = true
+            logger.warn(`[AI-Plugin] WebFetch 浏览器降级: 云崽 puppeteer 不可用 - ${err.message}`)
+        }
+    }
+
+    try {
+        if (!directBrowserPromise) {
+            const puppeteer = (await import('puppeteer')).default
+            directBrowserPromise = puppeteer.launch({
+                headless: 'new',
+                args: ['--disable-gpu', '--disable-setuid-sandbox', '--no-sandbox', '--no-zygote']
+            })
+        }
+        const browser = await directBrowserPromise
+        if (browser) {
+            return {
+                page: await browser.newPage(),
+                provider: 'direct puppeteer'
+            }
+        }
+    } catch (err) {
+        directBrowserPromise = null
+        logger.warn(`[AI-Plugin] WebFetch 浏览器降级: puppeteer 包不可用 - ${err.message}`)
+    }
+
+    return null
+}
+
+async function fetchWebPageWithBrowser(url, maxChars = DEFAULT_MAX_CHARS, reason = 'HTTP 抓取失败') {
+    const browserPage = await createBrowserPage()
+    if (!browserPage?.page) {
+        return {
+            ok: false,
+            error: `浏览器降级不可用（未找到云崽 puppeteer 或 puppeteer 包）`
+        }
+    }
+
+    const { page, provider } = browserPage
+    try {
+        logger.info(`[AI-Plugin] WebFetch: 启用浏览器降级 (${provider})，原因=${reason}，URL=${url}`)
+        if (page.setUserAgent) await page.setUserAgent(BROWSER_USER_AGENT)
+        if (page.setExtraHTTPHeaders) {
+            await page.setExtraHTTPHeaders({
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.5',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache',
+            })
+        }
+        if (page.setViewport) await page.setViewport({ width: 1365, height: 900, deviceScaleFactor: 1 })
+        if (page.setDefaultNavigationTimeout) page.setDefaultNavigationTimeout(BROWSER_TIMEOUT_MS)
+        if (page.setDefaultTimeout) page.setDefaultTimeout(BROWSER_TIMEOUT_MS)
+
+        const res = await page.goto(url, {
+            waitUntil: 'domcontentloaded',
+            timeout: BROWSER_TIMEOUT_MS,
+        })
+
+        try {
+            if (page.waitForNetworkIdle) {
+                await page.waitForNetworkIdle({ idleTime: 1000, timeout: 8000 })
+            } else if (page.waitForTimeout) {
+                await page.waitForTimeout(1500)
+            } else {
+                await new Promise(resolve => setTimeout(resolve, 1500))
+            }
+        } catch {
+            // 页面可能持续轮询，能读多少读多少
+        }
+
+        const data = await page.evaluate(() => {
+            const clean = () => {
+                for (const selector of ['script', 'style', 'noscript', 'iframe', 'svg', 'canvas', 'nav', 'footer', 'header', 'aside', 'form']) {
+                    document.querySelectorAll(selector).forEach(el => el.remove())
+                }
+            }
+            clean()
+            return {
+                title: document.title || '',
+                text: document.body?.innerText || '',
+                html: document.documentElement?.outerHTML || '',
+                url: location.href,
+            }
+        })
+
+        const text = htmlToText(data.text || '')
+        if (!text.trim()) {
+            return {
+                ok: false,
+                error: '浏览器已打开页面，但没有提取到可读正文'
+            }
+        }
+        if (isLikelyBotWall(text, data.html)) {
+            return {
+                ok: false,
+                error: '目标站点仍要求人机验证/登录或返回反爬页面'
+            }
+        }
+
+        const originalLen = text.length
+        const finalText = truncateContent(text, maxChars)
+        logger.info(`[AI-Plugin] WebFetch 浏览器降级成功: ${url} (${originalLen} 字符, 返回 ${finalText.length} 字符)`)
+        const status = res?.status ? `HTTP ${res.status()}` : 'HTTP 状态未知'
+        const titleLine = data.title ? `标题：${data.title}\n` : ''
+        const finalUrlLine = data.url && data.url !== url ? `最终地址：${data.url}\n` : ''
+        return {
+            ok: true,
+            content: `\n\n【网页内容「${url}」(浏览器渲染, ${status}, ${originalLen} 字符)：】\n${titleLine}${finalUrlLine}${finalText}\n【网页内容结束】\n`
+        }
+    } catch (err) {
+        logger.warn(`[AI-Plugin] WebFetch 浏览器降级失败: ${url} - ${err.message}`)
+        return {
+            ok: false,
+            error: err.message
+        }
+    } finally {
+        try {
+            await page.close()
+        } catch {}
+    }
+}
 
 /**
  * 还原 B站短链（b23.tv / bili2233.cn）为完整 bilibili.com 链接
@@ -27,7 +242,7 @@ async function resolveBiliShortLink(rawUrl) {
         const res = await fetch(rawUrl, {
             method: 'GET',
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+                'User-Agent': BROWSER_USER_AGENT
             },
             redirect: 'follow',
             signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
@@ -335,23 +550,26 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS) {
     try {
         res = await fetch(resolvedUrl, {
             method: 'GET',
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.5',
-            },
+            headers: DEFAULT_HEADERS,
             signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
             redirect: 'follow',
         })
     } catch (err) {
         logger.warn(`[AI-Plugin] WebFetch 请求失败: ${targetUrl} - ${err.message}`)
-        return `\n\n【网页抓取失败】请求出错: ${err.message}\n`
+        const browserResult = await fetchWebPageWithBrowser(resolvedUrl, maxChars, `HTTP 请求异常: ${err.message}`)
+        if (browserResult.ok) return browserResult.content
+        return `\n\n【网页抓取失败】请求出错: ${err.message}；浏览器降级也失败：${browserResult.error}。\n`
     }
 
     if (!res.ok) {
         logger.warn(`[AI-Plugin] WebFetch 返回非200: ${targetUrl} - ${res.status}`)
         if (res.status === 429) {
             return `\n\n【网页抓取失败】HTTP 429：目标站点请求过于频繁（触发了频率限制）。请稍后再试，通常几分钟后即可恢复。\n`
+        }
+        if (isBrowserFallbackStatus(res.status)) {
+            const browserResult = await fetchWebPageWithBrowser(resolvedUrl, maxChars, `HTTP ${res.status}`)
+            if (browserResult.ok) return browserResult.content
+            return `\n\n【网页抓取失败】HTTP ${res.status}，并且浏览器降级也失败：${browserResult.error}。\n`
         }
         return `\n\n【网页抓取失败】HTTP ${res.status}\n`
     }
@@ -363,9 +581,9 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS) {
         if (contentType.includes('json')) {
             try {
                 const json = await res.text()
-                const truncated = json.slice(0, maxChars)
+                const truncated = truncateContent(json, maxChars)
                 logger.info(`[AI-Plugin] WebFetch 成功(JSON): ${targetUrl} (${truncated.length} 字符)`)
-                return `\n\n【网页内容「${targetUrl}」(JSON, ${truncated.length} 字符)】：\n${truncated}${json.length > maxChars ? '\n...(已截断)' : ''}\n`
+                return `\n\n【网页内容「${targetUrl}」(JSON, ${json.length} 字符)】：\n${truncated}\n`
             } catch {
                 return `\n\n【网页抓取失败】无法解析 JSON 响应\n`
             }
@@ -389,12 +607,22 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS) {
 
     // 提取文本
     let text = htmlToText(html)
+    if (isLikelyBotWall(text, html) || isLikelyShellHtml(text, html)) {
+        const browserResult = await fetchWebPageWithBrowser(
+            resolvedUrl,
+            maxChars,
+            isLikelyBotWall(text, html) ? '页面疑似反爬/验证页' : '页面疑似需要浏览器渲染'
+        )
+        if (browserResult.ok) return browserResult.content
+        if (isLikelyBotWall(text, html)) {
+            return `\n\n【网页抓取失败】目标站点疑似返回反爬/验证页面，浏览器降级也失败：${browserResult.error}。\n`
+        }
+        logger.warn(`[AI-Plugin] WebFetch 浏览器降级未成功，继续使用 HTTP 提取文本: ${browserResult.error}`)
+    }
 
     // 截断
     const originalLen = text.length
-    if (text.length > maxChars) {
-        text = text.slice(0, maxChars) + '\n...(已截断)'
-    }
+    text = truncateContent(text, maxChars)
 
     logger.info(`[AI-Plugin] WebFetch 成功: ${targetUrl} (${originalLen} 字符, 返回 ${text.length} 字符)`)
 
@@ -404,13 +632,13 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS) {
 export const webFetchTool = {
     name: 'web_fetch',
     permission: 'master',
-    description: '抓取指定网页的文本内容，用于获取网页详细信息。',
+    description: '抓取指定网页的文本内容，用于获取网页详细信息；必要时会尝试浏览器渲染降级。',
 
     functionSchema: {
         type: 'function',
         function: {
             name: 'web_fetch',
-            description: '访问指定网页 URL，提取并返回页面中的可读文本内容。适合在搜索后进一步查看具体网页的详细信息。',
+            description: '访问指定网页 URL，提取并返回页面中的可读文本内容。适合在搜索后进一步查看具体网页的详细信息；HTTP 抓取失败或页面需要 JS 渲染时会自动尝试浏览器降级，但无法绕过登录/验证码。',
             parameters: {
                 type: 'object',
                 properties: {
