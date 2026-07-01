@@ -14,7 +14,6 @@ function saveRuntimeSwitch(key, value) {
             return value && typeof value === 'object' && !Array.isArray(value) && (
                 value.enable_web_search !== undefined ||
                 value.enable_web_fetch !== undefined ||
-                value.enable_file_read !== undefined ||
                 value.enable_shell_exec !== undefined ||
                 value.enable_file_transfer !== undefined ||
                 value.enable_ai_draw !== undefined ||

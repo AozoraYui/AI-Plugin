@@ -41,9 +41,7 @@
 
 ### 🔍 工具调用
 - **服务器状态查询**：AI 可查看服务器 CPU、内存、温度等系统信息
-- **本地文件只读**：AI 可读取白名单目录下的文件内容（最大 4MB），支持自然语言别名、相对路径和文件名片段定位
-- **目录浏览**：AI 可列出白名单目录下的文件和子目录，支持逐层深入浏览
-- **Shell 执行**：可选开启后，主人可让 AI 根据意图执行服务器 Shell 命令，适合 grep/rg 搜索、日志排查、服务诊断等
+- **Shell 执行**：可选开启后，主人可让 AI 根据意图执行服务器 Shell 命令，适合 `rg`/`ls`/`cat`/`tail` 查文件、日志排查、服务诊断等
 - **联网搜索**：AI 自动判断是否需要联网搜索，注入搜索结果辅助回答。默认关闭，使用 `#cn` 临时启用
 
 ### 🖼️ Vision Relay（图文转述）
@@ -162,8 +160,7 @@ vision_model:
 enable_web_search: false
 # intent_model: []
 enable_web_fetch: false
-# enable_file_read: false  # 默认关闭，可使用 #cf 临时启用只读文件工具
-# enable_shell_exec: false # 默认关闭；独立开关，开启后即允许主人让 AI 执行 Shell（无需 enable_file_read）
+# enable_shell_exec: false # 默认关闭；开启后允许主人让 AI 执行 Shell
 # enable_shell_session: false # 默认关闭；持久 tmux Shell 会话，主人专用，默认会话名 ai-shell
 # SHELL_SESSION_AFTER_SEND_DELAY_MS: 1200 # send 后自动回读窗口快照前等待多久
 # SHELL_SESSION_AFTER_SEND_TIMEOUT_MS: 64000 # send 后最多等待多久直到窗口出现新输出
@@ -237,10 +234,9 @@ name: 诺亚
 > - 单次对话模式适合临时提问，不会污染上下文记忆
 > - 多轮对话模式会自动加载历史记忆和锚点总结
 > - 短命令 `pchat`/`uchat` 和完整命令 `prochat`/`ultrachat` 等效
-> - **临时开关**：`#cv` 启用图文转述，`#cn` 启用联网搜索，`#cw` 启用网页抓取，`#cf` 启用本地文件读取，`#cvnwf` 同时启用
-  - 开关可组合，如 `#scv`、`#pcn`、`#uswf`、`#scvnwf` 等
-  - `v`/`n`/`w`/`f` 仅识别紧跟指令后的字符，对话内容中的 `v`/`n`/`w`/`f` 不会误触发
-  - `f` flag 会递归读取目录下所有文本文件（跳过 `.git` 和 `node_modules`）
+> - **临时开关**：`#cv` 启用图文转述，`#cn` 启用联网搜索，`#cw` 启用网页抓取，`#cvnw` 同时启用
+  - 开关可组合，如 `#scv`、`#pcn`、`#usw`、`#scvnw` 等
+  - `v`/`n`/`w` 仅识别紧跟指令后的字符，对话内容中的 `v`/`n`/`w` 不会误触发
 > - **数字前缀临时指定供应商**：在 `#` 后、命令前加数字（1-9），临时使用对应优先级的供应商
   - `#3chat 你好` → 使用 priority=3 的供应商
   - `#3手办化` → 使用 priority=3 的供应商生成手办
@@ -278,7 +274,7 @@ name: 诺亚
 >  每轮最多临时读取 `NOA_CHAT_MAX_CONTEXT_IMAGES` 张图；`3` 表示最多读 3 张，不是超过 3 张就分批；该值可设为 `unlimited` 或 `-1` 表示不限制，`0` 表示禁用畅聊读图。
 >  当待读图片超过 `NOA_CHAT_IMAGE_BATCH_SIZE` 时，会先按批读取并生成图片摘要，再把摘要注入最终回复，避免一次请求塞入过多图片。
 >  跨群检索默认只允许查询触发者自己的消息；只有主人可查询所有已捕获群或指定群流水。
->  主人可在 `#chat` 或畅聊触发消息里直接给出白名单内的本地图片绝对路径（如 `/root/Yunzai/resources/tmp/a.jpg`），对话流程会把它作为本轮图片输入，而不是走 file_read/shell。
+>  主人可在 `#chat` 或畅聊触发消息里直接给出白名单内的本地图片绝对路径（如 `/root/Yunzai/resources/tmp/a.jpg`），对话流程会把它作为本轮图片输入，不需要额外调用 Shell。
 >  畅聊回复会同步到触发者普通对话记忆；工具调用仍按原权限鉴权，高危群管工具需要 `enable_group_admin: true` 且操作者具备权限。
 
 ### 记忆管理
@@ -302,9 +298,6 @@ AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单
 | 工具能力 | 触发方式 | 说明 |
 |---------|---------|------|
 | 服务器状态查询 | 在对话中询问服务器状态（如`#chat 服务器状态怎么样`） | 返回 CPU、内存、温度、磁盘等信息，支持 fastfetch/neofetch |
-| 本地文件读取 | 全局开关开启后自动检测，或使用 `#cf` 临时强制读取 | 只读，仅限白名单目录，最大 4MB；支持“日志/配置/模型配置/插件目录”等别名、相对路径和文件名片段 |
-| 目录浏览 | 全局开关开启后自动检测，或使用 `#cf` 临时强制浏览 | 列出文件和子目录，受白名单限制；支持“data目录/上次那个目录”等自然语言指代 |
-| 目录+文件全读 | 全局开关开启后自动检测，或使用 `#cf` 临时强制读取 | 递归读取所有文本文件，自动跳过二进制和超大文件 |
 | Shell 执行 | `enable_shell_exec: true` 后，主人对话中自动按意图调用 | 执行服务器 shell 命令并返回 stdout/stderr，适合 `grep`/`rg`/`find` 查文件、日志排查、服务诊断；具备完整服务器权限 |
 | 持久 Shell 会话 | `enable_shell_session: true` 后，主人明确提到 tmux/ai-shell/shell会话时调用 | 操作独立 tmux 会话（默认 `ai-shell`）：读取窗口、输入命令、Ctrl-C 中断、清屏、重启或关闭；发送命令后最多等待 64 秒直到窗口出现新输出，适合长任务和交互式排查 |
 | 文件上传 | `enable_file_transfer: true` 后，主人对话中按意图调用 | 把白名单目录内的文件/文件夹发送到当前会话；文件夹自动打包为 tar.gz；支持文件名模糊匹配 |
@@ -317,10 +310,8 @@ AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单
 | 联网搜索 | 使用 `#cn` 临时启用，AI 自动判断是否需要搜索 | 注入搜索结果辅助回答，自动抓取首条结果网页全文 |
 | 网页抓取 | 使用 `#cw` 临时启用，自动提取消息中的 URL 并抓取网页内容 | 提取网页可读文本，支持 HTML/JSON，最大 8000 字符；GitHub 链接自动改走 API 取干净数据，B站短链自动还原 |
 
-> 💡 文件读取白名单在 `config/file_roots.yaml` 中单独配置，AI 只能读取无法写入修改。
->  文件读取默认关闭，可使用 `#cf` 临时启用，或在 `models_config.yaml` 中设置 `enable_file_read: true` 全局开启。
->  开启后可以直接说“看下日志”“读一下模型配置”“data目录有什么”“看看上次那个目录”，无需每次输入绝对路径。
-> ⚠️ Shell 执行默认关闭，且不会被 `#cf` 临时打开；独立开关，只需设置 `enable_shell_exec: true`（无需 `enable_file_read`），并且仅主人可用。开启后 AI 可执行完整服务器命令，请谨慎使用。
+> 💡 文件白名单在 `config/file_roots.yaml` 中单独配置，用于限制文件收发和本地图片路径输入。
+> ⚠️ Shell 执行默认关闭，独立开关 `enable_shell_exec: true`，并且仅主人可用。开启后 AI 可执行完整服务器命令，请谨慎使用。
 > 🖥️ 持久 Shell 会话默认关闭，独立开关 `enable_shell_session: true`，仅主人可用。开启后启动时会检查 tmux 会话 `ai-shell`，不存在就创建；发送命令后默认最多等待 64 秒直到窗口出现新输出并回读快照；你也可以在服务器上 `tmux attach -t ai-shell` 直接接管。
 > 🧭 Shell 目录安全检查会在执行 `git pull`、`rm`、`npm/pnpm` 等会改动状态的命令前核对目录语义；如果当前目录和用户目标不一致，会停止执行并要求向主人确认下一步。
 > 📤 文件收发默认关闭，独立开关 `enable_file_transfer: true`，仅主人可用。上传/下载路径均受 `file_roots.yaml` 白名单约束：上传只能发白名单内的文件，下载只能存到白名单目录。
@@ -381,7 +372,6 @@ AI-Plugin/
 ├── tools/                   # 工具系统
 │   ├── index.js            # 工具注册入口
 │   ├── registry.js         # 工具注册表（注册、意图检测等）
-│   ├── file_read.js        # 本地文件读取 & 目录浏览
 │   ├── file_send.js        # 文件上传（白名单文件/文件夹发送到会话，主人专用）
 │   ├── file_download.js    # 文件下载（消息媒体保存到白名单目录，主人专用）
 │   ├── group_file.js       # 群文件浏览/下载（群文件区列表与下载到白名单目录，主人专用）
@@ -423,7 +413,7 @@ AI-Plugin/
 | `disabled_models.json` | 禁用的模型列表 |
 | `draw_presets.yaml` | 作图预设配置 |
 | `access_control.yaml` | 权限控制配置 |
-| `file_roots.yaml` | 文件读取白名单配置（AI 只能读取这些目录下的文件） |
+| `file_roots.yaml` | 文件白名单配置（用于文件收发和本地图片路径输入） |
 | `ai_plugin.db` | SQLite 数据库（对话历史、记忆锚点、摘要缓存） |
 
 ### 数据存储
@@ -487,8 +477,8 @@ AI-Plugin/
 11. **模型熔断**：连续失败 3 次自动熔断 30 秒，全部熔断时无视冷却强制尝试，确保服务可用
 12. **Vision Relay**：非多模态模型通过 Vision 模型描述图片后间接理解图片；有图请求会优先使用多模态模型，避免纯文本模型直接接收图片
 13. **作图兼容**：chat/completions 不支持图片时自动重试 `/images/edits`（multipart 传图）或 `/images/generations`（纯文本）
-14. **文件读取安全**：AI 只能读取 `file_roots.yaml` 白名单目录下的文件，无法写入、修改或删除
-15. **Shell 执行风险**：Shell 工具默认关闭，需 `enable_shell_exec: true` 开启（独立开关，无需 `enable_file_read`）且仅主人可用；开启后具备完整服务器命令权限
+14. **文件白名单**：文件收发和本地图片路径输入受 `file_roots.yaml` 限制
+15. **Shell 执行风险**：Shell 工具默认关闭，需 `enable_shell_exec: true` 开启且仅主人可用；开启后具备完整服务器命令权限
 16. **持久 Shell 会话风险**：tmux 会话工具默认关闭，需 `enable_shell_session: true` 开启且仅主人可用；会话状态会保留，适合长任务，但也意味着命令可能持续运行
 17. **指令自定义**：可在 `models_config.yaml` 中修改 `chat_command`/`draw_command` 缩短指令
 

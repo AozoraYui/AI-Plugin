@@ -21,7 +21,6 @@ export class AiClient {
         this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
         this.webSearchConfig = { enabled: false, intent_model: null }
         this.webFetchConfig = { enabled: false }
-        this.fileReadConfig = { enabled: false }
         this.shellExecConfig = { enabled: false }
         this.shellSessionConfig = { enabled: false }
         this.groupSendConfig = { enabled: false }
@@ -147,12 +146,7 @@ export class AiClient {
         return (this.webFetchConfig?.enable_web_fetch ?? this.webFetchConfig?.enabled) === true
     }
 
-    /** 是否启用本地文件读取（默认关闭，需配置明确启用） */
-    get enableFileRead() {
-        return (this.fileReadConfig?.enable_file_read ?? this.fileReadConfig?.enabled) === true
-    }
-
-    /** 是否允许 AI 执行 Shell（仅需 Shell 开关；开启即默认具备文件读取能力） */
+    /** 是否允许 AI 执行 Shell */
     get enableShellExec() {
         return this.shellExecConfig?.enabled === true
     }
@@ -321,7 +315,6 @@ export class AiClient {
         this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
         this.webSearchConfig = { enabled: false, intent_model: null }
         this.webFetchConfig = { enabled: false }
-        this.fileReadConfig = { enabled: false }
         this.weatherApiKey = null
         this.openWeatherMapApiKey = null
         if (!fs.existsSync(MODELS_CONFIG_FILE)) {
@@ -349,7 +342,6 @@ export class AiClient {
                 value.enable_web_search !== undefined ||
                 value.intent_model !== undefined ||
                 value.enable_web_fetch !== undefined ||
-                value.enable_file_read !== undefined ||
                 value.enable_shell_exec !== undefined ||
                 value.enable_shell_session !== undefined ||
                 value.SHELL_SESSION_NAME !== undefined ||
@@ -450,8 +442,6 @@ export class AiClient {
                     logger.debug('[AI-Plugin] 网页抓取未启用')
                 }
 
-                // 提取 enable_file_read（默认关闭）
-                this.fileReadConfig = { enabled: rawConfig.enable_file_read === true }
                 this.shellExecConfig = { enabled: rawConfig.enable_shell_exec === true }
                 this.shellSessionConfig = { enabled: rawConfig.enable_shell_session === true }
                 this.fileTransferConfig = { enabled: rawConfig.enable_file_transfer === true }
@@ -474,13 +464,8 @@ export class AiClient {
                 for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_FOLLOWUP_MAX_ROUNDS', 'SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS', 'SHELL_EXEC_MAX_BUFFER', 'SHELL_SESSION_NAME', 'SHELL_SESSION_CAPTURE_LINES', 'SHELL_SESSION_MAX_OUTPUT_CHARS', 'SHELL_SESSION_AFTER_SEND_DELAY_MS', 'SHELL_SESSION_AFTER_SEND_TIMEOUT_MS', 'SHELL_SESSION_AFTER_SEND_POLL_MS']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
-                if (this.enableFileRead) {
-                    logger.info('[AI-Plugin] 本地文件读取已启用')
-                } else {
-                    logger.debug('[AI-Plugin] 本地文件读取未启用（可通过 #cf/#scf 临时调用）')
-                }
                 if (this.enableShellExec) {
-                    logger.warn('[AI-Plugin] Shell 执行工具已启用：AI 可在主人请求下执行服务器命令（含文件读取）')
+                    logger.warn('[AI-Plugin] Shell 执行工具已启用：AI 可在主人请求下执行服务器命令')
                 }
                 if (this.enableShellSession) {
                     logger.warn(`[AI-Plugin] 持久 Shell 会话已启用：将使用 tmux 会话 ${Config.SHELL_SESSION_NAME}`)

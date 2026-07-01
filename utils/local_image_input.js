@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { Config } from './config.js'
+import { checkPathAllowed } from './file_access.js'
 import { processImageBufferForAI } from './image.js'
 
 const LOCAL_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif'])
@@ -30,31 +31,6 @@ function extractLocalImagePaths(text = '', limit = 20) {
         paths.push(candidate)
     }
     return paths
-}
-
-function checkPathAllowed(filePath) {
-    const roots = Config.FILE_ROOTS
-    if (!Array.isArray(roots) || roots.length === 0) {
-        return { allowed: false, reason: '未配置文件读取白名单(FILE_ROOTS)' }
-    }
-
-    let realPath
-    try {
-        realPath = fs.realpathSync(filePath)
-    } catch (err) {
-        return { allowed: false, reason: `无法解析真实路径: ${err.message}` }
-    }
-
-    for (const root of roots) {
-        try {
-            const realRoot = fs.realpathSync(root)
-            if (realPath === realRoot || realPath.startsWith(realRoot + path.sep)) {
-                return { allowed: true, realPath }
-            }
-        } catch { /* ignore invalid roots */ }
-    }
-
-    return { allowed: false, reason: `路径不在白名单内: ${realPath}` }
 }
 
 function formatBytes(bytes) {

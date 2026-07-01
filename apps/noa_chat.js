@@ -581,11 +581,7 @@ async function buildNoaEnabledTools(e, client) {
             enabledTools.push('group_send_message')
         }
     }
-    const fileReadEnabled = e.isMaster && (client.enableFileRead || client.enableShellSession)
     const shellEnabled = e.isMaster && client.enableShellExec
-    if (fileReadEnabled || shellEnabled) {
-        enabledTools.push('file_read', 'dir_read')
-    }
     if (shellEnabled) {
         enabledTools.push('shell_exec')
     }
@@ -639,7 +635,7 @@ function formatNoaToolInjection(toolName, result) {
     if (toolName === 'web_search' || toolName === 'web_fetch') {
         return `\n\n【畅聊工具结果：联网信息】请基于以下实际联网结果回答，不要编造。${formattedResult}`
     }
-    if (toolName === 'file_read' || toolName === 'dir_read' || toolName === 'shell_exec' || toolName === 'shell_session') {
+    if (toolName === 'shell_exec' || toolName === 'shell_session') {
         return `\n\n【畅聊工具结果：服务器信息】请严格基于以下实际结果回答，不要编造未执行的内容。${formattedResult}`
     }
     if (toolName === 'file_send' || toolName === 'file_download' || toolName === 'group_file_list' || toolName === 'group_file_download') {
@@ -820,7 +816,7 @@ export class NoaChatHandler extends plugin {
                 if (hasLocalImageInput) {
                     const attachedPaths = new Set(localImageInput.paths.flatMap(item => [item.requestedPath, item.realPath]).filter(Boolean))
                     toolCalls = toolCalls.filter(call => {
-                        if (!['file_read', 'dir_read'].includes(call.name)) return true
+                        if (!['shell_exec', 'shell_session'].includes(call.name)) return true
                         const argsText = JSON.stringify(call.args || {})
                         const redundant = [...attachedPaths].some(filePath => argsText.includes(filePath))
                         if (redundant) {

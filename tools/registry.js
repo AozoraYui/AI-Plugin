@@ -36,35 +36,7 @@ const TOOL_USAGE_GUIDES = {
             '主人询问服务器状态、系统负载、资源占用、磁盘空间、运行环境时使用。'
         ],
         avoid: [
-            '不要用来查询插件业务日志或文件内容；那类需求用 file_read/dir_read/shell_exec。'
-        ]
-    },
-    file_read: {
-        capabilities: [
-            '读取白名单目录内单个文本文件，或对路径做只读查看。',
-            '支持绝对路径、相对路径、常用别名、文件名片段和最近成功路径。'
-        ],
-        useWhen: [
-            '主人让你看某个日志、配置、代码文件、README、脚本内容时优先用它。'
-        ],
-        avoid: [
-            '不要用于执行命令、搜索大量文件、发送文件或保存媒体。',
-            '主人当前消息里给出的本地图片路径会由对话流程自动作为图片输入处理，不要为了看图片内容调用 file_read 或 shell。'
-        ],
-        rules: [
-            '完全不知道目标路径时不要编造，先追问或用 dir_read 看目录。'
-        ]
-    },
-    dir_read: {
-        capabilities: [
-            '列出白名单目录的文件/子目录，可选 read_all 读取目录下所有文本文件。',
-            '适合了解目录结构、检查插件目录、查看某目录有哪些文件。'
-        ],
-        avoid: [
-            '只是读取一个明确文件时用 file_read；需要 shell 搜索或 git 命令时用 shell_exec。'
-        ],
-        rules: [
-            'read_all 只在用户明确要求全面检查目录内容时设 true。'
+            '不要用来查询插件业务日志或文件内容；那类需求用 shell_exec 或 shell_session。'
         ]
     },
     file_send: {
@@ -77,7 +49,7 @@ const TOOL_USAGE_GUIDES = {
         ],
         avoid: [
             '不要用于下载当前消息里的图片/文件；那是 file_download。',
-            '目标不明确时先用 dir_read/file_read 确认。'
+            '目标不明确时不要猜路径；先让主人补充准确路径，或在 shell 工具中查询确认。'
         ]
     },
     file_download: {
@@ -341,7 +313,7 @@ const TOOL_USAGE_GUIDES = {
         ],
         avoid: [
             '非主人不可用；不要为了补全信息自行设计危险命令。',
-            '读取明确单文件优先 file_read；列目录优先 dir_read。'
+            '本地图片绝对路径如果已被对话流程附加为图片输入，不要再用 shell 重复读取同一张图。'
         ],
         rules: [
             '命令必须具体可执行；有副作用命令只在用户明确要求时使用。',
@@ -773,7 +745,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - nmap/局域网设备扫描：如果主模型计划是先探测本机网络，shell_exec 可编译为 "ip route get 1.1.1.1; ip -o -4 addr show scope global; ip route show default"；如果主模型计划用 shell_session 一步执行，input 必须用 ip route/ip addr 自动推断 iface/cidr 后再 nmap -sn "$cidr"，不要硬编码 192.168.0.0/24 或 192.168.1.0/24。
 - shell_exec/shell_session 若返回目录安全检查阻止执行，后续不要再编译新的 Shell 命令绕过检查，应让主模型反问主人。
 - file_download 用于下载当前消息或引用消息里的媒体，不需要 URL；web_fetch 才需要完整 URL。
-- 如果当前指令是“看/分析/描述”服务器本地图片路径（如 /root/.../xxx.jpg），对话流程会在工具路由前把白名单内图片作为多模态输入附加；不要再编译 file_read、dir_read、shell_exec 或 shell_session 去读取同一张图片。
+- 如果当前指令是“看/分析/描述”服务器本地图片路径（如 /root/.../xxx.jpg），对话流程会在工具路由前把白名单内图片作为多模态输入附加；不要再编译 shell_exec 或 shell_session 去读取同一张图片。
 - draw_image 的参考图由工具自动提取（当前图、引用图、@头像、最近图片缓存）；角色参考图库参数按计划填写 character/characters/self_portrait。主模型已经计划 draw_image 时，不要仅因当前消息没有图片就丢弃调用；如果最近图片缓存可用，工具会按“刚才那张/这张图/用 p 模型处理/修图/去水印”等语义自行复用。
 - group_chat_context 的 scope 必须按主模型计划保留：当前群前情用 current_group；主人问机器人加了哪些群/能看到哪些群用 group_list；用户问自己在别的群/其他群刚发了什么用 other_group_messages 并设置 exclude_current_group=true；用户问自己跨群最近消息但未排除当前群用 my_recent_messages；主人要求所有群或指定群才用 all_groups/specific_group。普通用户不要编译其他人的 user_id。主人按群名问某个群但没有明确 group_id 时，可把群名放 query，工具会尝试解析为群号。普通 #c 中，用户问“他们刚才说了啥/群里刚刚发生了什么/最近前情”也可以编译 current_group；跨群/所有群流水仍只给主人编译。
 - group_send_message 必须来自主人明确要求“在某群发/说/转达某段文本”；目标群和 message 都要明确。没有唯一目标群或没有明确消息内容时不要编译。除非用户明确说原样/不要前缀，否则不要设置 as_is=true。

@@ -89,11 +89,9 @@ const defaultConfig = {
     NOA_CHAT_MAX_CONTEXT_IMAGES: 3,
     NOA_CHAT_AUTO_READ_IMAGE_LIMIT: 2,
     NOA_CHAT_IMAGE_BATCH_SIZE: 3,
-    // ========== 文件读取与 Shell 工具配置 ==========
-    // 单次读取文件最大大小（字节），默认 8MB
+    // ========== 文件白名单与 Shell 工具配置 ==========
+    // 本地图片路径输入的单文件最大大小（字节），默认 8MB
     FILE_MAX_SIZE: 8388608,
-    // readAll 模式下所有文件总大小上限（字节），默认 4MB
-    FILE_READ_ALL_MAX_TOTAL: 4194304,
     // Shell 命令默认超时时间（毫秒），仅在 enable_shell_exec 开启后可由主人使用
     SHELL_EXEC_TIMEOUT_MS: 60000,
     // Shell 命令最大超时时间（毫秒），防止长期阻塞
@@ -278,19 +276,19 @@ function saveTrustedGroups(groups) {
 function loadFileRoots() {
     try {
         if (!fs.existsSync(FILE_ROOTS_FILE)) {
-            logger.info(`[AI-Plugin] 未找到文件读取白名单配置，将从模板创建。`)
+            logger.info(`[AI-Plugin] 未找到文件白名单配置，将从模板创建。`)
             ensureDataDir()
-            copyFromTemplate('file_roots.yaml', FILE_ROOTS_FILE, '文件读取白名单')
+            copyFromTemplate('file_roots.yaml', FILE_ROOTS_FILE, '文件白名单')
         }
         const fileContent = fs.readFileSync(FILE_ROOTS_FILE, 'utf8')
         const data = yaml.parse(fileContent)
         if (data && Array.isArray(data.paths)) {
-            logger.info(`[AI-Plugin] 已加载 ${data.paths.length} 个文件读取白名单路径`)
+            logger.info(`[AI-Plugin] 已加载 ${data.paths.length} 个文件白名单路径`)
             return data.paths
         }
         return []
     } catch (error) {
-        logger.error(`[AI-Plugin] 加载文件读取白名单失败: ${error.message}`)
+        logger.error(`[AI-Plugin] 加载文件白名单失败: ${error.message}`)
         return []
     }
 }
@@ -415,7 +413,6 @@ export const Config = {
     set NOA_CHAT_IMAGE_BATCH_SIZE(val) { config.NOA_CHAT_IMAGE_BATCH_SIZE = parsePositiveInteger(val, defaultConfig.NOA_CHAT_IMAGE_BATCH_SIZE) },
     get FILE_ROOTS() { return loadedFileRoots ?? defaultConfig.FILE_ROOTS },
     get FILE_MAX_SIZE() { return config.FILE_MAX_SIZE ?? defaultConfig.FILE_MAX_SIZE },
-    get FILE_READ_ALL_MAX_TOTAL() { return config.FILE_READ_ALL_MAX_TOTAL ?? defaultConfig.FILE_READ_ALL_MAX_TOTAL },
     get SHELL_EXEC_TIMEOUT_MS() { return config.SHELL_EXEC_TIMEOUT_MS ?? defaultConfig.SHELL_EXEC_TIMEOUT_MS },
     set SHELL_EXEC_TIMEOUT_MS(val) { config.SHELL_EXEC_TIMEOUT_MS = Number(val) || defaultConfig.SHELL_EXEC_TIMEOUT_MS },
     get SHELL_EXEC_MAX_TIMEOUT_MS() { return config.SHELL_EXEC_MAX_TIMEOUT_MS ?? defaultConfig.SHELL_EXEC_MAX_TIMEOUT_MS },

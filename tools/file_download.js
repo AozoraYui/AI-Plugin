@@ -1,13 +1,13 @@
 /**
  * 文件下载工具
  * 把当前消息 / 引用消息中的图片、视频、语音、文件下载到服务器白名单目录。
- * 仅主人可用；保存目录受 file_roots.yaml 白名单约束，与文件读取保持一致的安全策略。
+ * 仅主人可用；保存目录受 file_roots.yaml 白名单约束。
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { toolRegistry } from './registry.js'
-import { checkPathAllowed } from './file_read.js'
+import { checkPathAllowed } from '../utils/file_access.js'
 import { Config } from '../utils/config.js'
 
 const MAX_FORWARD_DEPTH = 3
@@ -298,4 +298,3 @@ export const fileDownloadTool = {
 
 // 自动注册
 toolRegistry.register(fileDownloadTool)
-

@@ -1,7 +1,7 @@
 /**
  * 群文件工具
  * 让 AI 浏览当前群的群文件（文件/文件夹列表），并把指定群文件下载到服务器白名单目录。
- * 仅主人可用；下载保存目录受 file_roots.yaml 白名单约束，与文件读取保持一致的安全策略。
+ * 仅主人可用；下载保存目录受 file_roots.yaml 白名单约束。
  * 依赖 NapCat / go-cqhttp 兼容的 OneBot 接口：
  *   get_group_root_files / get_group_files_by_folder / get_group_file_url
  */
@@ -9,7 +9,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { toolRegistry } from './registry.js'
-import { checkPathAllowed } from './file_read.js'
+import { checkPathAllowed } from '../utils/file_access.js'
 import { Config } from '../utils/config.js'
 import { takeSourceMsg } from '../utils/common.js'
 
@@ -461,4 +461,3 @@ export const groupFileDownloadTool = {
 // 自动注册
 toolRegistry.register(groupFileListTool)
 toolRegistry.register(groupFileDownloadTool)
-

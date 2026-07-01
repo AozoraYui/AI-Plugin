@@ -1,7 +1,7 @@
 /**
  * 本地文件上传工具
  * 允许 AI 把白名单目录下的文件/文件夹发送到当前会话（群/好友）。
- * 仅主人可用；路径受 file_roots.yaml 白名单约束，与文件读取保持一致的安全策略。
+ * 仅主人可用；路径受 file_roots.yaml 白名单约束。
  * 文件夹会先用系统 tar 打包为 .tar.gz 再发送，避免引入额外依赖。
  */
 
@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { toolRegistry } from './registry.js'
-import { checkPathAllowed, findFuzzyPathInAllowedRoots, resolvePathInput } from './file_read.js'
+import { checkPathAllowed, findFuzzyPathInAllowedRoots, rememberResolvedPath, resolvePathInput } from '../utils/file_access.js'
 
 // 单个文件发送上限（字节）。过大文件 QQ 通常发送失败，提前拦截给出清晰提示。
 const MAX_SEND_SIZE = 200 * 1024 * 1024 // 200MB
@@ -125,7 +125,7 @@ export const fileSendTool = {
                 properties: {
                     path: {
                         type: 'string',
-                        description: '要发送的文件或文件夹路径，支持绝对路径、相对路径、常用别名或文件名片段（会在白名单目录内模糊查找）。建议先用 dir_read/file_read 确认目标文件后再发送。'
+                        description: '要发送的文件或文件夹路径，支持绝对路径、相对路径、常用别名或文件名片段（会在白名单目录内模糊查找）。目标不明确时建议先让主人补充准确路径。'
                     },
                     as_image: {
                         type: 'boolean',
@@ -152,15 +152,16 @@ export const fileSendTool = {
             if (fuzzy) resolved = fuzzy
         }
         if (!resolved || !fs.existsSync(resolved)) {
-            return `【文件发送失败】未找到文件: ${rawInput}（请确认文件名或先用目录浏览确认路径）`
+            return `【文件发送失败】未找到文件: ${rawInput}（请确认文件名或让 AI 用 Shell 查询准确路径）`
         }
 
-        // 白名单校验：与文件读取一致，只能发送白名单目录内的文件
+        // 白名单校验：只能发送白名单目录内的文件
         const check = checkPathAllowed(resolved)
         if (!check.allowed) {
             return `【文件发送失败】${check.reason}`
         }
         const realPath = check.realPath
+        rememberResolvedPath(context, realPath)
 
         let stats
         try {
