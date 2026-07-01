@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import plugin from '../../../lib/plugins/plugin.js'
 import { Config } from '../utils/config.js'
-import { checkAccess } from '../utils/access.js'
+import { checkAccess, getAccessConfig } from '../utils/access.js'
 import { formatDBTimestampToBeijing, getBeijingTimeStr, getTodayDateStr, takeSourceMsg } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
 import { buildEnvironmentHint, expandForwardMsg, extractCardInfo } from '../utils/message_context.js'
@@ -145,6 +145,24 @@ function normalizeInstructionSegments(segments = []) {
     return textParts.join('').replace(/\n{3,}/g, '\n\n').trim()
 }
 
+function isBlacklistedForCapture(e) {
+    const accessConfig = getAccessConfig()
+    const userId = String(e.user_id || '')
+    const groupId = String(e.group_id || '')
+    return accessConfig.blacklist_users?.includes(userId) || accessConfig.blacklist_groups?.includes(groupId)
+}
+
+async function checkCaptureAccess(e) {
+    if (Config.NOA_CHAT_CAPTURE_MODE === 'all') {
+        if (isBlacklistedForCapture(e)) {
+            logger.debug(`[AI-Plugin] [畅聊] 捕获跳过黑名单群/用户: 群 ${e.group_id}, 用户 ${e.user_id}`)
+            return false
+        }
+        return true
+    }
+    return await checkAccess(e)
+}
+
 async function normalizeGroupMessage(e) {
     const current = await normalizeSegments(e, e.message || [], 'message')
     const instructionText = normalizeInstructionSegments(e.message || [])
@@ -216,6 +234,38 @@ function shouldTriggerNoa(e, normalizedText) {
     return [...keywords].some(keyword => keyword && lower.includes(keyword))
 }
 
+function splitTextByLength(text, maxLength) {
+    const value = String(text || '')
+    const limit = Math.max(500, Math.floor(Number(maxLength) || 4000))
+    if (value.length <= limit) return [value]
+
+    const chunks = []
+    let rest = value
+    while (rest.length > limit) {
+        let cut = rest.lastIndexOf('\n', limit)
+        if (cut < Math.floor(limit * 0.5)) cut = rest.lastIndexOf('。', limit)
+        if (cut < Math.floor(limit * 0.5)) cut = limit
+        chunks.push(rest.slice(0, cut).trim())
+        rest = rest.slice(cut).trim()
+    }
+    if (rest) chunks.push(rest)
+    return chunks.filter(Boolean)
+}
+
+function buildCaptureLogEntries(normalized) {
+    const chunkSize = Config.NOA_CHAT_CAPTURE_CHUNK_CHARS
+    const chunks = splitTextByLength(normalized.normalizedText, chunkSize)
+    if (chunks.length <= 1) return [normalized]
+
+    return chunks.map((chunk, index) => ({
+        ...normalized,
+        messageId: `${normalized.messageId}:part:${index + 1}`,
+        normalizedText: `【长消息分段 ${index + 1}/${chunks.length}】\n${chunk}`,
+        imageMeta: index === 0 ? normalized.imageMeta : [],
+        seq: normalized.seq ? `${normalized.seq}:part:${index + 1}` : ''
+    }))
+}
+
 function formatGroupContext(logs = []) {
     const lines = []
     for (const log of logs) {
@@ -272,8 +322,8 @@ function buildImageReadPlan(normalized, logs = []) {
     const currentCount = currentMeta.length
     const routingText = normalized.instructionText || normalized.normalizedText || ''
     const explicitRead = isExplicitImageReadRequest(routingText, currentCount > 0)
-    const imageQuestion = isImageQuestion(normalized.normalizedText)
-    const contextSummaryQuestion = isContextSummaryQuestion(normalized.normalizedText)
+    const imageQuestion = isImageQuestion(routingText)
+    const contextSummaryQuestion = isContextSummaryQuestion(routingText)
     const seen = new Set()
     const imageUrls = []
     const notes = []
@@ -498,7 +548,7 @@ function extractUrlsFromText(text, limit = 10) {
 function shouldRouteNoaTools(text, urls = []) {
     const value = String(text || '')
     if (urls.length > 0 && /(看|看看|打开|总结|分析|解释|读|抓取|链接|网页|网站)/i.test(value)) return true
-    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|代发|转达|帮我.{0,20}(群|发|说|告诉)|tmux|ai-shell|shell会话|shell窗口|独立shell|画|绘制|生成|作图|手办化|图片处理|修图|执行|运行|调用|命令|shell|终端|命令行|脚本|插件.{0,8}更新|更新.{0,8}插件|\b(?:git|pull|push|status|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head)\b|之前|前面|刚才|刚刚|最近|他们|大家|群里|别的群|其他群|其它群|跨群|前情提要|聊了啥|说了啥|发生了什么|什么情况|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
+    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|代发|转达|帮我.{0,20}(群|发|说|告诉)|tmux|ai-shell|shell会话|shell窗口|独立shell|画|绘制|生成|作图|手办化|图片处理|修图|执行|运行|调用|命令|shell|终端|命令行|脚本|插件.{0,8}更新|更新.{0,8}插件|\b(?:git|pull|push|status|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head)\b|(?:读取|查看|查询|总结|整理).{0,12}(群聊|群消息|聊天记录|消息流水|畅聊记录|群上下文)|别的群|其他群|其它群|跨群|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
 }
 
 function shouldLetNoaToolModelJudge(text, isMaster = false) {
@@ -621,33 +671,49 @@ export class NoaChatHandler extends plugin {
     }
 
     async handleNoaChat(e) {
-        if (!this.client?.enableNoaChat && Config.enable_noa_chat !== true) return false
+        const captureEnabled = this.client?.enableNoaCapture || Config.enable_noa_capture === true
+        const replyEnabled = this.client?.enableNoaReply || Config.enable_noa_reply === true
+        if (!captureEnabled && !replyEnabled) return false
         if (!e.group_id || !e.message || !Array.isArray(e.message)) return false
-        if (!await checkAccess(e)) return false
+
+        const captureAllowed = captureEnabled && await checkCaptureAccess(e)
+        const replyAllowed = replyEnabled && await checkAccess(e)
+        if (!captureAllowed && !replyAllowed) return false
 
         const normalized = await normalizeGroupMessage(e)
         if (!normalized.normalizedText) return false
 
-        try {
-            const changes = await this.conversationManager.db.saveGroupMessageLog(normalized)
-            if (changes > 0) {
-                logger.debug(`[AI-Plugin] [畅聊] 已捕获群消息: 群 ${normalized.groupId}, 用户 ${normalized.userId}, 图片=${normalized.imageMeta.length}`)
+        if (captureAllowed && (Config.NOA_CHAT_CAPTURE_COMMANDS === true || !normalized.isCommand)) {
+            try {
+                const entries = buildCaptureLogEntries(normalized)
+                let savedCount = 0
+                for (const entry of entries) {
+                    savedCount += await this.conversationManager.db.saveGroupMessageLog(entry)
+                }
+                if (savedCount > 0) {
+                    const splitNote = entries.length > 1 ? `，长消息已分 ${entries.length} 段` : ''
+                    logger.debug(`[AI-Plugin] [畅聊] 已捕获群消息: 群 ${normalized.groupId}, 用户 ${normalized.userId}, 图片=${normalized.imageMeta.length}${splitNote}`)
+                }
+            } catch (err) {
+                logger.error(`[AI-Plugin] [畅聊] 保存群消息失败:`, err)
             }
-        } catch (err) {
-            logger.error(`[AI-Plugin] [畅聊] 保存群消息失败:`, err)
         }
 
         try {
-            const savedAliasRecords = await captureGroupMemberAliases(this.conversationManager.db, e, normalized.normalizedText, { sourceNickname: normalized.nickname })
-            if (savedAliasRecords.length > 0) {
+            const aliasSourceText = normalized.currentText || normalized.instructionText || ''
+            const savedAliasRecords = aliasSourceText
+                ? await captureGroupMemberAliases(this.conversationManager.db, e, aliasSourceText, { sourceNickname: normalized.nickname })
+                : []
+            if (savedAliasRecords.length > 0 && replyAllowed) {
                 normalized.aliasCaptureText = `【本轮称呼记录写入成功】\n${savedAliasRecords.map(record => `QQ ${record.targetUserId} 已记录称呼「${record.alias}」${record.isJoke ? '（调侃称呼）' : ''}。`).join('\n')}\n请只在看到这段写入成功提示时才说已经记住；否则不要声称已写入称呼记忆。`
             }
         } catch (err) {
             logger.warn(`[AI-Plugin] [畅聊][称呼记忆] 记录失败: ${err.message}`)
         }
 
+        if (!replyAllowed) return false
         if (normalized.isBot || normalized.isCommand) return false
-        if (!shouldTriggerNoa(e, normalized.normalizedText)) return false
+        if (!shouldTriggerNoa(e, normalized.instructionText || normalized.currentText || '')) return false
 
         const cooldownMs = Math.max(0, Number(Config.NOA_CHAT_REPLY_COOLDOWN_MS) || 0)
         const cooldownKey = String(e.group_id)
@@ -856,7 +922,7 @@ ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}${norm
                 '【畅聊模式记录】以下内容来自群聊畅聊模式，已同步到个人对话记忆，供后续普通 #c 对话延续上下文。',
                 `群聊：${groupName}(${normalized.groupId})`,
                 `触发者：${normalized.nickname}(${userId})`,
-                `触发消息：${normalized.normalizedText}`,
+                `触发消息：${truncateText(normalized.normalizedText, PERSONAL_HISTORY_CONTEXT_MAX_CHARS)}`,
                 contextText ? `当时最近群聊上下文：\n${truncateText(contextText, PERSONAL_HISTORY_CONTEXT_MAX_CHARS)}` : '',
                 '注意：这是一段群聊公开上下文记录，回复时仍需遵守当前聊天环境的隐私规则。'
             ].filter(Boolean).join('\n')

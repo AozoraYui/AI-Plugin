@@ -126,13 +126,13 @@ function mergeGroupLists(liveGroups = [], capturedGroups = []) {
 export const groupChatContextTool = {
     name: 'group_chat_context',
     permission: 'everyone',
-    description: '读取畅聊模式捕获的群消息流水，或列出机器人可见/已捕获群列表。默认只读取当前群；用户问“我在别的群刚说了什么/你看到我其他群的消息吗”时可用 scope=my_recent_messages 或 other_group_messages 只查该用户自己的跨群消息；只有主人可用 scope=group_list、all_groups 或指定其他 group_id 查询所有已捕获群。工具本体只返回文本和图片元信息；对话流程会在明确问图片或总结前情时按配置临时预读图片摘要。',
+    description: '读取畅聊模式捕获的群消息流水，或列出机器人可见/已捕获群列表。普通 #c 中只在用户明确要求读取/查询/总结群聊记录、畅聊记录或消息流水时使用。默认只读取当前群；用户问“我在别的群刚说了什么/你看到我其他群的消息吗”时可用 scope=my_recent_messages 或 other_group_messages 只查该用户自己的跨群消息；只有主人可用 scope=group_list、all_groups 或指定其他 group_id 查询所有已捕获群。工具本体只返回文本和图片元信息；对话流程会在明确问图片或总结前情时按配置临时预读图片摘要。',
 
     functionSchema: {
         type: 'function',
         function: {
             name: 'group_chat_context',
-            description: '读取畅聊模式捕获的群聊流水，或列出机器人可见/已捕获群。默认当前群；可安全查询当前用户自己的跨群消息；主人可跨群查询全部已捕获公开流水。结果若含图片元信息，最终对话流程可按配置临时预读图片摘要。',
+            description: '读取畅聊模式捕获的群聊流水，或列出机器人可见/已捕获群。普通 #c 中需要用户明确说要读取/查询/总结群聊记录或消息流水。默认当前群；可安全查询当前用户自己的跨群消息；主人可跨群查询全部已捕获公开流水。结果若含图片元信息，最终对话流程可按配置临时预读图片摘要。',
             parameters: {
                 type: 'object',
                 properties: {

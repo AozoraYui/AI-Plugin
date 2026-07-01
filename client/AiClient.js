@@ -187,6 +187,16 @@ export class AiClient {
         return this.noaChatConfig?.enabled === true
     }
 
+    /** 是否启用畅聊群消息捕获 */
+    get enableNoaCapture() {
+        return this.noaCaptureConfig?.enabled === true
+    }
+
+    /** 是否启用畅聊自然触发回复 */
+    get enableNoaReply() {
+        return this.noaReplyConfig?.enabled === true
+    }
+
     ensureShellSessionOnStartup() {
         ensureShellSession({ sessionName: Config.SHELL_SESSION_NAME, cwd: process.cwd() })
             .then(result => {
@@ -360,6 +370,11 @@ export class AiClient {
                 value.enable_group_admin !== undefined ||
                 value.enable_group_send !== undefined ||
                 value.enable_noa_chat !== undefined ||
+                value.enable_noa_capture !== undefined ||
+                value.enable_noa_reply !== undefined ||
+                value.NOA_CHAT_CAPTURE_MODE !== undefined ||
+                value.NOA_CHAT_CAPTURE_COMMANDS !== undefined ||
+                value.NOA_CHAT_CAPTURE_CHUNK_CHARS !== undefined ||
                 value.show_thinking !== undefined ||
                 value.show_thinking_notice !== undefined ||
                 value.draw_review_after_generate !== undefined ||
@@ -459,13 +474,17 @@ export class AiClient {
                 this.groupAdminConfig = { enabled: rawConfig.enable_group_admin === true }
                 this.groupSendConfig = { enabled: rawConfig.enable_group_send === true }
                 this.noaChatConfig = { enabled: rawConfig.enable_noa_chat === true }
+                this.noaCaptureConfig = { enabled: (rawConfig.enable_noa_capture ?? rawConfig.enable_noa_chat) === true }
+                this.noaReplyConfig = { enabled: (rawConfig.enable_noa_reply ?? rawConfig.enable_noa_chat) === true }
                 Config.show_thinking = rawConfig.show_thinking === true
                 Config.show_thinking_notice = rawConfig.show_thinking_notice === true
                 Config.draw_review_after_generate = rawConfig.draw_review_after_generate === true
                 Config.enable_shell_session = rawConfig.enable_shell_session === true
                 Config.enable_group_send = rawConfig.enable_group_send === true
                 Config.enable_noa_chat = rawConfig.enable_noa_chat === true
-                for (const key of ['NOA_CHAT_CONTEXT_LIMIT', 'NOA_CHAT_REPLY_COOLDOWN_MS', 'NOA_CHAT_MAX_CONTEXT_IMAGES', 'NOA_CHAT_AUTO_READ_IMAGE_LIMIT', 'NOA_CHAT_IMAGE_BATCH_SIZE']) {
+                Config.enable_noa_capture = (rawConfig.enable_noa_capture ?? rawConfig.enable_noa_chat) === true
+                Config.enable_noa_reply = (rawConfig.enable_noa_reply ?? rawConfig.enable_noa_chat) === true
+                for (const key of ['NOA_CHAT_CONTEXT_LIMIT', 'NOA_CHAT_REPLY_COOLDOWN_MS', 'NOA_CHAT_MAX_CONTEXT_IMAGES', 'NOA_CHAT_AUTO_READ_IMAGE_LIMIT', 'NOA_CHAT_IMAGE_BATCH_SIZE', 'NOA_CHAT_CAPTURE_MODE', 'NOA_CHAT_CAPTURE_COMMANDS', 'NOA_CHAT_CAPTURE_CHUNK_CHARS']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
                 if (Array.isArray(rawConfig.NOA_CHAT_TRIGGER_KEYWORDS)) {
@@ -498,8 +517,8 @@ export class AiClient {
                 if (this.enableGroupSend) {
                     logger.warn('[AI-Plugin] 群消息代发已启用：主人可让 AI 向指定群发送纯文本消息')
                 }
-                if (this.enableNoaChat) {
-                    logger.info('[AI-Plugin] 畅聊模式已启用：群消息将被轻量捕获，触发词命中时 AI 会基于群上下文回复')
+                if (this.enableNoaCapture || this.enableNoaReply) {
+                    logger.info(`[AI-Plugin] 畅聊模式已启用：捕获=${this.enableNoaCapture ? '开' : '关'}，回复=${this.enableNoaReply ? '开' : '关'}，捕获模式=${Config.NOA_CHAT_CAPTURE_MODE}`)
                 }
 
                 // 提取 weather_api_key（高德地图天气查询）

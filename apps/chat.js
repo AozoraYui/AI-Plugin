@@ -10,7 +10,7 @@ import { processImagesInBatches } from '../utils/image.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
-import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasNegatedDrawIntent, parseGroupSendRequest } from '../utils/tool_intent.js'
+import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitGroupChatContextIntent, hasNegatedDrawIntent, parseGroupSendRequest } from '../utils/tool_intent.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import yaml from 'yaml'
 
@@ -455,6 +455,8 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
 
     // 7) 群聊流水查询：当前群前情和“我在别的群刚说了什么”是明确可查的畅聊数据。
     if (hasTool(enabledTools, 'group_chat_context')) {
+        if (!hasExplicitGroupChatContextIntent(routeText)) return null
+
         const asksGroupList = isMaster && /(加了哪些群|加入了哪些群|在哪些群|能看到哪些群|可见群|群列表|所有群列表|有哪些群|有什么群|机器人.*群|你.*群)/i.test(routeText)
         if (asksGroupList) {
             return {
@@ -601,7 +603,7 @@ ${toolSummary}
 - draw_image 可以自动提取当前消息图、引用图、@头像，也可以在用户说“刚才那张/这张图/用 p 模型处理/修图/去水印/二维码/套预设”等时复用最近图片缓存。用户明确要求基于图片生成、重绘、修图、去水印或套风格时，可以计划 draw_image，但不要承诺精准像素级编辑。
 - 如果当前消息包含引用/转发内容，判断是否画图时只能看“用户本条指令”，不要因为引用聊天记录里出现“作图/做图/画/AI做图”等词就计划 draw_image；“不是让你画图/不要画/别生成图”等否定句必须返回 need_tools=false。
 - 当前操作者是否主人：${isMaster ? '是' : '否'}。
-- 用户问“刚才/之前/他们/大家/群里聊了什么、发生了什么、前情提要、总结最近群聊”时，优先计划 group_chat_context 读取畅聊捕获的本群公开群流水，params_hint 写 scope=current_group。
+- 只有用户明确要求“读取/查看/查询/总结/整理群聊记录、消息流水、畅聊记录、群上下文、前情”时，才计划 group_chat_context 读取畅聊捕获的群流水；单纯问“他们刚才说了啥/刚刚发生了什么”但没有明确要求读记录时，不要计划工具，应说明需要读取群聊记录才知道。
 - 主人问“你加了哪些群/能看到哪些群/群列表/有哪些群”时，计划 group_chat_context，params_hint 写 scope=group_list；私聊中也可以使用。
 - 用户问“我刚在别的群/其他群发了什么”“你看到我在别的群说的话吗”时，计划 group_chat_context，params_hint 写 scope=other_group_messages、exclude_current_group=true；这只查询当前触发者自己的跨群消息。
 - 只有当前操作者是主人且用户明确要求跨群/所有群/指定群的已捕获流水时，才计划 group_chat_context 的 scope=all_groups 或 specific_group；非主人不要计划读取其他人的跨群消息。主人按群名问某个群但你暂时没有群号时，可在 params_hint 里把群名写入 query，工具会尝试解析群号。

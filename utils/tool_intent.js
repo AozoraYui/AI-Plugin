@@ -138,6 +138,19 @@ export function hasExplicitFileSendIntent(text) {
     return sendIntent && targetHint
 }
 
+export function hasExplicitGroupChatContextIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+
+    if (/(加了哪些群|加入了哪些群|在哪些群|能看到哪些群|可见群|群列表|所有群列表|有哪些群|有什么群|机器人.*群|你.*群)/i.test(value)) return true
+    if (/(我|俺|咱).{0,18}(别的群|其他群|其它群|别群|跨群).{0,24}(发|说|聊|消息|看到|看见|记录|记得|知道)/i.test(value)) return true
+    if (/(别的群|其他群|其它群|别群|跨群).{0,18}(我|俺|咱).{0,24}(发|说|聊|消息|看到|看见|记录|记得|知道)/i.test(value)) return true
+
+    const action = '(?:读取|读一下|查看|看看|查询|查一下|检索|搜索|拉一下|调出|翻一下|总结|整理|回顾|概括)'
+    const object = '(?:群聊|群消息|聊天记录|群聊记录|消息记录|消息流水|畅聊记录|群上下文|聊天上下文|前情|所有群|全部群|其他群|其它群|别的群|跨群)'
+    return new RegExp(`${action}.{0,20}${object}|${object}.{0,20}${action}`, 'i').test(value)
+}
+
 export function hasExplicitShellIntent(text, toolName = '') {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
@@ -197,6 +210,8 @@ export function isExplicitToolIntent(toolName, text, options = {}) {
             return hasExplicitWebFetchIntent(text, options.candidateUrls || [])
         case 'web_search':
             return options.strictWebSearch === true ? hasExplicitWebSearchIntent(text) : true
+        case 'group_chat_context':
+            return hasExplicitGroupChatContextIntent(text)
         case 'group_mute':
         case 'group_whole_mute':
         case 'group_kick':

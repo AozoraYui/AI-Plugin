@@ -83,6 +83,11 @@ const defaultConfig = {
     draw_review_after_generate: false,
     enable_group_send: false,
     enable_noa_chat: false,
+    enable_noa_capture: false,
+    enable_noa_reply: false,
+    NOA_CHAT_CAPTURE_MODE: 'access',
+    NOA_CHAT_CAPTURE_COMMANDS: false,
+    NOA_CHAT_CAPTURE_CHUNK_CHARS: 4000,
     NOA_CHAT_TRIGGER_KEYWORDS: ['诺亚', 'noa'],
     NOA_CHAT_CONTEXT_LIMIT: 60,
     NOA_CHAT_REPLY_COOLDOWN_MS: 8000,
@@ -389,6 +394,23 @@ export const Config = {
     set enable_group_send(val) { config.enable_group_send = val === true },
     get enable_noa_chat() { return config.enable_noa_chat ?? defaultConfig.enable_noa_chat },
     set enable_noa_chat(val) { config.enable_noa_chat = val === true },
+    get enable_noa_capture() {
+        return config.enable_noa_capture ?? config.enable_noa_chat ?? defaultConfig.enable_noa_capture
+    },
+    set enable_noa_capture(val) { config.enable_noa_capture = val === true },
+    get enable_noa_reply() {
+        return config.enable_noa_reply ?? config.enable_noa_chat ?? defaultConfig.enable_noa_reply
+    },
+    set enable_noa_reply(val) { config.enable_noa_reply = val === true },
+    get NOA_CHAT_CAPTURE_MODE() {
+        const value = String(config.NOA_CHAT_CAPTURE_MODE ?? defaultConfig.NOA_CHAT_CAPTURE_MODE).toLowerCase()
+        return ['access', 'all'].includes(value) ? value : defaultConfig.NOA_CHAT_CAPTURE_MODE
+    },
+    set NOA_CHAT_CAPTURE_MODE(val) { config.NOA_CHAT_CAPTURE_MODE = String(val || defaultConfig.NOA_CHAT_CAPTURE_MODE).toLowerCase() },
+    get NOA_CHAT_CAPTURE_COMMANDS() { return config.NOA_CHAT_CAPTURE_COMMANDS ?? defaultConfig.NOA_CHAT_CAPTURE_COMMANDS },
+    set NOA_CHAT_CAPTURE_COMMANDS(val) { config.NOA_CHAT_CAPTURE_COMMANDS = val === true },
+    get NOA_CHAT_CAPTURE_CHUNK_CHARS() { return config.NOA_CHAT_CAPTURE_CHUNK_CHARS ?? defaultConfig.NOA_CHAT_CAPTURE_CHUNK_CHARS },
+    set NOA_CHAT_CAPTURE_CHUNK_CHARS(val) { config.NOA_CHAT_CAPTURE_CHUNK_CHARS = parsePositiveInteger(val, defaultConfig.NOA_CHAT_CAPTURE_CHUNK_CHARS) },
     get NOA_CHAT_TRIGGER_KEYWORDS() { return config.NOA_CHAT_TRIGGER_KEYWORDS ?? defaultConfig.NOA_CHAT_TRIGGER_KEYWORDS },
     set NOA_CHAT_TRIGGER_KEYWORDS(val) { config.NOA_CHAT_TRIGGER_KEYWORDS = Array.isArray(val) ? val : defaultConfig.NOA_CHAT_TRIGGER_KEYWORDS },
     get NOA_CHAT_CONTEXT_LIMIT() { return config.NOA_CHAT_CONTEXT_LIMIT ?? defaultConfig.NOA_CHAT_CONTEXT_LIMIT },
