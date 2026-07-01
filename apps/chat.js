@@ -1241,7 +1241,7 @@ export class ChatHandler extends plugin {
                 const memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(userId)
                 history = memoryData.history
                 incrementalCheckpoint = memoryData.incrementalCheckpoint
-                userProfileText = await loadUserProfileText(this.conversationManager.db, userId, 3200)
+                userProfileText = await loadUserProfileText(this.conversationManager.db, userId)
 
                 if (incrementalCheckpoint) {
                     logger.debug(`[AI-Plugin] 用户 ${userId} 加载增量总结记忆`)

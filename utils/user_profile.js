@@ -6,8 +6,10 @@ const PROFILE_OUTPUT_MAX_TOKENS = 4096
 
 function truncateText(value, maxChars) {
     const text = String(value || '').trim()
-    if (text.length <= maxChars) return text
-    return text.slice(0, maxChars) + '\n[内容过长，后续已截断]'
+    const limit = Number(maxChars)
+    if (!Number.isFinite(limit) || limit <= 0) return text
+    if (text.length <= limit) return text
+    return text.slice(0, limit) + '\n[内容过长，后续已截断]'
 }
 
 function normalizeSummaryType(type = '') {
@@ -104,7 +106,7 @@ export async function updateUserProfileFromSummary(db, client, userId, summaryTe
     }
 }
 
-export async function loadUserProfileText(db, userId, maxChars = 3200) {
+export async function loadUserProfileText(db, userId, maxChars = Infinity) {
     const userIdStr = String(userId || '').trim()
     if (!userIdStr || !db?.getUserProfile) return ''
     try {

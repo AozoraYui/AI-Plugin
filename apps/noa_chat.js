@@ -763,7 +763,7 @@ export class NoaChatHandler extends plugin {
         try {
             memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(normalized.userId)
             personalMemory = truncateText(memoryData?.incrementalCheckpoint || '', PERSONAL_MEMORY_MAX_CHARS)
-            userProfileText = await loadUserProfileText(this.conversationManager.db, normalized.userId, PERSONAL_MEMORY_MAX_CHARS)
+            userProfileText = await loadUserProfileText(this.conversationManager.db, normalized.userId)
             if (personalMemory) {
                 logger.info(`[AI-Plugin] [畅聊] 已加载触发者个人记忆摘要: 用户 ${normalized.userId}, 字符数=${personalMemory.length}`)
             }
