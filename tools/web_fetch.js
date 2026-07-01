@@ -25,6 +25,162 @@ let yunzaiPuppeteerRenderer = null
 let yunzaiPuppeteerUnavailable = false
 let directBrowserPromise = null
 
+function formatBytes(value) {
+    const n = Number(value)
+    if (!Number.isFinite(n) || n < 0) return '未知'
+    if (n === 0) return '0 B'
+    const units = ['B', 'KB', 'MB', 'GB', 'TB']
+    const index = Math.min(Math.floor(Math.log(n) / Math.log(1024)), units.length - 1)
+    return `${(n / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`
+}
+
+function formatPercent(value) {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return '未知'
+    return `${(n * 100).toFixed(2)}%`
+}
+
+function formatMetric(value, digits = 2) {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return '未知'
+    return n.toFixed(digits)
+}
+
+function formatDuration(ms) {
+    const n = Number(ms)
+    if (!Number.isFinite(n) || n < 0) return '未知'
+    const totalSeconds = Math.round(n / 1000)
+    const hours = Math.floor(totalSeconds / 3600)
+    const minutes = Math.floor((totalSeconds % 3600) / 60)
+    const seconds = totalSeconds % 60
+    const parts = []
+    if (hours) parts.push(`${hours}h`)
+    if (minutes) parts.push(`${minutes}m`)
+    if (seconds || parts.length === 0) parts.push(`${seconds}s`)
+    return parts.join(' ')
+}
+
+function formatDateTime(value) {
+    const n = Number(value)
+    if (!Number.isFinite(n) || n <= 0) return '未知'
+    return new Date(n).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })
+}
+
+function topEntries(obj = {}, limit = 10) {
+    return Object.entries(obj || {})
+        .sort((a, b) => Number(b[1]) - Number(a[1]))
+        .slice(0, limit)
+        .map(([key, value]) => `${key}: ${value}`)
+}
+
+function resolveSparkReport(rawUrl) {
+    let u
+    try {
+        u = new URL(rawUrl)
+    } catch {
+        return null
+    }
+
+    if (u.hostname !== 'spark.lucko.me' && u.hostname !== 'www.spark.lucko.me') return null
+    const parts = u.pathname.split('/').filter(Boolean)
+    if (parts.length !== 1) return null
+    const code = parts[0]
+    if (!/^[A-Za-z0-9_-]{6,80}$/.test(code) || code === '_') return null
+
+    const raw = new URL(`https://spark.lucko.me/${code}`)
+    raw.searchParams.set('raw', '1')
+    return { code, rawUrl: raw.toString() }
+}
+
+function formatSparkReport(data, originalUrl, rawUrl, maxChars) {
+    const metadata = data?.metadata || {}
+    const platform = metadata.platform || {}
+    const platformStats = metadata.platformStatistics || {}
+    const systemStats = metadata.systemStatistics || {}
+    const tps = platformStats.tps || {}
+    const mspt = platformStats.mspt || {}
+    const heap = platformStats.memory?.heap || {}
+    const systemCpu = systemStats.cpu || {}
+    const systemMemory = systemStats.memory || {}
+    const world = platformStats.world || {}
+    const start = Number(metadata.startTime)
+    const end = Number(metadata.endTime)
+    const runningMs = Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : undefined
+
+    const lines = [
+        `类型: ${data?.type || '未知'}`,
+        `平台: ${platform.name || '未知'} ${platform.version || ''} / Minecraft ${platform.minecraftVersion || '未知'} / sparkVersion=${platform.sparkVersion ?? '未知'}`,
+        `生成时间: ${formatDateTime(metadata.startTime)}；采样时长: ${formatDuration(runningMs)}；ticks=${metadata.numberOfTicks ?? '未知'}`,
+        `TPS: 1m=${formatMetric(tps.last1m)} / 5m=${formatMetric(tps.last5m)} / 15m=${formatMetric(tps.last15m)}`,
+        `MSPT(1m): mean=${formatMetric(mspt.last1m?.mean)} / median=${formatMetric(mspt.last1m?.median)} / p95=${formatMetric(mspt.last1m?.percentile95)} / max=${formatMetric(mspt.last1m?.max)}`,
+        `MSPT(5m): mean=${formatMetric(mspt.last5m?.mean)} / median=${formatMetric(mspt.last5m?.median)} / p95=${formatMetric(mspt.last5m?.percentile95)} / max=${formatMetric(mspt.last5m?.max)}`,
+        `进程堆内存: used=${formatBytes(heap.used)} / committed=${formatBytes(heap.committed)}${heap.max ? ` / max=${formatBytes(heap.max)}` : ''}`,
+        `CPU: process 1m=${formatPercent(systemCpu.processUsage?.last1m)} / system 1m=${formatPercent(systemCpu.systemUsage?.last1m)} / threads=${systemCpu.threads ?? '未知'}`,
+        `物理内存: used=${formatBytes(systemMemory.physical?.used)} / total=${formatBytes(systemMemory.physical?.total)}`,
+        `玩家数: ${platformStats.playerCount ?? '未知'}；实体总数: ${world.totalEntities ?? '未知'}`
+    ]
+
+    const gcLines = Object.entries(platformStats.gc || {}).map(([name, item]) =>
+        `${name}: total=${item.total ?? 0}, avgTime=${formatMetric(item.avgTime)}ms, avgFreq=${formatDuration(item.avgFrequency)}`
+    )
+    if (gcLines.length) lines.push(`GC: ${gcLines.join('；')}`)
+
+    const entityLines = topEntries(world.entityCounts || {}, 12)
+    if (entityLines.length) lines.push(`实体排行: ${entityLines.join('；')}`)
+
+    const worldLines = (world.worlds || [])
+        .filter(item => Number(item.totalEntities) > 0)
+        .sort((a, b) => Number(b.totalEntities) - Number(a.totalEntities))
+        .slice(0, 10)
+        .map(item => `${item.name}: ${item.totalEntities}`)
+    if (worldLines.length) lines.push(`世界实体分布: ${worldLines.join('；')}`)
+
+    const sourceLines = Object.values(metadata.sources || {})
+        .filter(item => item?.name)
+        .slice(0, 30)
+        .map(item => `${item.name}${item.version ? ` ${item.version}` : ''}`)
+    if (sourceLines.length) lines.push(`插件/模组(前30): ${sourceLines.join('；')}`)
+
+    const summary = lines.join('\n')
+    const rawJson = JSON.stringify(data)
+    const rawLimit = Math.max(1000, maxChars - summary.length - 260)
+    const rawPreview = truncateContent(rawJson, rawLimit)
+
+    return `\n\n【spark 报告「${originalUrl}」】\n数据接口: ${rawUrl}\n${summary}\n\n【spark 原始 JSON 预览】\n${rawPreview}\n【spark 报告结束】\n`
+}
+
+async function fetchSparkReport(spark, originalUrl, maxChars = DEFAULT_MAX_CHARS) {
+    try {
+        const res = await fetch(spark.rawUrl, {
+            method: 'GET',
+            headers: {
+                'User-Agent': BROWSER_USER_AGENT,
+                'Accept': 'application/json,text/plain,*/*',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.5',
+            },
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            redirect: 'follow',
+        })
+        if (!res.ok) {
+            logger.warn(`[AI-Plugin] WebFetch spark raw 返回非200: ${spark.rawUrl} - ${res.status}`)
+            return `\n\n【网页抓取失败】spark 报告 raw 接口 HTTP ${res.status}，可能链接已过期或数据不存在。\n`
+        }
+        const text = await res.text()
+        let data
+        try {
+            data = JSON.parse(text)
+        } catch {
+            logger.warn(`[AI-Plugin] WebFetch spark raw 非 JSON: ${spark.rawUrl}`)
+            return `\n\n【网页抓取失败】spark raw 接口返回的不是 JSON，内容类型可能不兼容。\n`
+        }
+        logger.info(`[AI-Plugin] WebFetch 成功(spark raw): ${originalUrl} (${text.length} 字符)`)
+        return formatSparkReport(data, originalUrl, spark.rawUrl, maxChars)
+    } catch (err) {
+        logger.warn(`[AI-Plugin] WebFetch spark raw 请求失败: ${spark.rawUrl} - ${err.message}`)
+        return `\n\n【网页抓取失败】spark raw 接口请求出错: ${err.message}\n`
+    }
+}
+
 function truncateContent(text, maxChars, suffix = '\n...(已截断)') {
     if (!text || text.length <= maxChars) return text || ''
     return text.slice(0, maxChars) + suffix
@@ -542,6 +698,14 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS) {
     if (gh) {
         logger.info(`[AI-Plugin] WebFetch: GitHub 链接改走 API (${gh.kind}) -> ${gh.apiUrl}`)
         return await fetchGitHubApi(gh, resolvedUrl, maxChars)
+    }
+
+    // spark viewer 是 React 单页应用；页面正文可能只显示错误提示。
+    // 官方 raw JSON 接口更适合给 AI 分析 TPS/MSPT/GC/实体统计等数据。
+    const spark = resolveSparkReport(resolvedUrl)
+    if (spark) {
+        logger.info(`[AI-Plugin] WebFetch: spark 链接改走 raw JSON -> ${spark.rawUrl}`)
+        return await fetchSparkReport(spark, resolvedUrl, maxChars)
     }
 
     logger.info(`[AI-Plugin] WebFetch: 开始抓取 ${resolvedUrl}`)
