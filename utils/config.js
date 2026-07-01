@@ -78,6 +78,7 @@ const defaultConfig = {
     // 每日摘要生成失败时，使用原始片段的最大长度（字符数）
     // 使用场景: utils/common.js, utils/scheduler.js 中每日摘要降级处理
     FALLBACK_DAILY_SUMMARY_MAX_LENGTH: 500,
+    DEFAULT_MODEL_GROUP: 'flash',
     show_thinking: false,
     show_thinking_notice: false,
     draw_review_after_generate: false,
@@ -340,6 +341,8 @@ export const Config = {
     set personaPrimer(val) { config.personaPrimer = val },
     get AI_NAME() { return config.AI_NAME ?? loadedAIName ?? '诺亚' },
     set AI_NAME(val) { config.AI_NAME = val },
+    get DEFAULT_MODEL_GROUP() { return global.AIPluginClient?.defaultModelGroup ?? config.DEFAULT_MODEL_GROUP ?? defaultConfig.DEFAULT_MODEL_GROUP },
+    set DEFAULT_MODEL_GROUP(val) { config.DEFAULT_MODEL_GROUP = val },
     get CHAT_COMMAND() { return global.AIPluginClient?.chatCommand ?? config.CHAT_COMMAND ?? 'chat' },
     get DRAW_COMMAND() { return global.AIPluginClient?.drawCommand ?? config.DRAW_COMMAND ?? 'draw' },
     get trustedGroups() { return config.trustedGroups ?? loadedTrustedGroups ?? defaultConfig.trustedGroups },

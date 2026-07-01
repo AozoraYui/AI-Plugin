@@ -30,7 +30,7 @@
 - 支持多图片输入（最多100张，含引用/回复/合并转发中的所有图片）
 - 支持 @某人 获取头像作图
 - 图片自动压缩优化
-- 预设命令支持模型组前缀（如 `#p手办化` 用 Pro 模型组）
+- 预设命令支持模型组前缀（如 `#f手办化` 强制 Flash，`#p手办化` 用 Pro 模型组）
 
 ### 📚 记忆管理
 - **全量总结**：整合全部对话记录，支持分块总结（128条/块）+ 合并，避免超长上下文失败
@@ -119,7 +119,10 @@ pnpm install
 
 ---
 # 自定义指令关键词（可选，默认 chat/draw）
-# 例: 设为 "c" 后 → #c, #pc, #uc
+# DEFAULT_MODEL_GROUP 控制无 f/p/u 前缀时默认使用的模型组，可填 flash/f、pro/p、ultra/u
+# 例: DEFAULT_MODEL_GROUP: pro 后，#chat/#draw 默认走 Pro，#fchat/#fdraw 强制 Flash
+DEFAULT_MODEL_GROUP: flash
+# 例: CHAT_COMMAND 设为 "c" 后 → #c 默认 / #fc Flash / #pc Pro / #uc Ultra
 CHAT_COMMAND: chat
 DRAW_COMMAND: draw
 
@@ -210,14 +213,16 @@ name: 诺亚
 #### 多轮对话（带记忆）
 | 指令 | 模型组 | 说明 |
 |------|--------|------|
-| `#chat [内容]` | Flash | 默认对话（速度快） |
+| `#chat [内容]` | 默认组 | 默认对话，使用 `DEFAULT_MODEL_GROUP` |
+| `#fchat [内容]` / `#flashchat [内容]` | Flash | Flash 模型对话（速度快） |
 | `#pchat [内容]` / `#prochat [内容]` | Pro | Pro 模型对话（更聪明） |
 | `#uchat [内容]` / `#ultrachat [内容]` | Ultra | Ultra 模型对话（旗舰） |
 
 #### 单次对话（不保存历史）
 | 指令 | 模型组 | 说明 |
 |------|--------|------|
-| `#schat [内容]` | Flash | 单次对话（不保存历史） |
+| `#schat [内容]` | 默认组 | 单次对话，使用 `DEFAULT_MODEL_GROUP` |
+| `#fschat [内容]` / `#flashschat [内容]` | Flash | Flash 单次对话 |
 | `#pschat [内容]` / `#proschat [内容]` | Pro | Pro 单次对话 |
 | `#uschat [内容]` / `#ultraschat [内容]` | Ultra | Ultra 单次对话 |
 
@@ -233,9 +238,9 @@ name: 诺亚
 > - 所有对话指令都支持发送图片和引用消息
 > - 单次对话模式适合临时提问，不会污染上下文记忆
 > - 多轮对话模式会自动加载历史记忆和锚点总结
-> - 短命令 `pchat`/`uchat` 和完整命令 `prochat`/`ultrachat` 等效
+> - 短命令 `fchat`/`pchat`/`uchat` 和完整命令 `flashchat`/`prochat`/`ultrachat` 等效；没有 `f/p/u` 前缀时使用 `DEFAULT_MODEL_GROUP`
 > - **临时开关**：`#cv` 启用图文转述，`#cn` 启用联网搜索，`#cw` 启用网页抓取，`#cvnw` 同时启用
-  - 开关可组合，如 `#scv`、`#pcn`、`#usw`、`#scvnw` 等
+  - 开关可组合，如 `#schatv`、`#fchatn`、`#pchatn`、`#uschatw`、`#schatvnw` 等
   - `v`/`n`/`w` 仅识别紧跟指令后的字符，对话内容中的 `v`/`n`/`w` 不会误触发
 > - **数字前缀临时指定供应商**：在 `#` 后、命令前加数字（1-9），临时使用对应优先级的供应商
   - `#3chat 你好` → 使用 priority=3 的供应商
@@ -247,10 +252,12 @@ name: 诺亚
 ### 作图功能
 | 指令 | 模型组 | 说明 |
 |------|--------|------|
-| `#draw [内容]` | Flash | 自定义作图 |
+| `#draw [内容]` | 默认组 | 自定义作图，使用 `DEFAULT_MODEL_GROUP` |
+| `#fdraw [内容]` / `#flashdraw [内容]` | Flash | Flash 模型作图 |
 | `#pdraw [内容]` / `#prodraw [内容]` | Pro | Pro 模型作图 |
 | `#udraw [内容]` / `#ultradraw [内容]` | Ultra | Ultra 模型作图 |
-| `#[预设命令]` | Flash | 使用预设作图（如 `#手办化`） |
+| `#[预设命令]` | 默认组 | 使用预设作图（如 `#手办化`） |
+| `#f[预设命令]` / `#flash[预设命令]` | Flash | Flash 模型预设作图（如 `#f手办化`） |
 | `#p[预设命令]` / `#pro[预设命令]` | Pro | Pro 模型预设作图（如 `#p手办化`） |
 | `#u[预设命令]` / `#ultra[预设命令]` | Ultra | Ultra 模型预设作图（如 `#u手办化`） |
 | `#画图预设列表` | - | 查看作图预设列表 |
@@ -289,7 +296,7 @@ name: 诺亚
 | `#ai增量总结 [日期]` | 为指定日期创建增量总结（如 `#ai增量总结 2026-05-05`） |
 | `#ai批量增量总结` | 批量处理未总结的日期 |
 
-> 💡 记忆命令同样支持模型组前缀：`#pai`/`#proai` → Pro，`#uai`/`#ultrai` → Ultra
+> 💡 记忆命令同样支持模型组前缀：`#fai`/`#flashai` → Flash，`#pai`/`#proai` → Pro，`#uai`/`#ultrai` → Ultra；无前缀使用 `DEFAULT_MODEL_GROUP`
 
 ### 🔍 工具调用（对话/畅聊中自动触发）
 
@@ -422,11 +429,11 @@ AI-Plugin/
 - **Redis**：可选缓存层，加速对话读取
 
 ### 模型组说明
-插件支持三个模型组，通过命令前缀切换：
+插件支持三个模型组，通过命令前缀切换；无 `f/p/u` 前缀时使用 `DEFAULT_MODEL_GROUP`：
 
 | 模型组 | 前缀 | 短前缀 | 说明 |
 |--------|------|--------|------|
-| **Flash** | (无) | - | 默认模型组，速度快，适合日常对话 |
+| **Flash** | `flash` | `f` | 速度快，适合日常对话 |
 | **Pro** | `pro` | `p` | 更高质量的回复，适合复杂问题 |
 | **Ultra** | `ultra` | `u` | 旗舰模型组，性能最强 |
 
@@ -452,7 +459,8 @@ AI-Plugin/
 
 | 指令示例 | 效果 |
 |---------|------|
-| `#3chat 你好` | Flash 模型组 + priority=3 的供应商 |
+| `#3chat 你好` | 默认模型组 + priority=3 的供应商 |
+| `#3fchat 你好` | Flash 模型组 + priority=3 的供应商 |
 | `#3pchat 问题` | Pro 模型组 + priority=3 的供应商 |
 | `#3手办化` | 预设作图 + priority=3 的供应商 |
 | `#3draw prompt` | 自定义作图 + priority=3 的供应商 |

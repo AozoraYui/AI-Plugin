@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import yaml from 'yaml'
 import { Config, MODELS_CONFIG_FILE, MODEL_STATUS_FILE, DISABLED_MODELS_FILE, TEMPLATE_DIR_EXPORT } from '../utils/config.js'
-import { fetchWithProxy } from '../utils/common.js'
+import { fetchWithProxy, normalizeModelGroup } from '../utils/common.js'
 import { ensureShellSession } from '../utils/shell_session.js'
 import { toolRegistry } from '../tools/index.js'
 
@@ -134,6 +134,11 @@ export class AiClient {
     /** 绘图指令关键词 */
     get drawCommand() {
         return this.commandConfig?.DRAW_COMMAND || 'draw'
+    }
+
+    /** 不带 f/p/u 前缀时默认使用的模型组 */
+    get defaultModelGroup() {
+        return normalizeModelGroup(this.commandConfig?.DEFAULT_MODEL_GROUP, 'flash')
     }
 
     /** 是否启用联网搜索 */
@@ -335,7 +340,7 @@ export class AiClient {
                 .filter(value => value !== null && value !== undefined)
 
             const providersConfig = docValues.find(value => Array.isArray(value))
-            const commandConfig = docValues.find(value => value && typeof value === 'object' && !Array.isArray(value) && (value.CHAT_COMMAND || value.DRAW_COMMAND))
+            const commandConfig = docValues.find(value => value && typeof value === 'object' && !Array.isArray(value) && (value.DEFAULT_MODEL_GROUP || value.CHAT_COMMAND || value.DRAW_COMMAND))
             const visionConfigDoc = docValues.find(value => value && typeof value === 'object' && !Array.isArray(value) && (value.enable_vision_relay !== undefined || value.vision_model !== undefined))
             const runtimeConfigDoc = docValues.find(value => value && typeof value === 'object' && !Array.isArray(value) && (
                 value.web_search !== undefined ||
@@ -386,10 +391,11 @@ export class AiClient {
                 }
 
                 // 解析指令配置
-                if (cmdConfig && typeof cmdConfig === 'object' && (cmdConfig.CHAT_COMMAND || cmdConfig.DRAW_COMMAND)) {
+                if (cmdConfig && typeof cmdConfig === 'object' && (cmdConfig.DEFAULT_MODEL_GROUP || cmdConfig.CHAT_COMMAND || cmdConfig.DRAW_COMMAND)) {
                     this.commandConfig = cmdConfig
-                    if (this.chatCommand !== 'chat' || this.drawCommand !== 'draw') {
-                        logger.info(`[AI-Plugin] 指令已自定义: chat=${this.chatCommand}, draw=${this.drawCommand}`)
+                    Config.DEFAULT_MODEL_GROUP = this.defaultModelGroup
+                    if (this.chatCommand !== 'chat' || this.drawCommand !== 'draw' || this.defaultModelGroup !== 'flash') {
+                        logger.info(`[AI-Plugin] 指令已自定义: default=${this.defaultModelGroup}, chat=${this.chatCommand}, draw=${this.drawCommand}`)
                     }
                 }
 

@@ -217,13 +217,31 @@ export async function takeSourceMsg(e, { img } = {}) {
     return source
 }
 
-export function resolveModelGroup(prefix) {
-    if (!prefix) return 'flash'
-    // 剥离前导数字（数字用于临时指定供应商优先级，如 #2p手办化）
-    const p = prefix.toLowerCase().replace(/^\d+/, '')
-    if (p === 'pro' || p === 'p') return 'pro'
-    if (p === 'ultra' || p === 'u') return 'ultra'
+export function normalizeModelGroup(value, fallback = 'flash') {
+    const raw = String(value || '').trim().toLowerCase()
+    if (raw === 'flash' || raw === 'f') return 'flash'
+    if (raw === 'pro' || raw === 'p') return 'pro'
+    if (raw === 'ultra' || raw === 'u') return 'ultra'
+    const fb = String(fallback || '').trim().toLowerCase()
+    if (fb === 'pro' || fb === 'p') return 'pro'
+    if (fb === 'ultra' || fb === 'u') return 'ultra'
     return 'flash'
+}
+
+export function hasExplicitModelGroup(prefix) {
+    if (!prefix) return false
+    const p = String(prefix).toLowerCase().replace(/^\d+/, '').replace(/[vnw]/g, '')
+    return ['flash', 'f', 'pro', 'p', 'ultra', 'u'].includes(p)
+}
+
+export function resolveModelGroup(prefix, fallback = Config.DEFAULT_MODEL_GROUP) {
+    const defaultGroup = normalizeModelGroup(fallback, 'flash')
+    if (!prefix) return defaultGroup
+    // 剥离前导数字（数字用于临时指定供应商优先级，如 #2p手办化）
+    // 再剥离 chat 临时 flag（v/n/w），保留 f 作为 flash 模型组前缀。
+    const p = String(prefix).toLowerCase().replace(/^\d+/, '').replace(/[vnw]/g, '')
+    if (!p) return defaultGroup
+    return normalizeModelGroup(p, defaultGroup)
 }
 
 /**
@@ -246,7 +264,7 @@ export function resolveModelDisplay(modelGroupKey) {
 }
 
 export function parseModelGroup(e) {
-    let modelGroupKey = 'flash'
+    let modelGroupKey = normalizeModelGroup(Config.DEFAULT_MODEL_GROUP, 'flash')
     let cleanedMsg = e.msg
 
     const match = e.msg.match(/^#([a-zA-Z0-9]*)(.*)/)
@@ -255,9 +273,9 @@ export function parseModelGroup(e) {
         const prefix = match[1].toLowerCase()
         const commandAndArgs = match[2]
 
-        modelGroupKey = resolveModelGroup(prefix)
+        modelGroupKey = resolveModelGroup(prefix, Config.DEFAULT_MODEL_GROUP)
 
-        if (modelGroupKey !== 'flash') {
+        if (hasExplicitModelGroup(prefix)) {
             cleanedMsg = `#${commandAndArgs}`
         }
     }

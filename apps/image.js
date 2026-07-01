@@ -11,7 +11,8 @@ import yaml from 'yaml'
 import sharp from 'sharp'
 import { PRESETS_FILE } from '../utils/config.js'
 
-const DRAW_PREFIX_PATTERN = '((?:[1-9])?(?:pro|p|ultra|u)?)'
+const DRAW_MODEL_PREFIX_PATTERN = '(?:flash|f|pro|p|ultra|u)'
+const DRAW_PREFIX_PATTERN = `((?:[1-9])?(?:${DRAW_MODEL_PREFIX_PATTERN})?)`
 
 function escapeRegex(text) {
     return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -71,7 +72,7 @@ export class ImageHandler extends plugin {
     async generateImage(e) {
         if (!await checkAccess(e)) return true
 
-        let modelGroupKey = 'flash'
+        let modelGroupKey = resolveModelGroup('', Config.DEFAULT_MODEL_GROUP)
         let providerFilter = null
         let isCustomCommand = false
         let instruction = ''
@@ -86,7 +87,7 @@ export class ImageHandler extends plugin {
             isCustomCommand = true
             const prefix = match[1].toLowerCase()
             instruction = match[2].trim()
-            modelGroupKey = resolveModelGroup(prefix)
+            modelGroupKey = resolveModelGroup(prefix, Config.DEFAULT_MODEL_GROUP)
             providerFilter = resolveProviderPriority(prefix)
         } else {
             const dynamicRule = this.rule.find(r => r.key === 'dynamicImageCommand')
@@ -99,7 +100,7 @@ export class ImageHandler extends plugin {
                     const prefix = match[1].toLowerCase()
                     command = match[2]
                     extraInstruction = (match[3] || '').trim()
-                    modelGroupKey = resolveModelGroup(prefix)
+                    modelGroupKey = resolveModelGroup(prefix, Config.DEFAULT_MODEL_GROUP)
                     providerFilter = resolveProviderPriority(prefix)
                 }
             }

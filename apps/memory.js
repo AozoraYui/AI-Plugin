@@ -57,7 +57,7 @@ export class MemoryHandler extends plugin {
 
         const prefixMatch = e.msg.match(/^#([a-zA-Z0-9]*)ai/i)
         const prefix = prefixMatch ? (prefixMatch[1] || '').toLowerCase() : ''
-        const modelGroupKey = resolveModelGroup(prefix)
+        const modelGroupKey = resolveModelGroup(prefix, Config.DEFAULT_MODEL_GROUP)
         const modelDisplay = resolveModelDisplay(modelGroupKey) + '模型组'
 
         let statusMsg = `📚 正在启动记忆归档 [${modelDisplay}]...`
@@ -532,7 +532,7 @@ export class MemoryHandler extends plugin {
 
         const prefixMatch = e.msg.match(/^#([a-zA-Z0-9]*)ai/i)
         const prefix = prefixMatch ? (prefixMatch[1] || '').toLowerCase() : ''
-        const modelGroupKey = resolveModelGroup(prefix)
+        const modelGroupKey = resolveModelGroup(prefix, Config.DEFAULT_MODEL_GROUP)
         const modelDisplay = resolveModelDisplay(modelGroupKey) + '模型组'
 
         // 从数据库获取所有日期

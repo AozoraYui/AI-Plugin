@@ -1,5 +1,6 @@
 import plugin from '../../../lib/plugins/plugin.js'
 import { Config } from '../utils/config.js'
+import { resolveModelDisplay, resolveModelGroup } from '../utils/common.js'
 
 export class HelpHandler extends plugin {
     constructor() {
@@ -18,6 +19,7 @@ export class HelpHandler extends plugin {
         const aiName = Config.AI_NAME
         const chatCmd = Config.CHAT_COMMAND
         const drawCmd = Config.DRAW_COMMAND
+        const defaultModelDisplay = resolveModelDisplay(resolveModelGroup('', Config.DEFAULT_MODEL_GROUP))
         const noaAutoImageLimit = Config.NOA_CHAT_AUTO_READ_IMAGE_LIMIT
         const noaMaxImages = Config.NOA_CHAT_MAX_CONTEXT_IMAGES
         const noaMaxImagesText = noaMaxImages === Infinity ? '不限制' : `${noaMaxImages} 张图`
@@ -32,6 +34,8 @@ export class HelpHandler extends plugin {
 - - - - - - - - - - - - - - - - -
 ✨ 三档模型组，随心切换 ✨
 > #${chatCmd} [内容]
+  使用默认模型组（当前：${defaultModelDisplay}）。
+> #f${chatCmd} [内容] / #flash${chatCmd} [内容]
   使用 Flash 模型组，速度快，适合日常聊天。
 > #p${chatCmd} [内容] / #pro${chatCmd} [内容]
   使用 Pro 模型组，更聪明，适合复杂问题。
@@ -39,6 +43,8 @@ export class HelpHandler extends plugin {
   使用 Ultra 模型组，旗舰性能！
 
 > #s${chatCmd} [内容]
+  单次对话模式（默认：${defaultModelDisplay}），不保存历史记录。
+> #fs${chatCmd} [内容] / #flashs${chatCmd} [内容]
   单次对话模式（Flash），不保存历史记录。
 > #ps${chatCmd} [内容] / #pros${chatCmd} [内容]
   单次对话模式（Pro），不保存历史记录。
@@ -49,6 +55,7 @@ export class HelpHandler extends plugin {
   在 # 后直接加数字（1-9），临时使用对应优先级的供应商。
   格式: #[数字][模型组前缀][命令] [内容]
   > 示例: #3${chatCmd} 你好 → 使用 priority=3 的供应商
+  > 示例: #3f${chatCmd} 你好 → priority=3 + Flash 模型组
   > 示例: #3p${chatCmd} 复杂问题 → priority=3 + Pro 模型组
   > 示例: #3s${chatCmd} 临时提问 → priority=3 + 单次对话
 
@@ -103,7 +110,7 @@ export class HelpHandler extends plugin {
   主人在私聊中也可以问“你加了哪些群/能看到哪些群”，查看机器人可见或已捕获群列表。
   图片只存元信息不存本体；触发消息最多自动读 ${noaAutoImageLimit} 张图，超过阈值默认不读，除非明确要求“读图/看图/分析图片”。
   每轮最多临时读取 ${noaMaxImagesText}；超过 ${noaImageBatchSize} 张会先分批读图摘要再回复。
-> 开关可组合，如 #pv${chatCmd}、#us${chatCmd}n、#s${chatCmd}w、#${chatCmd}vnw 等。
+> 开关可组合，如 #fv${chatCmd}、#pv${chatCmd}、#us${chatCmd}n、#s${chatCmd}w、#${chatCmd}vnw 等。
 
 > #导出${aiName}记忆
   导出该用户的对话记忆。
@@ -123,25 +130,29 @@ export class HelpHandler extends plugin {
 > 🏷️ 数字前缀临时指定供应商
   在指令前加数字（1-9），临时使用对应优先级的供应商。
   格式: #[数字][模型组前缀][命令] [额外描述]
-  如 #3手办化、#3p手办化、#3u手办化
-> 示例: #3手办化 → Flash + priority=3 的供应商
+  如 #3手办化、#3f手办化、#3p手办化、#3u手办化
+> 示例: #3手办化 → 默认模型组（${defaultModelDisplay}）+ priority=3 的供应商
+> 示例: #3f手办化 → Flash + priority=3 的供应商
 > 示例: #3p手办化 → Pro + priority=3 的供应商
 
 > 💡 在指令前加模型组前缀切换模型：
-  #手办化        → Flash 模型组
+  #手办化        → 默认模型组（${defaultModelDisplay}）
+  #f手办化       → Flash 模型组
   #p手办化       → Pro 模型组
   #u手办化       → Ultra 模型组
 > 示例: #二次元 帮我画一只猫
 
 --- 自定义作图 ---
 > #${drawCmd} [...]
+  使用默认模型组（当前：${defaultModelDisplay}）。
+> #f${drawCmd} [...] / #flash${drawCmd} [...]
   使用 Flash 模型组，性价比高。
 > #p${drawCmd} [...] / #pro${drawCmd} [...]
   使用 Pro 模型组。
 > #u${drawCmd} [...] / #ultra${drawCmd} [...]
   使用 Ultra 模型组，效果更佳！
   > 示例: #u${drawCmd} 一个女孩在星空下看书
-> 💡 自定义作图同样支持数字前缀：如 #3${drawCmd}、#3p${drawCmd}、#3u${drawCmd}
+> 💡 自定义作图同样支持数字前缀：如 #3${drawCmd}、#3f${drawCmd}、#3p${drawCmd}、#3u${drawCmd}
 
 --- 预设管理 (主人专用) ---
 > #画图预设列表pro
@@ -191,6 +202,7 @@ export class HelpHandler extends plugin {
   [批量处理] 将所有"未总结"的日期逐个处理为增量总结。
   适合清理历史积压的未总结日期。
 > 💡 总结命令也支持模型组前缀：
+  #fai全量总结 → Flash 模型组
   #pai全量总结 → Pro 模型组
   #uai增量总结 2026-05-05 → Ultra 模型组`
 
@@ -264,7 +276,7 @@ export class HelpHandler extends plugin {
   持久 Shell 会话需 enable_shell_session 开启，默认使用 tmux 会话 ai-shell，发送命令后会等待新输出并自动回读快照
 
 > 🎨 作图技巧
-  - 预设命令加模型组前缀切换模型（#p手办化 / #u手办化）
+  - 预设命令加模型组前缀切换模型（#f手办化 / #p手办化 / #u手办化）
   - 使用 @某人 可获取其头像进行作图
   - 支持多张图片同时输入（最多100张，含引用/回复/合并转发中的所有图片）
   - chat/completions 不支持图片时会自动重试 /images/edits（保留参考图）

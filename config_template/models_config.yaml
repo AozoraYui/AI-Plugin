@@ -24,7 +24,7 @@
 #               按量模型全挂了才降级到按次模型。名单按模型名精确匹配。
 #               不同中转站的按次模型名各异，按各自实际名称填写即可。
 #   model_groups 模型组，分 flash / pro / ultra 三档：
-#               flash  默认组    → #chat / #draw
+#               flash  轻量组    → #fchat / #fdraw（若 DEFAULT_MODEL_GROUP=flash，则 #chat / #draw 也走它）
 #               pro    专业组    → #pchat / #pdraw
 #               ultra  旗舰组    → #uchat / #udraw
 #               （指令前缀随 CHAT_COMMAND / DRAW_COMMAND 变化）
@@ -62,14 +62,19 @@
 ---
 # ================================================
 # 指令自定义（可选，不配置则使用默认值）
+# DEFAULT_MODEL_GROUP: 不带 f/p/u 前缀时默认使用的模型组（默认 flash）
+#   可填 flash/f、pro/p、ultra/u
+#   例: DEFAULT_MODEL_GROUP: pro 后，#chat / #draw 默认走 Pro；
+#       #fchat / #fdraw 强制 Flash，#pchat / #pdraw 强制 Pro，#uchat / #udraw 强制 Ultra
 # CHAT_COMMAND: 对话指令关键词（默认 chat）
-#   例: 设为 "c" 后 → #c 默认 / #pc 专业 / #uc 旗舰 / #sc 单次
+#   例: 设为 "c" 后 → #c 默认 / #fc Flash / #pc Pro / #uc Ultra / #sc 单次默认
 # DRAW_COMMAND: 绘图指令关键词（默认 draw）
-#   例: 设为 "d" 后 → #d 默认 / #pd 专业 / #ud 旗舰
+#   例: 设为 "d" 后 → #d 默认 / #fd Flash / #pd Pro / #ud Ultra
 # 临时 flag 可叠加在前缀后：n 联网 / w 网页抓取 / v 图文转述
 #   例: #cn 临时联网、#cw 临时抓取网页、#cv 强制图文转述
 # 注意：请勿使用与绘图预设（如 cos化、手办化）冲突的关键词
 # ================================================
+# DEFAULT_MODEL_GROUP: flash
 # CHAT_COMMAND: chat
 # DRAW_COMMAND: draw
 

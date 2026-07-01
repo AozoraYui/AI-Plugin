@@ -5,7 +5,7 @@ import { Config, MODELS_CONFIG_FILE } from '../utils/config.js'
 import { AiClient } from '../client/AiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
-import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, resolveModelGroup, resolveModelDisplay, resolveProviderPriority, formatDBTimestampToBeijing } from '../utils/common.js'
+import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, hasExplicitModelGroup, resolveModelGroup, resolveModelDisplay, resolveProviderPriority, formatDBTimestampToBeijing } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
@@ -85,8 +85,10 @@ async function getRecentImageCacheInfo(e) {
     return { available: false, count: 0 }
 }
 
-const CHAT_PREFIX_PATTERN = '((?:[1-9])?(?:pro|p|ultra|u)?[vnwf]*)'
-const DRAW_COMMAND_PREFIX_PATTERN = '(?:[1-9])?(?:pro|p|ultra|u)?'
+const MODEL_GROUP_PREFIX_PATTERN = '(?:flash|f|pro|p|ultra|u)'
+const CHAT_PREFIX_PATTERN = `((?:[1-9])?(?:${MODEL_GROUP_PREFIX_PATTERN})?[vnw]*)`
+const CHAT_FLAG_PATTERN = '([vnwf]*)'
+const DRAW_COMMAND_PREFIX_PATTERN = `(?:[1-9])?(?:${MODEL_GROUP_PREFIX_PATTERN})?`
 
 function escapeRegex(text) {
     return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -103,11 +105,15 @@ function getImagePresetCommandExclusion() {
 }
 
 function buildChatRegex(chatCmd) {
-    return new RegExp(`^#${getImagePresetCommandExclusion()}${CHAT_PREFIX_PATTERN}${escapeRegex(chatCmd)}([vnwf]*)([\\s\\S]*)$`, 'i')
+    return new RegExp(`^#${getImagePresetCommandExclusion()}${CHAT_PREFIX_PATTERN}${escapeRegex(chatCmd)}${CHAT_FLAG_PATTERN}([\\s\\S]*)$`, 'i')
 }
 
 function buildSingleChatRegex(chatCmd) {
-    return new RegExp(`^#${getImagePresetCommandExclusion()}${CHAT_PREFIX_PATTERN}s${CHAT_PREFIX_PATTERN}${escapeRegex(chatCmd)}([vnwf]*)([\\s\\S]*)$`, 'i')
+    return new RegExp(`^#${getImagePresetCommandExclusion()}${CHAT_PREFIX_PATTERN}s${CHAT_PREFIX_PATTERN}${escapeRegex(chatCmd)}${CHAT_FLAG_PATTERN}([\\s\\S]*)$`, 'i')
+}
+
+function stripChatFeatureFlags(prefix = '') {
+    return String(prefix || '').replace(/[vnw]/gi, '')
 }
 
 function detectMasterOnlyToolRequest(message, flags = {}) {
@@ -818,15 +824,15 @@ export class ChatHandler extends plugin {
         let content = match[4]
 
         // 从所有位置提取 v/n/w flag（可能在 prefix1, prefix2, 或 flags group 中）。
-        // f 是旧版文件工具兼容 flag，现在只剥离、不再启用任何工具。
+        // f 在指令前表示 Flash 模型组；在指令后仅作为旧版文件工具兼容 flag 被吞掉。
         const allFlags = prefix1 + prefix2 + flags
         e._visionFlag = allFlags.includes('v')
         e._netFlag = allFlags.includes('n')
         e._webFetchFlag = allFlags.includes('w')
 
-        // 剥离 v/n/w/f 后再解析模型组
-        const clean1 = prefix1.replace(/[vnwf]/gi, '')
-        const clean2 = prefix2.replace(/[vnwf]/gi, '')
+        // 剥离 v/n/w 后再解析模型组，保留 f 作为 Flash 前缀
+        const clean1 = stripChatFeatureFlags(prefix1)
+        const clean2 = stripChatFeatureFlags(prefix2)
 
         // 从 prefix1 和 prefix2 解析数字优先匹配（临时指定供应商）
         const numericPriority = resolveProviderPriority(clean1) || resolveProviderPriority(clean2)
@@ -835,8 +841,8 @@ export class ChatHandler extends plugin {
         }
 
         let modelPrefix = ''
-        if (resolveModelGroup(clean1) !== 'flash') modelPrefix = clean1
-        if (resolveModelGroup(clean2) !== 'flash') modelPrefix = clean2
+        if (hasExplicitModelGroup(clean1)) modelPrefix = clean1
+        if (hasExplicitModelGroup(clean2)) modelPrefix = clean2
 
         e.msg = `#${modelPrefix}${chatCmd}${content}`
         return this.handleChat(e)
@@ -855,15 +861,15 @@ export class ChatHandler extends plugin {
         const originalUserMessage = userMessage
 
         // 从 prefix 和 flags 中提取 v/n/w flag（handleSingleChat 可能已设置）。
-        // f 是旧版文件工具兼容 flag，现在只剥离、不再启用任何工具。
+        // f 在指令前表示 Flash 模型组；在指令后仅作为旧版文件工具兼容 flag 被吞掉。
         const allFlags = prefix + flags
         if (e._visionFlag === undefined) e._visionFlag = /v/i.test(allFlags)
         if (e._netFlag === undefined) e._netFlag = /n/i.test(allFlags)
         if (e._webFetchFlag === undefined) e._webFetchFlag = /w/i.test(allFlags)
 
-        // 剥离 v/n/w/f 后再解析模型组
-        const cleanPrefix = prefix.replace(/[vnwf]/gi, '')
-        const modelGroupKey = resolveModelGroup(cleanPrefix)
+        // 剥离 v/n/w 后再解析模型组，保留 f 作为 Flash 前缀
+        const cleanPrefix = stripChatFeatureFlags(prefix)
+        const modelGroupKey = resolveModelGroup(cleanPrefix, Config.DEFAULT_MODEL_GROUP)
         const modelDisplay = resolveModelDisplay(modelGroupKey)
 
         // 数字优先匹配：临时指定供应商（优先级高于 handleSingleChat 传递的）
