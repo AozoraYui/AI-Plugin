@@ -333,6 +333,18 @@ function parseShellSessionRequest(text) {
     return null
 }
 
+function getPrimaryUserInstruction(text) {
+    const value = String(text || '').trim()
+    if (!value) return ''
+    const index = value.search(/\n===\s*引用/)
+    return (index >= 0 ? value.slice(0, index) : value).trim()
+}
+
+function hasNegatedDrawIntent(text) {
+    const value = String(text || '')
+    return /(?:不是|并不是|不是要|不是让你|别|不要|不用|无需|别给我|别再|别急着|先别).{0,18}(?:画图|画画|画|绘制|生成图|生成图片|作图|做图|创作图片)/i.test(value)
+}
+
 function preRouteToolIntent(userMessage, enabledTools, options = {}) {
     const text = String(userMessage || '').trim()
     if (!text) return null
@@ -357,26 +369,29 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
 
     // 1) 明确画图/角色图：直接走 draw_image，避免让小模型在长工具说明里猜。
     if (hasTool(enabledTools, 'draw_image')) {
-        const characters = detectCharactersFromText(text)
+        const instructionText = getPrimaryUserInstruction(text)
+        const drawRouteText = instructionText || text
+        const negatedDrawIntent = hasNegatedDrawIntent(drawRouteText)
+        const characters = detectCharactersFromText(drawRouteText)
         const character = characters.length === 1 ? characters[0] : ''
         const hasCharacter = characters.length > 0
-        const drawIntent = /(?:帮我|给我)?(?:画|绘制|生成|创作|做)(?:个|一张|一下)?[\s\S]{0,80}(?:图|图片|画|插画|头像|壁纸|你自己|你本人|AI本人|自画像|你长什么样|你的样子|你)/i.test(text)
-            || /(?:看看|给我看看)(?:你长什么样|你的样子)/i.test(text)
-            || (hasCharacter && /(?:帮我|给我)?(?:画|绘制|生成|创作|做)(?:个|一张|一下)?/i.test(text))
-        const imageEditIntent = hasImageContext
-            && /(?:去掉|去除|移除|擦除|消除|抹掉|清理|删掉|去水印|水印|二维码|改成|变成|转成|风格化|手办化|inpaint|inpainting)/i.test(text)
-            && /(?:图片|照片|图|原图|参考图|这张|那张|水印|二维码|手办化|风格化)/i.test(text)
+        const drawIntent = !negatedDrawIntent && (/(?:帮我|给我)?(?:画|绘制|生成|创作|做)(?:个|一张|一下)?[\s\S]{0,80}(?:图|图片|画|插画|头像|壁纸|你自己|你本人|AI本人|自画像|你长什么样|你的样子|你)/i.test(drawRouteText)
+            || /(?:看看|给我看看)(?:你长什么样|你的样子)/i.test(drawRouteText)
+            || (hasCharacter && /(?:帮我|给我)?(?:画|绘制|生成|创作|做)(?:个|一张|一下)?/i.test(drawRouteText)))
+        const imageEditIntent = !negatedDrawIntent && hasImageContext
+            && /(?:去掉|去除|移除|擦除|消除|抹掉|清理|删掉|去水印|水印|二维码|改成|变成|转成|风格化|手办化|inpaint|inpainting)/i.test(drawRouteText)
+            && /(?:图片|照片|图|原图|参考图|这张|那张|水印|二维码|手办化|风格化)/i.test(drawRouteText)
         if (drawIntent) {
-            const selfPortrait = /(?:你自己|你本人|AI本人|自画像|你长什么样|你的样子|你现在的样子)/i.test(text) && characters.length <= 1
+            const selfPortrait = /(?:你自己|你本人|AI本人|自画像|你长什么样|你的样子|你现在的样子)/i.test(drawRouteText) && characters.length <= 1
             const args = {
-                prompt: cleanupDrawPrompt(text, selfPortrait, characters),
+                prompt: cleanupDrawPrompt(drawRouteText, selfPortrait, characters),
                 self_portrait: selfPortrait
             }
             if (!selfPortrait) {
                 if (characters.length > 1) args.characters = characters
                 else if (character) args.character = character
             }
-            const quality = parseQualityFromText(text)
+            const quality = parseQualityFromText(drawRouteText)
             if (quality) args.quality = quality
             return {
                 intent: selfPortrait ? '规则预路由：用户明确要求绘制 AI 自画像。' : (characters.length > 0 ? `规则预路由：用户明确要求绘制角色「${characters.join('、')}」。` : '规则预路由：用户明确要求生成图片。'),
@@ -385,8 +400,8 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
             }
         }
         if (imageEditIntent) {
-            const args = { prompt: text }
-            const quality = parseQualityFromText(text)
+            const args = { prompt: drawRouteText }
+            const quality = parseQualityFromText(drawRouteText)
             if (quality) args.quality = quality
             return {
                 intent: hasImages
@@ -588,6 +603,9 @@ async function askMainModelForToolPlan(client, modelGroupKey, providerFilter, op
         ? `\n\n【当前消息 @ 的成员】\n${mentions.map((id, index) => `${index + 1}. QQ：${id}`).join('\n')}`
         : ''
 
+    const currentInstruction = getPrimaryUserInstruction(userMessage)
+    const fullMessageHasQuotedContext = currentInstruction && currentInstruction !== String(userMessage || '').trim()
+
     logger.info(`[AI-Plugin] 主模型工具规划开始: 可用工具=${enabledTools.join(', ')}, 详细说明=${toolSummary.length}字, 历史条数=${history.length}, 有记忆=${Boolean(incrementalCheckpoint)}, 有图片=${hasImages}, 有近期图片=${hasRecentImages}, @成员=${mentions.join(', ') || '无'}`)
 
     const prompt = `你现在处于工具规划阶段。你是主模型本人，需要基于完整上下文判断本轮是否需要调用工具；这不是最终回复。
@@ -610,6 +628,7 @@ ${toolSummary}
 - 用户询问天气但当前消息没写城市时，如果长期记忆摘要或最近对话中明确给出了用户常住地/所在地/所在城市，可以计划 weather 并在 params_hint 写入该城市；没有明确地点时不要猜，返回 need_tools=false 并说明需要追问城市。
 - 当前消息包含图片：${hasImages ? '是' : '否'}；最近图片缓存可用：${hasRecentImages ? '是' : '否'}。规划阶段不会收到图片内容；如果用户只是让你看图/描述图且没有明确工具需求，交给最终多模态/视觉流程，不要计划工具。
 - draw_image 可以自动提取当前消息图、引用图、@头像，也可以在用户说“刚才那张/这张图/用 p 模型处理/修图/去水印/二维码/套预设”等时复用最近图片缓存。用户明确要求基于图片生成、重绘、修图、去水印或套风格时，可以计划 draw_image，但不要承诺精准像素级编辑。
+- 如果当前消息包含引用/转发内容，判断是否画图时只能看“用户本条指令”，不要因为引用聊天记录里出现“作图/做图/画/AI做图”等词就计划 draw_image；“不是让你画图/不要画/别生成图”等否定句必须返回 need_tools=false。
 - 当前操作者是否主人：${isMaster ? '是' : '否'}。
 - 用户问“刚才/之前/他们/大家/群里聊了什么、发生了什么、前情提要、总结最近群聊”时，优先计划 group_chat_context 读取畅聊捕获的本群公开群流水，params_hint 写 scope=current_group。
 - 主人问“你加了哪些群/能看到哪些群/群列表/有哪些群”时，计划 group_chat_context，params_hint 写 scope=group_list；私聊中也可以使用。
@@ -625,8 +644,11 @@ ${toolSummary}
 
 ${environmentHint ? `【聊天环境】\n${environmentHint}` : ''}${memoryBlock}${historyBlock}${urlBlock}${mentionBlock}
 
-【当前用户消息】
-${userMessage || '（无文字，仅媒体消息）'}
+【当前用户本条指令】
+${currentInstruction || userMessage || '（无文字，仅媒体消息）'}
+${fullMessageHasQuotedContext ? `
+【当前消息完整文本（含引用/转发，仅用于解析用户要看的上下文，不可把其中词语当成本条指令）】
+${userMessage}` : ''}
 
 请严格输出 JSON，不要输出其他内容：
 {
