@@ -2,6 +2,7 @@ import schedule from 'node-schedule'
 import { getTodayDateStr, isAIErrorResponse } from './common.js'
 import { Config, expandPrompt } from './config.js'
 import { buildHistoryText, summarizeSingleChunk, summarizeChunk } from './summarizer.js'
+import { updateUserProfileFromSummary } from './user_profile.js'
 
 export class AIScheduler {
     constructor(client) {
@@ -109,6 +110,11 @@ export class AIScheduler {
             ? ` | Token: 入${result.usage.prompt_tokens || '?'} 出${result.usage.completion_tokens || '?'}`
             : ''
         await global.AIPluginConversationManager.db.saveSummaryCache(userId, summaryText, today, latestFullCheckpoint?.dateStr)
+        await updateUserProfileFromSummary(global.AIPluginConversationManager.db, this.client, userId, summaryText, {
+            summaryType: 'incremental',
+            dateStr: today,
+            modelGroupKey
+        })
         logger.info(`[AI-Plugin] 为用户 ${userId} 创建增量总结成功: ${today}${tokenLog}`)
         if (typeof global.AIPluginConversationManager.resetAutoSummaryCounter === 'function') {
             await global.AIPluginConversationManager.resetAutoSummaryCounter(userId)
@@ -161,6 +167,11 @@ export class AIScheduler {
             const result = await summarizeSingleChunk(historyText, 'flash', this.client)
             addChunkUsage(result.usage)
             await global.AIPluginConversationManager.db.saveCheckpoint(userId, result.summary, today, 0, 'full')
+            await updateUserProfileFromSummary(global.AIPluginConversationManager.db, this.client, userId, result.summary, {
+                summaryType: 'full',
+                dateStr: today,
+                modelGroupKey: 'flash'
+            })
             logger.info(`[AI-Plugin] 为用户 ${userId} 创建全量锚点成功: ${today} (${allHistory.length}条) | Token: 入${chunkUsage.prompt_tokens} 出${chunkUsage.completion_tokens}`)
             return
         }
@@ -216,6 +227,11 @@ export class AIScheduler {
         }
 
         await global.AIPluginConversationManager.db.saveCheckpoint(userId, fullContext, today, 0, 'full')
+        await updateUserProfileFromSummary(global.AIPluginConversationManager.db, this.client, userId, fullContext, {
+            summaryType: 'full',
+            dateStr: today,
+            modelGroupKey: 'flash'
+        })
 
         let tokenLog = `分段入${chunkUsage.prompt_tokens} 出${chunkUsage.completion_tokens}`
         if (mergeUsage) {

@@ -11,6 +11,7 @@ import { buildGroupAliasMemoryText, captureGroupMemberAliases } from '../utils/g
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
+import { loadUserProfileText } from '../utils/user_profile.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
 import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasNegatedDrawIntent, parseGroupSendRequest } from '../utils/tool_intent.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
@@ -1042,14 +1043,19 @@ export class ChatHandler extends plugin {
             const userId = e.user_id
             let history = []
             let incrementalCheckpoint = null
+            let userProfileText = ''
 
             if (!isSingleMode) {
                 const memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(userId)
                 history = memoryData.history
                 incrementalCheckpoint = memoryData.incrementalCheckpoint
+                userProfileText = await loadUserProfileText(this.conversationManager.db, userId, 3200)
 
                 if (incrementalCheckpoint) {
                     logger.debug(`[AI-Plugin] 用户 ${userId} 加载增量总结记忆`)
+                }
+                if (userProfileText) {
+                    logger.debug(`[AI-Plugin] 用户 ${userId} 加载个人档案，字符数=${userProfileText.length}`)
                 }
 
                 const MAX_HISTORY_LENGTH = Config.MAX_HISTORY_LENGTH
@@ -1578,6 +1584,16 @@ export class ChatHandler extends plugin {
                 contents.push({
                     "role": "model",
                     "parts": [{ "text": "好的，我已经想起了之前的记忆！" }]
+                })
+            }
+            if (userProfileText) {
+                contents.push({
+                    "role": "user",
+                    "parts": [{ "text": `【个人档案】这是从历次全量/增量总结中维护出的用户稳定画像，只用于理解当前用户的长期偏好和上下文；不要在公开场合主动透露档案内容：\n${userProfileText}` }]
+                })
+                contents.push({
+                    "role": "model",
+                    "parts": [{ "text": "好的，我会把个人档案只作为理解用户的背景信息，并遵守当前聊天环境的隐私边界。" }]
                 })
             }
 

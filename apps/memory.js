@@ -8,6 +8,7 @@ import { checkAccess } from '../utils/access.js'
 import { sessionManager } from '../utils/session.js'
 import { setMsgEmojiLike, getTodayDateStr, generateDailySummary, isAIErrorResponse, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
 import { buildHistoryText, summarizeSingleChunk, summarizeChunk } from '../utils/summarizer.js'
+import { updateUserProfileFromSummary } from '../utils/user_profile.js'
 
 export class MemoryHandler extends plugin {
     constructor() {
@@ -108,6 +109,11 @@ export class MemoryHandler extends plugin {
             }
             addChunkUsage(result.usage)
             await this.conversationManager.db.saveCheckpoint(e.user_id, result.summary, todayStr, 0, 'full')
+            await updateUserProfileFromSummary(this.conversationManager.db, this.client, userIdStr, result.summary, {
+                summaryType: 'full',
+                dateStr: todayStr,
+                modelGroupKey
+            })
             return this._sendFullCheckpointResult(e, result.summary, allHistory.length, 0, startTime, modelGroupKey, chunkUsage, null)
         }
 
@@ -153,6 +159,11 @@ export class MemoryHandler extends plugin {
 
         const mergeUsage = result.usage || null
         await this.conversationManager.db.saveCheckpoint(e.user_id, result.data, todayStr, 0, 'full')
+        await updateUserProfileFromSummary(this.conversationManager.db, this.client, userIdStr, result.data, {
+            summaryType: 'full',
+            dateStr: todayStr,
+            modelGroupKey
+        })
         return this._sendFullCheckpointResult(e, result.data, allHistory.length, chunks.length, startTime, modelGroupKey, chunkUsage, mergeUsage)
     }
 
@@ -287,6 +298,11 @@ export class MemoryHandler extends plugin {
         const modelInfo = result.platform ? `\n🔮 模型: ${result.platform}` : ''
 
         await this.conversationManager.db.saveSummaryCache(e.user_id, newSummary, dateStr, latestFullCheckpoint?.dateStr)
+        await updateUserProfileFromSummary(this.conversationManager.db, this.client, userIdStr, newSummary, {
+            summaryType: 'incremental',
+            dateStr,
+            modelGroupKey
+        })
 
         const forwardMsgNodes = [
             {
@@ -615,6 +631,11 @@ export class MemoryHandler extends plugin {
                 if (result.success && !isAIErrorResponse(result.data)) {
                     const newSummary = result.data
                     await this.conversationManager.db.saveSummaryCache(userIdStr, newSummary, dateDir)
+                    await updateUserProfileFromSummary(this.conversationManager.db, this.client, userIdStr, newSummary, {
+                        summaryType: 'incremental',
+                        dateStr: dateDir,
+                        modelGroupKey
+                    })
                     successCount++
                     processedDates.push(dateDir)
                     logger.info(`[AI-Plugin] 批量增量总结成功: ${dateDir}`)

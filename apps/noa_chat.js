@@ -9,6 +9,7 @@ import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedU
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
+import { loadUserProfileText } from '../utils/user_profile.js'
 import { filterToolCallsByIntent } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 
@@ -748,14 +749,19 @@ export class NoaChatHandler extends plugin {
         }
         let memoryData = null
         let personalMemory = ''
+        let userProfileText = ''
         try {
             memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(normalized.userId)
             personalMemory = truncateText(memoryData?.incrementalCheckpoint || '', PERSONAL_MEMORY_MAX_CHARS)
+            userProfileText = await loadUserProfileText(this.conversationManager.db, normalized.userId, PERSONAL_MEMORY_MAX_CHARS)
             if (personalMemory) {
                 logger.info(`[AI-Plugin] [畅聊] 已加载触发者个人记忆摘要: 用户 ${normalized.userId}, 字符数=${personalMemory.length}`)
             }
+            if (userProfileText) {
+                logger.info(`[AI-Plugin] [畅聊] 已加载触发者个人档案: 用户 ${normalized.userId}, 字符数=${userProfileText.length}`)
+            }
         } catch (err) {
-            logger.warn(`[AI-Plugin] [畅聊] 加载触发者个人记忆摘要失败: ${err.message}`)
+            logger.warn(`[AI-Plugin] [畅聊] 加载触发者个人记忆/档案失败: ${err.message}`)
         }
         let localImageInput = { imageParts: [], noteText: '', paths: [], failures: [] }
         if (e.isMaster) {
@@ -885,6 +891,7 @@ export class NoaChatHandler extends plugin {
 - 如果当前用户要求执行命令、更新插件、读写文件、下载/发送文件、画图或群管理，只有看到【本轮工具结果】时才能说已经执行；没有工具结果就必须明确说明本轮尚未执行或无法确认，绝不能编造成功。
 - “本群称呼记忆”只表示群里公开聊天中有人这样称呼过某个成员；带调侃的记录不要当作真实身份或事实断言。
 - “触发者个人记忆摘要”只用于理解当前触发者的偏好、称呼和长期上下文；具体隐私边界以当前聊天环境提示为准。
+- “触发者个人档案”来自历次全量/增量总结维护出的稳定画像，只能作为理解背景；公开群里不要主动透露档案内容。
 - 不要编造没有出现在上下文里的事实。
 - 如果上下文不足，就坦诚说不太确定。
 
@@ -894,7 +901,7 @@ ${getBeijingTimeStr()}
 【最近群聊上下文】
 ${contextText || '暂无'}
 
-${imageReadNotes.length > 0 ? `【本轮读图策略】\n${imageReadNotes.join('\n')}\n\n` : ''}${imageContext.summaryText ? `【本轮分批读图摘要】\n${imageContext.summaryText}\n\n` : ''}${localImageInput.noteText ? `${localImageInput.noteText}\n\n` : ''}${avatarImageInput.noteText ? `${avatarImageInput.noteText}\n\n` : ''}${groupAliasMemoryText ? `${groupAliasMemoryText}\n\n` : ''}${personalMemory ? `【触发者个人记忆摘要】\n${personalMemory}\n\n` : ''}${toolContextText ? `【本轮工具结果】${toolContextText}\n\n` : ''}【当前触发消息】
+${imageReadNotes.length > 0 ? `【本轮读图策略】\n${imageReadNotes.join('\n')}\n\n` : ''}${imageContext.summaryText ? `【本轮分批读图摘要】\n${imageContext.summaryText}\n\n` : ''}${localImageInput.noteText ? `${localImageInput.noteText}\n\n` : ''}${avatarImageInput.noteText ? `${avatarImageInput.noteText}\n\n` : ''}${groupAliasMemoryText ? `${groupAliasMemoryText}\n\n` : ''}${personalMemory ? `【触发者个人记忆摘要】\n${personalMemory}\n\n` : ''}${userProfileText ? `【触发者个人档案】\n${userProfileText}\n\n` : ''}${toolContextText ? `【本轮工具结果】${toolContextText}\n\n` : ''}【当前触发消息】
 ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}${normalized.aliasCaptureText ? `\n\n${normalized.aliasCaptureText}` : ''}`
 
         const contents = [
