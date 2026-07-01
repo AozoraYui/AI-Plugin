@@ -3,6 +3,7 @@
  * 仅主人可用：把主人明确给出的纯文本消息发送到指定群。
  */
 
+import { parseGroupSendRequest } from '../utils/tool_intent.js'
 import { toolRegistry } from './registry.js'
 
 const DEFAULT_PREFIX = '【主人转达】'
@@ -235,10 +236,23 @@ export const groupSendMessageTool = {
             return { ok: false, error: '缺少 bot 上下文，无法发送群消息。' }
         }
 
-        const messageResult = normalizeMessage(args.message)
+        const explicitRequest = parseGroupSendRequest(context.originalUserMessage || context.userMessage || '')
+        if (!explicitRequest) {
+            logger.warn('[AI-Plugin] group_send_message 已拦截：原始当前指令缺少明确代发意图')
+            return { ok: false, error: '为避免误发，代发群消息必须由主人在当前这条消息里明确写出目标群和要发送的纯文本内容。' }
+        }
+
+        const safeArgs = {
+            message: explicitRequest.message,
+            as_is: explicitRequest.as_is === true
+        }
+        if (explicitRequest.group_id) safeArgs.group_id = explicitRequest.group_id
+        else safeArgs.target = explicitRequest.target
+
+        const messageResult = normalizeMessage(safeArgs.message)
         if (!messageResult.ok) return messageResult
 
-        const targetResult = await resolveTargetGroup(args, event)
+        const targetResult = await resolveTargetGroup(safeArgs, event)
         if (!targetResult.ok) {
             logger.warn(`[AI-Plugin] group_send_message 目标群解析失败: ${targetResult.error}`)
             return {
@@ -250,7 +264,7 @@ export const groupSendMessageTool = {
         }
 
         const group = targetResult.group
-        const finalMessage = args.as_is === true
+        const finalMessage = safeArgs.as_is === true
             ? messageResult.message
             : `${DEFAULT_PREFIX}${messageResult.message}`
 
@@ -262,7 +276,7 @@ export const groupSendMessageTool = {
             groupName: group.groupName || '',
             message: finalMessage,
             originalMessage: messageResult.message,
-            asIs: args.as_is === true,
+            asIs: safeArgs.as_is === true,
             method
         }
     },

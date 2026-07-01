@@ -7,6 +7,7 @@ import { processImagesInBatches } from '../utils/image.js'
 import { buildEnvironmentHint, expandForwardMsg, extractCardInfo } from '../utils/message_context.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedUserIds } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
+import { filterToolCallsByIntent } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 
 const replyCooldown = new Map()
@@ -508,44 +509,12 @@ function shouldLetNoaToolModelJudge(text, isMaster = false) {
     return /(帮我|麻烦|拜托|能不能|可以|请|想让|给我|把|查|看|读|写|发|画|做|处理|执行|运行|调用|命令|更新|拉取|下载|保存|总结|整理|告诉|列出|找|搜|打开|修|改|删|踢|禁言|通过|拒绝|放.*进来)/i.test(value)
 }
 
-function hasExplicitHighImpactIntent(toolName, text) {
-    const value = String(text || '')
-    const patterns = {
-        group_mute: /(禁言|解禁|闭嘴|解除.{0,8}禁言)/i,
-        group_whole_mute: /(全员禁言|全体禁言|全群禁言|解除.{0,8}全员禁言|关闭.{0,8}全员禁言)/i,
-        group_kick: /(踢出|踢了|踢人|移出群|移出.{0,8}群聊|拉黑)/i,
-        group_set_card: /(群名片|群昵称|改名片|改.{0,8}昵称|设置.{0,8}名片)/i,
-        group_set_title: /(头衔|专属头衔|设置.{0,8}头衔|取消.{0,8}头衔)/i,
-        group_essence: /(精华|加精|设为精华|取消精华)/i,
-        group_request_handle: /(通过|同意|批准|允许|拒绝|放.{0,16}进来|让.{0,16}进来|准.{0,8}进).{0,24}(申请|入群|进群|加群|进来)?|(?:申请|入群|进群|加群).{0,24}(通过|同意|批准|允许|拒绝)/i,
-        group_send_message: /(帮我|替我|代我|转达|在.{1,40}群.{0,8}(说|发|发送|告诉)|去.{1,40}群.{0,8}(说|发|发送|告诉)|到.{1,40}群.{0,8}(说|发|发送|告诉))/i,
-        shell_session: /(tmux|ai-shell|shell\s*session|shell会话|shell窗口|独立shell|终端会话)/i
+function filterNoaToolCalls(toolCalls = [], toolRoutingText = '', options = {}) {
+    const guarded = filterToolCallsByIntent(toolCalls, toolRoutingText, options)
+    if (guarded.blocked.length > 0) {
+        logger.warn(`[AI-Plugin] [畅聊][安全] 已拦截缺少明确当前指令的工具: ${guarded.blocked.map(call => call.name).join(', ')}`)
     }
-    const pattern = patterns[toolName]
-    return pattern ? pattern.test(value) : true
-}
-
-function filterNoaToolCalls(toolCalls = [], toolRoutingText = '') {
-    const highImpactTools = new Set([
-        'group_mute',
-        'group_whole_mute',
-        'group_kick',
-        'group_set_card',
-        'group_set_title',
-        'group_essence',
-        'group_request_handle',
-        'group_send_message',
-        'shell_session'
-    ])
-    const filtered = []
-    for (const call of toolCalls) {
-        if (highImpactTools.has(call.name) && !hasExplicitHighImpactIntent(call.name, toolRoutingText)) {
-            logger.warn(`[AI-Plugin] [畅聊][安全] 已拦截高影响工具 ${call.name}：当前触发消息缺少明确操作意图`)
-            continue
-        }
-        filtered.push(call)
-    }
-    return filtered
+    return guarded.tools
 }
 
 async function buildNoaEnabledTools(e, client) {
@@ -756,11 +725,21 @@ export class NoaChatHandler extends plugin {
                     [],
                     personalMemory,
                     candidateUrls,
-                    { hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0, mentionedUserIds }
+                    {
+                        hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0,
+                        mentionedUserIds,
+                        currentInstruction: toolRoutingText
+                    }
                 )
                 const toolCalls = filterNoaToolCalls(
                     Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools.slice(0, 3) : [],
-                    toolRoutingText
+                    toolRoutingText,
+                    {
+                        hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0,
+                        hasRecentImages: imageContext.processedCount > 0,
+                        candidateUrls,
+                        strictWebSearch: false
+                    }
                 )
                 if (toolCalls.length > 0) {
                     logger.info(`[AI-Plugin] [畅聊] 工具执行队列: ${toolCalls.map(call => `${call.name}(${JSON.stringify(call.args || {}).slice(0, 120)})`).join(' -> ')}`)
