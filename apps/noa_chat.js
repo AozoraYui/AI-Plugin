@@ -549,7 +549,7 @@ function extractUrlsFromText(text, limit = 10) {
 function shouldRouteNoaTools(text, urls = []) {
     const value = String(text || '')
     if (urls.length > 0 && /(看|看看|打开|总结|分析|解释|读|抓取|链接|网页|网站)/i.test(value)) return true
-    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|代发|转达|帮我.{0,20}(群|发|说|告诉)|tmux|ai-shell|shell会话|shell窗口|独立shell|画|绘制|生成|作图|手办化|图片处理|修图|执行|运行|调用|命令|shell|终端|命令行|脚本|插件.{0,8}更新|更新.{0,8}插件|\b(?:git|pull|push|status|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head)\b|(?:读取|查看|查询|总结|整理).{0,12}(群聊|群消息|聊天记录|消息流水|畅聊记录|群上下文)|别的群|其他群|其它群|跨群|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
+    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|代发|转达|帮我.{0,20}(群|发|说|告诉)|个人档案|用户档案|用户画像|个人画像|长期记忆|tmux|ai-shell|shell会话|shell窗口|独立shell|画|绘制|生成|作图|手办化|图片处理|修图|执行|运行|调用|命令|shell|终端|命令行|脚本|插件.{0,8}更新|更新.{0,8}插件|\b(?:git|pull|push|status|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head)\b|(?:读取|查看|查询|总结|整理).{0,12}(群聊|群消息|聊天记录|消息流水|畅聊记录|群上下文)|别的群|其他群|其它群|跨群|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
 }
 
 function shouldLetNoaToolModelJudge(text, isMaster = false) {
@@ -582,6 +582,9 @@ async function buildNoaEnabledTools(e, client) {
         if (client.enableGroupSend) {
             enabledTools.push('group_send_message')
         }
+        if (client.enableGroupLeave) {
+            enabledTools.push('group_leave')
+        }
     }
     const shellEnabled = e.isMaster && client.enableShellExec
     if (shellEnabled) {
@@ -599,6 +602,7 @@ async function buildNoaEnabledTools(e, client) {
     if (client.enableAiDraw) {
         enabledTools.push('draw_image')
     }
+    enabledTools.push('user_profile_update')
     if (e.group_id) {
         enabledTools.push('group_chat_context')
         enabledTools.push('group_member_aliases')
@@ -631,8 +635,14 @@ function formatNoaToolInjection(toolName, result) {
     if (toolName === 'group_member_aliases') {
         return `\n\n【畅聊工具结果：群成员称呼记忆】以下是当前群公开聊天中提取的称呼/外号记录；只当作群内称呼或调侃来转述，不要当作真实身份或事实断言。${formattedResult}`
     }
+    if (toolName === 'user_profile_update') {
+        return `\n\n【畅聊工具结果：个人档案维护】以下是个人档案维护工具的实际结果；请只简短告知用户已更新或失败原因，不要在公开群里复述档案全文。${formattedResult}`
+    }
     if (toolName === 'group_send_message') {
-        return `\n\n【畅聊工具结果：群消息代发】以下是代发群消息的实际执行结果；请只如实告知主人已发送到哪个群或为什么失败，不要编造结果，也不要重复发送。${formattedResult}`
+        return `\n\n【畅聊工具结果：群消息代发】以下是代发群消息的实际结果；若结果显示待确认，说明尚未发送，请提醒主人按回执继续用 #c 自然确认或取消。${formattedResult}`
+    }
+    if (toolName === 'group_leave') {
+        return `\n\n【畅聊工具结果：退群】以下是退群工具的实际结果；若结果显示待确认，说明尚未退出任何群，请提醒主人按回执继续用 #c 自然确认或取消。${formattedResult}`
     }
     if (toolName === 'web_search' || toolName === 'web_fetch') {
         return `\n\n【畅聊工具结果：联网信息】请基于以下实际联网结果回答，不要编造。${formattedResult}`

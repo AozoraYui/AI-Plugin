@@ -19,6 +19,7 @@ function saveRuntimeSwitch(key, value) {
                 value.enable_ai_draw !== undefined ||
                 value.enable_group_admin !== undefined ||
                 value.enable_group_send !== undefined ||
+                value.enable_group_leave !== undefined ||
                 value.enable_noa_chat !== undefined ||
                 value.show_thinking !== undefined ||
                 value.draw_review_after_generate !== undefined
@@ -48,6 +49,7 @@ export class ManagementHandler extends plugin {
                 { reg: /^#ai信任群列表$/i, fnc: 'listTrustedGroups', permission: 'master' },
                 { reg: /^#?ai(开启|关闭)群管理$/i, fnc: 'switchGroupAdmin', permission: 'master' },
                 { reg: /^#?ai(开启|关闭)代发$/i, fnc: 'switchGroupSend', permission: 'master' },
+                { reg: /^#?ai(开启|关闭)退群$/i, fnc: 'switchGroupLeave', permission: 'master' },
                 { reg: /^#?ai(开启|关闭)畅聊$/i, fnc: 'switchNoaChat', permission: 'master' },
                 { reg: /^#ai状态$/i, fnc: 'showStatus', permission: 'master' },
             ]
@@ -204,11 +206,28 @@ export class ManagementHandler extends plugin {
             this.client.groupSendConfig = { enabled: isTurnOn }
             logger.info(`[AI-Plugin] 群消息代发开关已${isTurnOn ? '开启' : '关闭'}（运行时立即生效）`)
             await e.reply(isTurnOn
-                ? '✅ 已开启群消息代发工具。主人可让 AI 向指定群发送纯文本；目标群必须唯一，默认加“【主人转达】”前缀。'
+                ? '✅ 已开启群消息代发工具。主人可让 AI 创建跨群代发待确认操作；显式列出多个目标时可批量，默认加“【主人转达】”前缀。'
                 : '🚫 已关闭群消息代发工具。AI 不会再把跨群代发能力加入可用工具列表。')
         } catch (err) {
             logger.error('[AI-Plugin] 切换群消息代发开关失败:', err)
             await e.reply(`❌ 切换失败: ${err.message}`)
+        }
+        return true
+    }
+
+    async switchGroupLeave(e) {
+        const isTurnOn = e.msg.includes('开启')
+        try {
+            saveRuntimeSwitch('enable_group_leave', isTurnOn)
+            Config.enable_group_leave = isTurnOn
+            this.client.groupLeaveConfig = { enabled: isTurnOn }
+            logger.info(`[AI-Plugin] 遥控退群开关已${isTurnOn ? '开启' : '关闭'}（运行时立即生效）`)
+            await e.reply(isTurnOn
+                ? '已开启遥控退群工具。主人可让 AI 解析指定群并创建退群待确认操作；随后用 #c 自然确认后才会真正退出。'
+                : '已关闭遥控退群工具。AI 不会再把退群能力加入可用工具列表。')
+        } catch (err) {
+            logger.error('[AI-Plugin] 切换遥控退群开关失败:', err)
+            await e.reply(`切换失败: ${err.message}`)
         }
         return true
     }
@@ -336,6 +355,7 @@ export class ManagementHandler extends plugin {
             const shellSessionMode = this.client.enableShellSession ? `✅ 开启 (${Config.SHELL_SESSION_NAME})` : '🚫 关闭'
             const groupAdminMode = this.client.enableGroupAdmin ? '✅ 开启' : '🚫 关闭'
             const groupSendMode = this.client.enableGroupSend ? '✅ 开启' : '🚫 关闭'
+            const groupLeaveMode = this.client.enableGroupLeave ? '✅ 开启' : '🚫 关闭'
             const noaChatMode = (this.client.enableNoaChat || Config.enable_noa_chat) ? '✅ 开启' : '🚫 关闭'
 
             const trustedGroups = Config.trustedGroups
@@ -358,6 +378,7 @@ export class ManagementHandler extends plugin {
                 `  - 持久Shell会话: ${shellSessionMode}`,
                 `  - 群管理工具: ${groupAdminMode}`,
                 `  - 群消息代发: ${groupSendMode}`,
+                `  - 遥控退群: ${groupLeaveMode}`,
                 `  - 畅聊模式: ${noaChatMode}`,
                 `  - 信任群聊: ${trustedGroupCount} 个`,
                 '=============================='

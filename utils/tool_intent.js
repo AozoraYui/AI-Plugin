@@ -1,7 +1,8 @@
 const DELEGATE_WORDS = '(?:帮我|替我|代我|帮忙|麻烦你?|拜托你?|请你?|劳烦你?)'
-const SEND_VERBS = '(?:说(?:一下|一声|一句)?|发(?:一下|一条|一句|个消息|消息)?|发送|代发|转达)'
+const SEND_VERBS = '(?:说(?:一下|一声|一句)?|发(?:一下|一条|一句|个消息|消息)?|发送|群发|代发|转达)'
 const TARGET_SUFFIX = '(?:群聊|群里|群内|群|那边|里面|里)?'
 const BOT_CALL_PREFIX = '(?:(?:诺亚|noa|喏亚|诺娅)[,，。!！~～\\s]*)?'
+const FORBIDDEN_GROUP_SET_PATTERN = /(?:所有|全部|全体|每个|各个|不友好(?:的)?(?:那些|这些)?|有问题(?:的)?(?:那些|这些)?)/i
 
 export function getPrimaryUserInstruction(text) {
     const value = String(text || '').trim()
@@ -14,6 +15,8 @@ function cleanTarget(target = '') {
     return String(target || '')
         .trim()
         .replace(/^["'“”‘’\s]+|["'“”‘’\s]+$/g, '')
+        .replace(/^(?:在|去|到|往|给|从)\s*/i, '')
+        .replace(/(?:吧|呀|啊|呢|嘛|么|啦|了|哈|哦|噢|喵|捏)$/i, '')
         .replace(/(?:群聊|群里|群内|那边|里面|里|群)$/i, '')
         .trim()
 }
@@ -21,7 +24,7 @@ function cleanTarget(target = '') {
 function isTargetSafe(target = '') {
     const value = cleanTarget(target)
     if (!value) return false
-    if (/^(?:我|你|他|她|它|ta|大家|他们|她们|某个|某群|那个|这个|这|那|刚才那个|上面那个)$/i.test(value)) return false
+    if (/^(?:我|你|他|她|它|ta|大家|他们|她们|某个|某群|那个|这个|这些|這些|那些|这几个|這几个|那几个|这|那|刚才那个|上面那个)$/i.test(value)) return false
     return true
 }
 
@@ -34,12 +37,76 @@ function isMessageSafe(message = '') {
 }
 
 function hasExplicitDelegation(fullText = '', verb = '') {
-    return new RegExp(DELEGATE_WORDS, 'i').test(fullText) || /(?:代发|转达)/i.test(verb)
+    return new RegExp(DELEGATE_WORDS, 'i').test(fullText) || /(?:代发|转达|群发)/i.test(verb)
+}
+
+function splitGroupTargets(raw = '') {
+    const value = String(raw || '').trim()
+    if (!value) return { targets: [], forbidden: false }
+    if (FORBIDDEN_GROUP_SET_PATTERN.test(value)) return { targets: [], forbidden: true }
+
+    const normalized = value
+        .replace(/(?:群号(?:分别)?是|目标(?:群)?(?:分别)?是|这些群|這些群|那些群|这几个群|這几个群|那几个群|以下群|如下群|批量)/g, '')
+        .replace(/(?:群聊|群)\s*(?:和|与|及|跟|以及)\s*/g, '群、')
+        .replace(/[、/|；;，,\n]+/g, '、')
+        .replace(/\s+(?:和|与|及|跟|以及)\s+/g, '、')
+        .replace(/(?:和|与|及|跟|以及)(?=\d{5,15}\b)/g, '、')
+        .replace(/(?<=\d{5,15})(?:和|与|及|跟|以及)/g, '、')
+    const numericSpaceSeparated = /^\s*\d{5,15}(?:\s+\d{5,15})+\s*$/.test(normalized)
+    const parts = numericSpaceSeparated ? normalized.trim().split(/\s+/) : normalized.split('、')
+    const seen = new Set()
+    const targets = []
+    for (const part of parts) {
+        const target = cleanTarget(part)
+        if (!target || seen.has(target)) continue
+        seen.add(target)
+        targets.push(target)
+    }
+    return { targets, forbidden: false }
+}
+
+function assignGroupTargets(args, rawTarget = '') {
+    const parsed = splitGroupTargets(rawTarget)
+    if (parsed.forbidden) {
+        args.forbidden_set = true
+        return args
+    }
+    const safeTargets = parsed.targets.filter(isTargetSafe)
+    if (safeTargets.length === 0) return args
+    const numeric = safeTargets.filter(target => /^\d{5,15}$/.test(target))
+    const named = safeTargets.filter(target => !/^\d{5,15}$/.test(target))
+    if (numeric.length + named.length > 1) {
+        if (numeric.length) args.group_ids = numeric
+        if (named.length) args.targets = named
+    } else if (numeric.length === 1) {
+        args.group_id = numeric[0]
+    } else if (named.length === 1) {
+        args.target = named[0]
+    }
+    return args
 }
 
 export function parseGroupSendRequest(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return null
+
+    const explicitListPatterns = [
+        new RegExp(`^\\s*${BOT_CALL_PREFIX}(?<delegate>${DELEGATE_WORDS})?\\s*(?:在|去|到|往|给)?\\s*(?:这些群|這些群|那些群|这几个群|這几个群|那几个群|以下群|如下群|群号|目标群)\\s*[：:]\\s*(?<target>[\\s\\S]{1,200}?)\\s*(?<verb>${SEND_VERBS})\\s*[：:，,\\s]*(?<message>[\\s\\S]{1,1000})$`, 'i'),
+        new RegExp(`^\\s*${BOT_CALL_PREFIX}(?<delegate>${DELEGATE_WORDS})?\\s*(?<verb>${SEND_VERBS})\\s*(?:到|给|在)?\\s*(?:这些群|這些群|那些群|这几个群|這几个群|那几个群|以下群|如下群|群号|目标群)?\\s*[：:]\\s*(?<target>[\\s\\S]{1,200}?)\\s*(?:内容|消息|说|发|发送)\\s*[：:]\\s*(?<message>[\\s\\S]{1,1000})$`, 'i')
+    ]
+    for (const pattern of explicitListPatterns) {
+        const match = value.match(pattern)
+        const target = match?.groups?.target?.trim()
+        const message = match?.groups?.message?.trim()
+        const verb = match?.groups?.verb || ''
+        if (!target || !message) continue
+        if (!hasExplicitDelegation(value, verb) && !/(?:群发|代发|转达)/i.test(value)) continue
+        if (!isMessageSafe(message)) continue
+        const args = assignGroupTargets({ message }, target)
+        if (args.forbidden_set || (!args.group_id && !args.target && !args.group_ids && !args.targets)) continue
+        if (/(?:原样发送|原文发送|不要前缀|不加前缀|直接发原文|直接发送原文)/i.test(value)) args.as_is = true
+        return args
+    }
 
     const patterns = [
         new RegExp(`^\\s*${BOT_CALL_PREFIX}(?<delegate>${DELEGATE_WORDS})?\\s*(?:在|去|到|往)\\s*(?<target>[^，,。；;：:\\n]{1,60}?)${TARGET_SUFFIX}\\s*(?<verb>${SEND_VERBS})\\s*[：:，,\\s]*(?<message>[\\s\\S]{1,1000})$`, 'i'),
@@ -55,13 +122,10 @@ export function parseGroupSendRequest(text) {
         const hasDirectionalSend = /(?:^|[，,。；;\s])(?:在|去|到|往)\s*[^，,。；;：:\n]{1,60}/i.test(value)
             || new RegExp(`${SEND_VERBS}[\\s\\S]{1,1000}?(?:到|去|在|给)\\s*[^，,。；;：:\\n]{1,60}`, 'i').test(value)
         if (!hasExplicitDelegation(value, verb) && !hasDirectionalSend) continue
-        if (!isTargetSafe(target) || !isMessageSafe(message)) continue
+        if (!isMessageSafe(message)) continue
 
-        const args = { target: cleanTarget(target), message }
-        if (/^\d{5,}$/.test(args.target)) {
-            args.group_id = args.target
-            delete args.target
-        }
+        const args = assignGroupTargets({ message }, target)
+        if (args.forbidden_set || (!args.group_id && !args.target && !args.group_ids && !args.targets)) continue
         if (/(?:原样发送|原文发送|不要前缀|不加前缀|直接发原文|直接发送原文)/i.test(value)) args.as_is = true
         return args
     }
@@ -70,6 +134,50 @@ export function parseGroupSendRequest(text) {
 
 export function isExplicitGroupSendRequest(text) {
     return Boolean(parseGroupSendRequest(text))
+}
+
+export function parseGroupLeaveRequest(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return null
+    if (/(?:所有|全部|全体|每个|各个).{0,16}(?:群|退群|退出|离开)|(?:退|退出|离开).{0,16}(?:所有|全部|全体|每个|各个)/i.test(value)) {
+        return null
+    }
+
+    const currentGroupPattern = /(?:退(?:出)?(?:本群|当前群|这个群|這個群|这群|这里)?|退群|退出(?:本群|当前群|这个群|這個群|这群)?|离开(?:本群|当前群|这个群|這個群|这群)|从(?:本群|当前群|这个群|這個群|这群)退(?:出来|出)?)/i
+    const explicitCurrent = /(?:本群|当前群|这个群|這個群|这群|这里|這裡)/i.test(value) && currentGroupPattern.test(value)
+    if (explicitCurrent || /^\s*(?:诺亚|noa)?[,，。!！~～\s]*(?:退群|退出群聊|离开群聊)(?:吧|了|啦|呀|啊|喵|捏)?\s*$/i.test(value)) {
+        return { target: '当前群' }
+    }
+
+    const explicitListMatch = value.match(/(?:退(?:了|掉|出)?|退出|离开|撤出).{0,20}(?:这些群|這些群|那些群|这几个群|這几个群|那几个群|以下群|如下群|群号|目标群)?\s*[：:]\s*(?<target>[\s\S]{1,200})$/i)
+    if (explicitListMatch?.groups?.target) {
+        const args = assignGroupTargets({}, explicitListMatch.groups.target)
+        if (args.forbidden_set || (!args.group_id && !args.target && !args.group_ids && !args.targets)) return null
+        return args
+    }
+
+    const patterns = [
+        /(?:退(?:了|掉|出)?|退出|离开|撤出)\s*(?<target>[^，,。；;：:\n]{1,80}?)(?:群聊|群里|群内|那边|里面|里|群)?(?:吧|呀|啊|呢|嘛|么|啦|了|哈|哦|噢|喵|捏)?$/i,
+        /(?:把|将|让|叫)?\s*(?<target>[^，,。；;：:\n]{1,80}?)(?:群聊|群里|群内|那边|里面|里|群)?\s*(?:退(?:了|掉|出)?|退出|离开|撤出)(?:吧|呀|啊|呢|嘛|么|啦|了|哈|哦|噢|喵|捏)?$/i,
+        /(?:从)\s*(?<target>[^，,。；;：:\n]{1,80}?)(?:群聊|群里|群内|那边|里面|里|群)?\s*(?:退(?:出来|出)?|退出|离开|撤出)(?:吧|呀|啊|呢|嘛|么|啦|了|哈|哦|噢|喵|捏)?$/i
+    ]
+    for (const pattern of patterns) {
+        const match = value.match(pattern)
+        let target = match?.groups?.target?.trim()
+        if (!target) continue
+        target = cleanTarget(target)
+        if (!target || /^(?:吧|呀|啊|呢|嘛|么|啦|了|哈|哦|噢|喵|捏)$/i.test(target)) continue
+        if (/^(?:群|群聊|这个|这个群|本群|当前群|这里|这边)$/i.test(target)) return { target: '当前群' }
+        if (/^(?:它|他|她|ta|那个|那个群|这个|这个群|上面那个|刚才那个|不友好那个)$/i.test(target)) return null
+        const args = assignGroupTargets({}, target)
+        if (args.forbidden_set || (!args.group_id && !args.target && !args.group_ids && !args.targets)) continue
+        return args
+    }
+    return null
+}
+
+export function isExplicitGroupLeaveRequest(text) {
+    return Boolean(parseGroupLeaveRequest(text))
 }
 
 export function hasNegatedDrawIntent(text) {
@@ -116,9 +224,10 @@ export function hasExplicitWebFetchIntent(text, candidateUrls = []) {
     if (!value) return false
     const hasUrl = extractUrls(value).length > 0 || (Array.isArray(candidateUrls) && candidateUrls.length > 0)
     return hasUrl && (/\bfetch\b|(?:抓一下|爬一下|扒一下)/i.test(value)
+        || /(?:试试|再试试|重试|重新试|换(?:成|用)?这个|用这个|这个呢|这个可以吗|这个能行吗|能打开吗|能抓吗|能不能打开|能不能抓)/i.test(value)
         || /(?:看|看看|打开|读取|抓取|总结|分析|解释|概括).{0,20}(?:链接|网页|网址|页面|内容|这个|这条|上面)/i.test(value)
         || /(?:这个|这条|上面).{0,8}(?:链接|网页|网址).{0,12}(?:讲|说|内容|总结|看看|分析)/i.test(value)
-        || /^(?:帮我|给我|请|麻烦你?)?\s*(?:fetch|看|看看|看一下|打开|读取|抓取|抓一下|爬一下|扒一下|总结|总结一下|概括|分析|解释)(?:一下|下)?[。！!？?\s]*$/i.test(value))
+        || /^(?:帮我|给我|请|麻烦你?)?\s*(?:fetch|看|看看|看一下|打开|读取|抓取|抓一下|爬一下|扒一下|总结|总结一下|概括|分析|解释|试试|再试试|重试)(?:一下|下)?[。！!？?\s]*$/i.test(value))
 }
 
 export function hasExplicitFileDownloadIntent(text, options = {}) {
@@ -153,6 +262,23 @@ export function hasExplicitGroupChatContextIntent(text) {
     return new RegExp(`${action}.{0,20}${object}|${object}.{0,20}${action}`, 'i').test(value)
 }
 
+export function hasExplicitUserProfileUpdateIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    if (/^(?:你|诺亚|noa)?\s*(?:会不会|能不能|可以|能).{0,20}(?:写|更新|维护|记).{0,20}(?:个人档案|用户档案|用户画像|档案|画像|长期记忆).{0,10}(?:吗|嘛|么|？|\?)/i.test(value)
+        && !/(?:帮我|给我|请|麻烦|现在|直接).{0,16}(?:写|更新|维护|记|提炼)/i.test(value)) {
+        return false
+    }
+    const object = '(?:个人档案|用户档案|用户画像|个人画像|我的档案|我的画像|长期档案|长期记忆|稳定画像)'
+    const action = '(?:记到|记进|写到|写进|存到|存进|加入|更新|维护|整理|提炼|抽取|总结)'
+    const memoryAction = '(?:记住|记一下|记下来|帮我记|给我记|以后记得|长期记住|别忘了)'
+    const personalSignal = '(?:我|我的|叫我|称呼|名字|昵称|喜欢|不喜欢|偏好|习惯|常用|住在|来自|职业|身份|项目|性格|雷点|忌口)'
+    return new RegExp(`${action}.{0,24}${object}|${object}.{0,24}${action}`, 'i').test(value)
+        || /(?:把|将).{1,120}(?:记到|记进|写到|写进|存到|存进).{0,16}(?:档案|画像|长期记忆)/i.test(value)
+        || /(?:从|根据).{0,20}(?:刚才|上面|前面|最近|历史|聊天|对话).{0,30}(?:提炼|抽取|整理|总结).{0,20}(?:档案|画像|长期记忆)/i.test(value)
+        || new RegExp(`${memoryAction}.{0,100}${personalSignal}|${personalSignal}.{0,100}${memoryAction}`, 'i').test(value)
+}
+
 export function hasGroupChatContextQuestion(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
@@ -170,24 +296,37 @@ export function hasGroupChatContextQuestion(text) {
 export function hasExplicitShellIntent(text, toolName = '') {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
+    const commandKeywords = 'git|npm|pnpm|node|python3?|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head|nmap|ip|tmux|sqlite3|sqlite|curl|wget|jq|sed|awk'
+    const shellKeywords = `${commandKeywords}|shell|命令|终端`
     if (/^(?:你|诺亚|noa)?\s*(?:会不会|会|能不能|可以|能).{0,16}(?:执行|运行|调用).{0,16}(?:shell|命令|终端|命令行).{0,20}(?:吗|嘛|么|？|\?)/i.test(value)
         && !/(?:帮我|给我|请|麻烦)/i.test(value)) {
         return false
     }
-    const commandKeywords = 'git|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head|nmap|ip|tmux|shell|命令|终端'
-    if (isQuestionAboutTool(value, commandKeywords)
-        && !/(?:帮我|给我|请|麻烦|执行|运行|调用|用|拿|通过).{0,20}(?:git|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head|nmap|ip|tmux|shell|命令|终端)/i.test(value)) {
+    if (isQuestionAboutTool(value, shellKeywords)
+        && !new RegExp(`(?:帮我|给我|请|麻烦|执行|运行|调用|用|拿|通过).{0,20}(?:${shellKeywords})`, 'i').test(value)) {
         return false
     }
     if (toolName === 'shell_session' && /(?:tmux|ai-shell|shell\s*session|shell会话|shell窗口|独立shell|终端会话)/i.test(value)) return true
     if (/(?:执行|运行|调用).{0,12}(?:shell|命令|终端|命令行|脚本)|(?:shell|命令)[:：]/i.test(value)) return true
-    if (/(?:执行|运行|调用).{0,8}(?:git|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head|nmap|ip)\b/i.test(value)) return true
-    if (/^(?:sudo\s+)?(?:git|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head|nmap|ip)\b/i.test(value)) return true
-    if (/\b(?:git\s+(?:pull|status|diff|log|show|fetch)|tmux\s+ls|nmap\s+-|ip\s+(?:route|addr)|pnpm\s+|npm\s+|node\s+|docker\s+|systemctl\s+)/i.test(value)) return true
-    if (/(?:用|拿|通过).{0,8}(?:nmap|git|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head|ip).{0,8}(?:命令|工具)/i.test(value)) return true
+    if (new RegExp(`(?:执行|运行|调用).{0,8}(?:${commandKeywords})\\b`, 'i').test(value)) return true
+    if (new RegExp(`^(?:sudo\\s+)?(?:${commandKeywords})\\b`, 'i').test(value)) return true
+    if (/\b(?:git\s+(?:pull|status|diff|log|show|fetch)|tmux\s+ls|nmap\s+-|ip\s+(?:route|addr)|pnpm\s+|npm\s+|node\s+|python3?\s+|docker\s+|systemctl\s+|sqlite3\s+|curl\s+|wget\s+|jq\s+)/i.test(value)) return true
+    if (new RegExp(`(?:用|拿|通过).{0,12}(?:${commandKeywords}).{0,12}(?:命令|工具)`, 'i').test(value)) return true
+    if (new RegExp(`(?:${commandKeywords}).{0,10}(?:命令).{0,16}(?:查|看|读取|查询|检查|列出)`, 'i').test(value)) return true
     if (/(?:更新|拉取|重启|启动|停止|检查|诊断|搜索|查|看).{0,16}(?:插件|仓库|代码|服务|进程|容器|日志|服务器|系统|主机)/i.test(value)) return true
     if (/(?:插件|仓库|代码|服务|进程|容器|日志|服务器|系统|主机).{0,16}(?:更新|拉取|重启|启动|停止|检查|诊断|搜索|查|看)/i.test(value)) return true
     return false
+}
+
+export function isContinuationToolInstruction(text) {
+    const value = getPrimaryUserInstruction(text)
+        .replace(/^#\S+\s*/i, '')
+        .trim()
+    if (!value) return false
+
+    const prefix = '(?:咳咳|嗯+|呃+|那个|那|现在|这次|刚才|前面|上面|之前|好了|可以了|行了|ok|OK)?'
+    const action = '(?:继续|接着|看看|看一下|帮我看看|给我看看|处理|弄一下|执行|跑一下|查一下|读一下)'
+    return new RegExp(`^\\s*${prefix}[,，。!！\\s]*(?:现在)?(?:能不能|能|可以|可不可以)?(?:帮我|给我|麻烦你?)?${action}(?:了吗|了没|吗|嘛|么|吧|一下|下)?[?？!！。,.，\\s]*$`, 'i').test(value)
 }
 
 export function hasExplicitGroupAdminIntent(toolName, text) {
@@ -209,10 +348,27 @@ function extractUrls(text) {
     return String(text || '').match(/https?:\/\/[^\s<>'"，。！？、]+/gi) || []
 }
 
+function hasModelPlannedLowRiskEvidence(call = {}, instruction = '', options = {}) {
+    if (options.allowModelPlannedLowRisk !== true) return false
+    if (call.name === 'web_fetch') {
+        const urls = [
+            ...extractUrls(instruction),
+            ...(Array.isArray(options.candidateUrls) ? options.candidateUrls : [])
+        ].filter(Boolean)
+        if (urls.length === 0) return false
+        const requestedUrl = String(call.args?.url || call.params?.url || '').trim()
+        if (!requestedUrl) return true
+        return urls.some(url => requestedUrl === url || requestedUrl.includes(url) || url.includes(requestedUrl))
+    }
+    return false
+}
+
 export function isExplicitToolIntent(toolName, text, options = {}) {
     switch (toolName) {
         case 'group_send_message':
             return isExplicitGroupSendRequest(text)
+        case 'group_leave':
+            return isExplicitGroupLeaveRequest(text)
         case 'draw_image':
             return hasExplicitDrawIntent(text, options)
         case 'shell_exec':
@@ -228,6 +384,8 @@ export function isExplicitToolIntent(toolName, text, options = {}) {
             return options.strictWebSearch === true ? hasExplicitWebSearchIntent(text) : true
         case 'group_chat_context':
             return hasExplicitGroupChatContextIntent(text)
+        case 'user_profile_update':
+            return hasExplicitUserProfileUpdateIntent(text)
         case 'group_mute':
         case 'group_whole_mute':
         case 'group_kick':
@@ -245,9 +403,19 @@ export function filterToolCallsByIntent(toolCalls = [], text = '', options = {})
     const filtered = []
     const blocked = []
     const instruction = getPrimaryUserInstruction(text)
+    const allowContinuation = options.allowContinuation === true && isContinuationToolInstruction(instruction)
+    const continuationTools = new Set(Array.isArray(options.continuationTools) ? options.continuationTools : [])
     for (const call of toolCalls || []) {
         if (!call?.name) continue
         if (!isExplicitToolIntent(call.name, instruction, options)) {
+            if (allowContinuation && continuationTools.has(call.name)) {
+                filtered.push(call)
+                continue
+            }
+            if (hasModelPlannedLowRiskEvidence(call, instruction, options)) {
+                filtered.push(call)
+                continue
+            }
             blocked.push(call)
             continue
         }

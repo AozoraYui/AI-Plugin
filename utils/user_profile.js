@@ -14,6 +14,8 @@ function normalizeSummaryType(type = '') {
     const value = String(type || '').trim().toLowerCase()
     if (value === 'full') return '全量总结'
     if (value === 'incremental') return '增量总结'
+    if (value === 'manual') return '用户主动补充'
+    if (value === 'history') return '历史上下文提炼'
     return value || '记忆总结'
 }
 
@@ -92,6 +94,7 @@ export async function updateUserProfileFromSummary(db, client, userId, summaryTe
         return {
             ok: true,
             oldProfileExists: Boolean(oldProfile?.info),
+            oldLength: String(oldProfile?.info || '').length,
             length: profileText.length,
             usage: result.usage || null
         }
