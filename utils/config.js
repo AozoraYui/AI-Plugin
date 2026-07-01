@@ -105,6 +105,12 @@ const defaultConfig = {
     SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS: 24000,
     // child_process exec 最大缓冲区
     SHELL_EXEC_MAX_BUFFER: 20971520,
+    // 模型请求默认超时（毫秒）：普通对话/工具规划，避免上游长时间无响应
+    MODEL_CHAT_REQUEST_TIMEOUT_MS: 90000,
+    // 模型请求默认超时（毫秒）：绘图请求通常更慢
+    MODEL_IMAGE_REQUEST_TIMEOUT_MS: 180000,
+    // 模型请求默认超时（毫秒）：长摘要/大输出请求
+    MODEL_LONG_REQUEST_TIMEOUT_MS: 240000,
     // tmux 持久 Shell 会话开关（默认关闭，主人专用）
     enable_shell_session: false,
     // tmux 持久 Shell 会话名称
@@ -428,6 +434,21 @@ export const Config = {
     set SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS(val) { config.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS = Number(val) || defaultConfig.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS },
     get SHELL_EXEC_MAX_BUFFER() { return config.SHELL_EXEC_MAX_BUFFER ?? defaultConfig.SHELL_EXEC_MAX_BUFFER },
     set SHELL_EXEC_MAX_BUFFER(val) { config.SHELL_EXEC_MAX_BUFFER = Number(val) || defaultConfig.SHELL_EXEC_MAX_BUFFER },
+    get MODEL_CHAT_REQUEST_TIMEOUT_MS() { return config.MODEL_CHAT_REQUEST_TIMEOUT_MS ?? defaultConfig.MODEL_CHAT_REQUEST_TIMEOUT_MS },
+    set MODEL_CHAT_REQUEST_TIMEOUT_MS(val) {
+        const num = Number(val)
+        config.MODEL_CHAT_REQUEST_TIMEOUT_MS = Number.isFinite(num) && num > 0 ? Math.floor(num) : defaultConfig.MODEL_CHAT_REQUEST_TIMEOUT_MS
+    },
+    get MODEL_IMAGE_REQUEST_TIMEOUT_MS() { return config.MODEL_IMAGE_REQUEST_TIMEOUT_MS ?? defaultConfig.MODEL_IMAGE_REQUEST_TIMEOUT_MS },
+    set MODEL_IMAGE_REQUEST_TIMEOUT_MS(val) {
+        const num = Number(val)
+        config.MODEL_IMAGE_REQUEST_TIMEOUT_MS = Number.isFinite(num) && num > 0 ? Math.floor(num) : defaultConfig.MODEL_IMAGE_REQUEST_TIMEOUT_MS
+    },
+    get MODEL_LONG_REQUEST_TIMEOUT_MS() { return config.MODEL_LONG_REQUEST_TIMEOUT_MS ?? defaultConfig.MODEL_LONG_REQUEST_TIMEOUT_MS },
+    set MODEL_LONG_REQUEST_TIMEOUT_MS(val) {
+        const num = Number(val)
+        config.MODEL_LONG_REQUEST_TIMEOUT_MS = Number.isFinite(num) && num > 0 ? Math.floor(num) : defaultConfig.MODEL_LONG_REQUEST_TIMEOUT_MS
+    },
     get enable_shell_session() { return config.enable_shell_session ?? defaultConfig.enable_shell_session },
     set enable_shell_session(val) { config.enable_shell_session = val === true },
     get SHELL_SESSION_NAME() { return config.SHELL_SESSION_NAME ?? defaultConfig.SHELL_SESSION_NAME },

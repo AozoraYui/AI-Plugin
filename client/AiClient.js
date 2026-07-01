@@ -352,6 +352,9 @@ export class AiClient {
                 value.SHELL_SESSION_NAME !== undefined ||
                 value.SHELL_SESSION_CAPTURE_LINES !== undefined ||
                 value.SHELL_SESSION_MAX_OUTPUT_CHARS !== undefined ||
+                value.MODEL_CHAT_REQUEST_TIMEOUT_MS !== undefined ||
+                value.MODEL_IMAGE_REQUEST_TIMEOUT_MS !== undefined ||
+                value.MODEL_LONG_REQUEST_TIMEOUT_MS !== undefined ||
                 value.enable_file_transfer !== undefined ||
                 value.enable_ai_draw !== undefined ||
                 value.enable_group_admin !== undefined ||
@@ -467,7 +470,7 @@ export class AiClient {
                 if (Array.isArray(rawConfig.NOA_CHAT_TRIGGER_KEYWORDS)) {
                     Config.NOA_CHAT_TRIGGER_KEYWORDS = rawConfig.NOA_CHAT_TRIGGER_KEYWORDS
                 }
-                for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_FOLLOWUP_MAX_ROUNDS', 'SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS', 'SHELL_EXEC_MAX_BUFFER', 'SHELL_SESSION_NAME', 'SHELL_SESSION_CAPTURE_LINES', 'SHELL_SESSION_MAX_OUTPUT_CHARS', 'SHELL_SESSION_AFTER_SEND_DELAY_MS', 'SHELL_SESSION_AFTER_SEND_TIMEOUT_MS', 'SHELL_SESSION_AFTER_SEND_POLL_MS']) {
+                for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_FOLLOWUP_MAX_ROUNDS', 'SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS', 'SHELL_EXEC_MAX_BUFFER', 'SHELL_SESSION_NAME', 'SHELL_SESSION_CAPTURE_LINES', 'SHELL_SESSION_MAX_OUTPUT_CHARS', 'SHELL_SESSION_AFTER_SEND_DELAY_MS', 'SHELL_SESSION_AFTER_SEND_TIMEOUT_MS', 'SHELL_SESSION_AFTER_SEND_POLL_MS', 'MODEL_CHAT_REQUEST_TIMEOUT_MS', 'MODEL_IMAGE_REQUEST_TIMEOUT_MS', 'MODEL_LONG_REQUEST_TIMEOUT_MS']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
                 if (this.enableShellExec) {
@@ -955,6 +958,12 @@ export class AiClient {
         }
     }
 
+    _resolveRequestTimeout(type, maxTokens = 8192) {
+        if (type === 'image') return Config.MODEL_IMAGE_REQUEST_TIMEOUT_MS
+        if (Number(maxTokens) > 16384) return Config.MODEL_LONG_REQUEST_TIMEOUT_MS
+        return Config.MODEL_CHAT_REQUEST_TIMEOUT_MS
+    }
+
     /**
      * 构建 multipart/form-data 请求体（用于 /images/edits 图生图）
      * @param {Array<{name:string, value:string}>} fields - 普通表单字段
@@ -1123,10 +1132,11 @@ export class AiClient {
                 : sortedPool.map(s => ({ ...s, score: 0 }))
 
             lastError = ''
+            const requestTimeout = this._resolveRequestTimeout(type, maxTokens)
             for (const { provider, modelId, score } of poolToTry) {
                 const statusKey = `${provider.id}-${modelId}`
                 const startTime = Date.now()
-                const result = await this.attemptRequest(type, payload, provider, modelId, maxTokens)
+                const result = await this.attemptRequest(type, payload, provider, modelId, maxTokens, requestTimeout)
                 const elapsedMs = Date.now() - startTime
                 const elapsed = (elapsedMs / 1000).toFixed(2)
 

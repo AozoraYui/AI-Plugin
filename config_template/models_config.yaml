@@ -131,6 +131,19 @@ enable_web_search: false
 enable_web_fetch: false
 
 # ================================================
+# 模型请求超时配置
+# ------------------------------------------------
+# MODEL_CHAT_REQUEST_TIMEOUT_MS: 普通对话/工具规划/最终回复请求的单模型超时（默认 90000ms）
+#   用于避免上游模型或代理长时间无响应，尽早切换到下一个可用模型
+# MODEL_IMAGE_REQUEST_TIMEOUT_MS: 绘图请求的单模型超时（默认 180000ms）
+# MODEL_LONG_REQUEST_TIMEOUT_MS: 长摘要/大输出请求的单模型超时（默认 240000ms）
+#   目前 max_tokens > 16384 的请求会视为长请求，例如记忆锚点总结
+# ================================================
+# MODEL_CHAT_REQUEST_TIMEOUT_MS: 90000
+# MODEL_IMAGE_REQUEST_TIMEOUT_MS: 180000
+# MODEL_LONG_REQUEST_TIMEOUT_MS: 240000
+
+# ================================================
 # Shell 工具配置
 # ------------------------------------------------
 # enable_shell_exec: 是否允许 AI 执行服务器 Shell 命令（默认 false）
@@ -219,6 +232,9 @@ enable_web_fetch: false
 # SHELL_EXEC_MAX_OUTPUT_CHARS: 24000
 # SHELL_EXEC_FOLLOWUP_MAX_ROUNDS: 5
 # SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS: 24000
+# MODEL_CHAT_REQUEST_TIMEOUT_MS: 90000       # 普通对话/工具规划/最终回复的单模型超时
+# MODEL_IMAGE_REQUEST_TIMEOUT_MS: 180000     # 绘图请求的单模型超时
+# MODEL_LONG_REQUEST_TIMEOUT_MS: 240000      # 长摘要/大输出请求的单模型超时
 # SHELL_SESSION_NAME: ai-shell
 # SHELL_SESSION_CAPTURE_LINES: 200
 # SHELL_SESSION_MAX_OUTPUT_CHARS: 24000
