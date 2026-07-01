@@ -58,7 +58,6 @@ export function shouldReadGroupContextImages(text, logs = []) {
     if (!Array.isArray(logs) || !logs.some(log => Array.isArray(log.imageMeta) && log.imageMeta.length > 0)) return false
     return isExplicitGroupContextImageReadRequest(text)
         || isGroupContextImageQuestion(text)
-        || isGroupContextSummaryQuestion(text)
 }
 
 function collectImageTargets(logs = [], options = {}) {
