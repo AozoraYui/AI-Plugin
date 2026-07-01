@@ -2,16 +2,11 @@ import sharp from 'sharp'
 import { urlToBuffer, getImageMimeType } from './common.js'
 import { Config } from './config.js'
 
-/**
- * 处理单张图片，返回适合发送给 AI 的 inline_data 格式。
- * 自动处理：大小压缩（>MAX_IMAGE_SIZE_MB）、GIF→PNG 转换。
- * 失败时返回 null。
- */
-export async function processImageForAI(imageUrl) {
+export async function processImageBufferForAI(imageBuffer) {
     try {
-        let imageBuffer = await urlToBuffer(imageUrl)
+        imageBuffer = Buffer.from(imageBuffer)
         if (!imageBuffer) {
-            logger.warn(`[AI-Plugin] 获取图片失败: ${imageUrl}`)
+            logger.warn('[AI-Plugin] 图片内容为空')
             return null
         }
 
@@ -38,6 +33,25 @@ export async function processImageForAI(imageUrl) {
                 data: finalBuffer.toString('base64')
             }
         }
+    } catch (err) {
+        logger.warn(`[AI-Plugin] 图片处理异常: ${err.message}`)
+        return null
+    }
+}
+
+/**
+ * 处理单张图片 URL，返回适合发送给 AI 的 inline_data 格式。
+ * 自动处理：大小压缩（>MAX_IMAGE_SIZE_MB）、GIF→PNG 转换。
+ * 失败时返回 null。
+ */
+export async function processImageForAI(imageUrl) {
+    try {
+        const imageBuffer = await urlToBuffer(imageUrl)
+        if (!imageBuffer) {
+            logger.warn(`[AI-Plugin] 获取图片失败: ${imageUrl}`)
+            return null
+        }
+        return await processImageBufferForAI(imageBuffer)
     } catch (err) {
         logger.warn(`[AI-Plugin] 图片处理异常: ${err.message}`)
         return null

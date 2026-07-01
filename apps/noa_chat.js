@@ -7,6 +7,7 @@ import { processImagesInBatches } from '../utils/image.js'
 import { buildEnvironmentHint, expandForwardMsg, extractCardInfo } from '../utils/message_context.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedUserIds } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
+import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { filterToolCallsByIntent } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 
@@ -759,6 +760,16 @@ export class NoaChatHandler extends plugin {
         } catch (err) {
             logger.warn(`[AI-Plugin] [畅聊] 加载触发者个人记忆摘要失败: ${err.message}`)
         }
+        let localImageInput = { imageParts: [], noteText: '', paths: [], failures: [] }
+        if (e.isMaster) {
+            localImageInput = await buildLocalImageInputContext(normalized.instructionText || normalized.currentText || '', {
+                maxImages: Config.MAX_IMAGES_PER_MESSAGE
+            })
+            if (localImageInput.imageParts.length > 0) {
+                logger.info(`[AI-Plugin] [畅聊] 已附加本地图片输入: ${localImageInput.imageParts.length} 张`)
+            }
+        }
+        const hasLocalImageInput = localImageInput.imageParts.length > 0
         const imageReadPlan = buildImageReadPlan(normalized, logs)
         for (const line of imageReadPlan.logLines) logger.info(line)
         const imageContext = await prepareNoaImageContext(this.client, imageReadPlan, normalized)
@@ -791,21 +802,34 @@ export class NoaChatHandler extends plugin {
                     personalMemory,
                     candidateUrls,
                     {
-                        hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0,
+                        hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0 || hasLocalImageInput,
                         mentionedUserIds,
                         currentInstruction: toolRoutingText
                     }
                 )
-                const toolCalls = filterNoaToolCalls(
+                let toolCalls = filterNoaToolCalls(
                     Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools.slice(0, 3) : [],
                     toolRoutingText,
                     {
-                        hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0,
-                        hasRecentImages: imageContext.processedCount > 0,
+                        hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0 || hasLocalImageInput,
+                        hasRecentImages: imageContext.processedCount > 0 || hasLocalImageInput,
                         candidateUrls,
                         strictWebSearch: false
                     }
                 )
+                if (hasLocalImageInput) {
+                    const attachedPaths = new Set(localImageInput.paths.flatMap(item => [item.requestedPath, item.realPath]).filter(Boolean))
+                    toolCalls = toolCalls.filter(call => {
+                        if (!['file_read', 'dir_read'].includes(call.name)) return true
+                        const argsText = JSON.stringify(call.args || {})
+                        const redundant = [...attachedPaths].some(filePath => argsText.includes(filePath))
+                        if (redundant) {
+                            logger.info(`[AI-Plugin] [畅聊] 已跳过冗余 ${call.name}: 本地图片已作为多模态输入附加`)
+                            return false
+                        }
+                        return true
+                    })
+                }
                 if (toolCalls.length > 0) {
                     logger.info(`[AI-Plugin] [畅聊] 工具执行队列: ${toolCalls.map(call => `${call.name}(${JSON.stringify(call.args || {}).slice(0, 120)})`).join(' -> ')}`)
                 }
@@ -865,7 +889,7 @@ ${getBeijingTimeStr()}
 【最近群聊上下文】
 ${contextText || '暂无'}
 
-${imageReadNotes.length > 0 ? `【本轮读图策略】\n${imageReadNotes.join('\n')}\n\n` : ''}${imageContext.summaryText ? `【本轮分批读图摘要】\n${imageContext.summaryText}\n\n` : ''}${groupAliasMemoryText ? `${groupAliasMemoryText}\n\n` : ''}${personalMemory ? `【触发者个人记忆摘要】\n${personalMemory}\n\n` : ''}${toolContextText ? `【本轮工具结果】${toolContextText}\n\n` : ''}【当前触发消息】
+${imageReadNotes.length > 0 ? `【本轮读图策略】\n${imageReadNotes.join('\n')}\n\n` : ''}${imageContext.summaryText ? `【本轮分批读图摘要】\n${imageContext.summaryText}\n\n` : ''}${localImageInput.noteText ? `${localImageInput.noteText}\n\n` : ''}${groupAliasMemoryText ? `${groupAliasMemoryText}\n\n` : ''}${personalMemory ? `【触发者个人记忆摘要】\n${personalMemory}\n\n` : ''}${toolContextText ? `【本轮工具结果】${toolContextText}\n\n` : ''}【当前触发消息】
 ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}${normalized.aliasCaptureText ? `\n\n${normalized.aliasCaptureText}` : ''}`
 
         const contents = [
@@ -880,7 +904,7 @@ ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}${norm
             },
             {
                 role: 'user',
-                parts: [{ text: prompt }, ...imageParts]
+                parts: [{ text: prompt }, ...imageParts, ...localImageInput.imageParts]
             }
         ]
 

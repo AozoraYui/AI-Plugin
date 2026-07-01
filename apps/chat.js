@@ -9,6 +9,7 @@ import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTod
 import { processImagesInBatches } from '../utils/image.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
+import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
 import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasNegatedDrawIntent, parseGroupSendRequest } from '../utils/tool_intent.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
@@ -1058,6 +1059,19 @@ export class ChatHandler extends plugin {
             // 工具调用：规则预路由优先；其余场景由主模型规划，意图模型只负责编译工具参数。
             const enabledTools = []
             const currentToolInstruction = originalUserMessage || getPrimaryUserInstruction(userMessage)
+            let localImageInput = { imageParts: [], noteText: '', paths: [], failures: [] }
+            if (e.isMaster) {
+                localImageInput = await buildLocalImageInputContext(currentToolInstruction || userMessage, {
+                    maxImages: Config.MAX_IMAGES_PER_MESSAGE
+                })
+                if (localImageInput.noteText) {
+                    userMessage = `${userMessage}\n\n${localImageInput.noteText}`
+                }
+                if (localImageInput.imageParts.length > 0) {
+                    logger.info(`[AI-Plugin] 已附加本地图片输入: ${localImageInput.imageParts.length} 张`)
+                }
+            }
+            const hasLocalImageInput = localImageInput.imageParts.length > 0
             // drawImageAttempted：本轮是否调用过画图工具（无论成败，工具内已发过"🎨正在生成"进度提示），
             // 用于跳过后续"思考中"占位，避免重复刷屏。
             let drawImageAttempted = false
@@ -1152,7 +1166,7 @@ export class ChatHandler extends plugin {
             if (enabledTools.length > 0) {
                 const candidateUrls = extractUrlsFromText(userMessage, 10)
                 const preRouted = preRouteToolIntent(currentToolInstruction || userMessage, enabledTools, {
-                    hasImages: allImages.length > 0,
+                    hasImages: allImages.length > 0 || hasLocalImageInput,
                     hasRecentImages: recentImageInfo.available,
                     urls: candidateUrls,
                     isMaster: e.isMaster === true,
@@ -1172,7 +1186,7 @@ export class ChatHandler extends plugin {
                         enabledTools,
                         candidateUrls,
                         mentionedUserIds,
-                        hasImages: allImages.length > 0,
+                        hasImages: allImages.length > 0 || hasLocalImageInput,
                         hasRecentImages: recentImageInfo.available,
                         isMaster: e.isMaster === true,
                         currentInstruction: currentToolInstruction
@@ -1183,7 +1197,7 @@ export class ChatHandler extends plugin {
                             userMessage,
                             candidateUrls,
                             mentionedUserIds,
-                            hasImages: allImages.length > 0,
+                            hasImages: allImages.length > 0 || hasLocalImageInput,
                             hasRecentImages: recentImageInfo.available,
                             maxTools: 5,
                             currentInstruction: currentToolInstruction
@@ -1201,7 +1215,7 @@ export class ChatHandler extends plugin {
                 const intent = toolAnalysis?.intent || ''
                 let toolCalls = Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools : []
                 const guardedToolCalls = filterToolCallsByIntent(toolCalls, currentToolInstruction, {
-                    hasImages: allImages.length > 0,
+                    hasImages: allImages.length > 0 || hasLocalImageInput,
                     hasRecentImages: recentImageInfo.available,
                     candidateUrls,
                     strictWebSearch: false
@@ -1210,6 +1224,19 @@ export class ChatHandler extends plugin {
                     logger.warn(`[AI-Plugin] [工具安全] 已拦截缺少明确当前指令的工具: ${guardedToolCalls.blocked.map(call => call.name).join(', ')}`)
                 }
                 toolCalls = guardedToolCalls.tools
+                if (hasLocalImageInput) {
+                    const attachedPaths = new Set(localImageInput.paths.flatMap(item => [item.requestedPath, item.realPath]).filter(Boolean))
+                    toolCalls = toolCalls.filter(call => {
+                        if (!['file_read', 'dir_read'].includes(call.name)) return true
+                        const argsText = JSON.stringify(call.args || {})
+                        const redundant = [...attachedPaths].some(filePath => argsText.includes(filePath))
+                        if (redundant) {
+                            logger.info(`[AI-Plugin] 已跳过冗余 ${call.name}: 本地图片已作为多模态输入附加`)
+                            return false
+                        }
+                        return true
+                    })
+                }
                 const executedShellCommands = []
                 let groupChatContextToolUsed = false
                 // 工具规划注入：只在实际调用工具时告诉最终回复模型本轮执行依据。
@@ -1439,6 +1466,23 @@ export class ChatHandler extends plugin {
                     logger.warn('[AI-Plugin] Vision Relay: 所有 Vision 模型转述均失败，保留原始图片发送给主模型')
                 }
             }
+            if (localImageInput.imageParts.length > 0 && useVisionRelay) {
+                const visionModels = this.client.visionModels
+                logger.info(`[AI-Plugin] Vision Relay: 检测到 ${localImageInput.imageParts.length} 张本地图片输入，开始转述`)
+                let description = ''
+                for (const visionConf of visionModels) {
+                    description = await relayImagesToVision(localImageInput.imageParts, userMessage, this.client, visionConf)
+                    if (description) break
+                    logger.warn(`[AI-Plugin] Vision Relay: ${visionConf.provider_id}/${visionConf.model_id} 本地图片转述失败，尝试下一个`)
+                }
+                if (description) {
+                    userMessage = (userMessage || '') + '\n\n【以下是对本轮本地图片输入的详细描述，请基于此描述理解图片内容：】\n' + description + '\n【本地图片描述结束】\n'
+                    localImageInput.imageParts = []
+                    logger.info('[AI-Plugin] Vision Relay: 本地图片转述完成，图片已替换为文本描述')
+                } else {
+                    logger.warn('[AI-Plugin] Vision Relay: 本地图片转述失败，保留原始图片发送给主模型')
+                }
+            }
 
             // 画图场景工具已发过"🎨正在生成"进度提示（无论成败），跳过"思考中"占位避免重复；
             // 普通思考占位由主人命令「#ai开启/关闭思考提示」控制，默认关闭。
@@ -1474,6 +1518,9 @@ export class ChatHandler extends plugin {
             if (allImages.length > 0) {
                 const validImages = await processImagesInBatches(allImages)
                 currentUserTurnParts.push(...validImages)
+            }
+            if (localImageInput.imageParts.length > 0) {
+                currentUserTurnParts.push(...localImageInput.imageParts)
             }
             if (generatedDrawReviewImages.length > 0) {
                 currentUserTurnParts.push(...generatedDrawReviewImages)
@@ -1670,8 +1717,9 @@ export class ChatHandler extends plugin {
                 await setMsgEmojiLike(e, 144)
 
                 if (!isSingleMode) {
-                    const historyUserTurnParts = generatedDrawReviewImages.length > 0
-                        ? currentUserTurnParts.filter(part => !generatedDrawReviewImages.includes(part))
+                    const transientImageParts = new Set([...generatedDrawReviewImages, ...localImageInput.imageParts])
+                    const historyUserTurnParts = transientImageParts.size > 0
+                        ? currentUserTurnParts.filter(part => !transientImageParts.has(part))
                         : currentUserTurnParts
                     const updatedHistory = [...history, { "role": "user", "parts": historyUserTurnParts }, { "role": "model", "parts": [{ "text": finalResponseText }] }]
                     await this.conversationManager.saveUserHistory(userId, updatedHistory)

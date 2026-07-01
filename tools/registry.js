@@ -48,7 +48,8 @@ const TOOL_USAGE_GUIDES = {
             '主人让你看某个日志、配置、代码文件、README、脚本内容时优先用它。'
         ],
         avoid: [
-            '不要用于执行命令、搜索大量文件、发送文件或保存媒体。'
+            '不要用于执行命令、搜索大量文件、发送文件或保存媒体。',
+            '主人当前消息里给出的本地图片路径会由对话流程自动作为图片输入处理，不要为了看图片内容调用 file_read 或 shell。'
         ],
         rules: [
             '完全不知道目标路径时不要编造，先追问或用 dir_read 看目录。'
@@ -772,6 +773,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - nmap/局域网设备扫描：如果主模型计划是先探测本机网络，shell_exec 可编译为 "ip route get 1.1.1.1; ip -o -4 addr show scope global; ip route show default"；如果主模型计划用 shell_session 一步执行，input 必须用 ip route/ip addr 自动推断 iface/cidr 后再 nmap -sn "$cidr"，不要硬编码 192.168.0.0/24 或 192.168.1.0/24。
 - shell_exec/shell_session 若返回目录安全检查阻止执行，后续不要再编译新的 Shell 命令绕过检查，应让主模型反问主人。
 - file_download 用于下载当前消息或引用消息里的媒体，不需要 URL；web_fetch 才需要完整 URL。
+- 如果当前指令是“看/分析/描述”服务器本地图片路径（如 /root/.../xxx.jpg），对话流程会在工具路由前把白名单内图片作为多模态输入附加；不要再编译 file_read、dir_read、shell_exec 或 shell_session 去读取同一张图片。
 - draw_image 的参考图由工具自动提取（当前图、引用图、@头像、最近图片缓存）；角色参考图库参数按计划填写 character/characters/self_portrait。主模型已经计划 draw_image 时，不要仅因当前消息没有图片就丢弃调用；如果最近图片缓存可用，工具会按“刚才那张/这张图/用 p 模型处理/修图/去水印”等语义自行复用。
 - group_chat_context 的 scope 必须按主模型计划保留：当前群前情用 current_group；主人问机器人加了哪些群/能看到哪些群用 group_list；用户问自己在别的群/其他群刚发了什么用 other_group_messages 并设置 exclude_current_group=true；用户问自己跨群最近消息但未排除当前群用 my_recent_messages；主人要求所有群或指定群才用 all_groups/specific_group。普通用户不要编译其他人的 user_id。主人按群名问某个群但没有明确 group_id 时，可把群名放 query，工具会尝试解析为群号。普通 #c 中，用户问“他们刚才说了啥/群里刚刚发生了什么/最近前情”也可以编译 current_group；跨群/所有群流水仍只给主人编译。
 - group_send_message 必须来自主人明确要求“在某群发/说/转达某段文本”；目标群和 message 都要明确。没有唯一目标群或没有明确消息内容时不要编译。除非用户明确说原样/不要前缀，否则不要设置 as_is=true。
