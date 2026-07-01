@@ -69,6 +69,16 @@ function normalizeGroupMessageRow(row) {
     }
 }
 
+function appendLimitClause(query, params, limit, defaultLimit, maxLimit = Infinity) {
+    const num = Number(limit)
+    if (num === Infinity) return query
+    const fallback = Number(defaultLimit) || 60
+    const normalized = Math.max(1, Math.floor(Number.isFinite(num) && num > 0 ? num : fallback))
+    const finalLimit = maxLimit === Infinity ? normalized : Math.min(normalized, maxLimit)
+    params.push(finalLimit)
+    return `${query} LIMIT ?`
+}
+
 export class AIDatabase {
     constructor() {
         migrateLegacyDatabase()
@@ -430,8 +440,7 @@ export class AIDatabase {
             if (options.excludeCommands === true) {
                 query += ' AND is_command = 0'
             }
-            query += ' ORDER BY id DESC LIMIT ?'
-            params.push(Math.max(1, Number(limit) || 60))
+            query = appendLimitClause(`${query} ORDER BY id DESC`, params, limit, 60)
 
             this.db.all(query, params, (err, rows) => {
                 if (err) {
@@ -485,8 +494,7 @@ export class AIDatabase {
                 params.push(like, like, like, like)
             }
 
-            query += ' ORDER BY id DESC LIMIT ?'
-            params.push(Math.max(1, Math.min(Number(options.limit) || 60, 300)))
+            query = appendLimitClause(`${query} ORDER BY id DESC`, params, options.limit, 60, 300)
 
             this.db.all(query, params, (err, rows) => {
                 if (err) {
@@ -521,8 +529,7 @@ export class AIDatabase {
                 params.push(`%${q}%`)
             }
 
-            query += ' GROUP BY group_id ORDER BY last_message_at DESC LIMIT ?'
-            params.push(Math.max(1, Math.min(Number(options.limit) || 120, 500)))
+            query = appendLimitClause(`${query} GROUP BY group_id ORDER BY last_message_at DESC`, params, options.limit, 120, 500)
 
             this.db.all(query, params, (err, rows) => {
                 if (err) {

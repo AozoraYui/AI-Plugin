@@ -54,7 +54,7 @@ async function fetchLiveGroups(bot) {
 async function getCapturedGroups(query = '') {
     const manager = global.AIPluginConversationManager
     if (!manager?.db?.getGroupMessageLogGroups) return []
-    const groups = await manager.db.getGroupMessageLogGroups({ limit: 200, query, excludeCommands: true })
+    const groups = await manager.db.getGroupMessageLogGroups({ limit: 200, query })
     return groups.map(group => ({
         groupId: String(group.groupId),
         groupName: group.groupName || '',

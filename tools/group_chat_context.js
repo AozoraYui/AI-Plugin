@@ -38,7 +38,8 @@ function formatLogLine(log, options = {}) {
     const name = log.isBot ? 'AI' : (log.nickname || `用户${log.userId}`)
     const imageHint = log.imageMeta?.length ? `（含 ${log.imageMeta.length} 张图片）` : ''
     const groupHint = options.showGroupId ? `群${log.groupId} ` : ''
-    return `[${formatDBTimestampToBeijing(log.createdAt)}] ${groupHint}${name}(${log.userId}): ${truncateText(log.normalizedText, 700)}${imageHint}`
+    const commandHint = log.isCommand ? ' [命令消息]' : ''
+    return `[${formatDBTimestampToBeijing(log.createdAt)}]${commandHint} ${groupHint}${name}(${log.userId}): ${truncateText(log.normalizedText, 700)}${imageHint}`
 }
 
 function getActorUserId(context = {}, event = {}) {
@@ -235,7 +236,7 @@ export const groupChatContextTool = {
             }
             const liveResult = await fetchLiveGroupList(event)
             const capturedGroups = db.getGroupMessageLogGroups
-                ? await db.getGroupMessageLogGroups({ limit, query, excludeCommands: true })
+                ? await db.getGroupMessageLogGroups({ limit, query })
                 : []
             const filteredLiveGroups = effectiveQuery
                 ? liveResult.groups.filter(group => `${group.groupId}\n${group.groupName}`.toLowerCase().includes(effectiveQuery.toLowerCase()))
@@ -264,8 +265,8 @@ export const groupChatContextTool = {
                 return { ok: false, error: '权限不足：非主人只能读取当前群流水，或查询自己在其他群的消息。' }
             }
             logs = db.getGroupMessageLogs
-                ? await db.getGroupMessageLogs({ groupId: effectiveGroupId, limit, query: effectiveQuery, excludeCommands: true })
-                : await db.getRecentGroupMessageLogs(effectiveGroupId, limit, { excludeCommands: true })
+                ? await db.getGroupMessageLogs({ groupId: effectiveGroupId, limit, query: effectiveQuery })
+                : await db.getRecentGroupMessageLogs(effectiveGroupId, limit)
         } else if (scope === 'my_recent_messages' || scope === 'other_group_messages') {
             effectiveUserId = isMaster && requestedUserId ? requestedUserId : actorUserId
             excludeCurrentGroup = Boolean(currentGroupId) && (scope === 'other_group_messages' || normalizeBool(args.exclude_current_group))
@@ -275,7 +276,7 @@ export const groupChatContextTool = {
                 privacyNote = '非主人跨群查询只能查看自己的消息，已忽略模型传入的其他 user_id。'
             }
             if (!db.getGroupMessageLogs) {
-                logs = await db.getRecentGroupMessageLogs(currentGroupId, limit, { excludeCommands: true })
+                logs = await db.getRecentGroupMessageLogs(currentGroupId, limit)
                 logs = logs.filter(log => log.userId === effectiveUserId)
             } else {
                 logs = await db.getGroupMessageLogs({
@@ -283,8 +284,7 @@ export const groupChatContextTool = {
                     groupIds: resolvedQueryGroupIds,
                     excludeGroupId: excludeCurrentGroup ? currentGroupId : '',
                     limit,
-                    query: effectiveQuery,
-                    excludeCommands: true
+                    query: effectiveQuery
                 })
             }
         } else if (scope === 'all_groups') {
@@ -297,8 +297,7 @@ export const groupChatContextTool = {
                 userId: effectiveUserId || '',
                 groupIds: resolvedQueryGroupIds,
                 limit,
-                query: effectiveQuery,
-                excludeCommands: true
+                query: effectiveQuery
             })
         } else if (scope === 'specific_group') {
             if (!isMaster) {
@@ -311,8 +310,7 @@ export const groupChatContextTool = {
                 groupId: effectiveGroupId,
                 userId: effectiveUserId || '',
                 limit,
-                query: effectiveQuery,
-                excludeCommands: true
+                query: effectiveQuery
             })
         }
 

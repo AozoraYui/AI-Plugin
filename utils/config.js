@@ -147,6 +147,13 @@ function parseImageLimit(val, defaultValue) {
     return Number.isFinite(num) && num >= 0 ? Math.floor(num) : defaultValue
 }
 
+function parseContextLimit(val, defaultValue) {
+    if (val === null || val === undefined || val === '') return defaultValue
+    const parsed = parseImageLimit(val, defaultValue)
+    if (parsed === Infinity) return Infinity
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : defaultValue
+}
+
 function parsePositiveInteger(val, defaultValue) {
     const num = Number(val)
     return Number.isFinite(num) && num > 0 ? Math.floor(num) : defaultValue
@@ -391,11 +398,11 @@ export const Config = {
     set enable_noa_chat(val) { config.enable_noa_chat = val === true },
     get NOA_CHAT_TRIGGER_KEYWORDS() { return config.NOA_CHAT_TRIGGER_KEYWORDS ?? defaultConfig.NOA_CHAT_TRIGGER_KEYWORDS },
     set NOA_CHAT_TRIGGER_KEYWORDS(val) { config.NOA_CHAT_TRIGGER_KEYWORDS = Array.isArray(val) ? val : defaultConfig.NOA_CHAT_TRIGGER_KEYWORDS },
-    get NOA_CHAT_CONTEXT_LIMIT() { return config.NOA_CHAT_CONTEXT_LIMIT ?? defaultConfig.NOA_CHAT_CONTEXT_LIMIT },
-    set NOA_CHAT_CONTEXT_LIMIT(val) { config.NOA_CHAT_CONTEXT_LIMIT = Number(val) || defaultConfig.NOA_CHAT_CONTEXT_LIMIT },
+    get NOA_CHAT_CONTEXT_LIMIT() { return parseContextLimit(config.NOA_CHAT_CONTEXT_LIMIT, defaultConfig.NOA_CHAT_CONTEXT_LIMIT) },
+    set NOA_CHAT_CONTEXT_LIMIT(val) { config.NOA_CHAT_CONTEXT_LIMIT = parseContextLimit(val, defaultConfig.NOA_CHAT_CONTEXT_LIMIT) },
     get NOA_CHAT_REPLY_COOLDOWN_MS() { return config.NOA_CHAT_REPLY_COOLDOWN_MS ?? defaultConfig.NOA_CHAT_REPLY_COOLDOWN_MS },
     set NOA_CHAT_REPLY_COOLDOWN_MS(val) { config.NOA_CHAT_REPLY_COOLDOWN_MS = Number(val) || defaultConfig.NOA_CHAT_REPLY_COOLDOWN_MS },
-    get NOA_CHAT_MAX_CONTEXT_IMAGES() { return config.NOA_CHAT_MAX_CONTEXT_IMAGES ?? defaultConfig.NOA_CHAT_MAX_CONTEXT_IMAGES },
+    get NOA_CHAT_MAX_CONTEXT_IMAGES() { return parseImageLimit(config.NOA_CHAT_MAX_CONTEXT_IMAGES, defaultConfig.NOA_CHAT_MAX_CONTEXT_IMAGES) },
     set NOA_CHAT_MAX_CONTEXT_IMAGES(val) {
         config.NOA_CHAT_MAX_CONTEXT_IMAGES = parseImageLimit(val, defaultConfig.NOA_CHAT_MAX_CONTEXT_IMAGES)
     },

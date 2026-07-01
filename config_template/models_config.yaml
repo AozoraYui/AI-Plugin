@@ -185,8 +185,8 @@ enable_web_fetch: false
 #   开启后，插件会全局捕获群聊消息流水（黑名单群/用户除外；文本化内容 + 图片元信息，不存图片本体）
 #   当群里当前消息提到「诺亚/noa/AI名称」或 @ 机器人，且当前群/用户有访问权限时，AI 会基于最近群上下文自然回复
 #   触发判断只看当前消息文本，不会因为引用/合并转发里出现「诺亚」而误触发
-#   # 开头命令消息默认不入库；合并/嵌套合并消息会展开，过长内容会自动分段入库
-#   NOA_CHAT_CONTEXT_LIMIT: 每次回复注入最近多少条本群畅聊流水；只影响本轮上下文，不会删除数据库记录
+#   # 开头命令消息也会入库，并在上下文里标记为历史命令记录；合并/嵌套合并消息会展开，过长内容会自动分段入库
+#   NOA_CHAT_CONTEXT_LIMIT: 每次回复注入最近多少条本群畅聊流水；可设 unlimited / -1 表示尽量读取全部记录；只影响本轮上下文，不会删除数据库记录
 #   NOA_CHAT_REPLY_COOLDOWN_MS: 同一群两次畅聊主动回复之间的冷却时间，避免刷屏
 #   NOA_CHAT_AUTO_READ_IMAGE_LIMIT: 自动读图阈值；触发消息含图数 <= 该值时自动临时读图，超过则需明确说“读图/看图/分析图片”
 #   NOA_CHAT_MAX_CONTEXT_IMAGES: 本轮最多读取多少张图；3 表示最多读 3 张，不是超过 3 张就分批；0 表示禁用畅聊读图
@@ -206,8 +206,8 @@ enable_web_fetch: false
 # enable_ai_draw: false
 # enable_group_admin: false
 # enable_group_send: false            # 代发群消息，主人专用；高风险跨群发言，默认关闭
-# enable_noa_chat: false              # 是否开启畅聊：全局捕获群消息（黑名单除外），有权限时自然回复
-# NOA_CHAT_CONTEXT_LIMIT: 60          # 每次回复读取最近 60 条本群畅聊流水作为上下文
+# enable_noa_chat: false              # 是否开启畅聊：全局捕获群消息（黑名单除外，含 # 命令消息），有权限时自然回复
+# NOA_CHAT_CONTEXT_LIMIT: 60          # 每次回复读取最近 60 条本群畅聊流水；unlimited / -1 为不限制
 # NOA_CHAT_REPLY_COOLDOWN_MS: 8000    # 同一群畅聊回复冷却 8000ms，防止连续触发刷屏
 # NOA_CHAT_MAX_CONTEXT_IMAGES: 3      # 本轮最多读 3 张图；unlimited / -1 为不限制，0 为禁用读图
 # NOA_CHAT_AUTO_READ_IMAGE_LIMIT: 2   # 单条触发消息最多 2 张图时自动读图，超过则需明确要求读图
