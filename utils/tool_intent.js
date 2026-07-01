@@ -115,9 +115,10 @@ export function hasExplicitWebFetchIntent(text, candidateUrls = []) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
     const hasUrl = extractUrls(value).length > 0 || (Array.isArray(candidateUrls) && candidateUrls.length > 0)
-    return hasUrl && (/(?:看|看看|打开|读取|抓取|总结|分析|解释|概括).{0,20}(?:链接|网页|网址|页面|内容|这个|这条|上面)/i.test(value)
+    return hasUrl && (/\bfetch\b|(?:抓一下|爬一下|扒一下)/i.test(value)
+        || /(?:看|看看|打开|读取|抓取|总结|分析|解释|概括).{0,20}(?:链接|网页|网址|页面|内容|这个|这条|上面)/i.test(value)
         || /(?:这个|这条|上面).{0,8}(?:链接|网页|网址).{0,12}(?:讲|说|内容|总结|看看|分析)/i.test(value)
-        || /^(?:帮我|给我|请|麻烦你?)?\s*(?:看|看看|看一下|打开|读取|抓取|总结|总结一下|概括|分析|解释)(?:一下|下)?[。！!？?\s]*$/i.test(value))
+        || /^(?:帮我|给我|请|麻烦你?)?\s*(?:fetch|看|看看|看一下|打开|读取|抓取|抓一下|爬一下|扒一下|总结|总结一下|概括|分析|解释)(?:一下|下)?[。！!？?\s]*$/i.test(value))
 }
 
 export function hasExplicitFileDownloadIntent(text, options = {}) {

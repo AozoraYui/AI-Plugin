@@ -443,7 +443,8 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
 
     // 6) 明确要求查看/总结链接内容：直接走 web_fetch（仅在工具已启用时）。
     if (hasTool(enabledTools, 'web_fetch') && urls.length > 0) {
-        const fetchIntent = /(?:看|看看|打开|读取|抓取|总结|分析|解释|概括).{0,20}(?:链接|网页|网址|页面|内容|这个)/i.test(routeText)
+        const fetchIntent = /\bfetch\b|(?:抓一下|爬一下|扒一下)/i.test(routeText)
+            || /(?:看|看看|打开|读取|抓取|总结|分析|解释|概括).{0,20}(?:链接|网页|网址|页面|内容|这个)/i.test(routeText)
             || /(?:这个|这条|上面).{0,8}(?:链接|网页|网址).{0,12}(?:讲|说|内容|总结|看看|分析)/i.test(routeText)
         if (fetchIntent) {
             return {
