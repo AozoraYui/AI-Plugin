@@ -15,6 +15,7 @@ const PERSONAL_MEMORY_MAX_CHARS = 2600
 const PERSONAL_HISTORY_CONTEXT_MAX_CHARS = 2600
 const NOA_IMAGE_SUMMARY_MAX_CHARS = 12000
 const NOA_IMAGE_COMPACT_INPUT_MAX_CHARS = 30000
+const NOA_CAPTURE_CHUNK_CHARS = 4000
 
 function truncateText(text, maxLength = 900) {
     const value = String(text || '').trim()
@@ -153,14 +154,11 @@ function isBlacklistedForCapture(e) {
 }
 
 async function checkCaptureAccess(e) {
-    if (Config.NOA_CHAT_CAPTURE_MODE === 'all') {
-        if (isBlacklistedForCapture(e)) {
-            logger.debug(`[AI-Plugin] [畅聊] 捕获跳过黑名单群/用户: 群 ${e.group_id}, 用户 ${e.user_id}`)
-            return false
-        }
-        return true
+    if (isBlacklistedForCapture(e)) {
+        logger.debug(`[AI-Plugin] [畅聊] 捕获跳过黑名单群/用户: 群 ${e.group_id}, 用户 ${e.user_id}`)
+        return false
     }
-    return await checkAccess(e)
+    return true
 }
 
 async function normalizeGroupMessage(e) {
@@ -253,8 +251,7 @@ function splitTextByLength(text, maxLength) {
 }
 
 function buildCaptureLogEntries(normalized) {
-    const chunkSize = Config.NOA_CHAT_CAPTURE_CHUNK_CHARS
-    const chunks = splitTextByLength(normalized.normalizedText, chunkSize)
+    const chunks = splitTextByLength(normalized.normalizedText, NOA_CAPTURE_CHUNK_CHARS)
     if (chunks.length <= 1) return [normalized]
 
     return chunks.map((chunk, index) => ({
@@ -671,19 +668,18 @@ export class NoaChatHandler extends plugin {
     }
 
     async handleNoaChat(e) {
-        const captureEnabled = this.client?.enableNoaCapture || Config.enable_noa_capture === true
-        const replyEnabled = this.client?.enableNoaReply || Config.enable_noa_reply === true
-        if (!captureEnabled && !replyEnabled) return false
+        const enabled = this.client?.enableNoaChat || Config.enable_noa_chat === true
+        if (!enabled) return false
         if (!e.group_id || !e.message || !Array.isArray(e.message)) return false
 
-        const captureAllowed = captureEnabled && await checkCaptureAccess(e)
-        const replyAllowed = replyEnabled && await checkAccess(e)
+        const captureAllowed = await checkCaptureAccess(e)
+        const replyAllowed = await checkAccess(e)
         if (!captureAllowed && !replyAllowed) return false
 
         const normalized = await normalizeGroupMessage(e)
         if (!normalized.normalizedText) return false
 
-        if (captureAllowed && (Config.NOA_CHAT_CAPTURE_COMMANDS === true || !normalized.isCommand)) {
+        if (captureAllowed && !normalized.isCommand) {
             try {
                 const entries = buildCaptureLogEntries(normalized)
                 let savedCount = 0

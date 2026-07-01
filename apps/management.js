@@ -21,8 +21,6 @@ function saveRuntimeSwitch(key, value) {
                 value.enable_group_admin !== undefined ||
                 value.enable_group_send !== undefined ||
                 value.enable_noa_chat !== undefined ||
-                value.enable_noa_capture !== undefined ||
-                value.enable_noa_reply !== undefined ||
                 value.show_thinking !== undefined ||
                 value.draw_review_after_generate !== undefined
             )
@@ -186,14 +184,8 @@ export class ManagementHandler extends plugin {
         const isTurnOn = e.msg.includes('开启')
         try {
             saveRuntimeSwitch('enable_noa_chat', isTurnOn)
-            saveRuntimeSwitch('enable_noa_capture', isTurnOn)
-            saveRuntimeSwitch('enable_noa_reply', isTurnOn)
             Config.enable_noa_chat = isTurnOn
-            Config.enable_noa_capture = isTurnOn
-            Config.enable_noa_reply = isTurnOn
             this.client.noaChatConfig = { enabled: isTurnOn }
-            this.client.noaCaptureConfig = { enabled: isTurnOn }
-            this.client.noaReplyConfig = { enabled: isTurnOn }
             logger.info(`[AI-Plugin] 畅聊模式已${isTurnOn ? '开启' : '关闭'}（运行时立即生效）`)
             await e.reply(isTurnOn
                 ? '✅ 已开启畅聊模式。群消息会被捕获；有人在当前消息里提到诺亚/noa 或 @我 时，我会基于最近群上下文自然回复。'
@@ -345,9 +337,7 @@ export class ManagementHandler extends plugin {
             const shellSessionMode = this.client.enableShellSession ? `✅ 开启 (${Config.SHELL_SESSION_NAME})` : '🚫 关闭'
             const groupAdminMode = this.client.enableGroupAdmin ? '✅ 开启' : '🚫 关闭'
             const groupSendMode = this.client.enableGroupSend ? '✅ 开启' : '🚫 关闭'
-            const noaChatMode = (this.client.enableNoaCapture || Config.enable_noa_capture || this.client.enableNoaReply || Config.enable_noa_reply)
-                ? `✅ 捕获${(this.client.enableNoaCapture || Config.enable_noa_capture) ? '开' : '关'} / 回复${(this.client.enableNoaReply || Config.enable_noa_reply) ? '开' : '关'}`
-                : '🚫 关闭'
+            const noaChatMode = (this.client.enableNoaChat || Config.enable_noa_chat) ? '✅ 开启' : '🚫 关闭'
 
             const trustedGroups = Config.trustedGroups
             const trustedGroupCount = trustedGroups.length

@@ -174,12 +174,7 @@ enable_web_fetch: false
 # enable_group_send: false    # 代发群消息，主人专用；默认关闭，开启后可向指定群发送纯文本
 
 # 畅聊模式（可选）
-# enable_noa_chat: false              # 兼容旧版的一键畅聊总开关；未设置下面两项时同时控制捕获和回复
-# enable_noa_capture: false           # 是否捕获群消息流水；可单独开启全局旁听
-# enable_noa_reply: false             # 是否允许提到诺亚/noa/@机器人时自然回复
-# NOA_CHAT_CAPTURE_MODE: access       # 捕获范围：access 遵守权限配置；all 捕获所有群但仍尊重黑名单
-# NOA_CHAT_CAPTURE_COMMANDS: false    # 是否保存 # 开头命令消息
-# NOA_CHAT_CAPTURE_CHUNK_CHARS: 4000  # 长消息/合并转发超过该长度会拆成多段入库
+# enable_noa_chat: false              # 是否开启畅聊：全局捕获群消息（黑名单除外），有权限时自然回复
 # NOA_CHAT_CONTEXT_LIMIT: 60          # 每次回复读取最近 60 条本群畅聊流水作为上下文
 # NOA_CHAT_REPLY_COOLDOWN_MS: 8000    # 同一群畅聊回复冷却 8000ms，防止连续触发刷屏
 # NOA_CHAT_MAX_CONTEXT_IMAGES: 3      # 本轮最多读 3 张图；unlimited / -1 为不限制，0 为禁用读图
@@ -277,7 +272,7 @@ name: 诺亚
 | `诺亚看图/读图/分析图片` | 明确要求畅聊临时读取图片内容 |
 
 > 💡 畅聊模式只保存文本化消息和图片元信息，不保存图片本体或 base64。
->  合并转发/嵌套合并转发会按配置展开成文本；内容超过 `NOA_CHAT_CAPTURE_CHUNK_CHARS` 会拆成多段入库，避免单条上下文过大。
+>  合并转发/嵌套合并转发会展开成文本；过长内容会自动拆成多段入库，避免单条上下文过大。
 >  `#chat` 不会默认读取全局监听库；只有明确要求“读取/查询/总结群聊记录、畅聊记录、消息流水、群上下文”时才会调用群聊上下文工具。
 >  触发消息含 1-2 张图时会自动临时读取；超过 `NOA_CHAT_AUTO_READ_IMAGE_LIMIT` 默认不读，除非明确要求读图。
 >  每轮最多临时读取 `NOA_CHAT_MAX_CONTEXT_IMAGES` 张图；`3` 表示最多读 3 张，不是超过 3 张就分批；该值可设为 `unlimited` 或 `-1` 表示不限制，`0` 表示禁用畅聊读图。
