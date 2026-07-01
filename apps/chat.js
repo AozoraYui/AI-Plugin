@@ -13,7 +13,7 @@ import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserProfileText } from '../utils/user_profile.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
-import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseGroupLeaveRequest, parseGroupSendRequest } from '../utils/tool_intent.js'
+import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseGroupLeaveRequest, parseGroupSendRequest } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction } from '../utils/pending_actions.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { executePendingGroupSend } from '../tools/group_send.js'
@@ -453,7 +453,7 @@ function parseUserProfileUpdateRequest(text) {
     const value = getPrimaryUserInstruction(text).trim()
     if (!hasExplicitUserProfileUpdateIntent(value)) return null
     const args = {}
-    const historyMode = /(?:从|根据).{0,20}(?:刚才|上面|前面|最近|历史|聊天|对话).{0,30}(?:提炼|抽取|整理|总结|更新|维护|记住|记一下|记下来)|(?:提炼|抽取|整理|总结|更新|维护|记住|记一下|记下来).{0,20}(?:刚才|上面|前面|最近|历史|聊天|对话)/i.test(value)
+    const historyMode = hasExplicitUserProfileHistoryExtractionIntent(value)
     const sourceMatch = value.match(/(?:个人档案|用户档案|用户画像|个人画像|我的档案|我的画像|长期档案|长期记忆|稳定画像)\s*[：:，,]\s*([\s\S]{1,4000})$/i)
         || value.match(/(?:记到|记进|写到|写进|存到|存进).{0,16}(?:个人档案|用户档案|用户画像|个人画像|我的档案|我的画像|长期档案|长期记忆|稳定画像)\s*[：:，,]?\s*([\s\S]{1,4000})$/i)
         || value.match(/(?:把|将)\s*([\s\S]{1,4000}?)\s*(?:记到|记进|写到|写进|存到|存进).{0,16}(?:个人档案|用户档案|用户画像|个人画像|我的档案|我的画像|长期档案|长期记忆|稳定画像)/i)
@@ -874,7 +874,7 @@ ${toolSummary}
 - 用户问“我刚在别的群/其他群发了什么”“你看到我在别的群说的话吗”时，计划 group_chat_context，params_hint 写 scope=other_group_messages、exclude_current_group=true；这只查询当前触发者自己的跨群消息。
 - 只有当前操作者是主人且用户明确要求跨群/所有群/指定群的已捕获流水时，才计划 group_chat_context 的 scope=all_groups 或 specific_group；非主人不要计划读取其他人的跨群消息。主人按群名问某个群但你暂时没有群号时，可在 params_hint 里把群名写入 query，工具会尝试解析群号。
 - 用户问“这个人是谁/@某某有什么外号/谁是杂鱼/谁被叫过xxx/本群怎么称呼某人”时，计划 group_member_aliases 查询本群称呼记忆；这类结果只代表群内公开聊天里的称呼记录，不是真实身份断言。
-- 用户明确要求“记到我的个人档案/写进我的用户画像/更新个人档案/从刚才聊天提炼我的档案”时，计划 user_profile_update；只是询问“能不能写档案/有没有档案”不要计划。普通用户只更新自己的档案，主人明确指定用户时才可带 user_id。
+- 用户明确要求“记到我的个人档案/写进我的用户画像/更新个人档案/从刚才聊天提炼我的档案”时，计划 user_profile_update；“全面读我们的对话提炼档案/从我在所有群的发言里提炼/结合当前群上下文更新画像”也计划 user_profile_update，让工具按自然语言选择来源。只是询问“能不能写档案/有没有档案”不要计划。普通用户只更新自己的档案，主人明确指定用户时才可带 user_id。
 - 主人明确要求“帮我在某群说/发/转达某段文本”时，才计划 group_send_message；必须有目标群和明确消息内容。支持显式多个目标，但工具会先创建待确认操作，不会直接发送。不要替主人编写、润色或补全要发送的内容，目标群不明确时不要计划。
 - 主人明确要求“退出/离开/退了某群”时，才计划 group_leave；支持群号、唯一群名、本群/当前群，以及显式列出的多个目标。开放式“所有群/全部群/不友好那些群”不要计划，需让主人先明确群号或群名。group_leave 只创建待确认操作，确认后才真正退群。
 - 只计划“可用工具”中列出的工具，最多 5 个。
@@ -1458,6 +1458,7 @@ export class ChatHandler extends plugin {
                 }
                 const executedShellCommands = []
                 let groupChatContextToolUsed = false
+                let suppressAutoNoaContext = false
                 // 工具规划注入：只在实际调用工具时告诉最终回复模型本轮执行依据。
                 if (intent && toolCalls.length > 0) {
                     userMessage = userMessage + `\n\n【工具规划】${intent}`
@@ -1567,6 +1568,7 @@ export class ChatHandler extends plugin {
                             userMessage = userMessage + '\n\n【重要指令】以上为当前群公开聊天中提取的成员称呼/外号记录。请只把它当作群内称呼或调侃记录来转述，不要当作真实身份、事实断言或攻击性结论。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (call.name === 'user_profile_update') {
+                            suppressAutoNoaContext = true
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为个人档案维护工具的实际结果。请只简短告知用户已更新或失败原因；不要在公开群里复述个人档案全文，也不要编造工具没有写入的内容。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
@@ -1591,7 +1593,7 @@ export class ChatHandler extends plugin {
                     }
                 }
 
-                if (!groupChatContextToolUsed) {
+                if (!groupChatContextToolUsed && !suppressAutoNoaContext) {
                     try {
                         const autoNoaContextBlock = await buildAutoNoaChatContextBlock(
                             this.client,

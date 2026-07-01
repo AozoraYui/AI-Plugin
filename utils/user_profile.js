@@ -1,7 +1,7 @@
 import { isAIErrorResponse } from './common.js'
 
 const OLD_PROFILE_MAX_CHARS = 12000
-const SUMMARY_SOURCE_MAX_CHARS = 36000
+const SUMMARY_SOURCE_MAX_CHARS = 90000
 const PROFILE_OUTPUT_MAX_TOKENS = 4096
 
 function truncateText(value, maxChars) {

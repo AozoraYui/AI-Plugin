@@ -265,8 +265,8 @@ export function hasExplicitGroupChatContextIntent(text) {
 export function hasExplicitUserProfileUpdateIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
-    if (/^(?:你|诺亚|noa)?\s*(?:会不会|能不能|可以|能).{0,20}(?:写|更新|维护|记).{0,20}(?:个人档案|用户档案|用户画像|档案|画像|长期记忆).{0,10}(?:吗|嘛|么|？|\?)/i.test(value)
-        && !/(?:帮我|给我|请|麻烦|现在|直接).{0,16}(?:写|更新|维护|记|提炼)/i.test(value)) {
+    if (/^(?:你|诺亚|noa)?\s*(?:会不会|能不能|可以|能).{0,20}(?:写|更新|维护|记|提炼|抽取|整理|总结).{0,20}(?:个人档案|用户档案|用户画像|档案|画像|长期记忆).{0,10}(?:吗|嘛|么|？|\?)/i.test(value)
+        && !/(?:帮我|给我|请|麻烦|现在|直接).{0,16}(?:写|更新|维护|记|提炼|抽取|整理|总结)/i.test(value)) {
         return false
     }
     const object = '(?:个人档案|用户档案|用户画像|个人画像|我的档案|我的画像|长期档案|长期记忆|稳定画像)'
@@ -275,8 +275,19 @@ export function hasExplicitUserProfileUpdateIntent(text) {
     const personalSignal = '(?:我|我的|叫我|称呼|名字|昵称|喜欢|不喜欢|偏好|习惯|常用|住在|来自|职业|身份|项目|性格|雷点|忌口)'
     return new RegExp(`${action}.{0,24}${object}|${object}.{0,24}${action}`, 'i').test(value)
         || /(?:把|将).{1,120}(?:记到|记进|写到|写进|存到|存进).{0,16}(?:档案|画像|长期记忆)/i.test(value)
-        || /(?:从|根据).{0,20}(?:刚才|上面|前面|最近|历史|聊天|对话).{0,30}(?:提炼|抽取|整理|总结).{0,20}(?:档案|画像|长期记忆)/i.test(value)
+        || hasExplicitUserProfileHistoryExtractionIntent(value)
         || new RegExp(`${memoryAction}.{0,100}${personalSignal}|${personalSignal}.{0,100}${memoryAction}`, 'i').test(value)
+}
+
+export function hasExplicitUserProfileHistoryExtractionIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    const source = '(?:刚才|刚刚|上面|前面|最近|历史|聊天|对话|上下文|记录|我们(?:的)?(?:聊天|对话|记录)?|咱们(?:的)?(?:聊天|对话|记录)?|我(?:和|跟|与)你(?:的)?(?:聊天|对话|记录)?|你(?:和|跟|与)我(?:的)?(?:聊天|对话|记录)?)'
+    const action = '(?:全面读|完整读|全部读|通读|读(?:一下|一遍)?|看(?:一下|一遍)?|回顾|梳理|提炼|抽取|整理|总结|更新|维护|生成|写成|整理成|提炼成|做成|变成)'
+    const object = '(?:个人档案|用户档案|用户画像|个人画像|我的档案|我的画像|长期档案|长期记忆|稳定画像|档案|画像)'
+    return new RegExp(`(?:从|根据|基于|围绕)?.{0,12}${source}.{0,50}${action}.{0,40}${object}`, 'i').test(value)
+        || new RegExp(`${action}.{0,50}${source}.{0,50}${object}`, 'i').test(value)
+        || new RegExp(`${source}.{0,50}${object}.{0,30}${action}`, 'i').test(value)
 }
 
 export function hasGroupChatContextQuestion(text) {
