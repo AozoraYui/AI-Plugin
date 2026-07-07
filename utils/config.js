@@ -108,6 +108,8 @@ const defaultConfig = {
     SHELL_EXEC_MAX_BUFFER: 20971520,
     // 模型请求默认超时（毫秒）：普通对话/工具规划，避免上游长时间无响应
     MODEL_CHAT_REQUEST_TIMEOUT_MS: 90000,
+    // 模型请求默认超时（毫秒）：Ultra 模型组对话请求，长思考模型可能需要更久
+    MODEL_ULTRA_REQUEST_TIMEOUT_MS: 600000,
     // 模型请求默认超时（毫秒）：绘图请求通常更慢
     MODEL_IMAGE_REQUEST_TIMEOUT_MS: 180000,
     // 模型请求默认超时（毫秒）：长摘要/大输出请求
@@ -441,6 +443,11 @@ export const Config = {
     set MODEL_CHAT_REQUEST_TIMEOUT_MS(val) {
         const num = Number(val)
         config.MODEL_CHAT_REQUEST_TIMEOUT_MS = Number.isFinite(num) && num > 0 ? Math.floor(num) : defaultConfig.MODEL_CHAT_REQUEST_TIMEOUT_MS
+    },
+    get MODEL_ULTRA_REQUEST_TIMEOUT_MS() { return config.MODEL_ULTRA_REQUEST_TIMEOUT_MS ?? defaultConfig.MODEL_ULTRA_REQUEST_TIMEOUT_MS },
+    set MODEL_ULTRA_REQUEST_TIMEOUT_MS(val) {
+        const num = Number(val)
+        config.MODEL_ULTRA_REQUEST_TIMEOUT_MS = Number.isFinite(num) && num > 0 ? Math.floor(num) : defaultConfig.MODEL_ULTRA_REQUEST_TIMEOUT_MS
     },
     get MODEL_IMAGE_REQUEST_TIMEOUT_MS() { return config.MODEL_IMAGE_REQUEST_TIMEOUT_MS ?? defaultConfig.MODEL_IMAGE_REQUEST_TIMEOUT_MS },
     set MODEL_IMAGE_REQUEST_TIMEOUT_MS(val) {
