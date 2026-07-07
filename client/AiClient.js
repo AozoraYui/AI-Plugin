@@ -10,6 +10,7 @@ import { toolRegistry } from '../tools/index.js'
 const CONSECUTIVE_FAILS_THRESHOLD = 3    // 连续失败 N 次后熔断
 const COOLDOWN_DURATION_MS = 30000        // 熔断冷却 30 秒
 const LATENCY_SAMPLE_WEIGHT = 0.3         // 新延迟占 30% 加权（平滑指数）
+const ULTRA_CHAT_REQUEST_TIMEOUT_MS = 600000 // Ultra 长思考模型固定等待 10 分钟
 
 export class AiClient {
     constructor() {
@@ -359,7 +360,6 @@ export class AiClient {
                 value.SHELL_SESSION_CAPTURE_LINES !== undefined ||
                 value.SHELL_SESSION_MAX_OUTPUT_CHARS !== undefined ||
                 value.MODEL_CHAT_REQUEST_TIMEOUT_MS !== undefined ||
-                value.MODEL_ULTRA_REQUEST_TIMEOUT_MS !== undefined ||
                 value.MODEL_IMAGE_REQUEST_TIMEOUT_MS !== undefined ||
                 value.MODEL_LONG_REQUEST_TIMEOUT_MS !== undefined ||
                 value.enable_file_transfer !== undefined ||
@@ -480,7 +480,7 @@ export class AiClient {
                 if (Array.isArray(rawConfig.NOA_CHAT_TRIGGER_KEYWORDS)) {
                     Config.NOA_CHAT_TRIGGER_KEYWORDS = rawConfig.NOA_CHAT_TRIGGER_KEYWORDS
                 }
-                for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_FOLLOWUP_MAX_ROUNDS', 'SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS', 'SHELL_EXEC_MAX_BUFFER', 'SHELL_SESSION_NAME', 'SHELL_SESSION_CAPTURE_LINES', 'SHELL_SESSION_MAX_OUTPUT_CHARS', 'SHELL_SESSION_AFTER_SEND_DELAY_MS', 'SHELL_SESSION_AFTER_SEND_TIMEOUT_MS', 'SHELL_SESSION_AFTER_SEND_POLL_MS', 'MODEL_CHAT_REQUEST_TIMEOUT_MS', 'MODEL_ULTRA_REQUEST_TIMEOUT_MS', 'MODEL_IMAGE_REQUEST_TIMEOUT_MS', 'MODEL_LONG_REQUEST_TIMEOUT_MS']) {
+                for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_FOLLOWUP_MAX_ROUNDS', 'SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS', 'SHELL_EXEC_MAX_BUFFER', 'SHELL_SESSION_NAME', 'SHELL_SESSION_CAPTURE_LINES', 'SHELL_SESSION_MAX_OUTPUT_CHARS', 'SHELL_SESSION_AFTER_SEND_DELAY_MS', 'SHELL_SESSION_AFTER_SEND_TIMEOUT_MS', 'SHELL_SESSION_AFTER_SEND_POLL_MS', 'MODEL_CHAT_REQUEST_TIMEOUT_MS', 'MODEL_IMAGE_REQUEST_TIMEOUT_MS', 'MODEL_LONG_REQUEST_TIMEOUT_MS']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
                 if (this.enableShellExec) {
@@ -973,7 +973,7 @@ export class AiClient {
 
     _resolveRequestTimeout(type, maxTokens = 8192, modelGroupKey = 'flash') {
         if (type === 'image') return Config.MODEL_IMAGE_REQUEST_TIMEOUT_MS
-        if (normalizeModelGroup(modelGroupKey, 'flash') === 'ultra') return Config.MODEL_ULTRA_REQUEST_TIMEOUT_MS
+        if (normalizeModelGroup(modelGroupKey, 'flash') === 'ultra') return ULTRA_CHAT_REQUEST_TIMEOUT_MS
         if (Number(maxTokens) > 16384) return Config.MODEL_LONG_REQUEST_TIMEOUT_MS
         return Config.MODEL_CHAT_REQUEST_TIMEOUT_MS
     }

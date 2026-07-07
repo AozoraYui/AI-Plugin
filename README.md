@@ -165,8 +165,7 @@ vision_model:
 enable_web_search: false
 # intent_model: []
 enable_web_fetch: false
-# MODEL_CHAT_REQUEST_TIMEOUT_MS: 90000   # 普通对话/工具规划/最终回复的单模型超时
-# MODEL_ULTRA_REQUEST_TIMEOUT_MS: 600000 # Ultra 模型组对话请求的单模型超时，适合长思考模型
+# MODEL_CHAT_REQUEST_TIMEOUT_MS: 90000  # 普通对话/工具规划/最终回复的单模型超时
 # MODEL_IMAGE_REQUEST_TIMEOUT_MS: 180000 # 绘图请求的单模型超时
 # MODEL_LONG_REQUEST_TIMEOUT_MS: 240000  # 长摘要/大输出请求的单模型超时
 # enable_shell_exec: false # 默认关闭；开启后允许主人让 AI 执行 Shell
