@@ -10,6 +10,8 @@ import json
 import os
 import sys
 import threading
+import time
+import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # huggingface_hub reads HF_ENDPOINT during import in some versions, so set it
@@ -35,6 +37,7 @@ chroma_client = None
 collection = None
 is_ready = False
 init_error = ""
+init_failed = False
 
 
 def sanitize_metadata(metadata):
@@ -68,8 +71,13 @@ def write_json(handler, status, payload):
     handler.wfile.write(body)
 
 
-def init_model():
-    global embedding_model, chroma_client, collection, is_ready, init_error
+def shutdown_after_init_failure(server):
+    time.sleep(0.5)
+    server.shutdown()
+
+
+def init_model(server=None):
+    global embedding_model, chroma_client, collection, is_ready, init_error, init_failed
     try:
         print(f"HuggingFace endpoint: {os.environ.get('HF_ENDPOINT', '')}", flush=True)
         print(f"Loading embedding model: {MODEL_NAME}", flush=True)
@@ -82,8 +90,12 @@ def init_model():
         is_ready = True
         print("Vector database ready", flush=True)
     except Exception as exc:
-        init_error = str(exc)
+        init_failed = True
+        init_error = f"{type(exc).__name__}: {exc}"
         print(f"Vector database init failed: {init_error}", flush=True)
+        print(traceback.format_exc(), flush=True)
+        if server is not None:
+            threading.Thread(target=shutdown_after_init_failure, args=(server,), daemon=True).start()
 
 
 def reset_collection():
@@ -131,6 +143,7 @@ class VectorDBHandler(BaseHTTPRequestHandler):
     def handle_health(self):
         write_json(self, 200, {
             "ready": is_ready,
+            "failed": init_failed,
             "error": init_error,
             "model": MODEL_NAME,
             "collection": COLLECTION_NAME,
@@ -271,7 +284,7 @@ def main():
     os.makedirs(CHROMA_DB_PATH, exist_ok=True)
     server = ReusableHTTPServer((SERVER_HOST, SERVER_PORT), VectorDBHandler)
     print(f"HTTP server listening at http://{SERVER_HOST}:{SERVER_PORT}", flush=True)
-    threading.Thread(target=init_model, daemon=True).start()
+    threading.Thread(target=init_model, args=(server,), daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -117,9 +117,15 @@ export class VectorDBClient {
                 return { reachable: true, compatible: false, ready: false, error: this.lastError, model, collection }
             }
             const ready = data?.ready === true
+            const errorText = typeof data?.error === 'string' ? data.error.trim() : ''
+            if (!ready && (data?.failed === true || errorText)) {
+                this.isReady = false
+                this.lastError = errorText || '向量服务初始化失败'
+                return { reachable: true, compatible: true, ready: false, failed: true, error: this.lastError, model, collection }
+            }
             this.isReady = ready
-            this.lastError = data?.error || ''
-            return { reachable: true, compatible: true, ready, error: this.lastError, model, collection }
+            this.lastError = errorText
+            return { reachable: true, compatible: true, ready, failed: false, error: this.lastError, model, collection }
         } catch (err) {
             return { reachable: false, compatible: false, ready: false, error: err.message }
         }
@@ -140,6 +146,7 @@ export class VectorDBClient {
                 return false
             }
             if (!health.compatible) return false
+            if (health.failed) return false
             if (health.ready) return true
             lastError = health.error || lastError
             await sleep(1500)
@@ -196,6 +203,10 @@ export class VectorDBClient {
                 logger.warn(`[AI-Plugin] 向量记忆跳过启动: ${this.lastError}`)
                 return false
             }
+            if (health.failed) {
+                logger.warn(`[AI-Plugin] 向量记忆跳过启动: ${this.lastError}`)
+                return false
+            }
             logger.info(`[AI-Plugin] 检测到已有向量记忆服务正在启动，等待就绪: ${this.serverUrl}`)
             const ready = await this.waitForExistingServiceReady(STARTUP_TIMEOUT_MS)
             if (ready) logger.info(`[AI-Plugin] 向量记忆服务启动完成: ${this.serverUrl}`)
@@ -231,6 +242,8 @@ export class VectorDBClient {
             if (!msg) return
             logger.info(`[AI-Plugin] [向量服务] ${msg}`)
             if (msg.includes('Vector database ready')) this.isReady = true
+            const failedMatch = msg.match(/Vector database init failed:\s*(.+)$/m)
+            if (failedMatch) this.lastError = failedMatch[1].trim()
         })
         this.pythonProcess.stderr.on('data', data => {
             const msg = data.toString().trim()
