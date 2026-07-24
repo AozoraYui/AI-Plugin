@@ -134,6 +134,8 @@ class VectorDBHandler(BaseHTTPRequestHandler):
             "error": init_error,
             "model": MODEL_NAME,
             "collection": COLLECTION_NAME,
+            "path": CHROMA_DB_PATH,
+            "endpoint": os.environ.get("HF_ENDPOINT", ""),
         })
 
     def handle_stats(self):
@@ -261,9 +263,13 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         return
 
 
+class ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
+
 def main():
     os.makedirs(CHROMA_DB_PATH, exist_ok=True)
-    server = HTTPServer((SERVER_HOST, SERVER_PORT), VectorDBHandler)
+    server = ReusableHTTPServer((SERVER_HOST, SERVER_PORT), VectorDBHandler)
     print(f"HTTP server listening at http://{SERVER_HOST}:{SERVER_PORT}", flush=True)
     threading.Thread(target=init_model, daemon=True).start()
     try:

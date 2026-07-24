@@ -13,6 +13,10 @@ const DEFAULT_PORT = 9901
 const HEALTH_TIMEOUT_MS = 2500
 const STARTUP_TIMEOUT_MS = 180000
 
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms))
+}
+
 function execFileQuiet(command, args = []) {
     return new Promise(resolve => {
         execFile(command, args, { timeout: 20000 }, (error, stdout = '', stderr = '') => {
@@ -88,20 +92,60 @@ export class VectorDBClient {
         return String(process.env.AI_PLUGIN_VECTOR_MODEL || Config.VECTOR_MODEL || 'shibing624/text2vec-base-chinese')
     }
 
-    async checkHealth() {
+    async probeHealth() {
         try {
             const res = await fetch(`${this.serverUrl}/health`, {
                 method: 'GET',
                 signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS)
             })
-            if (!res.ok) return false
+            if (!res.ok) {
+                this.isReady = false
+                this.lastError = `${this.serverUrl} 已被占用，/health 返回 HTTP ${res.status}`
+                return { reachable: true, compatible: false, ready: false, error: this.lastError }
+            }
             const data = await res.json()
-            this.isReady = data?.ready === true
+            const model = typeof data?.model === 'string' ? data.model.trim() : ''
+            const collection = typeof data?.collection === 'string' ? data.collection.trim() : ''
+            if (!model || !collection || data?.ready === undefined) {
+                this.isReady = false
+                this.lastError = `${this.serverUrl} 已被其他服务占用`
+                return { reachable: true, compatible: false, ready: false, error: this.lastError }
+            }
+            if (model !== this.modelName) {
+                this.isReady = false
+                this.lastError = `端口 ${this.port} 已有向量服务，但模型不匹配: 当前=${model} / 期望=${this.modelName}`
+                return { reachable: true, compatible: false, ready: false, error: this.lastError, model, collection }
+            }
+            const ready = data?.ready === true
+            this.isReady = ready
             this.lastError = data?.error || ''
-            return this.isReady
-        } catch {
-            return false
+            return { reachable: true, compatible: true, ready, error: this.lastError, model, collection }
+        } catch (err) {
+            return { reachable: false, compatible: false, ready: false, error: err.message }
         }
+    }
+
+    async checkHealth() {
+        const health = await this.probeHealth()
+        return health.compatible === true && health.ready === true
+    }
+
+    async waitForExistingServiceReady(timeoutMs = STARTUP_TIMEOUT_MS) {
+        const deadline = Date.now() + timeoutMs
+        let lastError = ''
+        while (Date.now() < deadline) {
+            const health = await this.probeHealth()
+            if (!health.reachable) {
+                this.lastError = '已存在的向量服务不再响应，请重新执行本命令。'
+                return false
+            }
+            if (!health.compatible) return false
+            if (health.ready) return true
+            lastError = health.error || lastError
+            await sleep(1500)
+        }
+        this.lastError = `已有向量服务在 ${Math.round(timeoutMs / 1000)} 秒内未就绪${lastError ? `: ${lastError}` : ''}`
+        return false
     }
 
     async checkPythonDeps() {
@@ -125,14 +169,38 @@ export class VectorDBClient {
         }
         if (this.initPromise) return this.initPromise
         this.initStarted = true
-        this.initPromise = this._init()
+        this.initPromise = this._init().then(ok => {
+            if (!ok) {
+                this.initPromise = null
+                this.initStarted = false
+            }
+            return ok
+        }).catch(err => {
+            this.lastError = err.message
+            this.initPromise = null
+            this.initStarted = false
+            logger.warn(`[AI-Plugin] 向量记忆初始化异常: ${err.message}`)
+            return false
+        })
         return this.initPromise
     }
 
     async _init() {
-        if (await this.checkHealth()) {
+        const health = await this.probeHealth()
+        if (health.compatible && health.ready) {
             logger.info(`[AI-Plugin] 向量记忆服务已就绪: ${this.serverUrl}`)
             return true
+        }
+        if (health.reachable) {
+            if (!health.compatible) {
+                logger.warn(`[AI-Plugin] 向量记忆跳过启动: ${this.lastError}`)
+                return false
+            }
+            logger.info(`[AI-Plugin] 检测到已有向量记忆服务正在启动，等待就绪: ${this.serverUrl}`)
+            const ready = await this.waitForExistingServiceReady(STARTUP_TIMEOUT_MS)
+            if (ready) logger.info(`[AI-Plugin] 向量记忆服务启动完成: ${this.serverUrl}`)
+            else logger.warn(`[AI-Plugin] ${this.lastError}`)
+            return ready
         }
 
         if (!fs.existsSync(PYTHON_SCRIPT)) {
@@ -170,11 +238,16 @@ export class VectorDBClient {
         })
         this.pythonProcess.on('exit', code => {
             this.isReady = false
+            if (code !== 0 && !this.lastError) this.lastError = `向量记忆服务已退出: code=${code}`
+            this.initPromise = null
+            this.initStarted = false
             logger.warn(`[AI-Plugin] 向量记忆服务已退出: code=${code}`)
         })
         this.pythonProcess.on('error', err => {
             this.lastError = err.message
             this.isReady = false
+            this.initPromise = null
+            this.initStarted = false
             logger.warn(`[AI-Plugin] 向量记忆服务启动失败: ${err.message}`)
         })
 
@@ -184,16 +257,17 @@ export class VectorDBClient {
                 logger.info(`[AI-Plugin] 向量记忆服务启动完成: ${this.serverUrl}`)
                 return true
             }
-            await new Promise(resolve => setTimeout(resolve, 1500))
+            if (this.pythonProcess?.exitCode !== null && !this.isReady) break
+            await sleep(1500)
         }
-        this.lastError = '向量记忆服务启动超时'
+        if (!this.lastError) this.lastError = '向量记忆服务启动超时'
         logger.warn(`[AI-Plugin] ${this.lastError}`)
         return false
     }
 
     async waitForReady(timeoutMs = 0) {
         if (this.isReady || await this.checkHealth()) return true
-        if (!this.initStarted && this.enabled) this.init().catch(err => {
+        if (!this.initPromise && this.enabled) this.init().catch(err => {
             this.lastError = err.message
             logger.warn(`[AI-Plugin] 向量记忆初始化异常: ${err.message}`)
         })
@@ -201,7 +275,7 @@ export class VectorDBClient {
         const deadline = Date.now() + timeoutMs
         while (Date.now() < deadline) {
             if (this.isReady || await this.checkHealth()) return true
-            await new Promise(resolve => setTimeout(resolve, 1000))
+            await sleep(1000)
         }
         return false
     }
