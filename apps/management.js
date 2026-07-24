@@ -218,6 +218,7 @@ export class ManagementHandler extends plugin {
                 `地址: ${status.vectorStats?.url || 'http://127.0.0.1:9901'}`,
                 `目录: ${status.dataDir}`,
                 `向量片段: ${status.vectorStats?.count ?? 0}`,
+                status.vectorStats?.error ? `错误: ${status.vectorStats.error}` : '',
                 `SQLite 数据: ${this._formatVectorCounts(status.sqliteCounts)}`,
                 `索引版本: ${status.schemaVersion}`,
                 `状态文件: ${status.stateFile}`,

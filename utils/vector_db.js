@@ -17,6 +17,30 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function readTextFile(file) {
+    try {
+        return fs.readFileSync(file, 'utf8')
+    } catch {
+        return ''
+    }
+}
+
+function readDirEntries(dir) {
+    try {
+        return fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+        return []
+    }
+}
+
+function readDirNames(dir) {
+    try {
+        return fs.readdirSync(dir)
+    } catch {
+        return []
+    }
+}
+
 function execFileQuiet(command, args = []) {
     return new Promise(resolve => {
         execFile(command, args, { timeout: 20000 }, (error, stdout = '', stderr = '') => {
@@ -39,6 +63,99 @@ function sanitizeMetadata(metadata = {}) {
         else clean[key] = JSON.stringify(value)
     }
     return clean
+}
+
+function getListeningSocketInodes(port) {
+    const portHex = normalizePort(port).toString(16).toUpperCase().padStart(4, '0')
+    const inodes = new Set()
+    for (const file of ['/proc/net/tcp', '/proc/net/tcp6']) {
+        const text = readTextFile(file)
+        if (!text) continue
+        for (const line of text.split('\n').slice(1)) {
+            const parts = line.trim().split(/\s+/)
+            const local = parts[1] || ''
+            const state = parts[3] || ''
+            const inode = parts[9] || ''
+            const localPort = local.split(':')[1]
+            if (state === '0A' && localPort?.toUpperCase() === portHex && /^\d+$/.test(inode)) {
+                inodes.add(inode)
+            }
+        }
+    }
+    return inodes
+}
+
+function vectorServerArgMatches(arg) {
+    const text = String(arg || '')
+    if (!text) return false
+    if (text === PYTHON_SCRIPT) return true
+    if (text.endsWith('/AI-Plugin/scripts/vector_server.py')) return true
+    try {
+        return path.resolve(text) === PYTHON_SCRIPT
+    } catch {
+        return false
+    }
+}
+
+function readProcessArgs(pid) {
+    const raw = readTextFile(`/proc/${pid}/cmdline`)
+    return raw.split('\0').map(item => item.trim()).filter(Boolean)
+}
+
+function findOwnedVectorServerProcesses(port) {
+    const inodes = getListeningSocketInodes(port)
+    if (inodes.size === 0) return []
+    const processes = []
+    for (const entry of readDirEntries('/proc')) {
+        if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue
+        const pid = entry.name
+        const fdDir = `/proc/${pid}/fd`
+        let ownsPort = false
+        try {
+            for (const fd of readDirNames(fdDir)) {
+                const link = fs.readlinkSync(path.join(fdDir, fd))
+                const match = link.match(/^socket:\[(\d+)]$/)
+                if (match && inodes.has(match[1])) {
+                    ownsPort = true
+                    break
+                }
+            }
+        } catch {
+            continue
+        }
+        if (!ownsPort) continue
+        const args = readProcessArgs(pid)
+        if (args.some(vectorServerArgMatches) && args.includes(String(port))) {
+            processes.push({ pid: Number(pid), args })
+        }
+    }
+    return processes
+}
+
+function processExists(pid) {
+    return fs.existsSync(`/proc/${pid}`)
+}
+
+async function terminatePid(pid) {
+    try {
+        process.kill(pid, 'SIGTERM')
+    } catch (err) {
+        return err?.code === 'ESRCH'
+    }
+    for (let i = 0; i < 20; i++) {
+        if (!processExists(pid)) return true
+        await sleep(250)
+    }
+    try {
+        process.kill(pid, 'SIGKILL')
+    } catch (err) {
+        return err?.code === 'ESRCH'
+    }
+    for (let i = 0; i < 12; i++) {
+        if (!processExists(pid)) return true
+        await sleep(250)
+    }
+    return !processExists(pid)
 }
 
 async function postJson(url, body, timeoutMs = 30000) {
@@ -155,6 +272,25 @@ export class VectorDBClient {
         return false
     }
 
+    async stopOwnedVectorServer(reason = '') {
+        const processes = findOwnedVectorServerProcesses(this.port)
+        if (processes.length === 0) {
+            this.lastError = `${reason || this.lastError || '向量服务异常'}；未找到可安全停止的 AI-Plugin 向量服务进程，请手动执行 pkill -f 'AI-Plugin/scripts/vector_server.py'`
+            return false
+        }
+        const pids = processes.map(item => item.pid)
+        logger.warn(`[AI-Plugin] 检测到异常向量服务，准备停止后重启: pids=${pids.join(',')}${reason ? `, reason=${reason}` : ''}`)
+        const results = await Promise.all(processes.map(item => terminatePid(item.pid)))
+        const stopped = results.filter(Boolean).length
+        const remaining = findOwnedVectorServerProcesses(this.port)
+        if (remaining.length > 0) {
+            this.lastError = `${reason || this.lastError || '向量服务异常'}；无法停止异常向量服务进程: ${remaining.map(item => item.pid).join(',')}`
+            return false
+        }
+        logger.warn(`[AI-Plugin] 已停止异常向量服务进程: pids=${pids.join(',')}, stopped=${stopped}`)
+        return true
+    }
+
     async checkPythonDeps() {
         const python = await execFileQuiet(this.pythonBin, ['--version'])
         if (!python.ok) {
@@ -192,7 +328,7 @@ export class VectorDBClient {
         return this.initPromise
     }
 
-    async _init() {
+    async _init(cleanupTried = false) {
         const health = await this.probeHealth()
         if (health.compatible && health.ready) {
             logger.info(`[AI-Plugin] 向量记忆服务已就绪: ${this.serverUrl}`)
@@ -200,10 +336,18 @@ export class VectorDBClient {
         }
         if (health.reachable) {
             if (!health.compatible) {
+                if (!cleanupTried && health.model && health.collection && await this.stopOwnedVectorServer(this.lastError)) {
+                    await sleep(800)
+                    return await this._init(true)
+                }
                 logger.warn(`[AI-Plugin] 向量记忆跳过启动: ${this.lastError}`)
                 return false
             }
             if (health.failed) {
+                if (!cleanupTried && await this.stopOwnedVectorServer(this.lastError)) {
+                    await sleep(800)
+                    return await this._init(true)
+                }
                 logger.warn(`[AI-Plugin] 向量记忆跳过启动: ${this.lastError}`)
                 return false
             }
