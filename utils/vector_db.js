@@ -12,6 +12,7 @@ const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_PORT = 9901
 const HEALTH_TIMEOUT_MS = 2500
 const STARTUP_TIMEOUT_MS = 180000
+const VECTOR_SERVER_PROTOCOL_VERSION = '2026-07-25.4'
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms))
@@ -223,10 +224,16 @@ export class VectorDBClient {
             const data = await res.json()
             const model = typeof data?.model === 'string' ? data.model.trim() : ''
             const collection = typeof data?.collection === 'string' ? data.collection.trim() : ''
+            const serverVersion = typeof data?.server_version === 'string' ? data.server_version.trim() : ''
             if (!model || !collection || data?.ready === undefined) {
                 this.isReady = false
                 this.lastError = `${this.serverUrl} 已被其他服务占用`
                 return { reachable: true, compatible: false, ready: false, error: this.lastError }
+            }
+            if (serverVersion !== VECTOR_SERVER_PROTOCOL_VERSION) {
+                this.isReady = false
+                this.lastError = `端口 ${this.port} 已有旧版向量服务: 当前=${serverVersion || '未知'} / 期望=${VECTOR_SERVER_PROTOCOL_VERSION}`
+                return { reachable: true, compatible: false, ready: false, error: this.lastError, model, collection, serverVersion }
             }
             if (model !== this.modelName) {
                 this.isReady = false
@@ -514,6 +521,7 @@ export class VectorDBClient {
                 count: Number(data?.count) || 0,
                 model: data?.model || this.modelName,
                 collection: data?.collection || '',
+                serverVersion: data?.server_version || VECTOR_SERVER_PROTOCOL_VERSION,
                 url: this.serverUrl,
                 dataDir: this.dataDir
             }
@@ -565,7 +573,13 @@ export class VectorDBClient {
             this.pythonProcess = null
         }
         this.isReady = false
+        this.initPromise = null
+        this.initStarted = false
     }
 }
 
 export const vectorDB = new VectorDBClient()
+
+process.once('exit', () => {
+    vectorDB.shutdown()
+})

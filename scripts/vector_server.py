@@ -26,6 +26,7 @@ from sentence_transformers import SentenceTransformer
 CHROMA_DB_PATH = sys.argv[1] if len(sys.argv) > 1 else "./chroma_db"
 SERVER_HOST = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1"
 SERVER_PORT = int(sys.argv[3]) if len(sys.argv) > 3 else 9901
+SERVER_VERSION = "2026-07-25.4"
 MODEL_NAME = sys.argv[4] if len(sys.argv) > 4 else os.environ.get(
     "AI_PLUGIN_VECTOR_MODEL",
     "shibing624/text2vec-base-chinese",
@@ -202,6 +203,7 @@ class VectorDBHandler(BaseHTTPRequestHandler):
             "error": init_error,
             "model": MODEL_NAME,
             "collection": COLLECTION_NAME,
+            "server_version": SERVER_VERSION,
             "path": CHROMA_DB_PATH,
             "endpoint": os.environ.get("HF_ENDPOINT", ""),
         })
@@ -217,6 +219,7 @@ class VectorDBHandler(BaseHTTPRequestHandler):
                 "count": count,
                 "model": MODEL_NAME,
                 "collection": COLLECTION_NAME,
+                "server_version": SERVER_VERSION,
                 "path": CHROMA_DB_PATH,
             })
         except Exception as exc:
@@ -359,7 +362,7 @@ class ReusableHTTPServer(HTTPServer):
 def main():
     os.makedirs(CHROMA_DB_PATH, exist_ok=True)
     server = ReusableHTTPServer((SERVER_HOST, SERVER_PORT), VectorDBHandler)
-    print(f"HTTP server listening at http://{SERVER_HOST}:{SERVER_PORT}", flush=True)
+    print(f"HTTP server listening at http://{SERVER_HOST}:{SERVER_PORT}, version={SERVER_VERSION}", flush=True)
     threading.Thread(target=init_model, args=(server,), daemon=True).start()
     try:
         server.serve_forever()

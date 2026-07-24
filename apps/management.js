@@ -215,6 +215,7 @@ export class ManagementHandler extends plugin {
                 `开关: ${status.enabled ? '已开启' : '已关闭'}`,
                 `服务: ${status.vectorStats?.ready ? '已就绪' : '未就绪'}`,
                 `模型: ${status.modelName}`,
+                status.vectorStats?.serverVersion ? `服务版本: ${status.vectorStats.serverVersion}` : '',
                 `地址: ${status.vectorStats?.url || 'http://127.0.0.1:9901'}`,
                 `目录: ${status.dataDir}`,
                 `向量片段: ${status.vectorStats?.count ?? 0}`,
