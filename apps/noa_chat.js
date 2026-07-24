@@ -10,7 +10,8 @@ import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldRe
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserProfileText } from '../utils/user_profile.js'
-import { filterToolCallsByIntent, hasExplicitFileSendIntent } from '../utils/tool_intent.js'
+import { buildSemanticMemoryContext } from '../utils/vector_memory.js'
+import { filterToolCallsByIntent, hasExplicitFileSendIntent, hasExplicitMemorySearchIntent, parseMemorySearchRequest } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 
 const replyCooldown = new Map()
@@ -572,6 +573,7 @@ function extractUrlsFromText(text, limit = 10) {
 function shouldRouteNoaTools(text, urls = []) {
     const value = String(text || '')
     if (urls.length > 0 && /(看|看看|打开|总结|分析|解释|读|抓取|链接|网页|网站)/i.test(value)) return true
+    if (hasExplicitMemorySearchIntent(value)) return true
     return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|代发|转达|帮我.{0,20}(群|发|说|告诉)|个人档案|用户档案|用户画像|个人画像|长期记忆|tmux|ai-shell|shell会话|shell窗口|独立shell|画|绘制|生成|作图|手办化|图片处理|修图|执行|运行|调用|命令|shell|终端|命令行|脚本|插件.{0,8}更新|更新.{0,8}插件|\b(?:ssh|scp|rsync|git|pull|push|status|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head)\b|(?:读取|查看|查询|总结|整理).{0,12}(群聊|群消息|聊天记录|消息流水|畅聊记录|群上下文)|别的群|其他群|其它群|跨群|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
 }
 
@@ -626,6 +628,9 @@ async function buildNoaEnabledTools(e, client) {
         enabledTools.push('draw_image')
     }
     enabledTools.push('user_profile_update')
+    if (client.enableVectorMemory) {
+        enabledTools.push('memory_search')
+    }
     if (e.group_id) {
         enabledTools.push('group_chat_context')
         enabledTools.push('group_member_aliases')
@@ -660,6 +665,9 @@ function formatNoaToolInjection(toolName, result) {
     }
     if (toolName === 'user_profile_update') {
         return `\n\n【畅聊工具结果：个人档案维护】以下是个人档案维护工具的实际结果；请只简短告知用户已更新或失败原因，不要在公开群里复述档案全文。${formattedResult}`
+    }
+    if (toolName === 'memory_search') {
+        return `\n\n【畅聊工具结果：语义记忆检索】以下是本地向量记忆召回的相关历史线索；请结合当前群上下文谨慎回答，命中不足时说明不确定，不要把个人档案隐私主动摊开。${formattedResult}`
     }
     if (toolName === 'group_send_message') {
         return `\n\n【畅聊工具结果：群消息代发】以下是代发群消息的实际结果；若结果显示待确认，说明尚未发送，请提醒主人按回执继续用 #c 自然确认或取消。${formattedResult}`
@@ -783,6 +791,7 @@ export class NoaChatHandler extends plugin {
         let memoryData = null
         let personalMemory = ''
         let userProfileText = ''
+        let semanticMemoryContext = ''
         try {
             memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(normalized.userId)
             personalMemory = truncateText(memoryData?.incrementalCheckpoint || '', PERSONAL_MEMORY_MAX_CHARS)
@@ -795,6 +804,24 @@ export class NoaChatHandler extends plugin {
             }
         } catch (err) {
             logger.warn(`[AI-Plugin] [畅聊] 加载触发者个人记忆/档案失败: ${err.message}`)
+        }
+        const semanticQueryText = normalized.instructionText || normalized.currentText || normalized.normalizedText
+        if (this.client.enableVectorMemory && !hasExplicitMemorySearchIntent(semanticQueryText)) {
+            try {
+                semanticMemoryContext = await buildSemanticMemoryContext(
+                    this.conversationManager.db,
+                    semanticQueryText,
+                    {
+                        actorUserId: normalized.userId,
+                        currentGroupId: normalized.groupId,
+                        isMaster: e.isMaster === true,
+                        allowCrossGroup: false,
+                        maxChars: Config.VECTOR_AUTO_CONTEXT_MAX_CHARS
+                    }
+                )
+            } catch (err) {
+                logger.warn(`[AI-Plugin] [畅聊] 向量记忆自动检索失败: ${err.message}`)
+            }
         }
         let localImageInput = { imageParts: [], noteText: '', paths: [], failures: [] }
         const localImageInstruction = normalized.instructionText || normalized.currentText || ''
@@ -835,29 +862,38 @@ export class NoaChatHandler extends plugin {
             const routeByMasterRequest = shouldLetNoaToolModelJudge(toolRoutingText, e.isMaster)
             if (enabledTools.length > 0 && (routeByKeyword || routeByMasterRequest)) {
                 logger.info(`[AI-Plugin] [畅聊] 工具路由开始: 可用工具=${enabledTools.join(', ')}, 触发=${routeByKeyword ? '规则命中' : '主人请求兜底'}`)
-                const toolAnalysis = await toolRegistry.analyzeToolIntent(
-                    toolRoutingText,
-                    this.client,
-                    enabledTools,
-                    [],
-                    personalMemory,
-                    candidateUrls,
-                    {
-                        hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0 || hasLocalImageInput,
-                        mentionedUserIds,
-                        currentInstruction: toolRoutingText
-                    }
-                )
-                let toolCalls = filterNoaToolCalls(
-                    Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools.slice(0, 3) : [],
-                    toolRoutingText,
-                    {
-                        hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0 || hasLocalImageInput,
-                        hasRecentImages: imageContext.processedCount > 0 || hasLocalImageInput,
+                let toolCalls = []
+                const memorySearchArgs = enabledTools.includes('memory_search')
+                    ? parseMemorySearchRequest(toolRoutingText)
+                    : null
+                if (memorySearchArgs) {
+                    toolCalls = [{ name: 'memory_search', args: memorySearchArgs }]
+                    logger.info('[AI-Plugin] [畅聊] 规则预路由命中: memory_search - 用户明确要求检索本地语义记忆')
+                } else {
+                    const toolAnalysis = await toolRegistry.analyzeToolIntent(
+                        toolRoutingText,
+                        this.client,
+                        enabledTools,
+                        [],
+                        personalMemory,
                         candidateUrls,
-                        strictWebSearch: false
-                    }
-                )
+                        {
+                            hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0 || hasLocalImageInput,
+                            mentionedUserIds,
+                            currentInstruction: toolRoutingText
+                        }
+                    )
+                    toolCalls = filterNoaToolCalls(
+                        Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools.slice(0, 3) : [],
+                        toolRoutingText,
+                        {
+                            hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0 || hasLocalImageInput,
+                            hasRecentImages: imageContext.processedCount > 0 || hasLocalImageInput,
+                            candidateUrls,
+                            strictWebSearch: false
+                        }
+                    )
+                }
                 if (hasLocalImageInput) {
                     const attachedPaths = new Set(localImageInput.paths.flatMap(item => [item.requestedPath, item.realPath]).filter(Boolean))
                     toolCalls = toolCalls.filter(call => {
@@ -929,6 +965,7 @@ export class NoaChatHandler extends plugin {
 - “本群称呼记忆”只表示群里公开聊天中有人这样称呼过某个成员；带调侃的记录不要当作真实身份或事实断言。
 - “触发者个人记忆摘要”只用于理解当前触发者的偏好、称呼和长期上下文；具体隐私边界以当前聊天环境提示为准。
 - “触发者个人档案”来自历次全量/增量总结维护出的稳定画像，只能作为理解背景；公开群里不要主动透露档案内容。
+- “语义相关记忆”来自本地向量检索，只是和当前消息相关的旧线索，不等于当前群正在发生的事；命中不足时要说明不确定。
 - 不要编造没有出现在上下文里的事实。
 - 如果上下文不足，就坦诚说不太确定。
 
@@ -938,7 +975,7 @@ ${getBeijingTimeStr()}
 【最近群聊上下文】
 ${contextText || '暂无'}
 
-${imageReadNotes.length > 0 ? `【本轮读图策略】\n${imageReadNotes.join('\n')}\n\n` : ''}${imageContext.summaryText ? `【本轮分批读图摘要】\n${imageContext.summaryText}\n\n` : ''}${localImageInput.noteText ? `${localImageInput.noteText}\n\n` : ''}${avatarImageInput.noteText ? `${avatarImageInput.noteText}\n\n` : ''}${groupAliasMemoryText ? `${groupAliasMemoryText}\n\n` : ''}${personalMemory ? `【触发者个人记忆摘要】\n${personalMemory}\n\n` : ''}${userProfileText ? `【触发者个人档案】\n${userProfileText}\n\n` : ''}${toolContextText ? `【本轮工具结果】${toolContextText}\n\n` : ''}【当前触发消息】
+${imageReadNotes.length > 0 ? `【本轮读图策略】\n${imageReadNotes.join('\n')}\n\n` : ''}${imageContext.summaryText ? `【本轮分批读图摘要】\n${imageContext.summaryText}\n\n` : ''}${localImageInput.noteText ? `${localImageInput.noteText}\n\n` : ''}${avatarImageInput.noteText ? `${avatarImageInput.noteText}\n\n` : ''}${groupAliasMemoryText ? `${groupAliasMemoryText}\n\n` : ''}${personalMemory ? `【触发者个人记忆摘要】\n${personalMemory}\n\n` : ''}${userProfileText ? `【触发者个人档案】\n${userProfileText}\n\n` : ''}${semanticMemoryContext ? `${semanticMemoryContext}\n\n` : ''}${toolContextText ? `【本轮工具结果】${toolContextText}\n\n` : ''}【当前触发消息】
 ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}${normalized.aliasCaptureText ? `\n\n${normalized.aliasCaptureText}` : ''}`
 
         const contents = [

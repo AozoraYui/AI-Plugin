@@ -5,7 +5,7 @@
 #   1) 供应商列表（模型来源）
 #   2) 指令自定义
 #   3) 图文转述 Vision Relay
-#   4) 联网搜索 / 网页抓取 / Shell / 文件收发 / 天气 等开关
+#   4) 联网搜索 / 网页抓取 / Shell / 文件收发 / 向量记忆 / 天气 等开关
 # ----------------------------------------------------------------
 # 每个供应商字段说明：
 #   id          供应商唯一标识（被 intent_model / vision_model 引用）
@@ -218,6 +218,17 @@ enable_web_fetch: false
 #   普通“刚才聊了什么/前情总结”只读取文本和图片元信息，不会自动预读历史图片；明确问图或要求读图时才会临时读取图片
 #   畅聊只保存图片元信息，不会把图片本体或 base64 写入数据库
 #
+# enable_vector_memory: 是否启用本地向量记忆（默认 false）
+#   开启后会在本机 127.0.0.1 启动一个 Python 向量服务，用 sentence-transformers 将文本转成向量，
+#   并用 ChromaDB 存储到插件本地 config/chroma_db；不会上传到云端。
+#   依赖需手动安装：pip3 install -r plugins/AI-Plugin/scripts/requirements.txt
+#   如需使用 venv/conda，可设置环境变量 AI_PLUGIN_VECTOR_PYTHON=/path/to/python
+#   如需临时覆盖模型名，可设置环境变量 AI_PLUGIN_VECTOR_MODEL
+#   VECTOR_MODEL: 本地向量模型名，默认 shibing624/text2vec-base-chinese
+#   VECTOR_SERVER_PORT: 本地向量服务端口，默认 9901
+#   VECTOR_AUTO_CONTEXT_MAX_CHARS: 每轮自动注入的语义相关记忆字符上限，默认 6000
+#   开启后会索引普通对话历史、全量/增量总结、个人档案和畅聊群流水，并提供 memory_search 工具。
+#
 # show_thinking: 是否显示 AI 思考过程（Raw 模式；false 时自动清洗思考内容，默认 false）
 # show_thinking_notice: 是否在普通对话请求模型前发送“xx思考中”占位提示（默认 false）
 # draw_review_after_generate: 画图成功后是否把生成图再交给 AI 看一眼，并基于图片说一句短评（默认 false，会额外消耗一次多模态输入）
@@ -237,6 +248,10 @@ enable_web_fetch: false
 # NOA_CHAT_AUTO_READ_IMAGE_LIMIT: 2   # 单条触发消息最多 2 张图时自动读图，超过则需明确要求读图
 # NOA_CHAT_IMAGE_BATCH_SIZE: 3        # 待读图片超过 3 张时，每批 3 张先生成读图摘要再回复
 # 普通群聊前情总结不会自动读历史图片；只有明确问图/要求读图才会按以上配置临时读取图片
+# enable_vector_memory: false         # 本地向量记忆；开启前先安装 scripts/requirements.txt 里的 Python 依赖
+# VECTOR_MODEL: shibing624/text2vec-base-chinese
+# VECTOR_SERVER_PORT: 9901
+# VECTOR_AUTO_CONTEXT_MAX_CHARS: 6000
 # show_thinking: false
 # show_thinking_notice: false
 # draw_review_after_generate: false

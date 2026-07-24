@@ -26,6 +26,7 @@ export class AiClient {
         this.shellSessionConfig = { enabled: false }
         this.groupSendConfig = { enabled: false }
         this.groupLeaveConfig = { enabled: false }
+        this.vectorMemoryConfig = { enabled: false }
         this.weatherApiKey = null
         this.openWeatherMapApiKey = null
         this.loadModelsConfig()
@@ -188,6 +189,11 @@ export class AiClient {
         return this.groupLeaveConfig?.enabled === true
     }
 
+    /** 是否启用本地向量记忆 */
+    get enableVectorMemory() {
+        return this.vectorMemoryConfig?.enabled === true
+    }
+
     /** 是否启用畅聊模式（群消息捕获 + 触发词回复） */
     get enableNoaChat() {
         return this.noaChatConfig?.enabled === true
@@ -327,6 +333,7 @@ export class AiClient {
         this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
         this.webSearchConfig = { enabled: false, intent_model: null }
         this.webFetchConfig = { enabled: false }
+        this.vectorMemoryConfig = { enabled: false }
         this.weatherApiKey = null
         this.openWeatherMapApiKey = null
         if (!fs.existsSync(MODELS_CONFIG_FILE)) {
@@ -359,6 +366,13 @@ export class AiClient {
                 value.SHELL_SESSION_NAME !== undefined ||
                 value.SHELL_SESSION_CAPTURE_LINES !== undefined ||
                 value.SHELL_SESSION_MAX_OUTPUT_CHARS !== undefined ||
+                value.SHELL_SESSION_AFTER_SEND_DELAY_MS !== undefined ||
+                value.SHELL_SESSION_AFTER_SEND_TIMEOUT_MS !== undefined ||
+                value.SHELL_SESSION_AFTER_SEND_POLL_MS !== undefined ||
+                value.enable_vector_memory !== undefined ||
+                value.VECTOR_MODEL !== undefined ||
+                value.VECTOR_SERVER_PORT !== undefined ||
+                value.VECTOR_AUTO_CONTEXT_MAX_CHARS !== undefined ||
                 value.MODEL_CHAT_REQUEST_TIMEOUT_MS !== undefined ||
                 value.MODEL_IMAGE_REQUEST_TIMEOUT_MS !== undefined ||
                 value.MODEL_LONG_REQUEST_TIMEOUT_MS !== undefined ||
@@ -467,6 +481,7 @@ export class AiClient {
                 this.groupSendConfig = { enabled: rawConfig.enable_group_send === true }
                 this.groupLeaveConfig = { enabled: rawConfig.enable_group_leave === true }
                 this.noaChatConfig = { enabled: rawConfig.enable_noa_chat === true }
+                this.vectorMemoryConfig = { enabled: rawConfig.enable_vector_memory === true }
                 Config.show_thinking = rawConfig.show_thinking === true
                 Config.show_thinking_notice = rawConfig.show_thinking_notice === true
                 Config.draw_review_after_generate = rawConfig.draw_review_after_generate === true
@@ -474,6 +489,7 @@ export class AiClient {
                 Config.enable_group_send = rawConfig.enable_group_send === true
                 Config.enable_group_leave = rawConfig.enable_group_leave === true
                 Config.enable_noa_chat = rawConfig.enable_noa_chat === true
+                Config.enable_vector_memory = rawConfig.enable_vector_memory === true
                 for (const key of ['NOA_CHAT_CONTEXT_LIMIT', 'NOA_CHAT_REPLY_COOLDOWN_MS', 'NOA_CHAT_MAX_CONTEXT_IMAGES', 'NOA_CHAT_AUTO_READ_IMAGE_LIMIT', 'NOA_CHAT_IMAGE_BATCH_SIZE']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
@@ -481,6 +497,9 @@ export class AiClient {
                     Config.NOA_CHAT_TRIGGER_KEYWORDS = rawConfig.NOA_CHAT_TRIGGER_KEYWORDS
                 }
                 for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_FOLLOWUP_MAX_ROUNDS', 'SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS', 'SHELL_EXEC_MAX_BUFFER', 'SHELL_SESSION_NAME', 'SHELL_SESSION_CAPTURE_LINES', 'SHELL_SESSION_MAX_OUTPUT_CHARS', 'SHELL_SESSION_AFTER_SEND_DELAY_MS', 'SHELL_SESSION_AFTER_SEND_TIMEOUT_MS', 'SHELL_SESSION_AFTER_SEND_POLL_MS', 'MODEL_CHAT_REQUEST_TIMEOUT_MS', 'MODEL_IMAGE_REQUEST_TIMEOUT_MS', 'MODEL_LONG_REQUEST_TIMEOUT_MS']) {
+                    if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
+                }
+                for (const key of ['VECTOR_MODEL', 'VECTOR_SERVER_PORT', 'VECTOR_AUTO_CONTEXT_MAX_CHARS']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
                 if (this.enableShellExec) {
@@ -507,6 +526,9 @@ export class AiClient {
                 }
                 if (this.enableNoaChat) {
                     logger.info('[AI-Plugin] 畅聊模式已启用：群消息将全局捕获（黑名单除外），触发词命中且有访问权限时 AI 会基于群上下文回复')
+                }
+                if (this.enableVectorMemory) {
+                    logger.info(`[AI-Plugin] 本地向量记忆已启用：模型=${Config.VECTOR_MODEL}, 端口=${Config.VECTOR_SERVER_PORT}`)
                 }
 
                 // 提取 weather_api_key（高德地图天气查询）

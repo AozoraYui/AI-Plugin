@@ -12,8 +12,9 @@ import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldRe
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserProfileText } from '../utils/user_profile.js'
+import { buildSemanticMemoryContext } from '../utils/vector_memory.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
-import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseGroupLeaveRequest, parseGroupSendRequest } from '../utils/tool_intent.js'
+import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction } from '../utils/pending_actions.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { executePendingGroupSend } from '../tools/group_send.js'
@@ -46,6 +47,7 @@ const CONTINUATION_ALLOWED_TOOLS = [
     'system_info',
     'shell_exec',
     'shell_session',
+    'memory_search',
     'user_profile_update',
     'group_chat_context',
     'group_member_aliases',
@@ -60,6 +62,7 @@ const AGENT_LOOP_ALLOWED_TOOLS = [
     'system_info',
     'shell_exec',
     'shell_session',
+    'memory_search',
     'group_chat_context',
     'group_member_aliases',
     'group_member_list',
@@ -737,7 +740,19 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         }
     }
 
-    // 7) 群聊流水查询：自然询问“刚才聊啥”也可自动读取；跨群仍由主人权限限制。
+    // 7) 本地语义记忆查询：查旧对话/相关记忆，但不替代档案更新或当前群流水。
+    if (hasTool(enabledTools, 'memory_search')) {
+        const memorySearchArgs = parseMemorySearchRequest(routeText)
+        if (memorySearchArgs) {
+            return {
+                intent: '规则预路由：用户明确要求检索本地语义记忆。',
+                tools: [{ name: 'memory_search', args: memorySearchArgs }],
+                routedBy: 'rule'
+            }
+        }
+    }
+
+    // 8) 群聊流水查询：自然询问“刚才聊啥”也可自动读取；跨群仍由主人权限限制。
     if (hasTool(enabledTools, 'group_chat_context')) {
         if (!hasExplicitGroupChatContextIntent(routeText) && !hasGroupChatContextQuestion(routeText)) return null
 
@@ -856,6 +871,7 @@ function narrowToolCandidatesForPlanning(enabledTools, userMessage, options = {}
     else if (explicitShell) add(['shell_exec', 'shell_session', 'system_info'])
     if (hasExplicitDrawIntent(routeText, { hasImages, hasRecentImages })) add(['draw_image'])
     if (hasExplicitUserProfileUpdateIntent(routeText)) add(['user_profile_update'])
+    if (hasExplicitMemorySearchIntent(routeText)) add(['memory_search'])
     if (hasExplicitGroupChatContextIntent(routeText) || hasGroupChatContextQuestion(routeText)) add(['group_chat_context'])
     if (parseGroupSendRequest(routeText)) add(['group_send_message'])
     if (parseGroupLeaveRequest(routeText)) add(['group_leave'])
@@ -1107,6 +1123,7 @@ ${toolSummary}
 - 主人问“你加了哪些群/能看到哪些群/群列表/有哪些群”时，计划 group_chat_context，params_hint 写 scope=group_list；私聊中也可以使用。
 - 用户问“我刚在别的群/其他群发了什么”“你看到我在别的群说的话吗”时，计划 group_chat_context，params_hint 写 scope=other_group_messages、exclude_current_group=true；这只查询当前触发者自己的跨群消息。
 - 只有当前操作者是主人且用户明确要求跨群/所有群/指定群的已捕获流水时，才计划 group_chat_context 的 scope=all_groups 或 specific_group；非主人不要计划读取其他人的跨群消息。主人按群名问某个群但你暂时没有群号时，可在 params_hint 里把群名写入 query，工具会尝试解析群号。
+- 用户要求从历史/记忆/旧对话里查找某个话题，或问“以前有没有说过/还记得我之前提过什么/相关记忆/语义检索”时，计划 memory_search；它是只读检索，不会写档案。当前群“刚才聊啥”这种需要原始时间线的问题优先 group_chat_context。
 - 用户问“这个人是谁/@某某有什么外号/谁是杂鱼/谁被叫过xxx/本群怎么称呼某人”时，计划 group_member_aliases 查询本群称呼记忆；这类结果只代表群内公开聊天里的称呼记录，不是真实身份断言。
 - 用户明确要求“记到我的个人档案/写进我的用户画像/更新个人档案/从刚才聊天提炼我的档案”时，计划 user_profile_update；“全面读我们的对话提炼档案/从我在所有群的发言里提炼/结合当前群上下文更新画像”也计划 user_profile_update，让工具按自然语言选择来源。只是询问“能不能写档案/有没有档案”不要计划。普通用户只更新自己的档案，主人明确指定用户时才可带 user_id。
 - 主人明确要求“帮我在某群说/发/转达某段文本”时，才计划 group_send_message；必须有目标群和明确消息内容。支持显式多个目标，但工具会先创建待确认操作，不会直接发送。不要替主人编写、润色或补全要发送的内容，目标群不明确时不要计划。
@@ -1499,6 +1516,7 @@ export class ChatHandler extends plugin {
             }
 
             const environmentHint = buildEnvironmentHint(e)
+            let semanticMemoryContext = ''
 
             // 工具调用：规则预路由优先；其余场景由主模型规划，意图模型只负责编译工具参数。
             const enabledTools = []
@@ -1576,6 +1594,9 @@ export class ChatHandler extends plugin {
             if (!isSingleMode && hasExplicitUserProfileUpdateIntent(currentToolInstruction) && !enabledTools.includes('user_profile_update')) {
                 enabledTools.push('user_profile_update')
                 logger.info('[AI-Plugin] 个人档案更新工具兜底加入：当前指令明确要求维护个人档案')
+            }
+            if (this.client.enableVectorMemory) {
+                enabledTools.push('memory_search')
             }
             if (e.group_id || e.isMaster) {
                 enabledTools.push('group_chat_context')
@@ -1725,6 +1746,7 @@ export class ChatHandler extends plugin {
                 toolCalls = repeatedFilter.tools
                 const executedShellCommands = []
                 let groupChatContextToolUsed = false
+                let memorySearchToolUsed = false
                 let suppressAutoNoaContext = false
                 let shellFollowupConsideredByAgent = false
                 for (let agentRound = 1; agentRound <= AGENT_LOOP_MAX_ROUNDS; agentRound++) {
@@ -1843,6 +1865,11 @@ export class ChatHandler extends plugin {
                                 }
                             }
                             userMessage = userMessage + '\n\n【重要指令】以上为畅聊模式捕获的公开聊天流水或跨群个人消息查询结果。请严格基于这些记录回答用户关于“之前聊了什么/发生了什么/前情提要/别的群刚说了什么”的问题；如果记录里包含图片且下面提供了“群聊上下文图片预读摘要”，可以结合摘要回答；如果没有摘要，就只能说明有图片元信息，不能编造图片内容。记录不足时要明确说明只能看到已捕获的部分，并遵守工具结果中的范围与隐私提示。' + formattedResult + imageSummaryBlock
+                            logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
+                        } else if (call.name === 'memory_search') {
+                            memorySearchToolUsed = true
+                            const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
+                            userMessage = userMessage + '\n\n【重要指令】以上为本地向量记忆的语义检索结果。请把它作为相关历史线索使用；如果命中不足或不确定，要明确说明“不确定/只检索到这些”。不要把个人档案隐私主动摊开，也不要把相似片段当成绝对事实。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (call.name === 'group_member_aliases') {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
@@ -2038,6 +2065,24 @@ export class ChatHandler extends plugin {
                 } else if (shellFollowupConsideredByAgent && executedShellCommands.length > 0) {
                     logger.info('[AI-Plugin] Shell 补查已由 Agent 后续规划接管，本轮跳过旧补查器')
                 }
+
+                if (this.client.enableVectorMemory && !memorySearchToolUsed && !suppressAutoNoaContext) {
+                    try {
+                        semanticMemoryContext = await buildSemanticMemoryContext(
+                            this.conversationManager.db,
+                            currentToolInstruction || originalUserMessage || userMessage,
+                            {
+                                actorUserId: userId,
+                                currentGroupId: e.group_id,
+                                isMaster: e.isMaster === true,
+                                allowCrossGroup: false,
+                                maxChars: Config.VECTOR_AUTO_CONTEXT_MAX_CHARS
+                            }
+                        )
+                    } catch (err) {
+                        logger.warn(`[AI-Plugin] 向量记忆自动检索失败: ${err.message}`)
+                    }
+                }
             }
 
             avatarImageInput = await buildAvatarImageInputContext(e, currentToolInstruction || originalUserMessage || userMessage, {
@@ -2194,6 +2239,16 @@ export class ChatHandler extends plugin {
                 contents.push({
                     "role": "model",
                     "parts": [{ "text": "好的，我会把个人档案只作为理解用户的背景信息，并遵守当前聊天环境的隐私边界。" }]
+                })
+            }
+            if (semanticMemoryContext) {
+                contents.push({
+                    "role": "user",
+                    "parts": [{ "text": semanticMemoryContext }]
+                })
+                contents.push({
+                    "role": "model",
+                    "parts": [{ "text": "好的，我会把这些语义相关记忆作为当前问题的参考线索，不把未确认内容当作事实。" }]
                 })
             }
 

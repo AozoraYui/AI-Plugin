@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""
+AI-Plugin local vector service.
+
+This service keeps all embeddings and ChromaDB data on the local machine.
+Node talks to it over 127.0.0.1 only.
+"""
+
+import json
+import os
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+import chromadb
+from sentence_transformers import SentenceTransformer
+
+
+CHROMA_DB_PATH = sys.argv[1] if len(sys.argv) > 1 else "./chroma_db"
+SERVER_HOST = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1"
+SERVER_PORT = int(sys.argv[3]) if len(sys.argv) > 3 else 9901
+MODEL_NAME = sys.argv[4] if len(sys.argv) > 4 else os.environ.get(
+    "AI_PLUGIN_VECTOR_MODEL",
+    "shibing624/text2vec-base-chinese",
+)
+COLLECTION_NAME = os.environ.get("AI_PLUGIN_VECTOR_COLLECTION", "ai_memory")
+
+if "HF_ENDPOINT" not in os.environ:
+    os.environ["HF_ENDPOINT"] = os.environ.get("AI_PLUGIN_HF_ENDPOINT", "https://hf-mirror.com")
+
+embedding_model = None
+chroma_client = None
+collection = None
+is_ready = False
+init_error = ""
+
+
+def sanitize_metadata(metadata):
+    clean = {}
+    if not isinstance(metadata, dict):
+        return clean
+    for key, value in metadata.items():
+        if value is None:
+            continue
+        if isinstance(value, (str, int, float, bool)):
+            clean[str(key)] = value
+        else:
+            clean[str(key)] = json.dumps(value, ensure_ascii=False)
+    return clean
+
+
+def read_json(handler):
+    length = int(handler.headers.get("Content-Length", "0") or "0")
+    if length <= 0:
+        return {}
+    raw = handler.rfile.read(length)
+    return json.loads(raw.decode("utf-8"))
+
+
+def write_json(handler, status, payload):
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def init_model():
+    global embedding_model, chroma_client, collection, is_ready, init_error
+    try:
+        print(f"Loading embedding model: {MODEL_NAME}", flush=True)
+        embedding_model = SentenceTransformer(MODEL_NAME)
+        print("Embedding model loaded", flush=True)
+
+        print(f"Opening ChromaDB: {CHROMA_DB_PATH}", flush=True)
+        chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        collection = chroma_client.get_or_create_collection(name=COLLECTION_NAME)
+        is_ready = True
+        print("Vector database ready", flush=True)
+    except Exception as exc:
+        init_error = str(exc)
+        print(f"Vector database init failed: {init_error}", flush=True)
+
+
+def get_embedding(text):
+    return embedding_model.encode([text], normalize_embeddings=True)[0].tolist()
+
+
+class VectorDBHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health":
+            self.handle_health()
+        else:
+            write_json(self, 404, {"error": "not found"})
+
+    def do_POST(self):
+        if self.path == "/health":
+            self.handle_health()
+        elif self.path in ("/add", "/upsert"):
+            self.handle_add()
+        elif self.path in ("/add_many", "/upsert_many"):
+            self.handle_add_many()
+        elif self.path == "/search":
+            self.handle_search()
+        elif self.path == "/delete":
+            self.handle_delete()
+        else:
+            write_json(self, 404, {"error": "not found"})
+
+    def handle_health(self):
+        write_json(self, 200, {
+            "ready": is_ready,
+            "error": init_error,
+            "model": MODEL_NAME,
+            "collection": COLLECTION_NAME,
+        })
+
+    def _ensure_ready(self):
+        if is_ready:
+            return True
+        write_json(self, 503, {"error": init_error or "service not ready"})
+        return False
+
+    def handle_add(self):
+        if not self._ensure_ready():
+            return
+        data = read_json(self)
+        doc_id = str(data.get("id", "")).strip()
+        text = str(data.get("text", "")).strip()
+        if not doc_id or not text:
+            write_json(self, 400, {"error": "id and text are required"})
+            return
+        metadata = sanitize_metadata(data.get("metadata", {}))
+        embedding = get_embedding(text)
+        collection.upsert(ids=[doc_id], embeddings=[embedding], documents=[text], metadatas=[metadata])
+        write_json(self, 200, {"success": True, "count": 1})
+
+    def handle_add_many(self):
+        if not self._ensure_ready():
+            return
+        data = read_json(self)
+        docs = data.get("documents", [])
+        ids = []
+        texts = []
+        metadatas = []
+        for item in docs:
+            doc_id = str(item.get("id", "")).strip()
+            text = str(item.get("text", "")).strip()
+            if not doc_id or not text:
+                continue
+            ids.append(doc_id)
+            texts.append(text)
+            metadatas.append(sanitize_metadata(item.get("metadata", {})))
+        if not ids:
+            write_json(self, 200, {"success": True, "count": 0})
+            return
+        embeddings = embedding_model.encode(texts, normalize_embeddings=True).tolist()
+        collection.upsert(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
+        write_json(self, 200, {"success": True, "count": len(ids)})
+
+    def handle_search(self):
+        if not self._ensure_ready():
+            return
+        data = read_json(self)
+        query = str(data.get("query", "")).strip()
+        limit = max(1, min(int(data.get("limit", 10) or 10), 80))
+        where = data.get("where")
+        if not query:
+            write_json(self, 200, {"results": []})
+            return
+        query_embedding = get_embedding(query)
+        kwargs = {
+            "query_embeddings": [query_embedding],
+            "n_results": limit,
+            "include": ["documents", "metadatas", "distances"],
+        }
+        if isinstance(where, dict) and where:
+            kwargs["where"] = sanitize_metadata(where)
+        results = collection.query(**kwargs)
+        formatted = []
+        ids = results.get("ids", [[]])[0] or []
+        docs = results.get("documents", [[]])[0] or []
+        metas = results.get("metadatas", [[]])[0] or []
+        distances = results.get("distances", [[]])[0] or []
+        for index, doc_id in enumerate(ids):
+            formatted.append({
+                "id": doc_id,
+                "text": docs[index] if index < len(docs) else "",
+                "metadata": metas[index] if index < len(metas) else {},
+                "distance": distances[index] if index < len(distances) else 0,
+            })
+        write_json(self, 200, {"results": formatted})
+
+    def handle_delete(self):
+        if not self._ensure_ready():
+            return
+        data = read_json(self)
+        ids = [str(item) for item in data.get("ids", []) if str(item).strip()]
+        if ids:
+            collection.delete(ids=ids)
+        write_json(self, 200, {"success": True, "count": len(ids)})
+
+    def log_message(self, _format, *args):
+        return
+
+
+def main():
+    os.makedirs(CHROMA_DB_PATH, exist_ok=True)
+    server = HTTPServer((SERVER_HOST, SERVER_PORT), VectorDBHandler)
+    print(f"HTTP server listening at http://{SERVER_HOST}:{SERVER_PORT}", flush=True)
+    threading.Thread(target=init_model, daemon=True).start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        server.shutdown()
+
+
+if __name__ == "__main__":
+    main()

@@ -37,6 +37,7 @@
 - **全量总结**：整合全部对话记录，支持分块总结（128条/块）+ 合并，避免超长上下文失败
 - **增量总结**：在全量总结基础上追加当日对话，每8轮对话自动触发 + 每日23:50定时覆盖
 - **个人档案**：全量/增量总结会自动维护，也可在对话/畅聊中明确要求“记到我的个人档案”来主动合并更新
+- **本地向量记忆**：可选启用 sentence-transformers + ChromaDB，在本机索引对话、总结、个人档案和畅聊流水，支持语义召回
 - 记忆档案列表查看与读取
 - 支持导出个人/全部记忆
 - SQLite 数据库存储，按 QQ 号隔离用户
@@ -44,6 +45,7 @@
 ### 🔍 工具调用
 - **服务器状态查询**：AI 可查看服务器 CPU、内存、温度等系统信息
 - **Shell 执行**：可选开启后，主人可让 AI 根据意图执行服务器 Shell 命令，适合 `rg`/`ls`/`cat`/`tail` 查文件、日志排查、服务诊断等
+- **本地语义记忆检索**：启用向量记忆后，AI 可按自然语言从历史、总结、个人档案和群流水中召回相关片段
 - **联网搜索**：AI 自动判断是否需要联网搜索，注入搜索结果辅助回答。默认关闭，使用 `#cn` 临时启用
 
 ### 🖼️ Vision Relay（图文转述）
@@ -178,6 +180,10 @@ enable_web_fetch: false
 # enable_group_admin: false   # 群管理工具，主人或当前群管理员可用，机器人需有对应权限
 # enable_group_send: false    # 代发群消息，主人专用；默认关闭，执行前需二次确认
 # enable_group_leave: false   # 遥控退群，主人专用；默认关闭，执行前需二次确认
+# enable_vector_memory: false # 本地向量记忆；开启前先安装 scripts/requirements.txt 里的 Python 依赖
+# VECTOR_MODEL: shibing624/text2vec-base-chinese
+# VECTOR_SERVER_PORT: 9901
+# VECTOR_AUTO_CONTEXT_MAX_CHARS: 6000
 
 # 畅聊模式（可选）
 # enable_noa_chat: false              # 是否开启畅聊：全局捕获群消息（黑名单除外，含 # 命令消息），有权限时自然回复
@@ -292,7 +298,7 @@ name: 诺亚
 >  当待读图片超过 `NOA_CHAT_IMAGE_BATCH_SIZE` 时，会先按批读取并生成图片摘要，再把摘要注入最终回复，避免一次请求塞入过多图片。
 >  跨群检索默认只允许查询触发者自己的消息；只有主人可查询所有已捕获群或指定群流水。
 >  主人可在 `#chat` 或畅聊触发消息里直接给出白名单内的本地图片绝对路径（如 `/root/Yunzai/resources/tmp/a.jpg`），对话流程会把它作为本轮图片输入，不需要额外调用 Shell。
->  畅聊回复会同步到触发者普通对话记忆；个人档案会由全量/增量总结自动维护，也可在明确要求“记到我的个人档案/从刚才聊天提炼档案”时主动合并更新。工具调用仍按原权限鉴权，高危群管工具需要 `enable_group_admin: true` 且操作者具备权限。
+>  畅聊回复会同步到触发者普通对话记忆；个人档案会由全量/增量总结自动维护，也可在明确要求“记到我的个人档案/从刚才聊天提炼档案”时主动合并更新。开启本地向量记忆后，畅聊流水也会参与语义索引，便于后续 `#chat` 按主题跨记录召回。工具调用仍按原权限鉴权，高危群管工具需要 `enable_group_admin: true` 且操作者具备权限。
 
 ### 记忆管理
 | 指令 | 说明 |
@@ -326,6 +332,7 @@ AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单
 | 遥控退群 | `enable_group_leave: true` 后，主人明确说“退了某群/退出群号xxx” | 让机器人退出指定 QQ 群；显式列出多个目标时可批量，开放式“所有群/全部群”会被拒绝；所有退群都先创建待确认操作 |
 | AI 画图 | `enable_ai_draw: true` 后，对话中按意图调用 | 在对话中用自然语言让 AI 画图（等同 `#draw`）；支持参考图（带图/引用图/@成员头像）与预设风格名；生成图直接发送到会话 |
 | 群管理 | `enable_group_admin: true` 后，群聊中主人或群管理员按意图调用 | 禁言/解禁、全员禁言、踢人（可拉黑）、改群名片、设专属头衔、精华消息、入群审核（查看/通过/拒绝加群申请）；需机器人为群管理员（设头衔需群主） |
+| 本地语义记忆检索 | `enable_vector_memory: true` 后，用户询问“历史里找一下/以前有没有说过/相关记忆”时调用 | 从本地 ChromaDB 召回普通对话、全量/增量总结、个人档案和畅聊群流水；普通用户只能查自己的记忆、当前群流水和自己跨群发言，主人可明确要求跨群/指定群/指定用户 |
 | 联网搜索 | 使用 `#cn` 临时启用，AI 自动判断是否需要搜索 | 注入搜索结果辅助回答，自动抓取首条结果网页全文 |
 | 网页抓取 | 使用 `#cw` 临时启用，自动提取消息中的 URL 并抓取网页内容 | 提取网页可读文本，支持 HTML/JSON，最大 8000 字符；GitHub 链接自动改走 API，B站短链自动还原；失败时会按 HTTP、浏览器渲染、公开网页 Reader 文本化顺序降级 |
 
@@ -341,6 +348,7 @@ AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单
 > 💡 网页抓取默认关闭，可使用 `#cw` 临时启用，或在 `models_config.yaml` 中设置 `enable_web_fetch: true` 全局开启。消息中包含 URL 时自动抓取网页内容。
 > 💡 网页抓取会自动尝试浏览器渲染和公开网页 Reader 文本化降级；Reader 不会用于 localhost、内网 IP、`.local` 等私有地址，也无法绕过登录/验证码。可选配置 `JINA_API_KEY` 或 `JINA_READER_API_KEY` 环境变量提升 Reader 稳定性。
 > 💡 抓取 GitHub 链接（commits/commit/releases/issues/pulls/blob/仓库主页）时会自动改走 GitHub API/raw，返回精简数据并规避网页防爬。匿名访问限 60 次/小时，可在服务器配置 `GITHUB_TOKEN` 环境变量提升到 5000 次/小时。
+> 🧠 本地向量记忆默认关闭，需 `enable_vector_memory: true` 并安装 `scripts/requirements.txt` 里的 Python 依赖。服务只监听 `127.0.0.1`，向量库默认写入 `config/chroma_db`，不会上传到云端。
 > 💬 畅聊模式会复用同一套工具系统与鉴权规则。工具路由只使用当前触发消息文本，引用消息/群上下文不会被当作工具指令执行。
 
 ### 管理功能（管理员）
@@ -400,6 +408,7 @@ AI-Plugin/
 │   ├── group_chat_context.js # 畅聊群上下文查询工具
 │   ├── group_member_aliases.js # 群成员称呼/外号查询工具
 │   ├── image_gen.js        # AI 对话画图（按意图联动插件画图能力，可选开启）
+│   ├── memory_search.js    # 本地语义记忆检索
 │   ├── shell_exec.js       # Shell 命令执行工具（主人专用，可选开启）
 │   ├── system_info.js      # 系统信息查询
 │   ├── search.js           # 联网搜索
@@ -412,9 +421,14 @@ AI-Plugin/
 │   ├── access.js           # 权限控制
 │   ├── group_alias.js      # 群成员称呼/外号记忆
 │   ├── database.js         # SQLite 数据库操作
+│   ├── vector_db.js        # 本地 ChromaDB 向量服务客户端
+│   ├── vector_memory.js    # 向量记忆索引、召回和格式化
 │   ├── common.js           # 通用工具
 │   ├── image.js            # 图片处理
 │   └── summarizer.js       # 摘要生成
+├── scripts/                 # 辅助脚本
+│   ├── vector_server.py    # 本地向量服务（sentence-transformers + ChromaDB）
+│   └── requirements.txt    # 向量记忆 Python 依赖
 ├── index.js                 # 入口文件
 └── package.json             # 依赖配置
 ```
@@ -436,9 +450,11 @@ AI-Plugin/
 | `access_control.yaml` | 权限控制配置 |
 | `file_roots.yaml` | 文件白名单配置（用于文件收发和本地图片路径输入） |
 | `ai_plugin.db` | SQLite 数据库（对话历史、记忆锚点、摘要缓存） |
+| `chroma_db/` | 本地向量库目录（启用 `enable_vector_memory` 后创建） |
 
 ### 数据存储
 - **SQLite 数据库**：主要存储引擎，存储对话历史、记忆锚点、摘要缓存
+- **ChromaDB 向量库**：可选本地语义检索层，索引对话、总结、个人档案和畅聊流水
 - **JSON/YAML 文件**：配置文件（模型配置、权限配置、预设等）
 - **Redis**：可选缓存层，加速对话读取
 
@@ -503,6 +519,7 @@ AI-Plugin/
 15. **Shell 执行风险**：Shell 工具默认关闭，需 `enable_shell_exec: true` 开启且仅主人可用；开启后具备完整服务器命令权限
 16. **持久 Shell 会话风险**：tmux 会话工具默认关闭，需 `enable_shell_session: true` 开启且仅主人可用；会话状态会保留，适合长任务，但也意味着命令可能持续运行
 17. **指令自定义**：可在 `models_config.yaml` 中修改 `chat_command`/`draw_command` 缩短指令
+18. **本地向量记忆**：默认关闭；开启前需安装 Python 依赖。首次启动会下载/加载本地 embedding 模型，可能占用额外内存与磁盘空间；普通用户检索范围受权限过滤限制
 
 ## 🤝 贡献
 

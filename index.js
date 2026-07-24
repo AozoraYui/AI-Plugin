@@ -3,6 +3,7 @@ import { Config, HISTORY_DIR } from './utils/config.js'
 import { AiClient } from './client/AiClient.js'
 import { ConversationManager } from './model/conversation.js'
 import { AIScheduler } from './utils/scheduler.js'
+import { vectorMemory } from './utils/vector_memory.js'
 
 logger.info('**************************************')
 logger.info(`
@@ -30,6 +31,14 @@ if (!global.segment) {
 global.AIPluginClient = new AiClient()
 global.AIPluginConversationManager = new ConversationManager()
 await global.AIPluginConversationManager.waitForMigration()
+
+vectorMemory.init({ db: global.AIPluginConversationManager.db })
+    .then(ok => {
+        if (ok) logger.info('[AI-Plugin] 本地向量记忆初始化完成')
+    })
+    .catch(err => {
+        logger.warn(`[AI-Plugin] 本地向量记忆初始化异常: ${err.message}`)
+    })
 
 // 检查是否需要修复迁移日期
 const migrationStatus = await global.AIPluginConversationManager.db.getMigrationStatus()

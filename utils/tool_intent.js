@@ -290,6 +290,47 @@ export function hasExplicitUserProfileHistoryExtractionIntent(text) {
         || new RegExp(`${source}.{0,50}${object}.{0,30}${action}`, 'i').test(value)
 }
 
+export function hasExplicitMemorySearchIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    if (hasExplicitUserProfileUpdateIntent(value)) return false
+
+    const recentGroupQuestion = hasGroupChatContextQuestion(value)
+    const semanticHint = /(?:语义|相关记忆|相关历史|历史里|记忆里|旧对话|对话记录|聊天记录|以前|之前|曾经|说过|提过|聊过|讨论过|记得|记不记得)/i.test(value)
+    if (recentGroupQuestion && !semanticHint) return false
+
+    return /(?:历史|记忆|旧对话|过往|对话记录|聊天记录|记录里).{0,40}(?:搜索|检索|查|查询|找|翻|回忆|有没有|是否|说过|提过|聊过|讨论过|相关)/i.test(value)
+        || /(?:搜索|检索|查|查询|找|翻).{0,32}(?:历史|记忆|旧对话|过往|对话记录|聊天记录|记录)/i.test(value)
+        || /(?:相关记忆|相关历史|语义检索|语义搜索|交叉检索|跨源检索|跨群检索)/i.test(value)
+        || /(?:我|我们|咱们|你).{0,24}(?:以前|之前|曾经).{0,36}(?:说过|提过|聊过|讨论过|提到过|讲过|记得|记不记得)/i.test(value)
+        || /(?:你还记得|还记不记得|有没有印象).{0,80}(?:我|我们|之前|以前|说过|提过|聊过|讨论过)/i.test(value)
+}
+
+export function parseMemorySearchRequest(text) {
+    const value = getPrimaryUserInstruction(text).trim()
+    if (!hasExplicitMemorySearchIntent(value)) return null
+    const query = value.replace(/^#[A-Za-z0-9_]+\s*/i, '').trim() || value
+    const args = { query }
+    if (/(?:所有群|全部群|跨群|各群|全局|全部记忆|所有记忆|所有历史|全部历史)/i.test(value)) {
+        args.scope = 'all'
+    } else if (/(?:本群|当前群|这个群|群里|群聊)/i.test(value)) {
+        args.scope = 'current_group'
+    } else if (/(?:我的个人记忆|我的记忆|我自己的|关于我|我的历史|我们的对话|咱们的对话|我和你|你和我)/i.test(value)) {
+        args.scope = 'my_memory'
+    }
+    const userMatch = value.match(/(?:QQ|用户|user[_\s-]?id)\s*[：:=]?\s*(\d{5,15})/i)
+    if (userMatch?.[1]) {
+        args.user_id = userMatch[1]
+        if (!args.scope) args.scope = 'user_memory'
+    }
+    const groupMatch = value.match(/(?:群号|群)\s*[：:=]?\s*(\d{5,15})/i)
+    if (groupMatch?.[1]) {
+        args.group_id = groupMatch[1]
+        args.scope = 'specific_group'
+    }
+    return args
+}
+
 export function hasGroupChatContextQuestion(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
@@ -411,6 +452,8 @@ export function isExplicitToolIntent(toolName, text, options = {}) {
             return options.strictWebSearch === true ? hasExplicitWebSearchIntent(text) : true
         case 'group_chat_context':
             return hasExplicitGroupChatContextIntent(text)
+        case 'memory_search':
+            return hasExplicitMemorySearchIntent(text)
         case 'user_profile_update':
             return hasExplicitUserProfileUpdateIntent(text)
         case 'group_mute':

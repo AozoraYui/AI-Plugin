@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import sqlite3 from 'sqlite3'
 import { getDBTimestamp, ensureDir } from './common.js'
+import { queueGroupMessageVectorIndex, queueHistoryVectorIndex, queueSummaryVectorIndex, queueUserProfileVectorIndex } from './vector_memory.js'
 
 const _path = process.cwd()
 const PLUGIN_DIR = path.join(_path, 'plugins', 'AI-Plugin')
@@ -331,6 +332,10 @@ export class AIDatabase {
             const dateStr = history.length > 0 && history[0].date_str 
                 ? history[0].date_str 
                 : new Date().toISOString().split('T')[0]
+            const historyWithDate = history.map(turn => ({
+                ...turn,
+                date_str: turn.date_str || dateStr
+            }))
 
             logger.debug(`[AI-Plugin] 保存用户 ${userId} 的 ${history.length} 条对话到 SQLite，日期: ${dateStr}`)
 
@@ -360,12 +365,12 @@ export class AIDatabase {
                     this.db.serialize(() => {
                         this.db.run('BEGIN TRANSACTION')
                         
-                        for (const turn of history) {
+                        for (const turn of historyWithDate) {
                             insert.run(
                                 userIdStr,
                                 turn.role,
                                 JSON.stringify(turn.parts),
-                                turn.date_str || dateStr
+                                turn.date_str
                             )
                         }
                         
@@ -375,6 +380,7 @@ export class AIDatabase {
                                 logger.error(`[AI-Plugin] 提交事务失败:`, err)
                                 reject(err)
                             } else {
+                                queueHistoryVectorIndex(userIdStr, historyWithDate)
                                 logger.debug(`[AI-Plugin] 成功保存用户 ${userId} 的 ${history.length} 条对话`)
                                 resolve()
                             }
@@ -396,7 +402,10 @@ export class AIDatabase {
                 VALUES (?, ?, ?, ?)
             `, [String(userId), role, JSON.stringify(parts), dateStr], (err) => {
                 if (err) reject(err)
-                else resolve()
+                else {
+                    queueHistoryVectorIndex(userId, [{ role, parts, date_str: dateStr }])
+                    resolve()
+                }
             })
         })
     }
@@ -424,7 +433,11 @@ export class AIDatabase {
                     reject(err)
                     return
                 }
-                resolve(this.changes || 0)
+                const changes = this.changes || 0
+                if (changes > 0) {
+                    queueGroupMessageVectorIndex({ ...log, createdAt })
+                }
+                resolve(changes)
             })
         })
     }
@@ -699,13 +712,17 @@ export class AIDatabase {
 
     saveUserProfile(userId, info) {
         return new Promise((resolve, reject) => {
+            const lastUpdated = getDBTimestamp()
             this.db.run(`
                 INSERT INTO user_profiles (user_id, info, last_updated)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(user_id) DO UPDATE SET info = ?, last_updated = CURRENT_TIMESTAMP
-            `, [String(userId), info, info], (err) => {
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET info = ?, last_updated = ?
+            `, [String(userId), info, lastUpdated, info, lastUpdated], (err) => {
                 if (err) reject(err)
-                else resolve()
+                else {
+                    queueUserProfileVectorIndex(userId, info, lastUpdated)
+                    resolve()
+                }
             })
         })
     }
@@ -860,7 +877,10 @@ export class AIDatabase {
                 ON CONFLICT(user_id, date_str) DO UPDATE SET content = ?, message_count = ?, checkpoint_type = ?, created_at = ?
             `, [String(userId), content, dateStr, messageCount, checkpointType, createdAt, content, messageCount, checkpointType, createdAt], (err) => {
                 if (err) reject(err)
-                else resolve()
+                else {
+                    queueSummaryVectorIndex(userId, content, dateStr, 'memory_checkpoint', { checkpointType })
+                    resolve()
+                }
             })
         })
     }
@@ -924,7 +944,7 @@ export class AIDatabase {
 
     getAllCheckpoints(userId) {
         return new Promise((resolve, reject) => {
-            this.db.all('SELECT content, date_str, created_at FROM memory_checkpoints WHERE user_id = ? ORDER BY date_str ASC',
+            this.db.all('SELECT content, date_str, created_at, checkpoint_type FROM memory_checkpoints WHERE user_id = ? ORDER BY date_str ASC',
                 [String(userId)], (err, rows) => {
                     if (err) {
                         reject(err)
@@ -933,7 +953,8 @@ export class AIDatabase {
                     resolve(rows.map(row => ({
                         content: row.content,
                         dateStr: row.date_str,
-                        createdAt: row.created_at
+                        createdAt: row.created_at,
+                        checkpointType: row.checkpoint_type
                     })))
                 })
         })
@@ -960,7 +981,10 @@ export class AIDatabase {
                 ON CONFLICT(user_id, date_str) DO UPDATE SET content = ?, base_checkpoint_date = ?, created_at = ?
             `, [String(userId), content, dateStr, baseCheckpointDate, createdAt, content, baseCheckpointDate, createdAt], (err) => {
                 if (err) reject(err)
-                else resolve()
+                else {
+                    queueSummaryVectorIndex(userId, content, dateStr, 'summary_cache', { baseCheckpointDate })
+                    resolve()
+                }
             })
         })
     }

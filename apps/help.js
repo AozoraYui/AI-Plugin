@@ -115,6 +115,11 @@ export class HelpHandler extends plugin {
   可明确说“记到我的个人档案：xxx”或“从刚才聊天提炼我的档案”，AI 会合并更新你的长期画像。
   图片只存元信息不存本体；触发消息最多自动读 ${noaAutoImageLimit} 张图，超过阈值默认不读，除非明确要求“读图/看图/分析图片”。
   每轮最多临时读取 ${noaMaxImagesText}；超过 ${noaImageBatchSize} 张会先分批读图摘要再回复。
+> 🧠 本地向量记忆（可选）
+  需在 models_config.yaml 开启 enable_vector_memory: true，并安装 scripts/requirements.txt 里的 Python 依赖。
+  开启后会在本机索引普通对话、全量/增量总结、个人档案和畅聊群流水，数据写入 config/chroma_db，不上传云端。
+  可自然询问“历史里查一下我以前有没有说过向量库”“找一下相关记忆”“跨群检索一下我刚才提过的内容”。
+  普通用户只能查自己的记忆、当前群流水和自己跨群发言；主人明确要求时可跨群、指定群或指定用户检索。
 > 开关可组合，如 #fv${chatCmd}、#pv${chatCmd}、#us${chatCmd}n、#s${chatCmd}w、#${chatCmd}vnw 等。
 
 > #导出${aiName}记忆
@@ -207,6 +212,9 @@ export class HelpHandler extends plugin {
 > #ai批量增量总结
   [批量处理] 将所有"未总结"的日期逐个处理为增量总结。
   适合清理历史积压的未总结日期。
+> 🧠 本地向量记忆
+  开启 enable_vector_memory 后，总结、个人档案、普通对话和畅聊流水会同步进入本地向量库。
+  后续可在 #${chatCmd}/畅聊中自然询问“历史里查一下/以前有没有说过/相关记忆”，AI 会按权限召回相关片段。
 > 💡 总结命令也支持模型组前缀：
   #fai全量总结 → Flash 模型组
   #pai全量总结 → Pro 模型组
@@ -293,6 +301,7 @@ export class HelpHandler extends plugin {
   - 增量总结 = 快速存档，消耗低，推荐日常使用
   - 全量总结 = 完整重玩，支持分块合并，适合定期整理记忆
   - 个人档案由全量/增量总结自动维护，也可通过“记到我的个人档案：xxx”主动更新；只作为理解背景，不会在公开群主动透露
+  - 本地向量记忆开启后，可按语义从对话、总结、档案和畅聊流水里召回相关片段；普通用户会按权限过滤，主人可明确跨群检索
 
 > 📊 Token 统计
   - 对话回复底部显示 Token 消耗与耗时

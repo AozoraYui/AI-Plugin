@@ -126,6 +126,14 @@ const defaultConfig = {
     SHELL_SESSION_AFTER_SEND_TIMEOUT_MS: 64000,
     // action=send 后等待输出的轮询间隔
     SHELL_SESSION_AFTER_SEND_POLL_MS: 1000,
+    // 本地向量记忆开关（默认关闭；开启后需要 Python 依赖和本地 embedding 模型）
+    enable_vector_memory: false,
+    // 本地向量模型名称，传给 sentence-transformers
+    VECTOR_MODEL: 'shibing624/text2vec-base-chinese',
+    // 本地向量服务监听端口，仅绑定 127.0.0.1
+    VECTOR_SERVER_PORT: 9901,
+    // 自动注入最终回复模型的语义相关记忆最大字符数
+    VECTOR_AUTO_CONTEXT_MAX_CHARS: 6000,
     version: 'v1.0.0'
 }
 
@@ -466,6 +474,14 @@ export const Config = {
     set SHELL_SESSION_AFTER_SEND_TIMEOUT_MS(val) { config.SHELL_SESSION_AFTER_SEND_TIMEOUT_MS = Number(val) || defaultConfig.SHELL_SESSION_AFTER_SEND_TIMEOUT_MS },
     get SHELL_SESSION_AFTER_SEND_POLL_MS() { return config.SHELL_SESSION_AFTER_SEND_POLL_MS ?? defaultConfig.SHELL_SESSION_AFTER_SEND_POLL_MS },
     set SHELL_SESSION_AFTER_SEND_POLL_MS(val) { config.SHELL_SESSION_AFTER_SEND_POLL_MS = Number(val) || defaultConfig.SHELL_SESSION_AFTER_SEND_POLL_MS },
+    get enable_vector_memory() { return config.enable_vector_memory ?? defaultConfig.enable_vector_memory },
+    set enable_vector_memory(val) { config.enable_vector_memory = val === true },
+    get VECTOR_MODEL() { return config.VECTOR_MODEL ?? defaultConfig.VECTOR_MODEL },
+    set VECTOR_MODEL(val) { config.VECTOR_MODEL = val || defaultConfig.VECTOR_MODEL },
+    get VECTOR_SERVER_PORT() { return config.VECTOR_SERVER_PORT ?? defaultConfig.VECTOR_SERVER_PORT },
+    set VECTOR_SERVER_PORT(val) { config.VECTOR_SERVER_PORT = parsePositiveInteger(val, defaultConfig.VECTOR_SERVER_PORT) },
+    get VECTOR_AUTO_CONTEXT_MAX_CHARS() { return config.VECTOR_AUTO_CONTEXT_MAX_CHARS ?? defaultConfig.VECTOR_AUTO_CONTEXT_MAX_CHARS },
+    set VECTOR_AUTO_CONTEXT_MAX_CHARS(val) { config.VECTOR_AUTO_CONTEXT_MAX_CHARS = parsePositiveInteger(val, defaultConfig.VECTOR_AUTO_CONTEXT_MAX_CHARS) },
     presets,
     reloadPresets() {
         this.presets = loadPresetsSync()
