@@ -365,6 +365,17 @@ export class VectorDBClient {
             return ready
         }
 
+        if (getListeningSocketInodes(this.port).size > 0) {
+            const reason = `端口 ${this.port} 已被无响应服务占用，/health 不可达`
+            if (!cleanupTried && await this.stopOwnedVectorServer(reason)) {
+                await sleep(800)
+                return await this._init(true)
+            }
+            if (!this.lastError) this.lastError = `${reason}；未启动新的向量服务以避免端口冲突`
+            logger.warn(`[AI-Plugin] 向量记忆跳过启动: ${this.lastError}`)
+            return false
+        }
+
         if (!fs.existsSync(PYTHON_SCRIPT)) {
             this.lastError = `向量服务脚本不存在: ${PYTHON_SCRIPT}`
             logger.warn(`[AI-Plugin] ${this.lastError}`)
