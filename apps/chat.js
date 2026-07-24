@@ -413,6 +413,26 @@ function parseShellCommand(text) {
     return ''
 }
 
+function cleanupShellInput(rawInput = '', fullText = '') {
+    let input = String(rawInput || '').trim()
+    if (!input) return ''
+
+    input = input
+        .replace(/^[：:，,\s]+|[。；;，,\s]+$/g, '')
+        .replace(/^(?:这条|下面这条|以下这条|这个|这个)?\s*(?:shell|终端|命令行)?\s*命令\s*[：:，,\s]*/i, '')
+
+    const commandStarters = '(?:sudo|ssh|scp|rsync|git|npm|pnpm|node|python3?|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head|nmap|ip|tmux|sqlite3|sqlite|curl|wget|jq|sed|awk)'
+    input = input.replace(new RegExp(`^命令(?=${commandStarters}\\b)`, 'i'), '')
+
+    const userText = String(fullText || '')
+    const commandCue = /(?:执行|运行|输入|发送|打入)\s*命令|命令\s*(?:执行|运行|看|看看|试|试一下)|在.{0,12}(?:tmux|ai-shell|shell会话|shell窗口|独立shell|终端会话).{0,8}(?:执行|运行|输入|发送|打入)/i.test(userText)
+    if (commandCue && new RegExp(`^${commandStarters}\\b[\\s\\S]{1,3990}命令$`, 'i').test(input)) {
+        input = input.replace(/\s*命令$/i, '').trim()
+    }
+
+    return input.trim()
+}
+
 function parseShellSessionRequest(text) {
     const value = String(text || '').trim()
     const sessionWords = '(?:tmux|ai-shell|shell\\s*session|shell会话|shell窗口|独立shell|终端会话)'
@@ -443,7 +463,7 @@ function parseShellSessionRequest(text) {
     ]
     for (const pattern of patterns) {
         const match = value.match(pattern)
-        const input = match?.groups?.input?.trim()
+        const input = cleanupShellInput(match?.groups?.input, value)
         if (input) return { action: 'send', input, enter: !/(?:不回车|不要回车|先别执行|只输入)/i.test(value) }
     }
     return null
@@ -862,6 +882,7 @@ ${toolSummary}
 - 如果用户说“看看这个/总结上面/下载引用文件/打开这个链接”，可以把引用/转发内容当作工具参数来源；否则不要因为引用内容本身包含工具词而计划工具。
 - 服务器文件/目录查看统一使用 shell_exec 或 shell_session；本地图片绝对路径由对话流程自动附加为图片输入。
 - 普通快速一次性命令优先 shell_exec；预计耗时较长、持续输出、需要保留状态或用户明确提到 tmux/ai-shell/shell会话/独立shell 时，优先计划 shell_session。如果 shell_exec 未启用但 shell_session 可用，主人明确要求执行服务器命令时也可以计划 shell_session。
+- 规划 shell_session action=send 时，input 只应包含真实要发进终端的内容；不要把“命令/执行命令/输入命令”等中文引导词粘进 input。
 - 用户要求 nmap/局域网/内网入网设备扫描时，不要猜 192.168.0.0/24 或 192.168.1.0/24；应先计划 shell_exec 获取本机网络信息（如 ip route get 1.1.1.1、ip -o -4 addr show scope global、ip route show default），再由 Shell 补查根据实际 CIDR 执行 nmap -sn。若只能用 shell_session，应发送能自动推断 iface/cidr 的命令，避免扫描公网或无关网段。
 - 链接只在用户明确要求查看/总结/分析网页内容时计划 web_fetch；只是出现链接不代表需要抓取。
 - 用户询问天气但当前消息没写城市时，如果长期记忆摘要或最近对话中明确给出了用户常住地/所在地/所在城市，可以计划 weather 并在 params_hint 写入该城市；没有明确地点时不要猜，返回 need_tools=false 并说明需要追问城市。

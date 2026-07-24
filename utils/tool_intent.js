@@ -307,7 +307,7 @@ export function hasGroupChatContextQuestion(text) {
 export function hasExplicitShellIntent(text, toolName = '') {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
-    const commandKeywords = 'git|npm|pnpm|node|python3?|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head|nmap|ip|tmux|sqlite3|sqlite|curl|wget|jq|sed|awk'
+    const commandKeywords = 'ssh|scp|rsync|git|npm|pnpm|node|python3?|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head|nmap|ip|tmux|sqlite3|sqlite|curl|wget|jq|sed|awk'
     const shellKeywords = `${commandKeywords}|shell|命令|终端`
     if (/^(?:你|诺亚|noa)?\s*(?:会不会|会|能不能|可以|能).{0,16}(?:执行|运行|调用).{0,16}(?:shell|命令|终端|命令行).{0,20}(?:吗|嘛|么|？|\?)/i.test(value)
         && !/(?:帮我|给我|请|麻烦)/i.test(value)) {
@@ -320,7 +320,9 @@ export function hasExplicitShellIntent(text, toolName = '') {
     if (toolName === 'shell_session' && /(?:tmux|ai-shell|shell\s*session|shell会话|shell窗口|独立shell|终端会话)/i.test(value)) return true
     if (/(?:执行|运行|调用).{0,12}(?:shell|命令|终端|命令行|脚本)|(?:shell|命令)[:：]/i.test(value)) return true
     if (new RegExp(`(?:执行|运行|调用).{0,8}(?:${commandKeywords})\\b`, 'i').test(value)) return true
+    if (new RegExp(`(?:输入|发送|打入).{0,8}(?:${commandKeywords})\\b`, 'i').test(value)) return true
     if (new RegExp(`^(?:sudo\\s+)?(?:${commandKeywords})\\b`, 'i').test(value)) return true
+    if (new RegExp(`\\b(?:${commandKeywords})\\b[\\s\\S]{0,200}(?:命令|执行|运行|输入|发送|打入|跑一下|试一下)`, 'i').test(value)) return true
     if (/\b(?:git\s+(?:pull|status|diff|log|show|fetch)|tmux\s+ls|nmap\s+-|ip\s+(?:route|addr)|pnpm\s+|npm\s+|node\s+|python3?\s+|docker\s+|systemctl\s+|sqlite3\s+|curl\s+|wget\s+|jq\s+)/i.test(value)) return true
     if (new RegExp(`(?:用|拿|通过).{0,12}(?:${commandKeywords}).{0,12}(?:命令|工具)`, 'i').test(value)) return true
     if (new RegExp(`(?:${commandKeywords}).{0,10}(?:命令).{0,16}(?:查|看|读取|查询|检查|列出)`, 'i').test(value)) return true
@@ -331,9 +333,13 @@ export function hasExplicitShellIntent(text, toolName = '') {
 
 export function isContinuationToolInstruction(text) {
     const value = getPrimaryUserInstruction(text)
-        .replace(/^#\S+\s*/i, '')
+        .replace(/^#[A-Za-z0-9_]+\s*/i, '')
         .trim()
     if (!value) return false
+
+    if (/^(?:现在|再|重新|刷新|继续|接着|帮我|给我|麻烦你?)?[，,。\s]*(?:看看|看一下|读一下|查看|刷新|回读).{0,18}(?:有没有|有无)?(?:输出|回显|结果|窗口|画面|终端内容|tmux内容|shell内容)/i.test(value)) {
+        return true
+    }
 
     const prefix = '(?:咳咳|嗯+|呃+|那个|那|现在|这次|刚才|前面|上面|之前|好了|可以了|行了|ok|OK)?'
     const action = '(?:继续|接着|看看|看一下|帮我看看|给我看看|处理|弄一下|执行|跑一下|查一下|读一下)'
@@ -361,6 +367,13 @@ function extractUrls(text) {
 
 function hasModelPlannedLowRiskEvidence(call = {}, instruction = '', options = {}) {
     if (options.allowModelPlannedLowRisk !== true) return false
+    if (call.name === 'shell_session') {
+        const args = call.args || call.params || {}
+        const action = String(args.action || '').trim().toLowerCase()
+        if (['read', 'status'].includes(action)) {
+            return /(?:输出|回显|结果|窗口|画面|终端内容|tmux内容|shell内容|看看|看一下|读取|查看|刷新|现在)/i.test(instruction)
+        }
+    }
     if (call.name === 'web_fetch') {
         const urls = [
             ...extractUrls(instruction),
