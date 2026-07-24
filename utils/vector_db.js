@@ -13,7 +13,7 @@ const DEFAULT_PORT = 9901
 const HEALTH_TIMEOUT_MS = 2500
 const STARTUP_TIMEOUT_MS = 180000
 const VECTOR_WRITE_TIMEOUT_MS = 300000
-const VECTOR_SERVER_PROTOCOL_VERSION = '2026-07-25.5'
+const VECTOR_SERVER_PROTOCOL_VERSION = '2026-07-25.6'
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms))
@@ -527,10 +527,13 @@ export class VectorDBClient {
         }
         try {
             const data = await postJson(`${this.serverUrl}/stats`, {}, 30000)
+            const count = Number(data?.count)
             return {
                 enabled: true,
-                ready: data?.success === true,
-                count: Number(data?.count) || 0,
+                ready: data?.success === true && data?.ready !== false,
+                count: Number.isFinite(count) ? count : 0,
+                busy: data?.busy === true,
+                cached: data?.cached === true,
                 model: data?.model || this.modelName,
                 collection: data?.collection || '',
                 serverVersion: data?.server_version || VECTOR_SERVER_PROTOCOL_VERSION,

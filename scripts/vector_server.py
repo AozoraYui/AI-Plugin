@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 import traceback
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # huggingface_hub reads HF_ENDPOINT during import in some versions, so set it
 # before importing sentence-transformers/chromadb.
@@ -26,7 +26,7 @@ from sentence_transformers import SentenceTransformer
 CHROMA_DB_PATH = sys.argv[1] if len(sys.argv) > 1 else "./chroma_db"
 SERVER_HOST = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1"
 SERVER_PORT = int(sys.argv[3]) if len(sys.argv) > 3 else 9901
-SERVER_VERSION = "2026-07-25.5"
+SERVER_VERSION = "2026-07-25.6"
 MODEL_NAME = sys.argv[4] if len(sys.argv) > 4 else os.environ.get(
     "AI_PLUGIN_VECTOR_MODEL",
     "shibing624/text2vec-base-chinese",
@@ -39,6 +39,9 @@ collection = None
 is_ready = False
 init_error = ""
 init_failed = False
+last_count = 0
+embedding_lock = threading.RLock()
+collection_lock = threading.RLock()
 
 
 def sanitize_metadata(metadata):
@@ -86,7 +89,8 @@ def coerce_text(value):
 
 def encode_texts_resilient(ids, texts):
     try:
-        embeddings = embedding_model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+        with embedding_lock:
+            embeddings = embedding_model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
         if hasattr(embeddings, "tolist"):
             embeddings = embeddings.tolist()
         return embeddings, []
@@ -115,7 +119,7 @@ def shutdown_after_init_failure(server):
 
 
 def init_model(server=None):
-    global embedding_model, chroma_client, collection, is_ready, init_error, init_failed
+    global embedding_model, chroma_client, collection, is_ready, init_error, init_failed, last_count
     try:
         print(f"HuggingFace endpoint: {os.environ.get('HF_ENDPOINT', '')}", flush=True)
         print(f"Loading embedding model: {MODEL_NAME}", flush=True)
@@ -125,7 +129,9 @@ def init_model(server=None):
 
         print(f"Opening ChromaDB: {CHROMA_DB_PATH}", flush=True)
         chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
-        collection = chroma_client.get_or_create_collection(name=COLLECTION_NAME)
+        with collection_lock:
+            collection = chroma_client.get_or_create_collection(name=COLLECTION_NAME)
+            last_count = int(collection.count())
         is_ready = True
         print("Vector database ready", flush=True)
     except Exception as exc:
@@ -138,21 +144,31 @@ def init_model(server=None):
 
 
 def reset_collection():
-    global collection
-    try:
-        chroma_client.delete_collection(name=COLLECTION_NAME)
-    except Exception:
-        pass
-    collection = chroma_client.get_or_create_collection(name=COLLECTION_NAME)
+    global collection, last_count
+    with collection_lock:
+        try:
+            chroma_client.delete_collection(name=COLLECTION_NAME)
+        except Exception:
+            pass
+        collection = chroma_client.get_or_create_collection(name=COLLECTION_NAME)
+        last_count = int(collection.count())
+        return last_count
 
 
 def get_embedding(text):
-    embedding = embedding_model.encode(coerce_text(text), normalize_embeddings=True, show_progress_bar=False)
+    with embedding_lock:
+        embedding = embedding_model.encode(coerce_text(text), normalize_embeddings=True, show_progress_bar=False)
     if hasattr(embedding, "tolist"):
         embedding = embedding.tolist()
     if isinstance(embedding, list) and embedding and isinstance(embedding[0], list):
         return embedding[0]
     return embedding
+
+
+def update_cached_count():
+    global last_count
+    last_count = int(collection.count())
+    return last_count
 
 
 class VectorDBHandler(BaseHTTPRequestHandler):
@@ -218,11 +234,19 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         if not self._ensure_ready():
             return
         try:
-            count = collection.count()
+            busy = not collection_lock.acquire(blocking=False)
+            count = last_count
+            if not busy:
+                try:
+                    count = update_cached_count()
+                finally:
+                    collection_lock.release()
             write_json(self, 200, {
                 "success": True,
                 "ready": True,
                 "count": count,
+                "busy": busy,
+                "cached": busy,
                 "model": MODEL_NAME,
                 "collection": COLLECTION_NAME,
                 "server_version": SERVER_VERSION,
@@ -248,8 +272,10 @@ class VectorDBHandler(BaseHTTPRequestHandler):
             return
         metadata = sanitize_metadata(data.get("metadata", {}))
         embedding = get_embedding(text)
-        collection.upsert(ids=[doc_id], embeddings=[embedding], documents=[text], metadatas=[metadata])
-        write_json(self, 200, {"success": True, "count": 1})
+        with collection_lock:
+            collection.upsert(ids=[doc_id], embeddings=[embedding], documents=[text], metadatas=[metadata])
+            total_count = update_cached_count()
+        write_json(self, 200, {"success": True, "count": 1, "total_count": total_count})
 
     def handle_add_many(self):
         if not self._ensure_ready():
@@ -284,13 +310,17 @@ class VectorDBHandler(BaseHTTPRequestHandler):
             ok_texts.append(texts[index])
             ok_metadatas.append(metadatas[index])
             ok_embeddings.append(embedding)
+        total_count = last_count
         if ok_ids:
-            collection.upsert(ids=ok_ids, embeddings=ok_embeddings, documents=ok_texts, metadatas=ok_metadatas)
+            with collection_lock:
+                collection.upsert(ids=ok_ids, embeddings=ok_embeddings, documents=ok_texts, metadatas=ok_metadatas)
+                total_count = update_cached_count()
         if failures:
             print(f"Skipped {len(failures)} embedding document(s): {json.dumps(failures[:5], ensure_ascii=False)}", flush=True)
         write_json(self, 200, {
             "success": len(ok_ids) > 0,
             "count": len(ok_ids),
+            "total_count": total_count,
             "failed": len(failures),
             "failures": failures[:5],
         })
@@ -313,7 +343,8 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         }
         if isinstance(where, dict) and where:
             kwargs["where"] = sanitize_metadata(where)
-        results = collection.query(**kwargs)
+        with collection_lock:
+            results = collection.query(**kwargs)
         formatted = []
         ids = results.get("ids", [[]])[0] or []
         docs = results.get("documents", [[]])[0] or []
@@ -333,9 +364,12 @@ class VectorDBHandler(BaseHTTPRequestHandler):
             return
         data = read_json(self)
         ids = [str(item) for item in data.get("ids", []) if str(item).strip()]
+        total_count = last_count
         if ids:
-            collection.delete(ids=ids)
-        write_json(self, 200, {"success": True, "count": len(ids)})
+            with collection_lock:
+                collection.delete(ids=ids)
+                total_count = update_cached_count()
+        write_json(self, 200, {"success": True, "count": len(ids), "total_count": total_count})
 
     def handle_delete_where(self):
         if not self._ensure_ready():
@@ -345,15 +379,17 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         if not isinstance(where, dict) or not where:
             write_json(self, 400, {"error": "where is required"})
             return
-        collection.delete(where=sanitize_metadata(where))
-        write_json(self, 200, {"success": True})
+        with collection_lock:
+            collection.delete(where=sanitize_metadata(where))
+            total_count = update_cached_count()
+        write_json(self, 200, {"success": True, "total_count": total_count})
 
     def handle_reset(self):
         if not self._ensure_ready():
             return
         try:
-            reset_collection()
-            write_json(self, 200, {"success": True, "count": collection.count()})
+            count = reset_collection()
+            write_json(self, 200, {"success": True, "count": count})
         except Exception as exc:
             write_json(self, 500, {"success": False, "error": str(exc)})
 
@@ -361,8 +397,9 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         return
 
 
-class ReusableHTTPServer(HTTPServer):
+class ReusableHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
+    daemon_threads = True
 
 
 def main():

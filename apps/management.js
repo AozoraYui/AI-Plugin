@@ -198,7 +198,7 @@ export class ManagementHandler extends plugin {
             result.rebuild ? '✅ 向量索引重建完成' : '✅ 向量索引迁移完成',
             `耗时: ${elapsed}s`,
             `本轮处理: ${result.rows || 0} 行 / ${result.docs || 0} 个向量片段`,
-            `当前向量库文档数: ${result.vectorStats?.count ?? '未知'}`,
+            `当前向量库文档数: ${result.vectorStats?.count ?? '未知'}${result.vectorStats?.cached ? '（缓存）' : ''}`,
             sourceLines.length ? sourceLines.join('\n') : ''
         ].filter(Boolean).join('\n')
     }
@@ -210,15 +210,19 @@ export class ManagementHandler extends plugin {
 
         if (action === '状态') {
             const status = await vectorMemory.getStatus(this.conversationManager.db)
+            const serviceText = status.vectorStats?.ready
+                ? (status.vectorStats?.busy ? '已就绪（忙碌中）' : '已就绪')
+                : '未就绪'
             const lines = [
                 '🧠 本地向量记忆状态',
                 `开关: ${status.enabled ? '已开启' : '已关闭'}`,
-                `服务: ${status.vectorStats?.ready ? '已就绪' : '未就绪'}`,
+                `服务: ${serviceText}`,
                 `模型: ${status.modelName}`,
                 status.vectorStats?.serverVersion ? `服务版本: ${status.vectorStats.serverVersion}` : '',
                 `地址: ${status.vectorStats?.url || 'http://127.0.0.1:9901'}`,
                 `目录: ${status.dataDir}`,
-                `向量片段: ${status.vectorStats?.count ?? 0}`,
+                `向量片段: ${status.vectorStats?.count ?? 0}${status.vectorStats?.cached ? '（缓存）' : ''}`,
+                status.vectorStats?.busy ? '状态: 正在写入/迁移，状态查询已返回缓存计数。' : '',
                 status.vectorStats?.error ? `错误: ${status.vectorStats.error}` : '',
                 `SQLite 数据: ${this._formatVectorCounts(status.sqliteCounts)}`,
                 `索引版本: ${status.schemaVersion}`,
