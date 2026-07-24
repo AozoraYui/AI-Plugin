@@ -167,7 +167,7 @@ async function postJson(url, body, timeoutMs = 30000) {
     })
     if (!res.ok) {
         const text = await res.text().catch(() => '')
-        throw new Error(`HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`)
+        throw new Error(`HTTP ${res.status}${text ? `: ${text.slice(0, 1000)}` : ''}`)
     }
     return await res.json()
 }
@@ -457,7 +457,14 @@ export class VectorDBClient {
             const data = normalized.length === 1
                 ? await postJson(`${this.serverUrl}/add`, normalized[0])
                 : await postJson(`${this.serverUrl}/add_many`, { documents: normalized }, 120000)
-            return data?.success === true
+            if (Number(data?.failed) > 0) {
+                logger.warn(`[AI-Plugin] 向量记忆写入跳过 ${Number(data.failed)} 个异常片段: ${JSON.stringify(data.failures || []).slice(0, 500)}`)
+            }
+            if (data?.success !== true) {
+                this.lastError = data?.error || `向量记忆写入失败: 成功 ${Number(data?.count) || 0}/${normalized.length} 个片段`
+                return false
+            }
+            return true
         } catch (err) {
             this.lastError = err.message
             logger.warn(`[AI-Plugin] 向量记忆写入失败: ${err.message}`)

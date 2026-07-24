@@ -71,6 +71,40 @@ def write_json(handler, status, payload):
     handler.wfile.write(body)
 
 
+def compact_error(exc):
+    return f"{type(exc).__name__}: {exc}"
+
+
+def coerce_text(value):
+    text = str(value if value is not None else "").strip()
+    return text.replace("\x00", "")
+
+
+def encode_texts_resilient(ids, texts):
+    try:
+        embeddings = embedding_model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+        if hasattr(embeddings, "tolist"):
+            embeddings = embeddings.tolist()
+        return embeddings, []
+    except Exception as exc:
+        print(f"Batch embedding failed, falling back to single-item encode: {compact_error(exc)}", flush=True)
+
+    embeddings = []
+    failures = []
+    for index, text in enumerate(texts):
+        try:
+            embeddings.append(get_embedding(text))
+        except Exception as exc:
+            failures.append({
+                "id": ids[index] if index < len(ids) else "",
+                "index": index,
+                "error": compact_error(exc),
+                "preview": text[:120],
+            })
+            embeddings.append(None)
+    return embeddings, failures
+
+
 def shutdown_after_init_failure(server):
     time.sleep(0.5)
     server.shutdown()
@@ -82,7 +116,8 @@ def init_model(server=None):
         print(f"HuggingFace endpoint: {os.environ.get('HF_ENDPOINT', '')}", flush=True)
         print(f"Loading embedding model: {MODEL_NAME}", flush=True)
         embedding_model = SentenceTransformer(MODEL_NAME)
-        print("Embedding model loaded", flush=True)
+        test_embedding = get_embedding("AI-Plugin vector self test")
+        print(f"Embedding model loaded, dimension={len(test_embedding)}", flush=True)
 
         print(f"Opening ChromaDB: {CHROMA_DB_PATH}", flush=True)
         chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
@@ -91,7 +126,7 @@ def init_model(server=None):
         print("Vector database ready", flush=True)
     except Exception as exc:
         init_failed = True
-        init_error = f"{type(exc).__name__}: {exc}"
+        init_error = compact_error(exc)
         print(f"Vector database init failed: {init_error}", flush=True)
         print(traceback.format_exc(), flush=True)
         if server is not None:
@@ -108,37 +143,57 @@ def reset_collection():
 
 
 def get_embedding(text):
-    return embedding_model.encode([text], normalize_embeddings=True)[0].tolist()
+    embedding = embedding_model.encode(coerce_text(text), normalize_embeddings=True, show_progress_bar=False)
+    if hasattr(embedding, "tolist"):
+        embedding = embedding.tolist()
+    if isinstance(embedding, list) and embedding and isinstance(embedding[0], list):
+        return embedding[0]
+    return embedding
 
 
 class VectorDBHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/health":
-            self.handle_health()
-        elif self.path == "/stats":
-            self.handle_stats()
-        else:
-            write_json(self, 404, {"error": "not found"})
+        try:
+            if self.path == "/health":
+                self.handle_health()
+            elif self.path == "/stats":
+                self.handle_stats()
+            else:
+                write_json(self, 404, {"error": "not found"})
+        except Exception as exc:
+            self.handle_exception(exc)
 
     def do_POST(self):
-        if self.path == "/health":
-            self.handle_health()
-        elif self.path in ("/add", "/upsert"):
-            self.handle_add()
-        elif self.path in ("/add_many", "/upsert_many"):
-            self.handle_add_many()
-        elif self.path == "/search":
-            self.handle_search()
-        elif self.path == "/delete":
-            self.handle_delete()
-        elif self.path == "/delete_where":
-            self.handle_delete_where()
-        elif self.path == "/stats":
-            self.handle_stats()
-        elif self.path == "/reset":
-            self.handle_reset()
-        else:
-            write_json(self, 404, {"error": "not found"})
+        try:
+            if self.path == "/health":
+                self.handle_health()
+            elif self.path in ("/add", "/upsert"):
+                self.handle_add()
+            elif self.path in ("/add_many", "/upsert_many"):
+                self.handle_add_many()
+            elif self.path == "/search":
+                self.handle_search()
+            elif self.path == "/delete":
+                self.handle_delete()
+            elif self.path == "/delete_where":
+                self.handle_delete_where()
+            elif self.path == "/stats":
+                self.handle_stats()
+            elif self.path == "/reset":
+                self.handle_reset()
+            else:
+                write_json(self, 404, {"error": "not found"})
+        except Exception as exc:
+            self.handle_exception(exc)
+
+    def handle_exception(self, exc):
+        error = compact_error(exc)
+        print(f"Request failed: {error}", flush=True)
+        print(traceback.format_exc(), flush=True)
+        try:
+            write_json(self, 500, {"success": False, "error": error})
+        except Exception:
+            pass
 
     def handle_health(self):
         write_json(self, 200, {
@@ -178,7 +233,7 @@ class VectorDBHandler(BaseHTTPRequestHandler):
             return
         data = read_json(self)
         doc_id = str(data.get("id", "")).strip()
-        text = str(data.get("text", "")).strip()
+        text = coerce_text(data.get("text", ""))
         if not doc_id or not text:
             write_json(self, 400, {"error": "id and text are required"})
             return
@@ -196,8 +251,10 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         texts = []
         metadatas = []
         for item in docs:
+            if not isinstance(item, dict):
+                continue
             doc_id = str(item.get("id", "")).strip()
-            text = str(item.get("text", "")).strip()
+            text = coerce_text(item.get("text", ""))
             if not doc_id or not text:
                 continue
             ids.append(doc_id)
@@ -206,9 +263,28 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         if not ids:
             write_json(self, 200, {"success": True, "count": 0})
             return
-        embeddings = embedding_model.encode(texts, normalize_embeddings=True).tolist()
-        collection.upsert(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
-        write_json(self, 200, {"success": True, "count": len(ids)})
+        embeddings, failures = encode_texts_resilient(ids, texts)
+        ok_ids = []
+        ok_texts = []
+        ok_metadatas = []
+        ok_embeddings = []
+        for index, embedding in enumerate(embeddings):
+            if embedding is None:
+                continue
+            ok_ids.append(ids[index])
+            ok_texts.append(texts[index])
+            ok_metadatas.append(metadatas[index])
+            ok_embeddings.append(embedding)
+        if ok_ids:
+            collection.upsert(ids=ok_ids, embeddings=ok_embeddings, documents=ok_texts, metadatas=ok_metadatas)
+        if failures:
+            print(f"Skipped {len(failures)} embedding document(s): {json.dumps(failures[:5], ensure_ascii=False)}", flush=True)
+        write_json(self, 200, {
+            "success": len(ok_ids) > 0,
+            "count": len(ok_ids),
+            "failed": len(failures),
+            "failures": failures[:5],
+        })
 
     def handle_search(self):
         if not self._ensure_ready():
