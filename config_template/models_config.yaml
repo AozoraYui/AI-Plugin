@@ -220,7 +220,7 @@ enable_web_fetch: false
 #
 # enable_vector_memory: 是否启用本地向量记忆（默认 false）
 #   开启后会在本机 127.0.0.1 启动一个 Python 向量服务，用 sentence-transformers 将文本转成向量，
-#   并用 ChromaDB 存储到插件本地 config/chroma_db；不会上传到云端。
+#   并用 ChromaDB 存储到插件本地 data/chroma_db；不会上传到云端。
 #   依赖需手动安装：pip3 install -r plugins/AI-Plugin/scripts/requirements.txt
 #   如需使用 venv/conda，可设置环境变量 AI_PLUGIN_VECTOR_PYTHON=/path/to/python
 #   如需临时覆盖模型名，可设置环境变量 AI_PLUGIN_VECTOR_MODEL

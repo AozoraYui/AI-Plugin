@@ -348,7 +348,7 @@ AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单
 > 💡 网页抓取默认关闭，可使用 `#cw` 临时启用，或在 `models_config.yaml` 中设置 `enable_web_fetch: true` 全局开启。消息中包含 URL 时自动抓取网页内容。
 > 💡 网页抓取会自动尝试浏览器渲染和公开网页 Reader 文本化降级；Reader 不会用于 localhost、内网 IP、`.local` 等私有地址，也无法绕过登录/验证码。可选配置 `JINA_API_KEY` 或 `JINA_READER_API_KEY` 环境变量提升 Reader 稳定性。
 > 💡 抓取 GitHub 链接（commits/commit/releases/issues/pulls/blob/仓库主页）时会自动改走 GitHub API/raw，返回精简数据并规避网页防爬。匿名访问限 60 次/小时，可在服务器配置 `GITHUB_TOKEN` 环境变量提升到 5000 次/小时。
-> 🧠 本地向量记忆默认关闭，需 `enable_vector_memory: true` 并安装 `scripts/requirements.txt` 里的 Python 依赖。服务只监听 `127.0.0.1`，向量库默认写入 `config/chroma_db`，不会上传到云端。
+> 🧠 本地向量记忆默认关闭，需 `enable_vector_memory: true` 并安装 `scripts/requirements.txt` 里的 Python 依赖。服务只监听 `127.0.0.1`，向量库默认写入 `data/chroma_db`，不会上传到云端。
 > 💬 畅聊模式会复用同一套工具系统与鉴权规则。工具路由只使用当前触发消息文本，引用消息/群上下文不会被当作工具指令执行。
 
 ### 管理功能（管理员）
@@ -436,7 +436,7 @@ AI-Plugin/
 ## ⚙️ 配置说明
 
 ### 数据文件
-所有配置和数据文件存储在 `plugins/AI-Plugin/config/` 目录：
+配置文件主要存储在 `plugins/AI-Plugin/config/` 目录；运行数据也可能写入插件的 `data/` 目录：
 
 | 文件 | 说明 |
 |------|------|
@@ -450,7 +450,7 @@ AI-Plugin/
 | `access_control.yaml` | 权限控制配置 |
 | `file_roots.yaml` | 文件白名单配置（用于文件收发和本地图片路径输入） |
 | `ai_plugin.db` | SQLite 数据库（对话历史、记忆锚点、摘要缓存） |
-| `chroma_db/` | 本地向量库目录（启用 `enable_vector_memory` 后创建） |
+| `data/chroma_db/` | 本地向量库目录（启用 `enable_vector_memory` 后创建） |
 
 ### 数据存储
 - **SQLite 数据库**：主要存储引擎，存储对话历史、记忆锚点、摘要缓存

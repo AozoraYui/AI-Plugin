@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { Config } from './config.js'
 
 const PLUGIN_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-const VECTOR_DB_DIR = path.join(PLUGIN_DIR, 'config', 'chroma_db')
+const VECTOR_DB_DIR = path.join(PLUGIN_DIR, 'data', 'chroma_db')
 const PYTHON_SCRIPT = path.join(PLUGIN_DIR, 'scripts', 'vector_server.py')
 const REQUIREMENTS_FILE = path.join(PLUGIN_DIR, 'scripts', 'requirements.txt')
 const DEFAULT_HOST = '127.0.0.1'

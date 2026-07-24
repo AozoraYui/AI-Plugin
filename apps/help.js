@@ -117,7 +117,7 @@ export class HelpHandler extends plugin {
   每轮最多临时读取 ${noaMaxImagesText}；超过 ${noaImageBatchSize} 张会先分批读图摘要再回复。
 > 🧠 本地向量记忆（可选）
   需在 models_config.yaml 开启 enable_vector_memory: true，并安装 scripts/requirements.txt 里的 Python 依赖。
-  开启后会在本机索引普通对话、全量/增量总结、个人档案和畅聊群流水，数据写入 config/chroma_db，不上传云端。
+  开启后会在本机索引普通对话、全量/增量总结、个人档案和畅聊群流水，数据写入 data/chroma_db，不上传云端。
   可自然询问“历史里查一下我以前有没有说过向量库”“找一下相关记忆”“跨群检索一下我刚才提过的内容”。
   普通用户只能查自己的记忆、当前群流水和自己跨群发言；主人明确要求时可跨群、指定群或指定用户检索。
 > 开关可组合，如 #fv${chatCmd}、#pv${chatCmd}、#us${chatCmd}n、#s${chatCmd}w、#${chatCmd}vnw 等。
