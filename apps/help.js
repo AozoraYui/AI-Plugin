@@ -215,6 +215,7 @@ export class HelpHandler extends plugin {
 > 🧠 本地向量记忆
   开启 enable_vector_memory 后，总结、个人档案、普通对话和畅聊流水会同步进入本地向量库。
   后续可在 #${chatCmd}/畅聊中自然询问“历史里查一下/以前有没有说过/相关记忆”，AI 会按权限召回相关片段。
+  SQLite 是原始记忆库，向量库只是本地检索索引；可用 #ai向量迁移 从 SQLite 补齐索引，或 #ai向量重建 清空索引后全量重建。
 > 💡 总结命令也支持模型组前缀：
   #fai全量总结 → Flash 模型组
   #pai全量总结 → Pro 模型组
@@ -258,6 +259,12 @@ export class HelpHandler extends plugin {
 【 其他 】
 > #ai状态
   查看插件运行状态。
+> #ai向量状态
+  查看本地向量记忆服务、SQLite 数据量、向量片段数和索引状态。
+> #ai向量迁移
+  从 SQLite 增量补齐本地向量索引。
+> #ai向量重建
+  清空本地向量 collection 后，从 SQLite 全量重建索引。
 > #ai思考开启/关闭
   切换是否显示AI的思考过程。
 > #ai开启思考提示 / #ai关闭思考提示

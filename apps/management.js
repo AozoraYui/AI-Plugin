@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import yaml from 'yaml'
 import { Config, MODELS_CONFIG_FILE } from '../utils/config.js'
 import { getAccessConfig, saveAccessConfig } from '../utils/access.js'
+import { vectorMemory } from '../utils/vector_memory.js'
 
 function saveRuntimeSwitch(key, value) {
     const fileContent = fs.readFileSync(MODELS_CONFIG_FILE, 'utf8')
@@ -51,6 +52,7 @@ export class ManagementHandler extends plugin {
                 { reg: /^#?ai(开启|关闭)代发$/i, fnc: 'switchGroupSend', permission: 'master' },
                 { reg: /^#?ai(开启|关闭)退群$/i, fnc: 'switchGroupLeave', permission: 'master' },
                 { reg: /^#?ai(开启|关闭)畅聊$/i, fnc: 'switchNoaChat', permission: 'master' },
+                { reg: /^#ai向量(?:库)?(状态|迁移|重建|重建索引)$/i, fnc: 'handleVectorMemoryIndex', permission: 'master' },
                 { reg: /^#ai状态$/i, fnc: 'showStatus', permission: 'master' },
             ]
         })
@@ -162,6 +164,91 @@ export class ManagementHandler extends plugin {
         const forwardMsg = await this._buildModelListForwardMsg()
         await e.reply(forwardMsg)
         
+        return true
+    }
+
+    _formatVectorCounts(counts = {}) {
+        if (!counts || counts.error) return counts?.error ? `读取失败: ${counts.error}` : '暂无'
+        const labelMap = {
+            user_histories: '普通对话',
+            group_message_logs: '畅聊流水',
+            memory_checkpoints: '全量/锚点',
+            summary_cache: '增量总结',
+            user_profiles: '个人档案'
+        }
+        return Object.entries(labelMap)
+            .map(([key, label]) => `${label}: ${counts[key]?.count || 0}`)
+            .join(' / ')
+    }
+
+    _formatVectorMigrationResult(result) {
+        if (!result?.ok) return `❌ 向量索引处理失败: ${result?.error || '未知错误'}`
+        const elapsed = (Number(result.elapsedMs || 0) / 1000).toFixed(2)
+        const sourceLines = Object.entries(result.sources || {}).map(([key, item]) => {
+            const labelMap = {
+                user_histories: '普通对话',
+                group_message_logs: '畅聊流水',
+                memory_checkpoints: '全量/锚点',
+                summary_cache: '增量总结',
+                user_profiles: '个人档案'
+            }
+            return `${labelMap[key] || key}: ${item.rows || 0} 行 / ${item.docs || 0} 片`
+        })
+        return [
+            result.rebuild ? '✅ 向量索引重建完成' : '✅ 向量索引迁移完成',
+            `耗时: ${elapsed}s`,
+            `本轮处理: ${result.rows || 0} 行 / ${result.docs || 0} 个向量片段`,
+            `当前向量库文档数: ${result.vectorStats?.count ?? '未知'}`,
+            sourceLines.length ? sourceLines.join('\n') : ''
+        ].filter(Boolean).join('\n')
+    }
+
+    async handleVectorMemoryIndex(e) {
+        const match = e.msg.match(/^#ai向量(?:库)?(状态|迁移|重建|重建索引)$/i)
+        const action = match?.[1]
+        if (!action) return true
+
+        if (action === '状态') {
+            const status = await vectorMemory.getStatus(this.conversationManager.db)
+            const lines = [
+                '🧠 本地向量记忆状态',
+                `开关: ${status.enabled ? '已开启' : '已关闭'}`,
+                `服务: ${status.vectorStats?.ready ? '已就绪' : '未就绪'}`,
+                `模型: ${status.modelName}`,
+                `地址: ${status.vectorStats?.url || 'http://127.0.0.1:9901'}`,
+                `目录: ${status.dataDir}`,
+                `向量片段: ${status.vectorStats?.count ?? 0}`,
+                `SQLite 数据: ${this._formatVectorCounts(status.sqliteCounts)}`,
+                `索引版本: ${status.schemaVersion}`,
+                `状态文件: ${status.stateFile}`,
+                status.running ? '当前有迁移任务正在运行。' : '',
+                status.state?.completedAt ? `上次完成: ${status.state.completedAt}` : '尚未完成过完整迁移/重建。'
+            ].filter(Boolean)
+            await e.reply(lines.join('\n'))
+            return true
+        }
+
+        const rebuild = action.includes('重建')
+        await e.reply(rebuild
+            ? '🧠 开始重建向量索引：会清空本地向量 collection，然后从 SQLite 全量生成。SQLite 原始数据不会被修改。'
+            : '🧠 开始迁移向量索引：会从 SQLite 增量补齐缺失的向量片段。', true)
+
+        let lastProgressAt = 0
+        const result = await vectorMemory.migrateFromSQLite(this.conversationManager.db, {
+            rebuild,
+            onProgress: async (progress) => {
+                const now = Date.now()
+                if (progress.phase === 'reset' || progress.phase === 'source_done' || now - lastProgressAt > 20000) {
+                    lastProgressAt = now
+                    if (progress.phase === 'reset') {
+                        await e.reply('🧹 正在清空向量索引...', true)
+                    } else {
+                        await e.reply(`🧠 ${progress.label}: 已处理 ${progress.processedRows || 0}/${progress.totalCount ?? '?'} 行，生成 ${progress.processedDocs || 0} 个向量片段`, true)
+                    }
+                }
+            }
+        })
+        await e.reply(this._formatVectorMigrationResult(result))
         return true
     }
 

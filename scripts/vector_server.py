@@ -83,6 +83,15 @@ def init_model():
         print(f"Vector database init failed: {init_error}", flush=True)
 
 
+def reset_collection():
+    global collection
+    try:
+        chroma_client.delete_collection(name=COLLECTION_NAME)
+    except Exception:
+        pass
+    collection = chroma_client.get_or_create_collection(name=COLLECTION_NAME)
+
+
 def get_embedding(text):
     return embedding_model.encode([text], normalize_embeddings=True)[0].tolist()
 
@@ -91,6 +100,8 @@ class VectorDBHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self.handle_health()
+        elif self.path == "/stats":
+            self.handle_stats()
         else:
             write_json(self, 404, {"error": "not found"})
 
@@ -105,6 +116,12 @@ class VectorDBHandler(BaseHTTPRequestHandler):
             self.handle_search()
         elif self.path == "/delete":
             self.handle_delete()
+        elif self.path == "/delete_where":
+            self.handle_delete_where()
+        elif self.path == "/stats":
+            self.handle_stats()
+        elif self.path == "/reset":
+            self.handle_reset()
         else:
             write_json(self, 404, {"error": "not found"})
 
@@ -115,6 +132,22 @@ class VectorDBHandler(BaseHTTPRequestHandler):
             "model": MODEL_NAME,
             "collection": COLLECTION_NAME,
         })
+
+    def handle_stats(self):
+        if not self._ensure_ready():
+            return
+        try:
+            count = collection.count()
+            write_json(self, 200, {
+                "success": True,
+                "ready": True,
+                "count": count,
+                "model": MODEL_NAME,
+                "collection": COLLECTION_NAME,
+                "path": CHROMA_DB_PATH,
+            })
+        except Exception as exc:
+            write_json(self, 500, {"success": False, "error": str(exc)})
 
     def _ensure_ready(self):
         if is_ready:
@@ -200,6 +233,26 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         if ids:
             collection.delete(ids=ids)
         write_json(self, 200, {"success": True, "count": len(ids)})
+
+    def handle_delete_where(self):
+        if not self._ensure_ready():
+            return
+        data = read_json(self)
+        where = data.get("where")
+        if not isinstance(where, dict) or not where:
+            write_json(self, 400, {"error": "where is required"})
+            return
+        collection.delete(where=sanitize_metadata(where))
+        write_json(self, 200, {"success": True})
+
+    def handle_reset(self):
+        if not self._ensure_ready():
+            return
+        try:
+            reset_collection()
+            write_json(self, 200, {"success": True, "count": collection.count()})
+        except Exception as exc:
+            write_json(self, 500, {"success": False, "error": str(exc)})
 
     def log_message(self, _format, *args):
         return

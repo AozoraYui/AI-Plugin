@@ -1,6 +1,9 @@
 import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Config } from './config.js'
-import { formatDBTimestampToBeijing, getTodayDateStr } from './common.js'
+import { ensureDir, formatDBTimestampToBeijing, getDBTimestamp, getTodayDateStr } from './common.js'
 import { vectorDB } from './vector_db.js'
 
 const VECTOR_DOC_MAX_CHARS = 4000
@@ -8,6 +11,14 @@ const AUTO_CONTEXT_TOP_K = 6
 const AUTO_CONTEXT_MAX_CHARS = 6000
 const BACKFILL_HISTORY_TURNS_PER_USER = 120
 const BACKFILL_GROUP_LOGS = 300
+const PLUGIN_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
+const VECTOR_STATE_FILE = path.join(PLUGIN_DIR, 'data', 'vector_index_state.json')
+const VECTOR_INDEX_SCHEMA_VERSION = 2
+const VECTOR_MIGRATION_BATCH_SIZE = 96
+const VECTOR_TEXT_CHUNK_CHARS = 1600
+const VECTOR_TEXT_CHUNK_OVERLAP = 180
+const VECTOR_STATE_SOURCES = ['user_histories', 'group_message_logs', 'memory_checkpoints', 'summary_cache', 'user_profiles']
+let activeMigration = null
 
 function hashText(text) {
     return crypto.createHash('sha1').update(String(text || '')).digest('hex')
@@ -17,6 +28,113 @@ function truncateText(text, maxChars = VECTOR_DOC_MAX_CHARS) {
     const value = String(text || '').replace(/\s+/g, ' ').trim()
     if (value.length <= maxChars) return value
     return value.slice(0, maxChars) + '...'
+}
+
+function normalizeText(text) {
+    return String(text || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+}
+
+function splitTextChunks(text, maxChars = VECTOR_TEXT_CHUNK_CHARS, overlap = VECTOR_TEXT_CHUNK_OVERLAP) {
+    const value = normalizeText(text)
+    if (!value) return []
+    if (value.length <= maxChars) return [value]
+
+    const chunks = []
+    const paragraphs = value.split(/\n{2,}/).map(item => item.trim()).filter(Boolean)
+    let current = ''
+
+    const pushCurrent = () => {
+        if (!current.trim()) return
+        chunks.push(current.trim())
+        current = ''
+    }
+
+    for (const paragraph of paragraphs) {
+        if (paragraph.length > maxChars) {
+            pushCurrent()
+            for (let start = 0; start < paragraph.length; start += Math.max(1, maxChars - overlap)) {
+                chunks.push(paragraph.slice(start, start + maxChars).trim())
+            }
+            continue
+        }
+
+        const next = current ? `${current}\n\n${paragraph}` : paragraph
+        if (next.length > maxChars) {
+            pushCurrent()
+            current = paragraph
+        } else {
+            current = next
+        }
+    }
+    pushCurrent()
+    return chunks
+}
+
+function buildChunkedDocs(source, sourceId, body, metadata = {}, headerLines = []) {
+    const chunks = splitTextChunks(body)
+    if (chunks.length === 0) return []
+    const docKey = `${source}:${sourceId}`
+    return chunks.map((chunk, index) => {
+        const idSource = `${sourceId}:chunk:${index}`
+        const text = [
+            ...headerLines.filter(Boolean),
+            chunks.length > 1 ? `片段: ${index + 1}/${chunks.length}` : '',
+            chunk
+        ].filter(Boolean).join('\n')
+        return {
+            id: buildDocId(source, idSource, text),
+            text,
+            metadata: {
+                ...metadata,
+                source,
+                source_id: sourceId,
+                doc_key: docKey,
+                chunk_index: index,
+                chunk_count: chunks.length
+            }
+        }
+    })
+}
+
+function readVectorState() {
+    try {
+        if (!fs.existsSync(VECTOR_STATE_FILE)) return null
+        return JSON.parse(fs.readFileSync(VECTOR_STATE_FILE, 'utf8'))
+    } catch (err) {
+        logger.warn(`[AI-Plugin] 读取向量索引状态失败: ${err.message}`)
+        return null
+    }
+}
+
+function createVectorState(extra = {}) {
+    const now = getDBTimestamp()
+    return {
+        schemaVersion: VECTOR_INDEX_SCHEMA_VERSION,
+        modelName: vectorDB.modelName,
+        dataDir: vectorDB.dataDir,
+        startedAt: now,
+        updatedAt: now,
+        completedAt: '',
+        lastIds: Object.fromEntries(VECTOR_STATE_SOURCES.map(key => [key, 0])),
+        indexedRows: Object.fromEntries(VECTOR_STATE_SOURCES.map(key => [key, 0])),
+        indexedDocs: Object.fromEntries(VECTOR_STATE_SOURCES.map(key => [key, 0])),
+        failures: [],
+        ...extra
+    }
+}
+
+function writeVectorState(state) {
+    ensureDir(path.dirname(VECTOR_STATE_FILE))
+    const next = {
+        ...state,
+        updatedAt: getDBTimestamp()
+    }
+    fs.writeFileSync(VECTOR_STATE_FILE, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
+    return next
 }
 
 function textFromParts(parts = []) {
@@ -110,104 +228,130 @@ function formatHitLine(hit, index, maxTextChars = 700) {
 }
 
 export function buildGroupMessageVectorDoc(log = {}) {
-    const body = truncateText(log.normalizedText || '')
-    if (!isWorthIndexing(body)) return null
-    const sourceId = `${log.groupId || log.group_id || ''}:${log.messageId || log.message_id || log.seq || hashText(body)}`
+    const docs = buildGroupMessageVectorDocs(log)
+    return docs[0] || null
+}
+
+export function buildGroupMessageVectorDocs(log = {}) {
+    const body = normalizeText(log.normalizedText || '')
+    if (!isWorthIndexing(body)) return []
+    const sourceId = log.id
+        ? String(log.id)
+        : `${log.groupId || log.group_id || ''}:${log.messageId || log.message_id || log.seq || hashText(body)}`
     const groupId = String(log.groupId || log.group_id || '')
     const userId = String(log.userId || log.user_id || '')
     const nickname = log.nickname || ''
     const createdAt = normalizeCreatedAt(log.createdAt || log.created_at)
     const imageCount = Array.isArray(log.imageMeta) ? log.imageMeta.length : 0
-    const text = [
+    return buildChunkedDocs('group_message', sourceId, body, {
+        group_id: groupId,
+        user_id: userId,
+        nickname,
+        message_id: String(log.messageId || log.message_id || ''),
+        row_id: log.id ? Number(log.id) : '',
+        created_at: createdAt,
+        is_command: Boolean(log.isCommand || log.is_command),
+        is_bot: Boolean(log.isBot || log.is_bot)
+    }, [
         `群聊消息`,
         groupId ? `群号: ${groupId}` : '',
         nickname || userId ? `发送者: ${nickname || '用户'}(${userId})` : '',
         createdAt ? `时间: ${createdAt}` : '',
         imageCount > 0 ? `图片: ${imageCount} 张（仅元信息）` : '',
-        `内容: ${body}`
-    ].filter(Boolean).join('\n')
-    return {
-        id: buildDocId('group_message', sourceId, text),
-        text,
-        metadata: {
-            source: 'group_message',
-            source_id: sourceId,
-            group_id: groupId,
-            user_id: userId,
-            nickname,
-            message_id: String(log.messageId || log.message_id || ''),
-            created_at: createdAt,
-            is_command: Boolean(log.isCommand || log.is_command),
-            is_bot: Boolean(log.isBot || log.is_bot)
-        }
-    }
+        '内容:'
+    ])
+}
+
+export function buildHistoryRowVectorDocs(row = {}) {
+    const role = row?.role === 'model' ? 'model' : 'user'
+    const dateStr = row?.date_str || getTodayDateStr()
+    const rawText = textFromParts(row?.parts || [])
+    if (!isWorthIndexing(rawText)) return []
+    const userId = String(row.user_id || row.userId || '')
+    const sourceId = row.id
+        ? String(row.id)
+        : `${userId}:${dateStr}:${role}:${row.source_fallback_index ?? hashText(rawText).slice(0, 12)}`
+    return buildChunkedDocs('user_history', sourceId, rawText, {
+        user_id: userId,
+        role,
+        row_id: row.id ? Number(row.id) : '',
+        date_str: dateStr,
+        bucket_key: `user_history:${userId}:${dateStr}`,
+        created_at: normalizeCreatedAt(row.created_at || row.createdAt, dateStr)
+    }, [
+        `${role === 'model' ? Config.AI_NAME : '用户'}:`,
+        `日期: ${dateStr}`
+    ])
 }
 
 export function buildHistoryVectorDocs(userId, history = []) {
-    const counters = new Map()
     const docs = []
+    const counters = new Map()
     for (const turn of history || []) {
-        const role = turn?.role === 'model' ? 'model' : 'user'
         const dateStr = turn?.date_str || getTodayDateStr()
+        const role = turn?.role === 'model' ? 'model' : 'user'
+        const rawText = textFromParts(turn?.parts || [])
         const key = `${dateStr}:${role}`
         const index = counters.get(key) || 0
         counters.set(key, index + 1)
-        const rawText = textFromParts(turn?.parts || [])
-        if (!isWorthIndexing(rawText)) continue
-        const text = `${role === 'model' ? Config.AI_NAME : '用户'}: ${truncateText(rawText)}`
-        const sourceId = `${userId}:${dateStr}:${role}:${index}`
-        docs.push({
-            id: buildDocId('user_history', sourceId, text),
-            text,
-            metadata: {
-                source: 'user_history',
-                source_id: sourceId,
-                user_id: String(userId),
-                role,
-                date_str: dateStr,
-                created_at: normalizeCreatedAt('', dateStr)
-            }
-        })
+        docs.push(...buildHistoryRowVectorDocs({
+            ...turn,
+            user_id: String(userId),
+            id: turn.id || '',
+            date_str: dateStr,
+            source_fallback_index: index,
+            parts: turn.parts
+        }))
     }
     return docs
 }
 
 export function buildSummaryVectorDoc(userId, content, dateStr, source = 'summary_cache', metadata = {}) {
-    const body = truncateText(content || '', VECTOR_DOC_MAX_CHARS * 2)
-    if (!isWorthIndexing(body)) return null
-    const sourceId = `${userId}:${dateStr}:${source}:${metadata.checkpointType || metadata.checkpoint_type || ''}`
-    return {
-        id: buildDocId(source, sourceId, body),
-        text: body,
-        metadata: {
-            source,
-            source_id: sourceId,
-            user_id: String(userId),
-            date_str: dateStr || '',
-            created_at: normalizeCreatedAt('', dateStr),
-            checkpoint_type: metadata.checkpointType || metadata.checkpoint_type || ''
-        }
-    }
+    const docs = buildSummaryVectorDocs(userId, content, dateStr, source, metadata)
+    return docs[0] || null
+}
+
+export function buildSummaryVectorDocs(userId, content, dateStr, source = 'summary_cache', metadata = {}) {
+    const body = normalizeText(content || '')
+    if (!isWorthIndexing(body)) return []
+    const checkpointType = metadata.checkpointType || metadata.checkpoint_type || ''
+    const sourceSuffix = source === 'memory_checkpoint' ? (checkpointType || 'default') : 'default'
+    const sourceId = `${userId}:${dateStr}:${source}:${sourceSuffix}`
+    return buildChunkedDocs(source, sourceId, body, {
+        user_id: String(userId),
+        row_id: metadata.id || metadata.row_id ? Number(metadata.id || metadata.row_id) : '',
+        date_str: dateStr || '',
+        created_at: normalizeCreatedAt(metadata.createdAt || metadata.created_at, dateStr),
+        checkpoint_type: checkpointType,
+        base_checkpoint_date: metadata.baseCheckpointDate || metadata.base_checkpoint_date || ''
+    }, [
+        source === 'memory_checkpoint'
+            ? (checkpointType === 'full' ? '全量总结' : '记忆锚点')
+            : '增量总结',
+        dateStr ? `日期: ${dateStr}` : ''
+    ])
 }
 
 export function buildUserProfileVectorDoc(userId, info, lastUpdated = '') {
-    const body = truncateText(info || '', VECTOR_DOC_MAX_CHARS * 3)
-    if (!isWorthIndexing(body)) return null
+    const docs = buildUserProfileVectorDocs(userId, info, lastUpdated)
+    return docs[0] || null
+}
+
+export function buildUserProfileVectorDocs(userId, info, lastUpdated = '') {
+    const body = normalizeText(info || '')
+    if (!isWorthIndexing(body)) return []
     const sourceId = `${userId}:profile`
-    return {
-        id: buildDocId('user_profile', sourceId, body),
-        text: body,
-        metadata: {
-            source: 'user_profile',
-            source_id: sourceId,
-            user_id: String(userId),
-            created_at: lastUpdated || ''
-        }
-    }
+    return buildChunkedDocs('user_profile', sourceId, body, {
+        user_id: String(userId),
+        created_at: lastUpdated || ''
+    }, [
+        '个人档案',
+        `用户: ${userId}`
+    ])
 }
 
 export function queueVectorDocuments(docs = []) {
-    const normalized = docs.filter(Boolean)
+    const normalized = (Array.isArray(docs) ? docs : [docs]).filter(Boolean)
     if (normalized.length === 0 || Config.enable_vector_memory === false) return
     setTimeout(() => {
         vectorDB.addDocuments(normalized).then(ok => {
@@ -222,8 +366,42 @@ export function queueVectorDocument(doc) {
     if (doc) queueVectorDocuments([doc])
 }
 
+export function queueReplaceVectorDocuments(where = {}, docs = []) {
+    const normalized = (Array.isArray(docs) ? docs : [docs]).filter(Boolean)
+    if (normalized.length === 0 || Config.enable_vector_memory === false) return
+    setTimeout(async () => {
+        try {
+            await vectorDB.deleteWhere(where)
+            const ok = await vectorDB.addDocuments(normalized)
+            if (ok) logger.debug(`[AI-Plugin] 向量记忆已替换索引 ${normalized.length} 条文档`)
+        } catch (err) {
+            logger.warn(`[AI-Plugin] 向量记忆替换索引异常: ${err.message}`)
+        }
+    }, 0)
+}
+
+export function queueDeleteVectorWhere(where = {}) {
+    if (!where || typeof where !== 'object' || Object.keys(where).length === 0 || Config.enable_vector_memory === false) return
+    setTimeout(() => {
+        vectorDB.deleteWhere(where).catch(err => {
+            logger.warn(`[AI-Plugin] 向量记忆删除索引异常: ${err.message}`)
+        })
+    }, 0)
+}
+
 export function queueGroupMessageVectorIndex(log) {
-    queueVectorDocument(buildGroupMessageVectorDoc(log))
+    queueVectorDocuments(buildGroupMessageVectorDocs(log))
+}
+
+export function queueHistoryRowsVectorIndex(rows = []) {
+    queueVectorDocuments(rows.flatMap(row => buildHistoryRowVectorDocs(row)))
+}
+
+export function replaceHistoryRowsVectorIndex(userId, dateStr, rows = []) {
+    queueReplaceVectorDocuments(
+        { bucket_key: `user_history:${String(userId)}:${dateStr}` },
+        rows.flatMap(row => buildHistoryRowVectorDocs(row))
+    )
 }
 
 export function queueHistoryVectorIndex(userId, history = []) {
@@ -231,11 +409,15 @@ export function queueHistoryVectorIndex(userId, history = []) {
 }
 
 export function queueSummaryVectorIndex(userId, content, dateStr, source = 'summary_cache', metadata = {}) {
-    queueVectorDocument(buildSummaryVectorDoc(userId, content, dateStr, source, metadata))
+    const docs = buildSummaryVectorDocs(userId, content, dateStr, source, metadata)
+    const docKey = docs[0]?.metadata?.doc_key
+    if (docKey) queueReplaceVectorDocuments({ doc_key: docKey }, docs)
 }
 
 export function queueUserProfileVectorIndex(userId, info, lastUpdated = '') {
-    queueVectorDocument(buildUserProfileVectorDoc(userId, info, lastUpdated))
+    const docs = buildUserProfileVectorDocs(userId, info, lastUpdated)
+    const docKey = docs[0]?.metadata?.doc_key
+    if (docKey) queueReplaceVectorDocuments({ doc_key: docKey }, docs)
 }
 
 export async function searchSemanticMemory(query, options = {}) {
@@ -292,34 +474,300 @@ export async function buildSemanticMemoryContext(db, query, options = {}) {
     })
 }
 
-async function backfillUser(db, userId) {
+function buildCheckpointRowVectorDocs(row = {}) {
+    return buildSummaryVectorDocs(row.user_id, row.content, row.date_str, 'memory_checkpoint', {
+        id: row.id,
+        checkpoint_type: row.checkpoint_type || '',
+        created_at: row.created_at || ''
+    })
+}
+
+function buildSummaryRowVectorDocs(row = {}) {
+    return buildSummaryVectorDocs(row.user_id, row.content, row.date_str, 'summary_cache', {
+        id: row.id,
+        base_checkpoint_date: row.base_checkpoint_date || '',
+        created_at: row.created_at || ''
+    })
+}
+
+function buildProfileRowVectorDocs(row = {}) {
+    return buildUserProfileVectorDocs(row.user_id, row.info, row.last_updated)
+}
+
+async function notifyProgress(onProgress, payload) {
+    if (typeof onProgress !== 'function') return
     try {
-        const history = await db.getConversationHistory(userId)
-        if (history.length > 0) {
-            queueHistoryVectorIndex(userId, history.slice(-BACKFILL_HISTORY_TURNS_PER_USER))
-        }
-        if (db.getAllSummaryCaches) {
-            const summaries = await db.getAllSummaryCaches(userId)
-            for (const summary of summaries) {
-                queueSummaryVectorIndex(userId, summary.content, summary.dateStr, 'summary_cache', {
-                    base_checkpoint_date: summary.baseCheckpointDate || ''
-                })
-            }
-        }
-        if (db.getAllCheckpoints) {
-            const checkpoints = await db.getAllCheckpoints(userId)
-            for (const checkpoint of checkpoints) {
-                queueSummaryVectorIndex(userId, checkpoint.content, checkpoint.dateStr, 'memory_checkpoint', {
-                    checkpoint_type: checkpoint.checkpointType || ''
-                })
-            }
-        }
-        if (db.getUserProfile) {
-            const profile = await db.getUserProfile(userId)
-            if (profile?.info) queueUserProfileVectorIndex(userId, profile.info, profile.lastUpdated)
-        }
+        await onProgress(payload)
     } catch (err) {
-        logger.warn(`[AI-Plugin] 向量记忆回填用户 ${userId} 失败: ${err.message}`)
+        logger.warn(`[AI-Plugin] 向量迁移进度回调失败: ${err.message}`)
+    }
+}
+
+async function ensureVectorReadyForMigration() {
+    if (Config.enable_vector_memory === false) {
+        return { ok: false, error: '本地向量记忆未启用，请先在 models_config.yaml 设置 enable_vector_memory: true。' }
+    }
+    const started = await vectorDB.init()
+    if (!started) {
+        return { ok: false, error: vectorDB.lastError || '本地向量服务启动失败。' }
+    }
+    const ready = await vectorDB.waitForReady(60000)
+    if (!ready) {
+        return { ok: false, error: vectorDB.lastError || '本地向量服务尚未就绪。' }
+    }
+    return { ok: true }
+}
+
+async function migrateIdSource({ db, state, sourceKey, label, totalCount, fetchRows, buildDocs, batchSize, onProgress }) {
+    let lastId = Math.max(0, Number(state.lastIds?.[sourceKey]) || 0)
+    let rowCount = 0
+    let docCount = 0
+
+    while (true) {
+        const rows = await fetchRows(lastId, batchSize)
+        if (!Array.isArray(rows) || rows.length === 0) break
+
+        const docs = []
+        for (const row of rows) {
+            try {
+                docs.push(...buildDocs(row))
+            } catch (err) {
+                state.failures.push({
+                    source: sourceKey,
+                    id: row?.id || '',
+                    error: err.message,
+                    at: getDBTimestamp()
+                })
+            }
+            if (row?.id) lastId = Math.max(lastId, Number(row.id) || lastId)
+        }
+
+        if (docs.length > 0) {
+            const ok = await vectorDB.addDocuments(docs)
+            if (!ok) throw new Error(vectorDB.lastError || `${label} 写入向量库失败`)
+        }
+
+        rowCount += rows.length
+        docCount += docs.length
+        state.lastIds[sourceKey] = lastId
+        state.indexedRows[sourceKey] = (state.indexedRows[sourceKey] || 0) + rows.length
+        state.indexedDocs[sourceKey] = (state.indexedDocs[sourceKey] || 0) + docs.length
+        state = writeVectorState(state)
+
+        await notifyProgress(onProgress, {
+            phase: 'batch',
+            source: sourceKey,
+            label,
+            processedRows: rowCount,
+            processedDocs: docCount,
+            lastId,
+            totalCount
+        })
+    }
+
+    await notifyProgress(onProgress, {
+        phase: 'source_done',
+        source: sourceKey,
+        label,
+        processedRows: rowCount,
+        processedDocs: docCount,
+        lastId,
+        totalCount
+    })
+
+    return { state, rowCount, docCount, lastId }
+}
+
+async function migrateProfiles({ db, state, onProgress }) {
+    const rows = await db.getVectorProfileRows()
+    let docCount = 0
+    for (let i = 0; i < rows.length; i += VECTOR_MIGRATION_BATCH_SIZE) {
+        const batch = rows.slice(i, i + VECTOR_MIGRATION_BATCH_SIZE)
+        const docs = batch.flatMap(row => buildProfileRowVectorDocs(row))
+        if (docs.length > 0) {
+            const ok = await vectorDB.addDocuments(docs)
+            if (!ok) throw new Error(vectorDB.lastError || '个人档案写入向量库失败')
+        }
+        docCount += docs.length
+        state.indexedRows.user_profiles = i + batch.length
+        state.indexedDocs.user_profiles = docCount
+        state = writeVectorState(state)
+        await notifyProgress(onProgress, {
+            phase: 'batch',
+            source: 'user_profiles',
+            label: '个人档案',
+            processedRows: i + batch.length,
+            processedDocs: docCount,
+            totalCount: rows.length
+        })
+    }
+    await notifyProgress(onProgress, {
+        phase: 'source_done',
+        source: 'user_profiles',
+        label: '个人档案',
+        processedRows: rows.length,
+        processedDocs: docCount,
+        totalCount: rows.length
+    })
+    return { state, rowCount: rows.length, docCount }
+}
+
+async function runVectorMigration(db, options = {}) {
+    if (!db) return { ok: false, error: '数据库未就绪。' }
+    const ready = await ensureVectorReadyForMigration()
+    if (!ready.ok) return ready
+
+    const rebuild = options.rebuild === true
+    const onProgress = options.onProgress
+    const batchSize = Math.max(10, Math.min(Number(options.batchSize) || VECTOR_MIGRATION_BATCH_SIZE, 500))
+    const startedAt = Date.now()
+    const sqliteCounts = await db.getVectorSourceCounts()
+
+    let state = rebuild ? null : readVectorState()
+    if (state && (state.schemaVersion !== VECTOR_INDEX_SCHEMA_VERSION || state.modelName !== vectorDB.modelName)) {
+        return {
+            ok: false,
+            needRebuild: true,
+            error: '向量索引版本或 embedding 模型已变化，请使用 #ai向量重建 重新生成索引。'
+        }
+    }
+
+    if (rebuild) {
+        await notifyProgress(onProgress, { phase: 'reset', label: '清空向量索引' })
+        const resetOk = await vectorDB.reset()
+        if (!resetOk) return { ok: false, error: vectorDB.lastError || '向量索引重置失败。' }
+        state = createVectorState({ mode: 'rebuild' })
+    } else if (!state) {
+        state = createVectorState({ mode: 'migrate' })
+    } else {
+        state = {
+            ...createVectorState({ mode: state.mode || 'migrate' }),
+            ...state,
+            schemaVersion: VECTOR_INDEX_SCHEMA_VERSION,
+            modelName: vectorDB.modelName,
+            dataDir: vectorDB.dataDir
+        }
+    }
+
+    state.startedAt = state.startedAt || getDBTimestamp()
+    state = writeVectorState(state)
+
+    const totals = { rows: 0, docs: 0 }
+    const sourceResults = {}
+    const addResult = (key, result) => {
+        sourceResults[key] = {
+            rows: result.rowCount || 0,
+            docs: result.docCount || 0,
+            lastId: result.lastId || state.lastIds?.[key] || 0
+        }
+        totals.rows += result.rowCount || 0
+        totals.docs += result.docCount || 0
+    }
+
+    addResult('user_histories', await migrateIdSource({
+        db,
+        state,
+        sourceKey: 'user_histories',
+        label: '普通对话',
+        totalCount: sqliteCounts.user_histories?.count || 0,
+        fetchRows: (lastId, limit) => db.getVectorHistoryRowsAfter(lastId, limit),
+        buildDocs: buildHistoryRowVectorDocs,
+        batchSize,
+        onProgress
+    }))
+    state = readVectorState() || state
+
+    addResult('group_message_logs', await migrateIdSource({
+        db,
+        state,
+        sourceKey: 'group_message_logs',
+        label: '畅聊群流水',
+        totalCount: sqliteCounts.group_message_logs?.count || 0,
+        fetchRows: (lastId, limit) => db.getVectorGroupMessageRowsAfter(lastId, limit),
+        buildDocs: buildGroupMessageVectorDocs,
+        batchSize,
+        onProgress
+    }))
+    state = readVectorState() || state
+
+    addResult('memory_checkpoints', await migrateIdSource({
+        db,
+        state,
+        sourceKey: 'memory_checkpoints',
+        label: '全量/锚点总结',
+        totalCount: sqliteCounts.memory_checkpoints?.count || 0,
+        fetchRows: (lastId, limit) => db.getVectorCheckpointRowsAfter(lastId, Math.max(20, Math.floor(limit / 2))),
+        buildDocs: buildCheckpointRowVectorDocs,
+        batchSize,
+        onProgress
+    }))
+    state = readVectorState() || state
+
+    addResult('summary_cache', await migrateIdSource({
+        db,
+        state,
+        sourceKey: 'summary_cache',
+        label: '增量总结',
+        totalCount: sqliteCounts.summary_cache?.count || 0,
+        fetchRows: (lastId, limit) => db.getVectorSummaryRowsAfter(lastId, Math.max(20, Math.floor(limit / 2))),
+        buildDocs: buildSummaryRowVectorDocs,
+        batchSize,
+        onProgress
+    }))
+    state = readVectorState() || state
+
+    addResult('user_profiles', await migrateProfiles({ db, state, onProgress }))
+    state = readVectorState() || state
+
+    state.completedAt = getDBTimestamp()
+    state.lastCounts = sqliteCounts
+    state.lastRun = {
+        rebuild,
+        rows: totals.rows,
+        docs: totals.docs,
+        elapsedMs: Date.now() - startedAt
+    }
+    state = writeVectorState(state)
+
+    const stats = await vectorDB.stats()
+    return {
+        ok: true,
+        rebuild,
+        elapsedMs: Date.now() - startedAt,
+        rows: totals.rows,
+        docs: totals.docs,
+        sources: sourceResults,
+        sqliteCounts,
+        vectorStats: stats,
+        state
+    }
+}
+
+export async function migrateVectorMemoryFromSQLite(db, options = {}) {
+    if (activeMigration) {
+        return { ok: false, running: true, error: '已有向量迁移任务正在运行。' }
+    }
+    activeMigration = runVectorMigration(db, options)
+    try {
+        return await activeMigration
+    } finally {
+        activeMigration = null
+    }
+}
+
+export async function getVectorMemoryStatus(db) {
+    const sqliteCounts = db?.getVectorSourceCounts ? await db.getVectorSourceCounts().catch(err => ({ error: err.message })) : null
+    const stats = await vectorDB.stats()
+    return {
+        enabled: Config.enable_vector_memory === true,
+        running: Boolean(activeMigration),
+        schemaVersion: VECTOR_INDEX_SCHEMA_VERSION,
+        modelName: vectorDB.modelName,
+        dataDir: vectorDB.dataDir,
+        stateFile: VECTOR_STATE_FILE,
+        state: readVectorState(),
+        sqliteCounts,
+        vectorStats: stats
     }
 }
 
@@ -338,22 +786,43 @@ export const vectorMemory = {
 
     async backfillRecent(db) {
         if (!db || Config.enable_vector_memory === false) return
-        const userIds = db.getAllUserIds ? await db.getAllUserIds() : []
-        for (const userId of userIds.slice(0, 50)) {
-            await backfillUser(db, userId)
+        const counts = db.getVectorSourceCounts ? await db.getVectorSourceCounts() : {}
+        if (db.getVectorHistoryRowsAfter) {
+            const maxId = Number(counts.user_histories?.maxId) || 0
+            const rows = await db.getVectorHistoryRowsAfter(Math.max(0, maxId - BACKFILL_HISTORY_TURNS_PER_USER), BACKFILL_HISTORY_TURNS_PER_USER)
+            queueHistoryRowsVectorIndex(rows)
         }
-        if (db.getGroupMessageLogs) {
-            const logs = await db.getGroupMessageLogs({ limit: BACKFILL_GROUP_LOGS })
-            queueVectorDocuments(logs.map(log => buildGroupMessageVectorDoc(log)).filter(Boolean))
+        if (db.getVectorGroupMessageRowsAfter) {
+            const maxId = Number(counts.group_message_logs?.maxId) || 0
+            const rows = await db.getVectorGroupMessageRowsAfter(Math.max(0, maxId - BACKFILL_GROUP_LOGS), BACKFILL_GROUP_LOGS)
+            queueVectorDocuments(rows.flatMap(log => buildGroupMessageVectorDocs(log)))
         }
-        logger.info(`[AI-Plugin] 向量记忆后台回填已调度: 用户=${Math.min(userIds.length, 50)}, 群流水<=${BACKFILL_GROUP_LOGS}`)
+        if (db.getVectorCheckpointRowsAfter) {
+            const maxId = Number(counts.memory_checkpoints?.maxId) || 0
+            const rows = await db.getVectorCheckpointRowsAfter(Math.max(0, maxId - 100), 100)
+            queueVectorDocuments(rows.flatMap(row => buildCheckpointRowVectorDocs(row)))
+        }
+        if (db.getVectorSummaryRowsAfter) {
+            const maxId = Number(counts.summary_cache?.maxId) || 0
+            const rows = await db.getVectorSummaryRowsAfter(Math.max(0, maxId - 200), 200)
+            queueVectorDocuments(rows.flatMap(row => buildSummaryRowVectorDocs(row)))
+        }
+        if (db.getVectorProfileRows) {
+            const rows = await db.getVectorProfileRows()
+            queueVectorDocuments(rows.flatMap(row => buildProfileRowVectorDocs(row)))
+        }
+        logger.info('[AI-Plugin] 向量记忆后台轻量回填已调度')
     },
 
     search: searchSemanticMemory,
     formatContext: formatSemanticMemoryContext,
     buildContext: buildSemanticMemoryContext,
+    getStatus: getVectorMemoryStatus,
+    migrateFromSQLite: migrateVectorMemoryFromSQLite,
     queueDocument: queueVectorDocument,
     queueDocuments: queueVectorDocuments,
+    replaceDocuments: queueReplaceVectorDocuments,
+    deleteWhere: queueDeleteVectorWhere,
     queueGroupMessage: queueGroupMessageVectorIndex,
     queueHistory: queueHistoryVectorIndex,
     queueSummary: queueSummaryVectorIndex,

@@ -228,6 +228,7 @@ enable_web_fetch: false
 #   VECTOR_SERVER_PORT: 本地向量服务端口，默认 9901
 #   VECTOR_AUTO_CONTEXT_MAX_CHARS: 每轮自动注入的语义相关记忆字符上限，默认 6000
 #   开启后会索引普通对话历史、全量/增量总结、个人档案和畅聊群流水，并提供 memory_search 工具。
+#   SQLite 是原始记忆库；可用 #ai向量迁移 增量补齐索引，或 #ai向量重建 清空本地 collection 后全量重建。
 #
 # show_thinking: 是否显示 AI 思考过程（Raw 模式；false 时自动清洗思考内容，默认 false）
 # show_thinking_notice: 是否在普通对话请求模型前发送“xx思考中”占位提示（默认 false）

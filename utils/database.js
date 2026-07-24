@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import sqlite3 from 'sqlite3'
 import { getDBTimestamp, ensureDir } from './common.js'
-import { queueGroupMessageVectorIndex, queueHistoryVectorIndex, queueSummaryVectorIndex, queueUserProfileVectorIndex } from './vector_memory.js'
+import { queueDeleteVectorWhere, queueGroupMessageVectorIndex, queueHistoryRowsVectorIndex, queueSummaryVectorIndex, queueUserProfileVectorIndex, replaceHistoryRowsVectorIndex } from './vector_memory.js'
 
 const _path = process.cwd()
 const PLUGIN_DIR = path.join(_path, 'plugins', 'AI-Plugin')
@@ -55,6 +55,7 @@ function migrateLegacyDatabase() {
 
 function normalizeGroupMessageRow(row) {
     return {
+        id: row.id,
         groupId: row.group_id,
         messageId: row.message_id,
         seq: row.seq,
@@ -380,7 +381,9 @@ export class AIDatabase {
                                 logger.error(`[AI-Plugin] 提交事务失败:`, err)
                                 reject(err)
                             } else {
-                                queueHistoryVectorIndex(userIdStr, historyWithDate)
+                                this.getVectorHistoryRowsByUserDate(userIdStr, dateStr)
+                                    .then(rows => replaceHistoryRowsVectorIndex(userIdStr, dateStr, rows))
+                                    .catch(err => logger.warn(`[AI-Plugin] 对话向量索引读取 row id 失败: ${err.message}`))
                                 logger.debug(`[AI-Plugin] 成功保存用户 ${userId} 的 ${history.length} 条对话`)
                                 resolve()
                             }
@@ -400,10 +403,16 @@ export class AIDatabase {
             this.db.run(`
                 INSERT INTO user_histories (user_id, role, parts, date_str)
                 VALUES (?, ?, ?, ?)
-            `, [String(userId), role, JSON.stringify(parts), dateStr], (err) => {
+            `, [String(userId), role, JSON.stringify(parts), dateStr], function(err) {
                 if (err) reject(err)
                 else {
-                    queueHistoryVectorIndex(userId, [{ role, parts, date_str: dateStr }])
+                    queueHistoryRowsVectorIndex([{
+                        id: this.lastID,
+                        user_id: String(userId),
+                        role,
+                        parts,
+                        date_str: dateStr
+                    }])
                     resolve()
                 }
             })
@@ -435,7 +444,7 @@ export class AIDatabase {
                 }
                 const changes = this.changes || 0
                 if (changes > 0) {
-                    queueGroupMessageVectorIndex({ ...log, createdAt })
+                    queueGroupMessageVectorIndex({ ...log, id: this.lastID, createdAt })
                 }
                 resolve(changes)
             })
@@ -446,7 +455,7 @@ export class AIDatabase {
         return new Promise((resolve, reject) => {
             const params = [String(groupId)]
             let query = `
-                SELECT group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at
+                SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at
                 FROM group_message_logs
                 WHERE group_id = ?
             `
@@ -470,7 +479,7 @@ export class AIDatabase {
         return new Promise((resolve, reject) => {
             const params = []
             let query = `
-                SELECT group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at
+                SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at
                 FROM group_message_logs
                 WHERE 1 = 1
             `
@@ -734,6 +743,9 @@ export class AIDatabase {
                     reject(err)
                     return
                 }
+                if ((this.changes || 0) > 0) {
+                    queueDeleteVectorWhere({ doc_key: `user_profile:${String(userId)}:profile` })
+                }
                 resolve(this.changes > 0)
             })
         })
@@ -747,6 +759,170 @@ export class AIDatabase {
                     return
                 }
                 resolve(rows.map(row => row.user_id))
+            })
+        })
+    }
+
+    getVectorSourceCounts() {
+        const one = (sql, params = []) => new Promise((resolve, reject) => {
+            this.db.get(sql, params, (err, row) => {
+                if (err) reject(err)
+                else resolve(row || {})
+            })
+        })
+        return Promise.all([
+            one('SELECT COUNT(*) AS count, COALESCE(MAX(id), 0) AS max_id FROM user_histories'),
+            one('SELECT COUNT(*) AS count, COALESCE(MAX(id), 0) AS max_id FROM group_message_logs'),
+            one('SELECT COUNT(*) AS count, COALESCE(MAX(id), 0) AS max_id FROM memory_checkpoints'),
+            one('SELECT COUNT(*) AS count, COALESCE(MAX(id), 0) AS max_id FROM summary_cache'),
+            one('SELECT COUNT(*) AS count FROM user_profiles')
+        ]).then(([history, groupLogs, checkpoints, summaries, profiles]) => ({
+            user_histories: { count: history.count || 0, maxId: history.max_id || 0 },
+            group_message_logs: { count: groupLogs.count || 0, maxId: groupLogs.max_id || 0 },
+            memory_checkpoints: { count: checkpoints.count || 0, maxId: checkpoints.max_id || 0 },
+            summary_cache: { count: summaries.count || 0, maxId: summaries.max_id || 0 },
+            user_profiles: { count: profiles.count || 0, maxId: 0 }
+        }))
+    }
+
+    getVectorHistoryRowsAfter(lastId = 0, limit = 200) {
+        return new Promise((resolve, reject) => {
+            this.db.all(`
+                SELECT id, user_id, role, parts, date_str, created_at
+                FROM user_histories
+                WHERE id > ?
+                ORDER BY id ASC
+                LIMIT ?
+            `, [Math.max(0, Number(lastId) || 0), Math.max(1, Number(limit) || 200)], (err, rows) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(rows.map(row => ({
+                    id: row.id,
+                    user_id: row.user_id,
+                    role: row.role,
+                    parts: (() => {
+                        try { return JSON.parse(row.parts || '[]') } catch { return [] }
+                    })(),
+                    date_str: row.date_str,
+                    created_at: row.created_at
+                })))
+            })
+        })
+    }
+
+    getVectorHistoryRowsByUserDate(userId, dateStr) {
+        return new Promise((resolve, reject) => {
+            this.db.all(`
+                SELECT id, user_id, role, parts, date_str, created_at
+                FROM user_histories
+                WHERE user_id = ? AND date_str = ?
+                ORDER BY id ASC
+            `, [String(userId), dateStr], (err, rows) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(rows.map(row => ({
+                    id: row.id,
+                    user_id: row.user_id,
+                    role: row.role,
+                    parts: (() => {
+                        try { return JSON.parse(row.parts || '[]') } catch { return [] }
+                    })(),
+                    date_str: row.date_str,
+                    created_at: row.created_at
+                })))
+            })
+        })
+    }
+
+    getVectorGroupMessageRowsAfter(lastId = 0, limit = 200) {
+        return new Promise((resolve, reject) => {
+            this.db.all(`
+                SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at
+                FROM group_message_logs
+                WHERE id > ?
+                ORDER BY id ASC
+                LIMIT ?
+            `, [Math.max(0, Number(lastId) || 0), Math.max(1, Number(limit) || 200)], (err, rows) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(rows.map(normalizeGroupMessageRow))
+            })
+        })
+    }
+
+    getVectorCheckpointRowsAfter(lastId = 0, limit = 100) {
+        return new Promise((resolve, reject) => {
+            this.db.all(`
+                SELECT id, user_id, content, date_str, message_count, checkpoint_type, created_at
+                FROM memory_checkpoints
+                WHERE id > ?
+                ORDER BY id ASC
+                LIMIT ?
+            `, [Math.max(0, Number(lastId) || 0), Math.max(1, Number(limit) || 100)], (err, rows) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(rows.map(row => ({
+                    id: row.id,
+                    user_id: row.user_id,
+                    content: row.content,
+                    date_str: row.date_str,
+                    message_count: row.message_count,
+                    checkpoint_type: row.checkpoint_type,
+                    created_at: row.created_at
+                })))
+            })
+        })
+    }
+
+    getVectorSummaryRowsAfter(lastId = 0, limit = 100) {
+        return new Promise((resolve, reject) => {
+            this.db.all(`
+                SELECT id, user_id, content, date_str, base_checkpoint_date, created_at
+                FROM summary_cache
+                WHERE id > ?
+                ORDER BY id ASC
+                LIMIT ?
+            `, [Math.max(0, Number(lastId) || 0), Math.max(1, Number(limit) || 100)], (err, rows) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(rows.map(row => ({
+                    id: row.id,
+                    user_id: row.user_id,
+                    content: row.content,
+                    date_str: row.date_str,
+                    base_checkpoint_date: row.base_checkpoint_date,
+                    created_at: row.created_at
+                })))
+            })
+        })
+    }
+
+    getVectorProfileRows() {
+        return new Promise((resolve, reject) => {
+            this.db.all(`
+                SELECT user_id, info, last_updated
+                FROM user_profiles
+                ORDER BY user_id ASC
+            `, [], (err, rows) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(rows.map(row => ({
+                    user_id: row.user_id,
+                    info: row.info,
+                    last_updated: row.last_updated
+                })))
             })
         })
     }
@@ -965,7 +1141,12 @@ export class AIDatabase {
             this.db.run('DELETE FROM memory_checkpoints WHERE user_id = ? AND date_str = ?',
                 [String(userId), dateStr], (err) => {
                     if (err) reject(err)
-                    else resolve()
+                    else {
+                        queueDeleteVectorWhere({ doc_key: `memory_checkpoint:${String(userId)}:${dateStr}:memory_checkpoint:full` })
+                        queueDeleteVectorWhere({ doc_key: `memory_checkpoint:${String(userId)}:${dateStr}:memory_checkpoint:incremental` })
+                        queueDeleteVectorWhere({ doc_key: `memory_checkpoint:${String(userId)}:${dateStr}:memory_checkpoint:default` })
+                        resolve()
+                    }
                 })
         })
     }
@@ -1038,7 +1219,10 @@ export class AIDatabase {
             this.db.run('DELETE FROM summary_cache WHERE user_id = ? AND date_str = ?',
                 [String(userId), dateStr], (err) => {
                     if (err) reject(err)
-                    else resolve()
+                    else {
+                        queueDeleteVectorWhere({ doc_key: `summary_cache:${String(userId)}:${dateStr}:summary_cache:default` })
+                        resolve()
+                    }
                 })
         })
     }

@@ -80,6 +80,10 @@ export class VectorDBClient {
         return `http://${this.host}:${this.port}`
     }
 
+    get dataDir() {
+        return VECTOR_DB_DIR
+    }
+
     get modelName() {
         return String(process.env.AI_PLUGIN_VECTOR_MODEL || Config.VECTOR_MODEL || 'shibing624/text2vec-base-chinese')
     }
@@ -247,6 +251,73 @@ export class VectorDBClient {
             this.lastError = err.message
             logger.warn(`[AI-Plugin] 向量记忆检索失败: ${err.message}`)
             return []
+        }
+    }
+
+    async stats() {
+        if (!this.enabled) return { enabled: false, ready: false, count: 0, dataDir: this.dataDir }
+        const ready = await this.waitForReady(0)
+        if (!ready) {
+            return {
+                enabled: true,
+                ready: false,
+                count: 0,
+                model: this.modelName,
+                url: this.serverUrl,
+                dataDir: this.dataDir,
+                error: this.lastError
+            }
+        }
+        try {
+            const data = await postJson(`${this.serverUrl}/stats`, {}, 30000)
+            return {
+                enabled: true,
+                ready: data?.success === true,
+                count: Number(data?.count) || 0,
+                model: data?.model || this.modelName,
+                collection: data?.collection || '',
+                url: this.serverUrl,
+                dataDir: this.dataDir
+            }
+        } catch (err) {
+            this.lastError = err.message
+            return {
+                enabled: true,
+                ready: false,
+                count: 0,
+                model: this.modelName,
+                url: this.serverUrl,
+                dataDir: this.dataDir,
+                error: err.message
+            }
+        }
+    }
+
+    async reset() {
+        if (!this.enabled) return false
+        const ready = await this.waitForReady(60000)
+        if (!ready) return false
+        try {
+            const data = await postJson(`${this.serverUrl}/reset`, {}, 120000)
+            return data?.success === true
+        } catch (err) {
+            this.lastError = err.message
+            logger.warn(`[AI-Plugin] 向量记忆重置失败: ${err.message}`)
+            return false
+        }
+    }
+
+    async deleteWhere(where = {}) {
+        if (!this.enabled || !where || typeof where !== 'object' || Object.keys(where).length === 0) return false
+        const ready = await this.waitForReady(0)
+        if (!ready) return false
+        try {
+            const data = await postJson(`${this.serverUrl}/delete_where`, { where }, 120000)
+            return data?.success === true
+        } catch (err) {
+            this.lastError = err.message
+            logger.warn(`[AI-Plugin] 向量记忆条件删除失败: ${err.message}`)
+            return false
         }
     }
 
