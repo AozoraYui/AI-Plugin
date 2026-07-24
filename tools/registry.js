@@ -794,7 +794,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - 如果当前指令没有明确要求执行某个动作，即使主模型计划中提到该工具，也应返回 tools: []，尤其是 group_send_message、group_leave、draw_image、shell_exec、shell_session、file_send、file_download 和群管理动作。
 - 例外：如果当前指令本身是“继续/现在能帮我看看了吗/可以了吗”这类明显延续上一轮请求，且主模型计划已经把前文解析成明确工具、明确参数，可以只编译主模型计划中的工具；仍要遵守各工具权限和规则，不要把这个例外用于 group_send_message、group_leave、draw_image 或群管理动作。
 - 文件/目录路径可以保留主模型解析出的绝对路径、相对路径、别名或文件名片段，不要凭空发明路径。
-- shell_exec 只能编译主模型明确计划的具体命令；不要为了补全信息自己设计危险命令。主人要求更新当前 AI-Plugin/插件时，可编译为 command="git pull" 并设置 cwd 为插件目录。
+- shell_exec 只能编译主模型明确计划的具体命令；不要为了补全信息自己设计危险命令。主人要求更新当前 AI-Plugin/插件时，可编译为 command="git pull" 并设置 cwd 为插件目录；如果主模型在 git pull 后继续计划查看更新内容，可编译 git log --oneline --decorate --stat ORIG_HEAD..HEAD 或 git diff --stat ORIG_HEAD..HEAD。
 - shell_session 只能在主模型明确计划操作 tmux/ai-shell/shell会话时编译；action=read/status/interrupt/clear/restart/close 不需要 input。action=send 的 input 必须来自用户明确要求输入或执行的内容，只填真实要发进终端的文本，不要把“命令/执行命令/输入命令”等中文引导词粘进 input。
 - nmap/局域网设备扫描：如果主模型计划是先探测本机网络，shell_exec 可编译为 "ip route get 1.1.1.1; ip -o -4 addr show scope global; ip route show default"；如果主模型计划用 shell_session 一步执行，input 必须用 ip route/ip addr 自动推断 iface/cidr 后再 nmap -sn "$cidr"，不要硬编码 192.168.0.0/24 或 192.168.1.0/24。
 - shell_exec/shell_session 若返回目录安全检查阻止执行，后续不要再编译新的 Shell 命令绕过检查，应让主模型反问主人。
