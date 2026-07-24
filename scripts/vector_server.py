@@ -26,7 +26,7 @@ from sentence_transformers import SentenceTransformer
 CHROMA_DB_PATH = sys.argv[1] if len(sys.argv) > 1 else "./chroma_db"
 SERVER_HOST = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1"
 SERVER_PORT = int(sys.argv[3]) if len(sys.argv) > 3 else 9901
-SERVER_VERSION = "2026-07-25.4"
+SERVER_VERSION = "2026-07-25.5"
 MODEL_NAME = sys.argv[4] if len(sys.argv) > 4 else os.environ.get(
     "AI_PLUGIN_VECTOR_MODEL",
     "shibing624/text2vec-base-chinese",
@@ -65,11 +65,14 @@ def read_json(handler):
 
 def write_json(handler, status, payload):
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    handler.wfile.write(body)
+    try:
+        handler.send_response(status)
+        handler.send_header("Content-Type", "application/json; charset=utf-8")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
+    except BrokenPipeError:
+        print("Client disconnected before response could be sent", flush=True)
 
 
 def compact_error(exc):
@@ -188,6 +191,9 @@ class VectorDBHandler(BaseHTTPRequestHandler):
             self.handle_exception(exc)
 
     def handle_exception(self, exc):
+        if isinstance(exc, BrokenPipeError):
+            print("Client disconnected during request handling", flush=True)
+            return
         error = compact_error(exc)
         print(f"Request failed: {error}", flush=True)
         print(traceback.format_exc(), flush=True)

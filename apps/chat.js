@@ -492,13 +492,30 @@ function parseShellCommand(text) {
     const patterns = [
         /^(?:执行|运行|调用)\s*(?:shell|命令|终端|命令行)[:：]?\s*([\s\S]+)$/i,
         /^shell[:：]\s*([\s\S]+)$/i,
-        /^命令[:：]\s*([\s\S]+)$/i
+        /^命令[:：]\s*([\s\S]+)$/i,
+        /^(?:请|帮我|给我|麻烦你?)?\s*(?:再|继续|接着|重新)?\s*(?:执行|运行|跑(?:一下)?|试(?:一下)?|调用)\s*(?:一下|下)?\s*([\s\S]{1,4000})$/i
     ]
     for (const pattern of patterns) {
         const match = value.match(pattern)
-        if (match?.[1]?.trim()) return match[1].trim()
+        const command = normalizeExplicitShellCommand(match?.[1], value)
+        if (command) return command
     }
     return ''
+}
+
+function normalizeExplicitShellCommand(rawInput = '', fullText = '') {
+    let input = String(rawInput || '').trim()
+    if (!input) return ''
+    input = input
+        .replace(/^[：:，,\s]+|[。；;，,\s]+$/g, '')
+        .replace(/^(?:一下|下)\s*/i, '')
+        .replace(/\s*(?:看(?:一下|下|看)?|瞅(?:一下|下)?|查(?:一下|下)?|看结果|看看结果|输出结果|试试|一下|下|吧|喵|呢|嘛|吗|么|了)[?？!！。,.，\s]*$/i, '')
+        .trim()
+    if (!input) return ''
+    if (/[\u3400-\u9fff]/.test(input)) return ''
+    if (/^(?:这个|那个|它|上面|刚才|前面|计划|规划|操作)$/i.test(input)) return ''
+    if (!/^(?:sudo\s+)?[A-Za-z0-9_./:-]+(?:\s|$)/.test(input)) return ''
+    return cleanupShellInput(input, fullText)
 }
 
 function cleanupShellInput(rawInput = '', fullText = '') {
@@ -524,12 +541,20 @@ function cleanupShellInput(rawInput = '', fullText = '') {
 function parseShellSessionRequest(text) {
     const value = String(text || '').trim()
     const sessionWords = '(?:tmux|ai-shell|shell\\s*session|shell会话|shell窗口|独立shell|终端会话)'
-    if (!new RegExp(sessionWords, 'i').test(value)) return null
+    const hasSessionWords = new RegExp(sessionWords, 'i').test(value)
+
+    if (!hasSessionWords) {
+        const continuationMatch = value.match(/^(?:不对[，,\s]*)?(?:再|继续|接着|重新)\s*(?:执行|运行|跑(?:一下)?|试(?:一下)?|输入|发送|打入)\s*(?:一下|下)?\s*(?<input>[\s\S]{1,4000})$/i)
+        const input = normalizeExplicitShellCommand(continuationMatch?.groups?.input, value)
+        if (input) return { action: 'send', input, enter: !/(?:不回车|不要回车|先别执行|只输入)/i.test(value) }
+        return null
+    }
 
     if (new RegExp(`(?:状态|在不在|有没有|是否存在|创建|打开|启动|确保).{0,20}${sessionWords}`, 'i').test(value)) {
         return { action: 'status' }
     }
-    if (new RegExp(`(?:读取|读一下|看看|查看|显示).{0,20}${sessionWords}.{0,20}(?:输出|内容|窗口)?`, 'i').test(value)) {
+    if (new RegExp(`(?:读取|读一下|看看|查看|显示).{0,20}${sessionWords}.{0,20}(?:输出|内容|窗口)?`, 'i').test(value)
+        || new RegExp(`${sessionWords}.{0,24}(?:输出|回显|结果|窗口|画面|内容).{0,24}(?:还有|还有啥|还有什么|还有些什么|还有哪些|其他|别的|更多|些啥)`, 'i').test(value)) {
         return { action: 'read' }
     }
     if (/(?:中断|停止|打断|ctrl\+?c|Ctrl\+?C|发送C-c)/i.test(value)) {
@@ -551,7 +576,7 @@ function parseShellSessionRequest(text) {
     ]
     for (const pattern of patterns) {
         const match = value.match(pattern)
-        const input = cleanupShellInput(match?.groups?.input, value)
+        const input = normalizeExplicitShellCommand(match?.groups?.input, value)
         if (input) return { action: 'send', input, enter: !/(?:不回车|不要回车|先别执行|只输入)/i.test(value) }
     }
     return null

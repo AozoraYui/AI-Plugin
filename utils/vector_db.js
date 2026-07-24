@@ -12,7 +12,8 @@ const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_PORT = 9901
 const HEALTH_TIMEOUT_MS = 2500
 const STARTUP_TIMEOUT_MS = 180000
-const VECTOR_SERVER_PROTOCOL_VERSION = '2026-07-25.4'
+const VECTOR_WRITE_TIMEOUT_MS = 300000
+const VECTOR_SERVER_PROTOCOL_VERSION = '2026-07-25.5'
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms))
@@ -473,8 +474,8 @@ export class VectorDBClient {
         if (normalized.length === 0) return true
         try {
             const data = normalized.length === 1
-                ? await postJson(`${this.serverUrl}/add`, normalized[0])
-                : await postJson(`${this.serverUrl}/add_many`, { documents: normalized }, 120000)
+                ? await postJson(`${this.serverUrl}/add`, normalized[0], VECTOR_WRITE_TIMEOUT_MS)
+                : await postJson(`${this.serverUrl}/add_many`, { documents: normalized }, VECTOR_WRITE_TIMEOUT_MS)
             if (Number(data?.failed) > 0) {
                 logger.warn(`[AI-Plugin] 向量记忆写入跳过 ${Number(data.failed)} 个异常片段: ${JSON.stringify(data.failures || []).slice(0, 500)}`)
             }

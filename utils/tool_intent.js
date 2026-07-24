@@ -350,6 +350,12 @@ export function hasExplicitShellIntent(text, toolName = '') {
     if (!value) return false
     const commandKeywords = 'ssh|scp|rsync|git|npm|pnpm|node|python3?|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head|nmap|ip|tmux|sqlite3|sqlite|curl|wget|jq|sed|awk'
     const shellKeywords = `${commandKeywords}|shell|命令|终端`
+    const sessionWords = '(?:tmux|ai-shell|shell\\s*session|shell会话|shell窗口|独立shell|终端会话)'
+    if (toolName === 'shell_session'
+        && new RegExp(sessionWords, 'i').test(value)
+        && /(?:输出|回显|结果|窗口|画面|内容|状态|读|读取|查看|看看|刷新|回读|还有|执行|运行|输入|发送|打入|中断|停止|清屏|重启|关闭)/i.test(value)) {
+        return true
+    }
     if (/^(?:你|诺亚|noa)?\s*(?:会不会|会|能不能|可以|能).{0,16}(?:执行|运行|调用).{0,16}(?:shell|命令|终端|命令行).{0,20}(?:吗|嘛|么|？|\?)/i.test(value)
         && !/(?:帮我|给我|请|麻烦)/i.test(value)) {
         return false
@@ -358,12 +364,13 @@ export function hasExplicitShellIntent(text, toolName = '') {
         && !new RegExp(`(?:帮我|给我|请|麻烦|执行|运行|调用|用|拿|通过).{0,20}(?:${shellKeywords})`, 'i').test(value)) {
         return false
     }
-    if (toolName === 'shell_session' && /(?:tmux|ai-shell|shell\s*session|shell会话|shell窗口|独立shell|终端会话)/i.test(value)) return true
+    if (toolName === 'shell_session' && new RegExp(sessionWords, 'i').test(value)) return true
     if (/\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\b/i.test(value)
         && /(?:看|看看|读|读取|打开|检查|分析|搜索|查找|统计|内容|日志|配置|脚本|文件|目录)/i.test(value)) return true
     if (/(?:局域网|内网|LAN|网段|入网设备|在线设备|网关|路由器).{0,24}(?:扫描|探测|查|查看|多少|有哪些|nmap)|(?:扫描|探测|查|查看).{0,24}(?:局域网|内网|LAN|网段|入网设备|在线设备|网关|路由器)/i.test(value)) return true
     if (/(?:执行|运行|调用).{0,12}(?:shell|命令|终端|命令行|脚本)|(?:shell|命令)[:：]/i.test(value)) return true
     if (new RegExp(`(?:执行|运行|调用).{0,8}(?:${commandKeywords})\\b`, 'i').test(value)) return true
+    if (/(?:^|[，,。\s])(?:再|继续|接着|重新)?\s*(?:执行|运行|跑(?:一下)?|试(?:一下)?|调用)\s*(?:一下|下)?\s*(?:sudo\s+)?[A-Za-z0-9_./:-]+(?:\s+[A-Za-z0-9_./:=@%+-]+){0,40}(?:\s*(?:看(?:一下|下|看)?|瞅(?:一下|下)?|查(?:一下|下)?|看结果|看看结果|输出结果|试试|一下|下|吧|喵|呢|嘛|吗|么|了))?[?？!！。,.，\s]*$/i.test(value)) return true
     if (new RegExp(`(?:输入|发送|打入).{0,8}(?:${commandKeywords})\\b`, 'i').test(value)) return true
     if (new RegExp(`^(?:sudo\\s+)?(?:${commandKeywords})\\b`, 'i').test(value)) return true
     if (new RegExp(`\\b(?:${commandKeywords})\\b[\\s\\S]{0,200}(?:命令|执行|运行|输入|发送|打入|跑一下|试一下)`, 'i').test(value)) return true
@@ -381,7 +388,11 @@ export function isContinuationToolInstruction(text) {
         .trim()
     if (!value) return false
 
-    if (/^(?:现在|再|重新|刷新|继续|接着|帮我|给我|麻烦你?)?[，,。\s]*(?:看看|看一下|读一下|查看|刷新|回读).{0,18}(?:有没有|有无)?(?:输出|回显|结果|窗口|画面|终端内容|tmux内容|shell内容)/i.test(value)) {
+    if (/^(?:现在|再|重新|刷新|继续|接着|帮我|给我|麻烦你?)?[，,。\s]*(?:看看|看一下|读一下|查看|刷新|回读).{0,18}(?:有没有|有无)?(?:输出|回显|结果|窗口|画面|终端内容|tmux内容|shell内容)/i.test(value)
+        || /(?:tmux|ai-shell|shell会话|shell窗口|独立shell|终端会话).{0,18}(?:输出|回显|结果|窗口|画面|内容).{0,18}(?:还有|还有啥|还有什么|还有些什么|还有哪些|其他|别的|更多|些啥)/i.test(value)) {
+        return true
+    }
+    if (/(?:不对|不是|还没|没有).{0,12}(?:执行|运行|跑|调用|发送|输入)|(?:执行|运行|跑|调用|发送|输入).{0,12}(?:还没|没有|漏了|没做)/i.test(value)) {
         return true
     }
 
