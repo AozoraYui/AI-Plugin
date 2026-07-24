@@ -110,6 +110,16 @@ function buildDockerNapcatHint(sendPath) {
     ].join('\n')
 }
 
+function buildDockerNapcatShortHint(sendPath) {
+    const dirOfFile = path.dirname(sendPath)
+    return [
+        '疑似 NapCat/Docker 侧读取不到宿主机路径，或富媒体上传失败。',
+        `路径: ${sendPath}`,
+        `建议把目录按相同路径挂载进 NapCat 容器，例如: -v "${dirOfFile}:${dirOfFile}"`,
+        '也可以把文件放到 NapCat 已共享目录后再发送。'
+    ].join('\n')
+}
+
 export const fileSendTool = {
     name: 'file_send',
     permission: 'master',
@@ -231,7 +241,16 @@ export const fileSendTool = {
         } catch (err) {
             // sendFile 抛错且特征疑似 docker napcat 路径不可见 → 附带排查与解决方案
             if (isLikelyDockerPathError(err.message)) {
-                return `【文件发送失败】${err.message}\n${buildDockerNapcatHint(sendPath)}`
+                return {
+                    ok: false,
+                    error: err.message,
+                    sourcePath: realPath,
+                    sendPath,
+                    fileName,
+                    isArchive,
+                    dockerNapcatHint: buildDockerNapcatShortHint(sendPath),
+                    fullHint: buildDockerNapcatHint(sendPath)
+                }
             }
             return `【文件发送失败】${err.message}`
         } finally {
@@ -243,7 +262,16 @@ export const fileSendTool = {
 
     formatResult(data) {
         if (typeof data === 'string') return data
-        if (!data || !data.ok) return String(data || '')
+        if (!data || !data.ok) {
+            if (data && typeof data === 'object') {
+                const lines = [`\n\n【文件发送失败】${data.error || '未知错误'}`]
+                if (data.fileName) lines.push(`名称: ${data.fileName}`)
+                if (data.sourcePath) lines.push(`来源: ${data.sourcePath}`)
+                if (data.dockerNapcatHint) lines.push(data.dockerNapcatHint)
+                return `${lines.join('\n')}\n`
+            }
+            return String(data || '')
+        }
         const sizeMb = (data.sizeBytes / 1024 / 1024).toFixed(2)
         if (data.asImage) {
             return `\n\n【图片发送成功】已将图片发送到当前会话。\n名称: ${data.fileName}\n来源: ${data.sourcePath}\n大小: ${sizeMb}MB\n`

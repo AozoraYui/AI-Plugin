@@ -13,7 +13,7 @@ import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserProfileText } from '../utils/user_profile.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
-import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseGroupLeaveRequest, parseGroupSendRequest } from '../utils/tool_intent.js'
+import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseGroupLeaveRequest, parseGroupSendRequest } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction } from '../utils/pending_actions.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { executePendingGroupSend } from '../tools/group_send.js'
@@ -605,7 +605,7 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
     // 3) 明确要求发送服务器本地文件：直接走 file_send，避免小模型等待和误判。
     if (hasTool(enabledTools, 'file_send')) {
         const filePath = extractAbsolutePath(routeText)
-        const sendIntent = /(?:发给我|发我|发送|发出来|发到(?:群里|这里)?|传给我|上传到(?:群里|这里)?)/i.test(routeText)
+        const sendIntent = hasExplicitFileSendIntent(routeText)
         if (filePath && sendIntent) {
             const args = { path: filePath }
             if (/(?:以图片形式|作为图片|直接发图|发成图片|以图(?:片)?形式)/i.test(routeText)) args.as_image = true
@@ -702,6 +702,103 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
     return null
 }
 
+function pickEnabledTools(enabledTools, names = []) {
+    const enabled = new Set(Array.isArray(enabledTools) ? enabledTools : [])
+    return names.filter(name => enabled.has(name))
+}
+
+function hasWeatherToolIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    return /(?:天气|气温|温度|降雨|下雨|台风|空气质量|穿衣|预报)/i.test(value)
+}
+
+function hasSystemInfoToolIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    return /(?:系统信息|服务器信息|主机信息|运行状态|磁盘|内存|CPU|负载|进程|服务状态|系统时间|当前时间|现在几点|几点了)/i.test(value)
+}
+
+function hasGroupFileToolIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    return /(?:群文件|群文件区|群里的文件|群内文件|文件列表|列出.{0,12}文件|下载.{0,12}群文件|保存.{0,12}群文件)/i.test(value)
+}
+
+function hasGroupMemberAliasToolIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    return /(?:这个人是谁|这人是谁|他是谁|她是谁|@.{0,12}是谁|外号|绰号|群里.{0,12}叫|谁(?:被)?叫|称呼记录|群内称呼)/i.test(value)
+}
+
+function hasGroupAdminToolIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    return /(?:群管理|群管|群成员|成员列表|禁言|解禁|踢人|踢了|移出群|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请|通过申请|拒绝申请)/i.test(value)
+}
+
+function hasLocalPathReadIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value || !extractAbsolutePath(value)) return false
+    if (hasExplicitFileSendIntent(value)) return false
+    return /(?:看|看看|读|读取|打开|检查|分析|搜索|查找|统计|内容|日志|配置|脚本|文件|目录|cat|tail|head|rg|grep|ls)/i.test(value)
+}
+
+function narrowToolCandidatesForPlanning(enabledTools, userMessage, options = {}) {
+    const allEnabled = Array.isArray(enabledTools) ? enabledTools : []
+    const routeText = getPrimaryUserInstruction(userMessage) || String(userMessage || '').trim()
+    const hasImages = options.hasImages === true
+    const hasRecentImages = options.hasRecentImages === true
+    const urls = Array.isArray(options.urls) ? options.urls : extractUrlsFromText(routeText, 10)
+    const candidates = new Set()
+    const add = names => {
+        for (const name of pickEnabledTools(allEnabled, names)) candidates.add(name)
+    }
+
+    if (options.allowContinuation === true && isContinuationToolInstruction(routeText)) {
+        add(CONTINUATION_ALLOWED_TOOLS)
+    }
+    const explicitShellSession = /(?:tmux|ai-shell|shell\s*session|shell会话|shell窗口|独立shell|终端会话)/i.test(routeText)
+        && hasExplicitShellIntent(routeText, 'shell_session')
+    const explicitShell = explicitShellSession || hasExplicitShellIntent(routeText) || hasLocalPathReadIntent(routeText)
+
+    if (hasExplicitFileSendIntent(routeText)) add(['file_send'])
+    if (hasExplicitFileDownloadIntent(routeText, { hasImages })) add(['file_download'])
+    if (hasGroupFileToolIntent(routeText)) add(['group_file_list', 'group_file_download'])
+    if (hasExplicitWebFetchIntent(routeText, urls) || (options.webFetchFlag === true && urls.length > 0)) add(['web_fetch'])
+    if ((hasExplicitWebSearchIntent(routeText) && !explicitShell) || options.webSearchFlag === true) add(['web_search', 'web_fetch'])
+    if (explicitShellSession) add(['shell_session', 'shell_exec', 'system_info'])
+    else if (explicitShell) add(['shell_exec', 'shell_session', 'system_info'])
+    if (hasExplicitDrawIntent(routeText, { hasImages, hasRecentImages })) add(['draw_image'])
+    if (hasExplicitUserProfileUpdateIntent(routeText)) add(['user_profile_update'])
+    if (hasExplicitGroupChatContextIntent(routeText) || hasGroupChatContextQuestion(routeText)) add(['group_chat_context'])
+    if (parseGroupSendRequest(routeText)) add(['group_send_message'])
+    if (parseGroupLeaveRequest(routeText)) add(['group_leave'])
+    if (hasWeatherToolIntent(routeText)) add(['weather'])
+    if (hasSystemInfoToolIntent(routeText)) add(['system_info', 'shell_exec', 'shell_session'])
+    if (hasGroupMemberAliasToolIntent(routeText)) add(['group_member_aliases'])
+    if (hasGroupAdminToolIntent(routeText)) {
+        add([
+            'group_mute',
+            'group_whole_mute',
+            'group_kick',
+            'group_set_card',
+            'group_set_title',
+            'group_essence',
+            'group_member_list',
+            'group_member_resolve',
+            'group_request_list',
+            'group_request_handle'
+        ])
+    }
+
+    const tools = allEnabled.filter(name => candidates.has(name))
+    return {
+        tools,
+        reason: tools.length > 0 ? `候选工具=${tools.join(', ')}` : '当前指令没有明显工具需求'
+    }
+}
+
 function truncateForPrompt(text, maxChars) {
     const value = String(text || '')
     if (value.length <= maxChars) return value
@@ -733,6 +830,29 @@ function truncateAutoNoaContextBlock(block) {
     const value = String(block || '')
     if (value.length <= AUTO_NOA_CONTEXT_MAX_CHARS) return value
     return truncateForPrompt(value, AUTO_NOA_CONTEXT_MAX_CHARS)
+}
+
+function stripImagePartsFromHistory(history = []) {
+    if (!Array.isArray(history) || history.length === 0) return { history: [], removed: 0 }
+    let removed = 0
+    const cleaned = []
+    for (const turn of history) {
+        const parts = Array.isArray(turn?.parts) ? turn.parts : []
+        const textParts = []
+        for (const part of parts) {
+            if (part?.text !== undefined) {
+                textParts.push({ text: String(part.text) })
+            } else if (part?.inline_data || part?.inlineData || part?.file_data || part?.fileData) {
+                removed++
+            }
+        }
+        if (textParts.length > 0) {
+            cleaned.push({ ...turn, parts: textParts })
+        } else if (parts.length > 0) {
+            cleaned.push({ ...turn, parts: [{ text: '[历史媒体内容已省略]' }] })
+        }
+    }
+    return { history: cleaned, removed }
 }
 
 function formatAutoNoaContextLine(log, options = {}) {
@@ -1261,6 +1381,11 @@ export class ChatHandler extends plugin {
             if (!isSingleMode) {
                 const memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(userId)
                 history = memoryData.history
+                const strippedHistory = stripImagePartsFromHistory(history)
+                history = strippedHistory.history
+                if (strippedHistory.removed > 0) {
+                    logger.info(`[AI-Plugin] 已从历史上下文移除 ${strippedHistory.removed} 个历史图片/媒体输入，避免重复消耗多模态 token`)
+                }
                 incrementalCheckpoint = memoryData.incrementalCheckpoint
                 userProfileText = await loadUserProfileText(this.conversationManager.db, userId)
 
@@ -1287,7 +1412,8 @@ export class ChatHandler extends plugin {
                 return true
             }
             let localImageInput = { imageParts: [], noteText: '', paths: [], failures: [] }
-            if (e.isMaster) {
+            const skipLocalImageInput = e.isMaster && hasExplicitFileSendIntent(currentToolInstruction)
+            if (e.isMaster && !skipLocalImageInput) {
                 localImageInput = await buildLocalImageInputContext(currentToolInstruction || userMessage, {
                     maxImages: Config.MAX_IMAGES_PER_MESSAGE
                 })
@@ -1297,6 +1423,8 @@ export class ChatHandler extends plugin {
                 if (localImageInput.imageParts.length > 0) {
                     logger.info(`[AI-Plugin] 已附加本地图片输入: ${localImageInput.imageParts.length} 张`)
                 }
+            } else if (skipLocalImageInput) {
+                logger.info('[AI-Plugin] 本地图片路径用于文件发送，本轮不附加为多模态图片输入')
             }
             const hasLocalImageInput = localImageInput.imageParts.length > 0
             let avatarImageInput = { imageParts: [], noteText: '', targets: [], failures: [] }
@@ -1412,40 +1540,57 @@ export class ChatHandler extends plugin {
                     toolAnalysis = preRouted
                     logger.info(`[AI-Plugin] 工具预路由命中: ${preRouted.tools.map(t => t.name).join(', ')} - ${preRouted.intent}`)
                 } else {
-                    logger.info(`[AI-Plugin] 工具预路由未命中，进入主模型规划流程（CPU 决策，协处理器编译）`)
-                    const mainToolPlan = await askMainModelForToolPlan(this.client, modelGroupKey, providerFilter, {
-                        userMessage,
-                        history,
-                        incrementalCheckpoint,
-                        environmentHint,
-                        enabledTools,
-                        candidateUrls,
-                        mentionedUserIds,
+                    const planningCandidates = narrowToolCandidatesForPlanning(enabledTools, currentToolInstruction || userMessage, {
                         hasImages: allImages.length > 0 || hasLocalImageInput,
                         hasRecentImages: recentImageInfo.available,
-                        isMaster: e.isMaster === true,
-                        currentInstruction: currentToolInstruction
+                        urls: candidateUrls,
+                        allowContinuation: allowToolContinuation,
+                        webFetchFlag: e._webFetchFlag === true,
+                        webSearchFlag: e._netFlag === true
                     })
-                    if (mainToolPlan?.need_tools) {
-                        logger.info(`[AI-Plugin] 主模型计划调用 ${mainToolPlan.tool_plan.length} 个工具，交给意图模型编译参数`)
-                        toolAnalysis = await toolRegistry.compileToolPlan(mainToolPlan, this.client, enabledTools, {
+                    if (planningCandidates.tools.length === 0) {
+                        logger.info(`[AI-Plugin] 工具预路由未命中，跳过主模型工具规划：${planningCandidates.reason}`)
+                        toolAnalysis = {
+                            intent: planningCandidates.reason,
+                            tools: [],
+                            routedBy: 'candidate_prune'
+                        }
+                    } else {
+                        logger.info(`[AI-Plugin] 工具预路由未命中，进入主模型规划流程；工具候选裁剪: ${enabledTools.length} -> ${planningCandidates.tools.length} (${planningCandidates.tools.join(', ')})`)
+                        const mainToolPlan = await askMainModelForToolPlan(this.client, modelGroupKey, providerFilter, {
                             userMessage,
+                            history,
+                            incrementalCheckpoint,
+                            environmentHint,
+                            enabledTools: planningCandidates.tools,
                             candidateUrls,
                             mentionedUserIds,
                             hasImages: allImages.length > 0 || hasLocalImageInput,
                             hasRecentImages: recentImageInfo.available,
-                            maxTools: 5,
-                            currentInstruction: currentToolInstruction,
-                            allowContinuation: allowToolContinuation,
-                            continuationTools: CONTINUATION_ALLOWED_TOOLS
+                            isMaster: e.isMaster === true,
+                            currentInstruction: currentToolInstruction
                         })
-                    } else {
-                        logger.info(`[AI-Plugin] 主模型判断本轮无需工具: ${String(mainToolPlan?.reason || '').slice(0, 180)}`)
-                        toolAnalysis = {
-                            intent: mainToolPlan?.reason || '',
-                            tools: [],
-                            routedBy: 'main_model_plan',
-                            plan: mainToolPlan
+                        if (mainToolPlan?.need_tools) {
+                            logger.info(`[AI-Plugin] 主模型计划调用 ${mainToolPlan.tool_plan.length} 个工具，交给意图模型编译参数`)
+                            toolAnalysis = await toolRegistry.compileToolPlan(mainToolPlan, this.client, planningCandidates.tools, {
+                                userMessage,
+                                candidateUrls,
+                                mentionedUserIds,
+                                hasImages: allImages.length > 0 || hasLocalImageInput,
+                                hasRecentImages: recentImageInfo.available,
+                                maxTools: 5,
+                                currentInstruction: currentToolInstruction,
+                                allowContinuation: allowToolContinuation,
+                                continuationTools: CONTINUATION_ALLOWED_TOOLS
+                            })
+                        } else {
+                            logger.info(`[AI-Plugin] 主模型判断本轮无需工具: ${String(mainToolPlan?.reason || '').slice(0, 180)}`)
+                            toolAnalysis = {
+                                intent: mainToolPlan?.reason || '',
+                                tools: [],
+                                routedBy: 'main_model_plan',
+                                plan: mainToolPlan
+                            }
                         }
                     }
                 }
@@ -1550,19 +1695,23 @@ export class ChatHandler extends plugin {
                                 }
                             }
                         } else if (call.name === 'shell_exec') {
+                            suppressAutoNoaContext = true
                             const formattedResult = toolRegistry.formatToolResult('shell_exec', result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为服务器 Shell 命令的实际执行结果。请严格基于 stdout/stderr/退出码回答，不要编造未执行的结果。' + formattedResult
                             executedShellCommands.push(normalizeShellCommand(result.data?.command || call.args?.command))
                             logger.warn(`[AI-Plugin] shell_exec 完成，结果已注入`)
                         } else if (call.name === 'shell_session') {
+                            suppressAutoNoaContext = true
                             const formattedResult = toolRegistry.formatToolResult('shell_session', result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为持久 tmux Shell 会话的实际操作结果。请严格基于 tmux 窗口输出和动作结果回答，不要编造未执行的结果。' + formattedResult
                             logger.warn(`[AI-Plugin] shell_session 完成，结果已注入`)
                         } else if (call.name === 'file_send' || call.name === 'file_download') {
+                            suppressAutoNoaContext = true
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
-                            userMessage = userMessage + '\n\n【重要指令】以上为文件收发工具的实际执行结果，请如实告知主人操作结果，不要编造。' + formattedResult
+                            userMessage = userMessage + '\n\n【重要指令】以上为文件收发工具的实际执行结果，请如实告知主人操作结果，不要编造，也不要额外描述本地图片内容。' + truncateForPrompt(formattedResult, 2400)
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (call.name === 'group_file_list' || call.name === 'group_file_download') {
+                            suppressAutoNoaContext = true
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为群文件工具的实际执行结果，请如实、完整地告知主人，逐条列出每一个文件，不要只挑部分/代表文件，不要编造文件名或结果。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
@@ -1594,14 +1743,17 @@ export class ChatHandler extends plugin {
                             userMessage = userMessage + '\n\n【重要指令】以上为个人档案维护工具的实际结果。请只简短告知用户已更新或失败原因；不要在公开群里复述个人档案全文，也不要编造工具没有写入的内容。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (call.name === 'group_send_message') {
+                            suppressAutoNoaContext = true
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为群消息代发工具的实际结果。若结果显示“待确认”，说明尚未发送，请只提醒主人按回执继续用 #c 自然确认或取消；不要声称已经发送，也不要重复发送。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (call.name === 'group_leave') {
+                            suppressAutoNoaContext = true
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为退群工具的实际结果。若结果显示“待确认”，说明尚未退出任何群，请只提醒主人按回执继续用 #c 自然确认或取消；不要声称已经退群，也不要重复执行。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (['group_mute', 'group_whole_mute', 'group_kick', 'group_set_card', 'group_set_title', 'group_essence', 'group_member_list', 'group_member_resolve', 'group_request_list', 'group_request_handle'].includes(call.name)) {
+                            suppressAutoNoaContext = true
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为群管理工具的实际执行结果，请如实转告操作者，不要编造结果。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
@@ -1789,9 +1941,10 @@ export class ChatHandler extends plugin {
                 }
             }
 
+            let messageImageParts = []
             if (allImages.length > 0) {
-                const validImages = await processImagesInBatches(allImages)
-                currentUserTurnParts.push(...validImages)
+                messageImageParts = await processImagesInBatches(allImages)
+                currentUserTurnParts.push(...messageImageParts)
             }
             if (localImageInput.imageParts.length > 0) {
                 currentUserTurnParts.push(...localImageInput.imageParts)
@@ -2004,7 +2157,12 @@ export class ChatHandler extends plugin {
                 await setMsgEmojiLike(e, 144)
 
                 if (!isSingleMode) {
-                    const transientImageParts = new Set([...generatedDrawReviewImages, ...localImageInput.imageParts])
+                    const transientImageParts = new Set([
+                        ...messageImageParts,
+                        ...generatedDrawReviewImages,
+                        ...localImageInput.imageParts,
+                        ...avatarImageInput.imageParts
+                    ])
                     const historyUserTurnParts = transientImageParts.size > 0
                         ? currentUserTurnParts.filter(part => !transientImageParts.has(part))
                         : currentUserTurnParts

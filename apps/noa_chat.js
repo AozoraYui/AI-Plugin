@@ -10,7 +10,7 @@ import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldRe
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserProfileText } from '../utils/user_profile.js'
-import { filterToolCallsByIntent } from '../utils/tool_intent.js'
+import { filterToolCallsByIntent, hasExplicitFileSendIntent } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 
 const replyCooldown = new Map()
@@ -24,6 +24,29 @@ function truncateText(text, maxLength = 900) {
     const value = String(text || '').trim()
     if (value.length <= maxLength) return value
     return value.slice(0, maxLength) + '...'
+}
+
+function stripMediaPartsFromHistory(history = []) {
+    if (!Array.isArray(history) || history.length === 0) return { history: [], removed: 0 }
+    let removed = 0
+    const cleaned = []
+    for (const turn of history) {
+        const parts = Array.isArray(turn?.parts) ? turn.parts : []
+        const textParts = []
+        for (const part of parts) {
+            if (part?.text !== undefined) {
+                textParts.push({ text: String(part.text) })
+            } else if (part?.inline_data || part?.inlineData || part?.file_data || part?.fileData) {
+                removed++
+            }
+        }
+        if (textParts.length > 0) {
+            cleaned.push({ ...turn, parts: textParts })
+        } else if (parts.length > 0) {
+            cleaned.push({ ...turn, parts: [{ text: '[历史媒体内容已省略]' }] })
+        }
+    }
+    return { history: cleaned, removed }
 }
 
 function formatImageLimit(limit) {
@@ -774,13 +797,17 @@ export class NoaChatHandler extends plugin {
             logger.warn(`[AI-Plugin] [畅聊] 加载触发者个人记忆/档案失败: ${err.message}`)
         }
         let localImageInput = { imageParts: [], noteText: '', paths: [], failures: [] }
-        if (e.isMaster) {
+        const localImageInstruction = normalized.instructionText || normalized.currentText || ''
+        const skipLocalImageInput = e.isMaster && hasExplicitFileSendIntent(localImageInstruction)
+        if (e.isMaster && !skipLocalImageInput) {
             localImageInput = await buildLocalImageInputContext(normalized.instructionText || normalized.currentText || '', {
                 maxImages: Config.MAX_IMAGES_PER_MESSAGE
             })
             if (localImageInput.imageParts.length > 0) {
                 logger.info(`[AI-Plugin] [畅聊] 已附加本地图片输入: ${localImageInput.imageParts.length} 张`)
             }
+        } else if (skipLocalImageInput) {
+            logger.info('[AI-Plugin] [畅聊] 本地图片路径用于文件发送，本轮不附加为多模态图片输入')
         }
         const hasLocalImageInput = localImageInput.imageParts.length > 0
         let avatarImageInput = { imageParts: [], noteText: '', targets: [], failures: [] }
@@ -962,6 +989,10 @@ ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}${norm
             const history = Array.isArray(existingHistory)
                 ? existingHistory
                 : (await this.conversationManager.getUserHistoryWithCheckpoint(userId)).history
+            const strippedHistory = stripMediaPartsFromHistory(history)
+            if (strippedHistory.removed > 0) {
+                logger.info(`[AI-Plugin] [畅聊] 已从同步历史移除 ${strippedHistory.removed} 个历史图片/媒体输入，避免重复消耗多模态 token`)
+            }
             const groupName = e.group_name || e.group?.name || e.sender?.group_name || `群 ${normalized.groupId}`
             const memoryText = [
                 '【畅聊模式记录】以下内容来自群聊畅聊模式，已同步到个人对话记忆，供后续普通 #c 对话延续上下文。',
@@ -973,7 +1004,7 @@ ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}${norm
             ].filter(Boolean).join('\n')
 
             const updatedHistory = [
-                ...history,
+                ...strippedHistory.history,
                 { role: 'user', parts: [{ text: memoryText }] },
                 { role: 'model', parts: [{ text: replyText }] }
             ]

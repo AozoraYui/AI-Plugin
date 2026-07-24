@@ -243,7 +243,7 @@ export function hasExplicitFileDownloadIntent(text, options = {}) {
 export function hasExplicitFileSendIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
-    const sendIntent = /(?:发给我|发我|发送|发出来|发到(?:群里|这里)?|传给我|上传到(?:群里|这里)?)/i.test(value)
+    const sendIntent = /(?:发给我|发我|发送|发出来|发到(?:群里|这里)?|传给我|上传(?:到(?:群里|这里)?)?|把.{0,80}上传|试(?:一下|下)?上传)/i.test(value)
     const targetHint = /\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\b|[\w.-]+\.(?:png|jpe?g|webp|gif|mp4|mov|avi|mkv|mp3|wav|ogg|flac|zip|7z|rar|gz|pdf|txt|log|md|json|ya?ml|js|ts|db|sqlite|bin)\b|(?:日志|配置|脚本|文件|目录|压缩包|这个|刚才|上面)/i.test(value)
     return sendIntent && targetHint
 }
@@ -318,6 +318,9 @@ export function hasExplicitShellIntent(text, toolName = '') {
         return false
     }
     if (toolName === 'shell_session' && /(?:tmux|ai-shell|shell\s*session|shell会话|shell窗口|独立shell|终端会话)/i.test(value)) return true
+    if (/\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\b/i.test(value)
+        && /(?:看|看看|读|读取|打开|检查|分析|搜索|查找|统计|内容|日志|配置|脚本|文件|目录)/i.test(value)) return true
+    if (/(?:局域网|内网|LAN|网段|入网设备|在线设备|网关|路由器).{0,24}(?:扫描|探测|查|查看|多少|有哪些|nmap)|(?:扫描|探测|查|查看).{0,24}(?:局域网|内网|LAN|网段|入网设备|在线设备|网关|路由器)/i.test(value)) return true
     if (/(?:执行|运行|调用).{0,12}(?:shell|命令|终端|命令行|脚本)|(?:shell|命令)[:：]/i.test(value)) return true
     if (new RegExp(`(?:执行|运行|调用).{0,8}(?:${commandKeywords})\\b`, 'i').test(value)) return true
     if (new RegExp(`(?:输入|发送|打入).{0,8}(?:${commandKeywords})\\b`, 'i').test(value)) return true
