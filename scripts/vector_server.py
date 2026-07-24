@@ -12,6 +12,11 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+# huggingface_hub reads HF_ENDPOINT during import in some versions, so set it
+# before importing sentence-transformers/chromadb.
+if "HF_ENDPOINT" not in os.environ:
+    os.environ["HF_ENDPOINT"] = os.environ.get("AI_PLUGIN_HF_ENDPOINT", "https://hf-mirror.com")
+
 import chromadb
 from sentence_transformers import SentenceTransformer
 
@@ -24,9 +29,6 @@ MODEL_NAME = sys.argv[4] if len(sys.argv) > 4 else os.environ.get(
     "shibing624/text2vec-base-chinese",
 )
 COLLECTION_NAME = os.environ.get("AI_PLUGIN_VECTOR_COLLECTION", "ai_memory")
-
-if "HF_ENDPOINT" not in os.environ:
-    os.environ["HF_ENDPOINT"] = os.environ.get("AI_PLUGIN_HF_ENDPOINT", "https://hf-mirror.com")
 
 embedding_model = None
 chroma_client = None
@@ -69,6 +71,7 @@ def write_json(handler, status, payload):
 def init_model():
     global embedding_model, chroma_client, collection, is_ready, init_error
     try:
+        print(f"HuggingFace endpoint: {os.environ.get('HF_ENDPOINT', '')}", flush=True)
         print(f"Loading embedding model: {MODEL_NAME}", flush=True)
         embedding_model = SentenceTransformer(MODEL_NAME)
         print("Embedding model loaded", flush=True)
