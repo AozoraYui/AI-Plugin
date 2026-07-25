@@ -16,7 +16,7 @@ const VECTOR_WRITE_TIMEOUT_MS = 300000
 const VECTOR_WRITE_RETRY_COUNT = 3
 const VECTOR_WRITE_RETRY_BASE_MS = 1500
 const VECTOR_WRITE_CHUNK_SIZE = 32
-const VECTOR_SERVER_PROTOCOL_VERSION = '2026-07-25.7'
+const VECTOR_SERVER_PROTOCOL_VERSION = '2026-07-25.8'
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms))
@@ -59,13 +59,64 @@ function normalizePort(value) {
     return Number.isFinite(port) && port > 0 ? Math.floor(port) : DEFAULT_PORT
 }
 
+function stripLoneSurrogates(value) {
+    const text = String(value ?? '')
+    let clean = ''
+    for (let i = 0; i < text.length; i++) {
+        const code = text.charCodeAt(i)
+        if (code >= 0xD800 && code <= 0xDBFF) {
+            const next = text.charCodeAt(i + 1)
+            if (next >= 0xDC00 && next <= 0xDFFF) {
+                clean += text[i]
+                i += 1
+                clean += text[i]
+            }
+            continue
+        }
+        if (code >= 0xDC00 && code <= 0xDFFF) continue
+        clean += text[i]
+    }
+    return clean
+}
+
+function sanitizeVectorString(value, { trim = false } = {}) {
+    const text = stripLoneSurrogates(value).replace(/\u0000/g, '')
+    return trim ? text.trim() : text
+}
+
+function sanitizeJsonValue(value) {
+    if (value === undefined) return undefined
+    if (value === null) return null
+    if (typeof value === 'string') return sanitizeVectorString(value)
+    if (['number', 'boolean'].includes(typeof value)) return value
+    if (Array.isArray(value)) return value.map(item => sanitizeJsonValue(item))
+    if (typeof value === 'object') {
+        const clean = {}
+        for (const [key, item] of Object.entries(value)) {
+            const cleanKey = sanitizeVectorString(key, { trim: true })
+            if (!cleanKey) continue
+            const cleanValue = sanitizeJsonValue(item)
+            if (cleanValue !== undefined) clean[cleanKey] = cleanValue
+        }
+        return clean
+    }
+    return sanitizeVectorString(value)
+}
+
+function safeJsonStringify(value) {
+    return JSON.stringify(sanitizeJsonValue(value))
+}
+
 function sanitizeMetadata(metadata = {}) {
     const clean = {}
     if (!metadata || typeof metadata !== 'object') return clean
     for (const [key, value] of Object.entries(metadata)) {
+        const cleanKey = sanitizeVectorString(key, { trim: true })
+        if (!cleanKey) continue
         if (value === undefined || value === null) continue
-        if (['string', 'number', 'boolean'].includes(typeof value)) clean[key] = value
-        else clean[key] = JSON.stringify(value)
+        if (typeof value === 'string') clean[cleanKey] = sanitizeVectorString(value)
+        else if (['number', 'boolean'].includes(typeof value)) clean[cleanKey] = value
+        else clean[cleanKey] = safeJsonStringify(value)
     }
     return clean
 }
@@ -168,7 +219,7 @@ async function postJson(url, body, timeoutMs = 30000) {
         const res = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
+            body: safeJsonStringify(body),
             signal: AbortSignal.timeout(timeoutMs)
         })
         if (!res.ok) {
@@ -538,8 +589,8 @@ export class VectorDBClient {
         if (!this.enabled) return false
         const normalized = documents
             .map(doc => ({
-                id: String(doc.id || '').trim(),
-                text: String(doc.text || '').trim(),
+                id: sanitizeVectorString(doc.id, { trim: true }),
+                text: sanitizeVectorString(doc.text, { trim: true }),
                 metadata: sanitizeMetadata(doc.metadata || {})
             }))
             .filter(doc => doc.id && doc.text)
@@ -559,7 +610,7 @@ export class VectorDBClient {
                         : await postJson(`${this.serverUrl}/add_many`, { documents: chunk }, VECTOR_WRITE_TIMEOUT_MS)
                 })
                 if (Number(data?.failed) > 0) {
-                    logger.warn(`[AI-Plugin] 向量记忆写入跳过 ${Number(data.failed)} 个异常片段: ${JSON.stringify(data.failures || []).slice(0, 500)}`)
+                    logger.warn(`[AI-Plugin] 向量记忆写入跳过 ${Number(data.failed)} 个异常片段: ${safeJsonStringify(data.failures || []).slice(0, 500)}`)
                 }
                 if (data?.success !== true) {
                     this.lastError = data?.error || `向量记忆写入失败: 成功 ${Number(data?.count) || 0}/${chunk.length} 个片段`
@@ -580,13 +631,13 @@ export class VectorDBClient {
         if (!this.enabled) return []
         const ready = await this.waitForReady(0)
         if (!ready) return []
-        const text = String(query || '').trim()
+        const text = sanitizeVectorString(query, { trim: true })
         if (!text) return []
         try {
             const data = await postJson(`${this.serverUrl}/search`, {
                 query: text,
                 limit,
-                where: options.where || undefined
+                where: options.where ? sanitizeMetadata(options.where) : undefined
             }, 60000)
             return Array.isArray(data?.results) ? data.results : []
         } catch (err) {
@@ -666,7 +717,7 @@ export class VectorDBClient {
         const ready = await this.waitForReady(0)
         if (!ready) return false
         try {
-            const data = await this.requestWithRetries('条件删除', () => postJson(`${this.serverUrl}/delete_where`, { where }, 120000), 2)
+            const data = await this.requestWithRetries('条件删除', () => postJson(`${this.serverUrl}/delete_where`, { where: sanitizeMetadata(where) }, 120000), 2)
             return data?.success === true
         } catch (err) {
             this.lastError = formatFetchError(err)

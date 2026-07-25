@@ -20,18 +20,43 @@ const VECTOR_TEXT_CHUNK_OVERLAP = 180
 const VECTOR_STATE_SOURCES = ['user_histories', 'group_message_logs', 'memory_checkpoints', 'summary_cache', 'user_profiles']
 let activeMigration = null
 
+function stripLoneSurrogates(value) {
+    const text = String(value ?? '')
+    let clean = ''
+    for (let i = 0; i < text.length; i++) {
+        const code = text.charCodeAt(i)
+        if (code >= 0xD800 && code <= 0xDBFF) {
+            const next = text.charCodeAt(i + 1)
+            if (next >= 0xDC00 && next <= 0xDFFF) {
+                clean += text[i]
+                i += 1
+                clean += text[i]
+            }
+            continue
+        }
+        if (code >= 0xDC00 && code <= 0xDFFF) continue
+        clean += text[i]
+    }
+    return clean
+}
+
+function sanitizeVectorText(value, { trim = false } = {}) {
+    const text = stripLoneSurrogates(value).replace(/\u0000/g, '')
+    return trim ? text.trim() : text
+}
+
 function hashText(text) {
-    return crypto.createHash('sha1').update(String(text || '')).digest('hex')
+    return crypto.createHash('sha1').update(sanitizeVectorText(text)).digest('hex')
 }
 
 function truncateText(text, maxChars = VECTOR_DOC_MAX_CHARS) {
-    const value = String(text || '').replace(/\s+/g, ' ').trim()
+    const value = sanitizeVectorText(text).replace(/\s+/g, ' ').trim()
     if (value.length <= maxChars) return value
     return value.slice(0, maxChars) + '...'
 }
 
 function normalizeText(text) {
-    return String(text || '')
+    return sanitizeVectorText(text)
         .replace(/\r\n/g, '\n')
         .replace(/[ \t]+/g, ' ')
         .replace(/\n{3,}/g, '\n\n')
@@ -140,26 +165,28 @@ function writeVectorState(state) {
 function textFromParts(parts = []) {
     if (!Array.isArray(parts)) return ''
     return parts
-        .map(part => part?.text ? String(part.text) : '')
+        .map(part => part?.text ? sanitizeVectorText(part.text) : '')
         .filter(Boolean)
         .join('\n')
         .trim()
 }
 
 function normalizeCreatedAt(value, fallbackDate = '') {
-    if (value) return String(value)
-    if (fallbackDate) return `${fallbackDate} 12:00:00`
+    if (value) return sanitizeVectorText(value, { trim: true })
+    if (fallbackDate) return `${sanitizeVectorText(fallbackDate, { trim: true })} 12:00:00`
     return ''
 }
 
 function buildDocId(source, sourceId, text = '') {
-    const base = `${source}:${sourceId}`
+    const cleanSource = sanitizeVectorText(source, { trim: true })
+    const cleanSourceId = sanitizeVectorText(sourceId, { trim: true })
+    const base = `${cleanSource}:${cleanSourceId}`
     if (base.length <= 220) return base
-    return `${source}:${hashText(base)}:${hashText(text).slice(0, 10)}`
+    return `${cleanSource}:${hashText(base)}:${hashText(text).slice(0, 10)}`
 }
 
 function isWorthIndexing(text) {
-    const value = String(text || '').trim()
+    const value = sanitizeVectorText(text, { trim: true })
     if (value.length < 2) return false
     if (/^\[图片\]$/.test(value)) return false
     return true
@@ -208,8 +235,8 @@ function normalizeHit(raw = {}) {
     const metadata = raw.metadata || {}
     const distance = Number(raw.distance)
     return {
-        id: raw.id || '',
-        text: String(raw.text || '').trim(),
+        id: sanitizeVectorText(raw.id || '', { trim: true }),
+        text: sanitizeVectorText(raw.text || '', { trim: true }),
         metadata,
         distance: Number.isFinite(distance) ? distance : 0,
         label: sourceLabel(metadata)

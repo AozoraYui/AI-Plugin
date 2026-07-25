@@ -27,7 +27,7 @@ from sentence_transformers import SentenceTransformer
 CHROMA_DB_PATH = sys.argv[1] if len(sys.argv) > 1 else "./chroma_db"
 SERVER_HOST = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1"
 SERVER_PORT = int(sys.argv[3]) if len(sys.argv) > 3 else 9901
-SERVER_VERSION = "2026-07-25.7"
+SERVER_VERSION = "2026-07-25.8"
 MODEL_NAME = sys.argv[4] if len(sys.argv) > 4 else os.environ.get(
     "AI_PLUGIN_VECTOR_MODEL",
     "shibing624/text2vec-base-chinese",
@@ -44,7 +44,47 @@ last_count = 0
 embedding_lock = threading.RLock()
 collection_lock = threading.RLock()
 
+try:
+    sys.stdout.reconfigure(errors="backslashreplace")
+    sys.stderr.reconfigure(errors="backslashreplace")
+except Exception:
+    pass
+
 faulthandler.enable()
+
+
+def strip_surrogates(value):
+    text = str(value if value is not None else "")
+    return "".join(ch for ch in text if not 0xD800 <= ord(ch) <= 0xDFFF)
+
+
+def sanitize_text(value, trim=False):
+    text = strip_surrogates(value).replace("\x00", "")
+    return text.strip() if trim else text
+
+
+def sanitize_json_value(value):
+    if value is None or isinstance(value, (int, float, bool)):
+        return value
+    if isinstance(value, str):
+        return sanitize_text(value)
+    if isinstance(value, list):
+        return [sanitize_json_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [sanitize_json_value(item) for item in value]
+    if isinstance(value, dict):
+        clean = {}
+        for key, item in value.items():
+            clean_key = sanitize_text(key, trim=True)
+            if not clean_key:
+                continue
+            clean[clean_key] = sanitize_json_value(item)
+        return clean
+    return sanitize_text(value)
+
+
+def safe_json_dumps(payload):
+    return json.dumps(sanitize_json_value(payload), ensure_ascii=False)
 
 
 def sanitize_metadata(metadata):
@@ -54,10 +94,13 @@ def sanitize_metadata(metadata):
     for key, value in metadata.items():
         if value is None:
             continue
+        clean_key = sanitize_text(key, trim=True)
+        if not clean_key:
+            continue
         if isinstance(value, (str, int, float, bool)):
-            clean[str(key)] = value
+            clean[clean_key] = sanitize_text(value) if isinstance(value, str) else value
         else:
-            clean[str(key)] = json.dumps(value, ensure_ascii=False)
+            clean[clean_key] = safe_json_dumps(value)
     return clean
 
 
@@ -66,11 +109,11 @@ def read_json(handler):
     if length <= 0:
         return {}
     raw = handler.rfile.read(length)
-    return json.loads(raw.decode("utf-8"))
+    return sanitize_json_value(json.loads(raw.decode("utf-8", errors="replace")))
 
 
 def write_json(handler, status, payload):
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    body = safe_json_dumps(payload).encode("utf-8", errors="replace")
     try:
         handler.send_response(status)
         handler.send_header("Content-Type", "application/json; charset=utf-8")
@@ -82,12 +125,11 @@ def write_json(handler, status, payload):
 
 
 def compact_error(exc):
-    return f"{type(exc).__name__}: {exc}"
+    return sanitize_text(f"{type(exc).__name__}: {exc}")
 
 
 def coerce_text(value):
-    text = str(value if value is not None else "").strip()
-    return text.replace("\x00", "")
+    return sanitize_text(value, trim=True)
 
 
 def encode_texts_resilient(ids, texts):
@@ -268,7 +310,7 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         if not self._ensure_ready():
             return
         data = read_json(self)
-        doc_id = str(data.get("id", "")).strip()
+        doc_id = coerce_text(data.get("id", ""))
         text = coerce_text(data.get("text", ""))
         if not doc_id or not text:
             write_json(self, 400, {"error": "id and text are required"})
@@ -291,7 +333,7 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         for item in docs:
             if not isinstance(item, dict):
                 continue
-            doc_id = str(item.get("id", "")).strip()
+            doc_id = coerce_text(item.get("id", ""))
             text = coerce_text(item.get("text", ""))
             if not doc_id or not text:
                 continue
@@ -319,7 +361,7 @@ class VectorDBHandler(BaseHTTPRequestHandler):
                 collection.upsert(ids=ok_ids, embeddings=ok_embeddings, documents=ok_texts, metadatas=ok_metadatas)
                 total_count = last_count
         if failures:
-            print(f"Skipped {len(failures)} embedding document(s): {json.dumps(failures[:5], ensure_ascii=False)}", flush=True)
+            print(f"Skipped {len(failures)} embedding document(s): {safe_json_dumps(failures[:5])}", flush=True)
         write_json(self, 200, {
             "success": len(ok_ids) > 0,
             "count": len(ok_ids),
@@ -332,7 +374,7 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         if not self._ensure_ready():
             return
         data = read_json(self)
-        query = str(data.get("query", "")).strip()
+        query = coerce_text(data.get("query", ""))
         limit = max(1, min(int(data.get("limit", 10) or 10), 80))
         where = data.get("where")
         if not query:
@@ -366,7 +408,7 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         if not self._ensure_ready():
             return
         data = read_json(self)
-        ids = [str(item) for item in data.get("ids", []) if str(item).strip()]
+        ids = [coerce_text(item) for item in data.get("ids", []) if coerce_text(item)]
         total_count = last_count
         if ids:
             with collection_lock:
@@ -394,7 +436,7 @@ class VectorDBHandler(BaseHTTPRequestHandler):
             count = reset_collection()
             write_json(self, 200, {"success": True, "count": count})
         except Exception as exc:
-            write_json(self, 500, {"success": False, "error": str(exc)})
+            write_json(self, 500, {"success": False, "error": compact_error(exc)})
 
     def log_message(self, _format, *args):
         return
