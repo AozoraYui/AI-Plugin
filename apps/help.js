@@ -71,6 +71,9 @@ export class HelpHandler extends plugin {
   临时启用联网搜索，AI 自动判断是否搜索并注入结果。
 > #${chatCmd}w [URL]
   临时启用网页抓取，自动提取消息中的 URL 并抓取网页内容；失败时会尝试浏览器渲染和公开网页 Reader 文本化降级。
+> 🧭 Agent 任务续接
+  复杂工具任务会自动记录目标、步骤和观察摘要。
+  可用 #${chatCmd}任务状态 / #${chatCmd}继续刚才任务 / #${chatCmd}下一步 / #${chatCmd}取消任务 查看、续接或取消。
 > 🖥️ Shell 执行（主人专用）
   需在 models_config.yaml 开启 enable_shell_exec: true（独立开关）。
   开启后 AI 可根据你的意图执行服务器 Shell 命令，例如 grep/rg 查文件、查看日志、诊断服务状态。

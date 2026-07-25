@@ -5,7 +5,7 @@ import { Config, MODELS_CONFIG_FILE } from '../utils/config.js'
 import { AiClient } from '../client/AiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
-import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, hasExplicitModelGroup, resolveModelGroup, resolveModelDisplay, resolveProviderPriority, formatDBTimestampToBeijing } from '../utils/common.js'
+import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, getDBTimestamp, hasExplicitModelGroup, resolveModelGroup, resolveModelDisplay, resolveProviderPriority, formatDBTimestampToBeijing } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
@@ -75,6 +75,26 @@ const AGENT_LOOP_STOP_TOOLS = [
     'file_download',
     'group_file_download',
     'user_profile_update',
+    'group_send_message',
+    'group_leave',
+    'group_mute',
+    'group_whole_mute',
+    'group_kick',
+    'group_set_card',
+    'group_set_title',
+    'group_essence',
+    'group_request_handle'
+]
+const AGENT_TASK_STEP_MAX_CHARS = 6000
+const AGENT_TASK_CONTEXT_MAX_CHARS = 9000
+const AGENT_TASK_OBSERVATION_MAX_CHARS = 1600
+const AGENT_TASK_SUMMARY_MAX_CHARS = 3000
+const AGENT_HIGH_RISK_TOOLS = [
+    'shell_exec',
+    'shell_session',
+    'file_send',
+    'file_download',
+    'group_file_download',
     'group_send_message',
     'group_leave',
     'group_mute',
@@ -274,6 +294,7 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
 
     if (judgement.decision === 'cancel') {
         await clearPendingAction(e.user_id)
+        await updatePendingActionAgentTask(e, pending, { ok: false, error: '用户取消待确认操作。' }, 'cancel')
         await e.reply(`已取消待确认操作：${pending.type === 'group_leave' ? '退群' : '群消息代发'}。`, true)
         return true
     }
@@ -286,15 +307,19 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
         const currentGroups = groups.filter(group => String(group.groupId || group.group_id || '') === currentGroupId)
         if (currentGroups.length > 0) {
             const otherGroups = groups.filter(group => String(group.groupId || group.group_id || '') !== currentGroupId)
+            const executionResults = []
             await clearPendingAction(e.user_id)
             if (otherGroups.length > 0) {
                 const otherResult = await executePendingGroupLeave({ ...pending, groups: otherGroups }, e)
+                executionResults.push(otherResult)
                 const formatted = toolRegistry.formatToolResult(pending.type, otherResult).trim()
                 await e.reply(`${formatted}\n\n本群也在退群清单内，接下来将退出本群。`, true)
             } else {
                 await e.reply('已确认，接下来将退出本群。', true)
             }
             const currentResult = await executePendingGroupLeave({ ...pending, groups: currentGroups }, e)
+            executionResults.push(currentResult)
+            await updatePendingActionAgentTask(e, pending, mergePendingActionResults(executionResults, pending), 'confirm')
             if (!currentResult.ok) {
                 const formatted = toolRegistry.formatToolResult(pending.type, currentResult).trim()
                 await e.reply(formatted || `退出本群失败：${currentResult.error || '未知错误'}`, true)
@@ -314,8 +339,117 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
 
     await clearPendingAction(e.user_id)
     const formatted = toolRegistry.formatToolResult(pending.type, result).trim()
+    await updatePendingActionAgentTask(e, pending, result, 'confirm')
     await e.reply(formatted || (result.ok ? '已执行待确认操作。' : `执行失败：${result.error || '未知错误'}`), true)
     return true
+}
+
+function mergePendingActionResults(results = [], pending = {}) {
+    const validResults = results.filter(Boolean)
+    if (validResults.length <= 1) return validResults[0] || { ok: false, error: '没有执行结果。' }
+
+    const mergedItems = []
+    for (const result of validResults) {
+        if (Array.isArray(result.results)) {
+            mergedItems.push(...result.results)
+        } else {
+            mergedItems.push(result)
+        }
+    }
+
+    const failed = mergedItems.filter(item => item?.ok === false)
+    return {
+        ok: failed.length === 0,
+        partial: failed.length > 0 && failed.length < mergedItems.length,
+        results: mergedItems,
+        message: validResults.find(item => item?.message)?.message || pending.message || '',
+        originalMessage: pending.originalMessage || '',
+        asIs: pending.asIs === true
+    }
+}
+
+async function loadAgentTaskForPendingAction(e, pending = {}) {
+    const db = global.AIPluginConversationManager?.db
+    if (!db) return null
+
+    try {
+        if (pending.agentTaskId && db.getAgentTask) {
+            const task = await db.getAgentTask(pending.agentTaskId)
+            if (task) return task
+        }
+
+        const activeTask = await db.getActiveAgentTask?.(e.user_id, e.group_id)
+        if (activeTask?.taskId && ['active', 'waiting'].includes(activeTask.status)) {
+            return await db.getAgentTask(activeTask.taskId)
+        }
+
+        const recentWaiting = await db.getRecentAgentTasks?.(e.user_id, {
+            limit: 5,
+            statuses: ['waiting']
+        })
+        if (recentWaiting?.[0]?.taskId) {
+            return await db.getAgentTask(recentWaiting[0].taskId)
+        }
+    } catch (err) {
+        logger.warn(`[AI-Plugin] 待确认操作关联 Agent 任务读取失败: ${err.message}`)
+    }
+
+    return null
+}
+
+function formatPendingActionResultForAgent(toolName, result) {
+    try {
+        const formatted = toolRegistry.formatToolResult(toolName, result).trim()
+        if (formatted) return formatted
+    } catch (err) {
+        logger.warn(`[AI-Plugin] 待确认操作 Agent 结果格式化失败: ${err.message}`)
+    }
+    return stableStringify(result || {})
+}
+
+async function updatePendingActionAgentTask(e, pending = {}, result = {}, decision = 'confirm') {
+    const db = global.AIPluginConversationManager?.db
+    if (!db) return
+
+    const task = await loadAgentTaskForPendingAction(e, pending)
+    if (!task?.taskId) return
+
+    const actionName = pending.type === 'group_leave'
+        ? '退群'
+        : (pending.type === 'group_send_message' ? '群消息代发' : pending.type || '待确认操作')
+    const finalStatus = decision === 'cancel'
+        ? 'cancelled'
+        : ((result?.ok || result?.partial) ? 'completed' : 'blocked')
+    const formattedResult = formatPendingActionResultForAgent(pending.type, result)
+    const observation = decision === 'cancel'
+        ? `用户已取消待确认操作：${actionName}。`
+        : `用户已确认待确认操作：${actionName}；执行状态：${finalStatus}。\n${formattedResult}`
+    const finalSummary = truncateForPrompt(`${task.summary ? `${task.summary}\n` : ''}${observation}`, AGENT_TASK_SUMMARY_MAX_CHARS)
+    const lastObservation = truncateForPrompt(observation, AGENT_TASK_OBSERVATION_MAX_CHARS)
+
+    await recordAgentStep(db, task, {
+        stepIndex: 9000,
+        stepType: 'confirmation',
+        toolName: pending.type || '',
+        toolArgs: {
+            pendingId: pending.id || '',
+            decision
+        },
+        status: finalStatus,
+        content: observation
+    })
+
+    try {
+        await db.updateAgentTask(task.taskId, {
+            status: finalStatus,
+            summary: finalSummary,
+            lastObservation,
+            completedAt: getDBTimestamp()
+        })
+        logger.info(`[AI-Plugin] 待确认操作已回写 Agent 任务: ${task.taskId}, status=${finalStatus}`)
+    } catch (err) {
+        logger.warn(`[AI-Plugin] 待确认操作回写 Agent 任务失败: ${err.message}`)
+    }
 }
 
 function extractAtMentionsFromMessage(message = []) {
@@ -386,6 +520,141 @@ function shouldConsiderAgentContinuation(toolCalls = [], currentInstruction = ''
     }
 
     return false
+}
+
+function detectAgentTaskControl(text = '') {
+    const value = getPrimaryUserInstruction(text).trim()
+    if (!value) return { action: 'none' }
+    if (/(?:取消|停止|终止|别继续|不要继续|不用继续|暂停).{0,12}(?:任务|agent|刚才|上次|这个|当前)|(?:任务|agent).{0,12}(?:取消|停止|终止|暂停)/i.test(value)) {
+        return { action: 'cancel' }
+    }
+    if (/(?:任务|agent).{0,12}(?:状态|进度|做到哪|执行到哪|怎么样)|(?:刚才|上次|当前|这个).{0,12}(?:任务).{0,12}(?:状态|进度|怎么样)/i.test(value)) {
+        return { action: 'status' }
+    }
+    if (/^(?:继续|接着|继续吧|接着来|继续刚才|继续上次|接着刚才|接着上次|继续执行|继续处理|往下做|下一步)(?:[~～!！。,.，\s]*(?:喵|吧|呀|啦|呢|捏)?)?$/i.test(value)
+        || /(?:继续|接着).{0,12}(?:刚才|上次|当前|这个).{0,12}(?:任务|事情|那个)/i.test(value)) {
+        return { action: 'continue' }
+    }
+    return { action: 'none' }
+}
+
+function summarizeToolArgs(args = {}) {
+    return truncateForPrompt(stableStringify(args || {}), 1000)
+}
+
+function classifyAgentRisk(toolCalls = []) {
+    return (toolCalls || []).some(call => AGENT_HIGH_RISK_TOOLS.includes(call?.name)) ? 'high' : 'low'
+}
+
+function buildAgentObjective(currentInstruction = '', userMessage = '', toolIntent = '') {
+    const instruction = String(currentInstruction || '').trim()
+    const base = instruction || getPrimaryUserInstruction(userMessage) || String(userMessage || '').trim()
+    const intent = String(toolIntent || '').trim()
+    const text = intent && intent !== base ? `${base}\n意图：${intent}` : base
+    return truncateForPrompt(text || '未命名工具任务', 1200)
+}
+
+function formatAgentStepLine(step, index) {
+    const tool = step.toolName ? ` ${step.toolName}` : ''
+    const status = step.status ? ` ${step.status}` : ''
+    const content = truncateForPrompt(step.content || '', 360).replace(/\n+/g, ' ')
+    return `${index + 1}. [${step.stepType}${tool}${status}] ${content}`
+}
+
+function formatAgentTaskForReply(task) {
+    if (!task) return '当前没有正在进行的 Agent 任务。'
+    const steps = Array.isArray(task.steps) ? task.steps : []
+    const stepText = steps.length > 0
+        ? steps.slice(-8).map(formatAgentStepLine).join('\n')
+        : '暂无步骤记录'
+    const summary = task.summary ? `\n摘要：${truncateForPrompt(task.summary, 900)}` : ''
+    const lastObservation = task.lastObservation ? `\n最近观察：${truncateForPrompt(task.lastObservation, 900)}` : ''
+    const group = task.groupId ? `群 ${task.groupId}` : '私聊/全局'
+    return `Agent任务：${task.objective}\n状态：${task.status}，风险：${task.riskLevel || 'low'}，范围：${group}\n创建：${formatDBTimestampToBeijing(task.createdAt)}，更新：${formatDBTimestampToBeijing(task.updatedAt)}${summary}${lastObservation}\n最近步骤：\n${stepText}`
+}
+
+function buildAgentTaskContext(task) {
+    if (!task) return ''
+    const steps = Array.isArray(task.steps) ? task.steps : []
+    const stepText = steps.slice(-12).map(formatAgentStepLine).join('\n')
+    return truncateForPrompt(`【Agent任务续接上下文】
+任务ID：${task.taskId}
+目标：${task.objective}
+状态：${task.status}
+风险：${task.riskLevel || 'low'}
+任务摘要：${task.summary || '暂无'}
+最近观察：${task.lastObservation || '暂无'}
+最近步骤：
+${stepText || '暂无'}
+
+用户当前说“继续/接着”时，请基于这个任务状态判断下一步；如果已有结果足够，就不要继续调用工具，直接总结给用户。`, AGENT_TASK_CONTEXT_MAX_CHARS)
+}
+
+async function recordAgentStep(db, task, step = {}) {
+    if (!db?.addAgentStep || !task?.taskId) return
+    try {
+        await db.addAgentStep(task.taskId, {
+            ...step,
+            content: truncateForPrompt(step.content || '', AGENT_TASK_STEP_MAX_CHARS)
+        })
+    } catch (err) {
+        logger.warn(`[AI-Plugin] Agent任务步骤记录失败: ${err.message}`)
+    }
+}
+
+function isPendingConfirmationToolResult(callName, resultData) {
+    if (resultData?.pending === true) return true
+    return ['group_send_message', 'group_leave'].includes(callName) && /待确认/.test(JSON.stringify(resultData || {}))
+}
+
+async function summarizeAgentRound(client, modelGroupKey, providerFilter, task, round, observations = []) {
+    if (!client?.makeRequest || observations.length === 0) return null
+    const observationText = observations.map((item, index) => {
+        const args = item.args ? `\n参数：${summarizeToolArgs(item.args)}` : ''
+        return `${index + 1}. 工具：${item.tool}，状态：${item.status}${args}\n结果：${truncateForPrompt(item.text || '', 2400)}`
+    }).join('\n\n')
+    const prompt = `你是 Agent 任务观察器。请根据本轮工具真实结果，更新任务进度摘要，只输出 JSON。
+
+规则：
+- 工具结果是事实来源；不要编造没有出现的成功、失败或数据。
+- 如果工具结果显示待确认、权限不足、需要用户补充目标/范围/参数，completion_status 用 "waiting"。
+- 如果已经足够回答用户当前目标，completion_status 用 "ready"。
+- 如果还需要继续调用只读工具补充信息，completion_status 用 "continue" 并写 next_hint。
+- 如果失败且短期无法继续，completion_status 用 "blocked"。
+- summary 控制在 ${AGENT_TASK_SUMMARY_MAX_CHARS} 字内，last_observation 控制在 ${AGENT_TASK_OBSERVATION_MAX_CHARS} 字内。
+
+任务目标：
+${task?.objective || '未知'}
+
+旧摘要：
+${task?.summary || '暂无'}
+
+本轮：第 ${round} 轮
+
+本轮工具结果：
+${observationText}
+
+返回格式：
+{"summary":"更新后的任务摘要","last_observation":"本轮最重要观察","completion_status":"continue|ready|waiting|blocked","next_hint":"如果需要继续，下一步建议；否则留空"}`
+
+    const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
+    const result = await client.makeRequest('chat', payload, modelGroupKey, 1024, providerFilter)
+    if (!result.success || !result.data) {
+        logger.warn(`[AI-Plugin] Agent观察摘要失败: ${result.error || '无返回'}`)
+        return null
+    }
+    const parsed = parseJsonObject(result.data)
+    if (!parsed) {
+        logger.warn(`[AI-Plugin] Agent观察摘要 JSON 解析失败: ${String(result.data).slice(0, 200)}`)
+        return null
+    }
+    const status = String(parsed.completion_status || '').toLowerCase()
+    return {
+        summary: truncateForPrompt(parsed.summary || task?.summary || '', AGENT_TASK_SUMMARY_MAX_CHARS),
+        lastObservation: truncateForPrompt(parsed.last_observation || '', AGENT_TASK_OBSERVATION_MAX_CHARS),
+        completionStatus: ['continue', 'ready', 'waiting', 'blocked'].includes(status) ? status : 'ready',
+        nextHint: truncateForPrompt(parsed.next_hint || '', 800)
+    }
 }
 
 function parseQualityFromText(text) {
@@ -1549,6 +1818,64 @@ export class ChatHandler extends plugin {
             if (await handlePendingActionShortcut(e, currentToolInstruction, this.client, modelGroupKey, providerFilter)) {
                 return true
             }
+            let agentTask = null
+            let agentTaskContinuation = false
+            const agentControl = detectAgentTaskControl(currentToolInstruction)
+            if (agentControl.action === 'status') {
+                const activeTask = await this.conversationManager.db.getActiveAgentTask?.(e.user_id, e.group_id)
+                let taskWithSteps = activeTask?.taskId
+                    ? await this.conversationManager.db.getAgentTask(activeTask.taskId)
+                    : null
+                let prefixText = ''
+                if (!taskWithSteps) {
+                    const recentTasks = await this.conversationManager.db.getRecentAgentTasks?.(e.user_id, {
+                        limit: 1,
+                        ...(e.group_id ? { groupId: e.group_id } : {})
+                    })
+                    if (recentTasks?.[0]?.taskId) {
+                        taskWithSteps = await this.conversationManager.db.getAgentTask(recentTasks[0].taskId)
+                        prefixText = '当前没有进行中的 Agent 任务；下面是最近一个任务：\n'
+                    }
+                }
+                await e.reply(`${prefixText}${formatAgentTaskForReply(taskWithSteps)}`, true)
+                return true
+            }
+            if (agentControl.action === 'cancel') {
+                const activeTask = await this.conversationManager.db.getActiveAgentTask?.(e.user_id, e.group_id)
+                if (!activeTask?.taskId) {
+                    await e.reply('当前没有正在进行的 Agent 任务。', true)
+                    return true
+                }
+                const taskWithSteps = await this.conversationManager.db.getAgentTask(activeTask.taskId)
+                const observation = '用户取消当前 Agent 任务。'
+                await recordAgentStep(this.conversationManager.db, taskWithSteps, {
+                    stepIndex: 9000,
+                    stepType: 'cancel',
+                    status: 'cancelled',
+                    content: observation
+                })
+                await this.conversationManager.db.updateAgentTask?.(activeTask.taskId, {
+                    status: 'cancelled',
+                    summary: truncateForPrompt(`${taskWithSteps?.summary ? `${taskWithSteps.summary}\n` : ''}${observation}`, AGENT_TASK_SUMMARY_MAX_CHARS),
+                    lastObservation: observation,
+                    completedAt: getDBTimestamp()
+                })
+                await e.reply('已取消当前 Agent 任务。', true)
+                return true
+            }
+            if (agentControl.action === 'continue') {
+                const activeTask = await this.conversationManager.db.getActiveAgentTask?.(e.user_id, e.group_id)
+                agentTask = activeTask?.taskId
+                    ? await this.conversationManager.db.getAgentTask(activeTask.taskId)
+                    : null
+                if (!agentTask) {
+                    await e.reply('当前没有正在进行的 Agent 任务。', true)
+                    return true
+                }
+                agentTaskContinuation = true
+                userMessage = `${userMessage}\n\n${buildAgentTaskContext(agentTask)}`
+                logger.info(`[AI-Plugin] Agent 续接任务: ${agentTask.taskId}, objective=${agentTask.objective.slice(0, 120)}`)
+            }
             let localImageInput = { imageParts: [], noteText: '', paths: [], failures: [] }
             const skipLocalImageInput = e.isMaster && hasExplicitFileSendIntent(currentToolInstruction)
             if (e.isMaster && !skipLocalImageInput) {
@@ -1666,9 +1993,12 @@ export class ChatHandler extends plugin {
                 }
             }
 
+            let agentTaskFinalStatus = ''
+            let agentTaskLatestSummary = agentTask?.summary || ''
+            let agentTaskLatestObservation = agentTask?.lastObservation || ''
             if (enabledTools.length > 0) {
                 const candidateUrls = extractUrlsFromText(userMessage, 10)
-                const allowToolContinuation = isContinuationToolInstruction(currentToolInstruction)
+                const allowToolContinuation = agentTaskContinuation || isContinuationToolInstruction(currentToolInstruction)
                 const preRouted = preRouteToolIntent(currentToolInstruction || userMessage, enabledTools, {
                     hasImages: allImages.length > 0 || hasLocalImageInput,
                     hasRecentImages: recentImageInfo.available,
@@ -1769,6 +2099,46 @@ export class ChatHandler extends plugin {
                     logger.info(`[AI-Plugin] Agent 去重跳过重复工具: ${repeatedFilter.skipped.map(call => call.name).join(', ')}`)
                 }
                 toolCalls = repeatedFilter.tools
+                if (toolCalls.length > 0) {
+                    if (!agentTask) {
+                        try {
+                            agentTask = await this.conversationManager.db.createAgentTask?.({
+                                userId: e.user_id,
+                                groupId: e.group_id || '',
+                                objective: buildAgentObjective(currentToolInstruction, userMessage, currentToolIntent),
+                                riskLevel: classifyAgentRisk(toolCalls)
+                            })
+                            if (agentTask?.taskId) {
+                                logger.info(`[AI-Plugin] Agent 创建任务: ${agentTask.taskId}, risk=${agentTask.riskLevel}, objective=${agentTask.objective.slice(0, 120)}`)
+                            }
+                        } catch (err) {
+                            logger.warn(`[AI-Plugin] Agent任务创建失败: ${err.message}`)
+                        }
+                    } else {
+                        try {
+                            await this.conversationManager.db.updateAgentTask?.(agentTask.taskId, {
+                                status: 'active',
+                                riskLevel: classifyAgentRisk(toolCalls) === 'high' ? 'high' : agentTask.riskLevel
+                            })
+                            agentTask.status = 'active'
+                        } catch (err) {
+                            logger.warn(`[AI-Plugin] Agent任务续接更新失败: ${err.message}`)
+                        }
+                    }
+                    await recordAgentStep(this.conversationManager.db, agentTask, {
+                        stepIndex: 1,
+                        stepType: agentTaskContinuation ? 'resume_plan' : 'plan',
+                        status: 'ok',
+                        content: `意图：${currentToolIntent || '无'}\n工具队列：${toolCalls.map(call => `${call.name}(${summarizeToolArgs(call.args)})`).join(' -> ')}`
+                    })
+                } else if (agentTaskContinuation && agentTask) {
+                    await recordAgentStep(this.conversationManager.db, agentTask, {
+                        stepIndex: 1,
+                        stepType: 'resume_plan',
+                        status: 'no_tool',
+                        content: '续接任务后，本轮规划判断无需继续调用工具，交给最终回复模型总结当前任务状态。'
+                    })
+                }
                 const executedShellCommands = []
                 let groupChatContextToolUsed = false
                 let memorySearchToolUsed = false
@@ -1787,16 +2157,50 @@ export class ChatHandler extends plugin {
                     }
                     logger.info(`[AI-Plugin] Agent 第 ${agentRound} 轮工具执行队列: ${roundToolCalls.map(call => `${call.name}(${JSON.stringify(call.args || {}).slice(0, 120)})`).join(' -> ')}`)
                     let roundExecuted = 0
+                    let roundPendingConfirmation = false
+                    const roundObservations = []
+                    let roundCallIndex = 0
                     for (const call of roundToolCalls) {
+                        roundCallIndex++
                         seenToolCalls.add(toolCallKey(call))
-                        const toolContext = { userId: e.user_id, groupId: e.group_id, event: e, userMessage: originalUserMessage, originalUserMessage }
+                        const toolContext = { userId: e.user_id, groupId: e.group_id, event: e, userMessage: originalUserMessage, originalUserMessage, agentTaskId: agentTask?.taskId || '' }
                         const result = await toolRegistry.execute(call.name, call.args, e.isMaster, toolContext)
                         if (!result.success) {
                             logger.warn(`[AI-Plugin] ${call.name} 失败: ${result.error}`)
+                            const failureText = `工具 ${call.name} 执行失败：${result.error || '未知错误'}`
+                            userMessage = userMessage + `\n\n【工具执行失败：${call.name}】${result.error || '未知错误'}`
+                            roundObservations.push({ tool: call.name, args: call.args, status: 'failed', text: failureText })
+                            await recordAgentStep(this.conversationManager.db, agentTask, {
+                                stepIndex: agentRound * 100 + roundCallIndex,
+                                stepType: 'tool',
+                                toolName: call.name,
+                                toolArgs: call.args,
+                                status: 'failed',
+                                content: failureText
+                            })
                             continue
                         }
 
                         roundExecuted++
+                        const agentFormattedResult = toolRegistry.formatToolResult(call.name, result.data)
+                        const toolStatus = result.data?.ok === false ? 'tool_failed' : 'ok'
+                        if (isPendingConfirmationToolResult(call.name, result.data)) {
+                            roundPendingConfirmation = true
+                        }
+                        roundObservations.push({
+                            tool: call.name,
+                            args: call.args,
+                            status: toolStatus,
+                            text: agentFormattedResult
+                        })
+                        await recordAgentStep(this.conversationManager.db, agentTask, {
+                            stepIndex: agentRound * 100 + roundCallIndex,
+                            stepType: 'tool',
+                            toolName: call.name,
+                            toolArgs: call.args,
+                            status: toolStatus,
+                            content: agentFormattedResult
+                        })
                         if (call.name === 'draw_image') {
                             // 无论成败，画图工具内部都已发过"🎨正在生成"进度提示，
                             // 故标记 attempted 以跳过后续"思考中"占位，避免重复刷屏。
@@ -1926,6 +2330,49 @@ export class ChatHandler extends plugin {
                         }
                     }
 
+                    if (roundObservations.length > 0 && agentTask) {
+                        const roundSummary = await summarizeAgentRound(this.client, modelGroupKey, providerFilter, {
+                            ...agentTask,
+                            summary: agentTaskLatestSummary,
+                            lastObservation: agentTaskLatestObservation
+                        }, agentRound, roundObservations)
+                        const completionStatus = roundPendingConfirmation ? 'waiting' : (roundSummary?.completionStatus || (roundExecuted > 0 ? 'ready' : 'blocked'))
+                        agentTaskLatestSummary = roundSummary?.summary || agentTaskLatestSummary
+                        agentTaskLatestObservation = roundSummary?.lastObservation
+                            || roundObservations.map(item => `${item.tool}: ${item.status}`).join('；')
+                        if (roundSummary?.nextHint) {
+                            userMessage += `\n\n【Agent观察 第${agentRound}轮】${agentTaskLatestObservation}\n下一步建议：${roundSummary.nextHint}`
+                        } else {
+                            userMessage += `\n\n【Agent观察 第${agentRound}轮】${agentTaskLatestObservation}`
+                        }
+                        await recordAgentStep(this.conversationManager.db, agentTask, {
+                            stepIndex: agentRound * 100 + 90,
+                            stepType: 'observation',
+                            status: completionStatus,
+                            content: `${agentTaskLatestObservation}${roundSummary?.nextHint ? `\n下一步建议：${roundSummary.nextHint}` : ''}`
+                        })
+                        try {
+                            await this.conversationManager.db.updateAgentTask?.(agentTask.taskId, {
+                                status: ['waiting', 'blocked'].includes(completionStatus) ? completionStatus : 'active',
+                                summary: agentTaskLatestSummary,
+                                lastObservation: agentTaskLatestObservation
+                            })
+                            agentTask = {
+                                ...agentTask,
+                                status: ['waiting', 'blocked'].includes(completionStatus) ? completionStatus : 'active',
+                                summary: agentTaskLatestSummary,
+                                lastObservation: agentTaskLatestObservation
+                            }
+                            agentTaskFinalStatus = completionStatus
+                        } catch (err) {
+                            logger.warn(`[AI-Plugin] Agent任务观察更新失败: ${err.message}`)
+                        }
+                        if (completionStatus === 'waiting' || completionStatus === 'blocked') {
+                            logger.info(`[AI-Plugin] Agent 第 ${agentRound} 轮进入 ${completionStatus} 状态，停止继续规划`)
+                            break
+                        }
+                    }
+
                     if (roundExecuted === 0) {
                         logger.info(`[AI-Plugin] Agent 第 ${agentRound} 轮没有成功工具结果，停止循环`)
                         break
@@ -2017,6 +2464,14 @@ export class ChatHandler extends plugin {
                     }
                     toolCalls = dedupedNext.tools
                     currentToolIntent = nextAnalysis?.intent || nextPlan.reason || ''
+                    if (toolCalls.length > 0) {
+                        await recordAgentStep(this.conversationManager.db, agentTask, {
+                            stepIndex: (agentRound + 1) * 100 - 10,
+                            stepType: 'next_plan',
+                            status: 'ok',
+                            content: `后续意图：${currentToolIntent || '无'}\n下一轮工具队列：${toolCalls.map(call => `${call.name}(${summarizeToolArgs(call.args)})`).join(' -> ')}`
+                        })
+                    }
                 }
 
                 if (!groupChatContextToolUsed && !suppressAutoNoaContext) {
@@ -2036,7 +2491,7 @@ export class ChatHandler extends plugin {
                 }
 
                 if (e.isMaster && enabledTools.includes('shell_exec') && executedShellCommands.length > 0 && !shellFollowupConsideredByAgent) {
-                    const toolContext = { userId: e.user_id, groupId: e.group_id, event: e, userMessage: originalUserMessage, originalUserMessage }
+                    const toolContext = { userId: e.user_id, groupId: e.group_id, event: e, userMessage: originalUserMessage, originalUserMessage, agentTaskId: agentTask?.taskId || '' }
                     const seenCommands = new Set(executedShellCommands.filter(Boolean))
                     // 翻页续读使用 "命令@offset" 作为去重键，允许同命令不同分页继续
                     const seenPagedKeys = new Set()
@@ -2078,12 +2533,28 @@ export class ChatHandler extends plugin {
                         if (!result.success) {
                             logger.warn(`[AI-Plugin] Shell 补查失败: ${result.error}`)
                             userMessage += `\n\n【Shell补查失败】命令: ${command}\n错误: ${result.error}\n`
+                            await recordAgentStep(this.conversationManager.db, agentTask, {
+                                stepIndex: 8000 + round,
+                                stepType: 'shell_followup',
+                                toolName: 'shell_exec',
+                                toolArgs: args,
+                                status: 'failed',
+                                content: `Shell补查失败：${result.error || '未知错误'}`
+                            })
                             break
                         }
 
                         const formattedResult = toolRegistry.formatToolResult('shell_exec', result.data)
                         const pagingNote = result.data?.paging?.hasMore ? '（注意：本页仍未读完，如需完整数据可继续翻页）' : ''
                         userMessage += `\n\n【Shell补查第${round}轮】主模型判断需要继续补充服务器信息。请同样严格基于实际执行结果回答，不要编造未执行的结果。${pagingNote}${formattedResult}`
+                        await recordAgentStep(this.conversationManager.db, agentTask, {
+                            stepIndex: 8000 + round,
+                            stepType: 'shell_followup',
+                            toolName: 'shell_exec',
+                            toolArgs: args,
+                            status: result.data?.ok === false ? 'tool_failed' : 'ok',
+                            content: formattedResult
+                        })
                         seenPagedKeys.add(pagedKey)
                         if (!isPaging) seenCommands.add(command)
                     }
@@ -2439,6 +2910,31 @@ export class ChatHandler extends plugin {
 
                 await setMsgEmojiLike(e, 144)
 
+                if (agentTask?.taskId) {
+                    const finalStatus = agentTaskFinalStatus === 'waiting'
+                        ? 'waiting'
+                        : (agentTaskFinalStatus === 'blocked' ? 'blocked' : (agentTaskFinalStatus === 'continue' ? 'active' : 'completed'))
+                    const finalSummary = agentTaskLatestSummary || truncateForPrompt(finalResponseText, AGENT_TASK_SUMMARY_MAX_CHARS)
+                    const finalObservation = agentTaskLatestObservation || truncateForPrompt(finalResponseText, AGENT_TASK_OBSERVATION_MAX_CHARS)
+                    await recordAgentStep(this.conversationManager.db, agentTask, {
+                        stepIndex: 9999,
+                        stepType: 'final',
+                        status: finalStatus,
+                        content: finalResponseText
+                    })
+                    try {
+                        await this.conversationManager.db.updateAgentTask?.(agentTask.taskId, {
+                            status: finalStatus,
+                            summary: finalSummary,
+                            lastObservation: finalObservation,
+                            completedAt: ['completed', 'blocked'].includes(finalStatus) ? getDBTimestamp() : ''
+                        })
+                        logger.info(`[AI-Plugin] Agent任务已更新: ${agentTask.taskId}, status=${finalStatus}`)
+                    } catch (err) {
+                        logger.warn(`[AI-Plugin] Agent任务最终状态更新失败: ${err.message}`)
+                    }
+                }
+
                 if (!isSingleMode) {
                     const transientImageParts = new Set([
                         ...messageImageParts,
@@ -2473,6 +2969,25 @@ export class ChatHandler extends plugin {
                 }
             } else {
                 await setMsgEmojiLike(e, 10)
+                if (agentTask?.taskId) {
+                    const failText = `最终回复模型请求失败：${result.error || '未知错误'}`
+                    await recordAgentStep(this.conversationManager.db, agentTask, {
+                        stepIndex: 9999,
+                        stepType: 'final',
+                        status: 'failed',
+                        content: failText
+                    })
+                    try {
+                        await this.conversationManager.db.updateAgentTask?.(agentTask.taskId, {
+                            status: 'blocked',
+                            summary: agentTaskLatestSummary || failText,
+                            lastObservation: failText,
+                            completedAt: getDBTimestamp()
+                        })
+                    } catch (err) {
+                        logger.warn(`[AI-Plugin] Agent任务失败状态更新失败: ${err.message}`)
+                    }
+                }
                 await e.reply(`❌ 请求失败\n错误: ${result.error}`, true)
             }
         } catch (err) {

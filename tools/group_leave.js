@@ -179,6 +179,7 @@ export const groupLeaveTool = {
 
         const saveResult = await savePendingAction(event.user_id || context.userId, {
             type: 'group_leave',
+            agentTaskId: context.agentTaskId || '',
             groups: targetResult.groups
         })
         if (!saveResult.ok) return { ok: false, error: saveResult.error }

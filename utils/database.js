@@ -190,6 +190,44 @@ export class AIDatabase {
                     last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
 
+                -- Agent 任务会话：记录 #c 多步工具任务的目标、状态和执行摘要
+                CREATE TABLE IF NOT EXISTS agent_tasks (
+                    task_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    group_id TEXT,
+                    objective TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    risk_level TEXT DEFAULT 'low',
+                    summary TEXT,
+                    last_observation TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    completed_at DATETIME
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_agent_tasks_user_status
+                ON agent_tasks(user_id, status, updated_at);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_tasks_group_status
+                ON agent_tasks(group_id, status, updated_at);
+
+                -- Agent 执行步骤：记录每轮计划、工具调用、观察和最终验证
+                CREATE TABLE IF NOT EXISTS agent_steps (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL,
+                    step_index INTEGER NOT NULL,
+                    step_type TEXT NOT NULL,
+                    tool_name TEXT,
+                    tool_args TEXT,
+                    status TEXT NOT NULL DEFAULT 'ok',
+                    content TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(task_id) REFERENCES agent_tasks(task_id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_agent_steps_task
+                ON agent_steps(task_id, step_index, id);
+
                 -- 迁移状态表
                 CREATE TABLE IF NOT EXISTS migration_status (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -747,6 +785,238 @@ export class AIDatabase {
                     queueDeleteVectorWhere({ doc_key: `user_profile:${String(userId)}:profile` })
                 }
                 resolve(this.changes > 0)
+            })
+        })
+    }
+
+    createAgentTask(task = {}) {
+        return new Promise((resolve, reject) => {
+            const taskId = task.taskId || `agent_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+            const now = getDBTimestamp()
+            const row = {
+                taskId,
+                userId: String(task.userId || ''),
+                groupId: task.groupId ? String(task.groupId) : '',
+                objective: String(task.objective || '').trim(),
+                status: task.status || 'active',
+                riskLevel: task.riskLevel || 'low',
+                summary: task.summary || '',
+                lastObservation: task.lastObservation || '',
+                createdAt: now,
+                updatedAt: now,
+                completedAt: task.completedAt || ''
+            }
+            if (!row.userId || !row.objective) {
+                reject(new Error('agent task requires userId and objective'))
+                return
+            }
+            this.db.run(`
+                INSERT INTO agent_tasks (task_id, user_id, group_id, objective, status, risk_level, summary, last_observation, created_at, updated_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                row.taskId,
+                row.userId,
+                row.groupId,
+                row.objective,
+                row.status,
+                row.riskLevel,
+                row.summary,
+                row.lastObservation,
+                row.createdAt,
+                row.updatedAt,
+                row.completedAt || null
+            ], (err) => {
+                if (err) reject(err)
+                else resolve(row)
+            })
+        })
+    }
+
+    updateAgentTask(taskId, updates = {}) {
+        return new Promise((resolve, reject) => {
+            const allowed = {
+                objective: 'objective',
+                status: 'status',
+                riskLevel: 'risk_level',
+                summary: 'summary',
+                lastObservation: 'last_observation',
+                completedAt: 'completed_at'
+            }
+            const sets = []
+            const params = []
+            for (const [key, column] of Object.entries(allowed)) {
+                if (!(key in updates)) continue
+                sets.push(`${column} = ?`)
+                params.push(updates[key] === '' ? null : String(updates[key]))
+            }
+            sets.push('updated_at = ?')
+            params.push(getDBTimestamp())
+            params.push(String(taskId))
+            this.db.run(`UPDATE agent_tasks SET ${sets.join(', ')} WHERE task_id = ?`, params, function(err) {
+                if (err) reject(err)
+                else resolve(this.changes > 0)
+            })
+        })
+    }
+
+    addAgentStep(taskId, step = {}) {
+        return new Promise((resolve, reject) => {
+            const stepIndex = Math.max(1, Math.floor(Number(step.stepIndex) || 1))
+            this.db.run(`
+                INSERT INTO agent_steps (task_id, step_index, step_type, tool_name, tool_args, status, content, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                String(taskId),
+                stepIndex,
+                String(step.stepType || 'observation'),
+                step.toolName ? String(step.toolName) : '',
+                step.toolArgs ? JSON.stringify(step.toolArgs) : '',
+                String(step.status || 'ok'),
+                String(step.content || ''),
+                getDBTimestamp()
+            ], function(err) {
+                if (err) reject(err)
+                else resolve(this.lastID)
+            })
+        })
+    }
+
+    normalizeAgentTaskRow(row, steps = []) {
+        if (!row) return null
+        return {
+            taskId: row.task_id,
+            userId: row.user_id,
+            groupId: row.group_id || '',
+            objective: row.objective,
+            status: row.status,
+            riskLevel: row.risk_level || 'low',
+            summary: row.summary || '',
+            lastObservation: row.last_observation || '',
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+            completedAt: row.completed_at || '',
+            steps
+        }
+    }
+
+    normalizeAgentStepRow(row) {
+        let toolArgs = {}
+        try { toolArgs = row.tool_args ? JSON.parse(row.tool_args) : {} } catch { toolArgs = {} }
+        return {
+            id: row.id,
+            taskId: row.task_id,
+            stepIndex: row.step_index,
+            stepType: row.step_type,
+            toolName: row.tool_name || '',
+            toolArgs,
+            status: row.status,
+            content: row.content || '',
+            createdAt: row.created_at
+        }
+    }
+
+    getAgentTask(taskId, options = {}) {
+        return new Promise((resolve, reject) => {
+            this.db.get('SELECT * FROM agent_tasks WHERE task_id = ?', [String(taskId)], (err, row) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                if (!row) {
+                    resolve(null)
+                    return
+                }
+                if (options.withSteps === false) {
+                    resolve(this.normalizeAgentTaskRow(row))
+                    return
+                }
+                this.db.all('SELECT * FROM agent_steps WHERE task_id = ? ORDER BY step_index ASC, id ASC', [String(taskId)], (stepErr, stepRows) => {
+                    if (stepErr) {
+                        reject(stepErr)
+                        return
+                    }
+                    resolve(this.normalizeAgentTaskRow(row, stepRows.map(step => this.normalizeAgentStepRow(step))))
+                })
+            })
+        })
+    }
+
+    getActiveAgentTask(userId, groupId = '') {
+        return new Promise((resolve, reject) => {
+            const userIdStr = String(userId || '')
+            const groupIdStr = groupId ? String(groupId) : ''
+            const params = [userIdStr]
+            let sql = `
+                SELECT *
+                FROM agent_tasks
+                WHERE user_id = ?
+                  AND status IN ('active', 'waiting')
+            `
+            if (groupIdStr) {
+                sql += ' AND group_id = ?'
+                params.push(groupIdStr)
+            }
+            sql += ' ORDER BY updated_at DESC LIMIT 1'
+            this.db.get(sql, params, (err, row) => {
+                if (err) reject(err)
+                else resolve(this.normalizeAgentTaskRow(row))
+            })
+        })
+    }
+
+    getRecentAgentTasks(userId, options = {}) {
+        return new Promise((resolve, reject) => {
+            const limit = Math.min(Math.max(Number(options.limit) || 5, 1), 20)
+            const params = [String(userId || '')]
+            const where = ['user_id = ?']
+            if (options.groupId !== undefined && options.groupId !== null) {
+                where.push('group_id = ?')
+                params.push(options.groupId ? String(options.groupId) : '')
+            }
+            const statuses = Array.isArray(options.statuses)
+                ? options.statuses.map(status => String(status || '').trim()).filter(Boolean).slice(0, 8)
+                : []
+            if (statuses.length > 0) {
+                where.push(`status IN (${statuses.map(() => '?').join(', ')})`)
+                params.push(...statuses)
+            }
+            params.push(limit)
+            this.db.all(`
+                SELECT *
+                FROM agent_tasks
+                WHERE ${where.join(' AND ')}
+                ORDER BY updated_at DESC
+                LIMIT ?
+            `, params, (err, rows) => {
+                if (err) reject(err)
+                else resolve(rows.map(row => this.normalizeAgentTaskRow(row)))
+            })
+        })
+    }
+
+    cancelActiveAgentTask(userId, groupId = '', reason = '用户取消') {
+        return new Promise((resolve, reject) => {
+            const userIdStr = String(userId || '')
+            const groupIdStr = groupId ? String(groupId) : ''
+            const now = getDBTimestamp()
+            const params = [String(reason || '用户取消'), now, now, userIdStr]
+            let sql = `
+                UPDATE agent_tasks
+                SET status = 'cancelled', summary = ?, completed_at = ?, updated_at = ?
+                WHERE task_id = (
+                    SELECT task_id
+                    FROM agent_tasks
+                    WHERE user_id = ?
+                      AND status IN ('active', 'waiting')
+            `
+            if (groupIdStr) {
+                sql += ' AND group_id = ?'
+                params.push(groupIdStr)
+            }
+            sql += ' ORDER BY updated_at DESC LIMIT 1)'
+            this.db.run(sql, params, function(err) {
+                if (err) reject(err)
+                else resolve(this.changes > 0)
             })
         })
     }

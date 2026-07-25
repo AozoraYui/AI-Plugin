@@ -395,6 +395,7 @@ export const groupSendMessageTool = {
 
         const saveResult = await savePendingAction(event.user_id || context.userId, {
             type: 'group_send_message',
+            agentTaskId: context.agentTaskId || '',
             groups: targetResult.groups,
             message: finalMessage,
             originalMessage: messageResult.message,
