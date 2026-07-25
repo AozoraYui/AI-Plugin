@@ -353,6 +353,10 @@ export function buildUserProfileVectorDocs(userId, info, lastUpdated = '') {
 export function queueVectorDocuments(docs = []) {
     const normalized = (Array.isArray(docs) ? docs : [docs]).filter(Boolean)
     if (normalized.length === 0 || Config.enable_vector_memory === false) return
+    if (activeMigration) {
+        logger.debug(`[AI-Plugin] 向量迁移运行中，跳过即时索引 ${normalized.length} 条文档，后续迁移会从 SQLite 补齐`)
+        return
+    }
     setTimeout(() => {
         vectorDB.addDocuments(normalized).then(ok => {
             if (ok) logger.debug(`[AI-Plugin] 向量记忆已索引 ${normalized.length} 条文档`)
@@ -369,6 +373,10 @@ export function queueVectorDocument(doc) {
 export function queueReplaceVectorDocuments(where = {}, docs = []) {
     const normalized = (Array.isArray(docs) ? docs : [docs]).filter(Boolean)
     if (normalized.length === 0 || Config.enable_vector_memory === false) return
+    if (activeMigration) {
+        logger.debug(`[AI-Plugin] 向量迁移运行中，跳过即时替换索引 ${normalized.length} 条文档，后续迁移会从 SQLite 补齐`)
+        return
+    }
     setTimeout(async () => {
         try {
             await vectorDB.deleteWhere(where)
@@ -382,6 +390,10 @@ export function queueReplaceVectorDocuments(where = {}, docs = []) {
 
 export function queueDeleteVectorWhere(where = {}) {
     if (!where || typeof where !== 'object' || Object.keys(where).length === 0 || Config.enable_vector_memory === false) return
+    if (activeMigration) {
+        logger.debug('[AI-Plugin] 向量迁移运行中，跳过即时删除索引，后续迁移/重建会校准索引')
+        return
+    }
     setTimeout(() => {
         vectorDB.deleteWhere(where).catch(err => {
             logger.warn(`[AI-Plugin] 向量记忆删除索引异常: ${err.message}`)

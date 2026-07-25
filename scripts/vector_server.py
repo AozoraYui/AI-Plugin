@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 import traceback
+import faulthandler
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # huggingface_hub reads HF_ENDPOINT during import in some versions, so set it
@@ -26,7 +27,7 @@ from sentence_transformers import SentenceTransformer
 CHROMA_DB_PATH = sys.argv[1] if len(sys.argv) > 1 else "./chroma_db"
 SERVER_HOST = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1"
 SERVER_PORT = int(sys.argv[3]) if len(sys.argv) > 3 else 9901
-SERVER_VERSION = "2026-07-25.6"
+SERVER_VERSION = "2026-07-25.7"
 MODEL_NAME = sys.argv[4] if len(sys.argv) > 4 else os.environ.get(
     "AI_PLUGIN_VECTOR_MODEL",
     "shibing624/text2vec-base-chinese",
@@ -42,6 +43,8 @@ init_failed = False
 last_count = 0
 embedding_lock = threading.RLock()
 collection_lock = threading.RLock()
+
+faulthandler.enable()
 
 
 def sanitize_metadata(metadata):
@@ -274,7 +277,7 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         embedding = get_embedding(text)
         with collection_lock:
             collection.upsert(ids=[doc_id], embeddings=[embedding], documents=[text], metadatas=[metadata])
-            total_count = update_cached_count()
+            total_count = last_count
         write_json(self, 200, {"success": True, "count": 1, "total_count": total_count})
 
     def handle_add_many(self):
@@ -314,7 +317,7 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         if ok_ids:
             with collection_lock:
                 collection.upsert(ids=ok_ids, embeddings=ok_embeddings, documents=ok_texts, metadatas=ok_metadatas)
-                total_count = update_cached_count()
+                total_count = last_count
         if failures:
             print(f"Skipped {len(failures)} embedding document(s): {json.dumps(failures[:5], ensure_ascii=False)}", flush=True)
         write_json(self, 200, {
@@ -368,7 +371,7 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         if ids:
             with collection_lock:
                 collection.delete(ids=ids)
-                total_count = update_cached_count()
+                total_count = last_count
         write_json(self, 200, {"success": True, "count": len(ids), "total_count": total_count})
 
     def handle_delete_where(self):
@@ -381,7 +384,7 @@ class VectorDBHandler(BaseHTTPRequestHandler):
             return
         with collection_lock:
             collection.delete(where=sanitize_metadata(where))
-            total_count = update_cached_count()
+            total_count = last_count
         write_json(self, 200, {"success": True, "total_count": total_count})
 
     def handle_reset(self):
@@ -400,6 +403,10 @@ class VectorDBHandler(BaseHTTPRequestHandler):
 class ReusableHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        print(f"Unhandled request error from {client_address}", flush=True)
+        print(traceback.format_exc(), flush=True)
 
 
 def main():

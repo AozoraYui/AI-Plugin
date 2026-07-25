@@ -13,7 +13,10 @@ const DEFAULT_PORT = 9901
 const HEALTH_TIMEOUT_MS = 2500
 const STARTUP_TIMEOUT_MS = 180000
 const VECTOR_WRITE_TIMEOUT_MS = 300000
-const VECTOR_SERVER_PROTOCOL_VERSION = '2026-07-25.6'
+const VECTOR_WRITE_RETRY_COUNT = 3
+const VECTOR_WRITE_RETRY_BASE_MS = 1500
+const VECTOR_WRITE_CHUNK_SIZE = 32
+const VECTOR_SERVER_PROTOCOL_VERSION = '2026-07-25.7'
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms))
@@ -161,17 +164,50 @@ async function terminatePid(pid) {
 }
 
 async function postJson(url, body, timeoutMs = 30000) {
-    const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs)
-    })
-    if (!res.ok) {
-        const text = await res.text().catch(() => '')
-        throw new Error(`HTTP ${res.status}${text ? `: ${text.slice(0, 1000)}` : ''}`)
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(timeoutMs)
+        })
+        if (!res.ok) {
+            const text = await res.text().catch(() => '')
+            throw new Error(`HTTP ${res.status}${text ? `: ${text.slice(0, 1000)}` : ''}`)
+        }
+        return await res.json()
+    } catch (err) {
+        throw new Error(formatFetchError(err), { cause: err })
     }
-    return await res.json()
+}
+
+function formatFetchError(err) {
+    const parts = []
+    if (err?.name && err.name !== 'Error') parts.push(err.name)
+    if (err?.message) parts.push(err.message)
+    const cause = err?.cause
+    if (cause) {
+        const causeParts = []
+        if (cause.code) causeParts.push(String(cause.code))
+        if (cause.errno) causeParts.push(`errno=${cause.errno}`)
+        if (cause.syscall) causeParts.push(`syscall=${cause.syscall}`)
+        if (cause.address) causeParts.push(`address=${cause.address}`)
+        if (cause.port) causeParts.push(`port=${cause.port}`)
+        if (cause.message && cause.message !== err.message) causeParts.push(cause.message)
+        if (causeParts.length > 0) parts.push(`cause: ${causeParts.join(', ')}`)
+    }
+    return [...new Set(parts.filter(Boolean))].join(' | ') || String(err || 'unknown error')
+}
+
+function isTransientRequestError(err) {
+    const text = formatFetchError(err).toLowerCase()
+    return /fetch failed|socket|connect|connection|econn|etimedout|timeout|aborted|terminated|reset|refused|broken pipe|network|und_err|other side closed/.test(text)
+}
+
+function chunkArray(items, size) {
+    const chunks = []
+    for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
+    return chunks
 }
 
 export class VectorDBClient {
@@ -181,6 +217,7 @@ export class VectorDBClient {
         this.initStarted = false
         this.initPromise = null
         this.lastError = ''
+        this.writeQueue = Promise.resolve()
     }
 
     get enabled() {
@@ -456,14 +493,49 @@ export class VectorDBClient {
         return false
     }
 
+    enqueueWrite(task) {
+        const run = this.writeQueue.catch(() => {}).then(task)
+        this.writeQueue = run.catch(() => {})
+        return run
+    }
+
+    async recoverAfterRequestFailure(err) {
+        this.isReady = false
+        this.lastError = formatFetchError(err)
+        const health = await this.probeHealth()
+        if (health.compatible && health.ready) return true
+        this.initPromise = null
+        this.initStarted = false
+        const started = await this.init()
+        if (!started) return false
+        return await this.waitForReady(60000)
+    }
+
+    async requestWithRetries(operation, requestFn, retryCount = VECTOR_WRITE_RETRY_COUNT) {
+        let lastErr = null
+        for (let attempt = 0; attempt <= retryCount; attempt++) {
+            try {
+                return await requestFn()
+            } catch (err) {
+                lastErr = err
+                const detail = formatFetchError(err)
+                this.lastError = detail
+                const canRetry = attempt < retryCount && isTransientRequestError(err)
+                if (!canRetry) break
+                logger.warn(`[AI-Plugin] 向量记忆${operation}失败，准备重试 ${attempt + 1}/${retryCount}: ${detail}`)
+                await this.recoverAfterRequestFailure(err)
+                await sleep(VECTOR_WRITE_RETRY_BASE_MS * (attempt + 1))
+            }
+        }
+        throw lastErr
+    }
+
     async addDocument(id, text, metadata = {}) {
         return await this.addDocuments([{ id, text, metadata }])
     }
 
     async addDocuments(documents = []) {
         if (!this.enabled) return false
-        const ready = await this.waitForReady(0)
-        if (!ready) return false
         const normalized = documents
             .map(doc => ({
                 id: String(doc.id || '').trim(),
@@ -472,21 +544,34 @@ export class VectorDBClient {
             }))
             .filter(doc => doc.id && doc.text)
         if (normalized.length === 0) return true
+        return await this.enqueueWrite(() => this.addDocumentsNow(normalized))
+    }
+
+    async addDocumentsNow(normalized = []) {
+        const ready = await this.waitForReady(0)
+        if (!ready) return false
         try {
-            const data = normalized.length === 1
-                ? await postJson(`${this.serverUrl}/add`, normalized[0], VECTOR_WRITE_TIMEOUT_MS)
-                : await postJson(`${this.serverUrl}/add_many`, { documents: normalized }, VECTOR_WRITE_TIMEOUT_MS)
-            if (Number(data?.failed) > 0) {
-                logger.warn(`[AI-Plugin] 向量记忆写入跳过 ${Number(data.failed)} 个异常片段: ${JSON.stringify(data.failures || []).slice(0, 500)}`)
+            let written = 0
+            for (const chunk of chunkArray(normalized, VECTOR_WRITE_CHUNK_SIZE)) {
+                const data = await this.requestWithRetries(`写入 ${chunk.length} 个片段`, async () => {
+                    return chunk.length === 1
+                        ? await postJson(`${this.serverUrl}/add`, chunk[0], VECTOR_WRITE_TIMEOUT_MS)
+                        : await postJson(`${this.serverUrl}/add_many`, { documents: chunk }, VECTOR_WRITE_TIMEOUT_MS)
+                })
+                if (Number(data?.failed) > 0) {
+                    logger.warn(`[AI-Plugin] 向量记忆写入跳过 ${Number(data.failed)} 个异常片段: ${JSON.stringify(data.failures || []).slice(0, 500)}`)
+                }
+                if (data?.success !== true) {
+                    this.lastError = data?.error || `向量记忆写入失败: 成功 ${Number(data?.count) || 0}/${chunk.length} 个片段`
+                    return false
+                }
+                written += Number(data?.count) || chunk.length
             }
-            if (data?.success !== true) {
-                this.lastError = data?.error || `向量记忆写入失败: 成功 ${Number(data?.count) || 0}/${normalized.length} 个片段`
-                return false
-            }
+            if (written < normalized.length) logger.warn(`[AI-Plugin] 向量记忆写入数量偏少: ${written}/${normalized.length}`)
             return true
         } catch (err) {
-            this.lastError = err.message
-            logger.warn(`[AI-Plugin] 向量记忆写入失败: ${err.message}`)
+            this.lastError = formatFetchError(err)
+            logger.warn(`[AI-Plugin] 向量记忆写入失败: ${this.lastError}`)
             return false
         }
     }
@@ -505,8 +590,8 @@ export class VectorDBClient {
             }, 60000)
             return Array.isArray(data?.results) ? data.results : []
         } catch (err) {
-            this.lastError = err.message
-            logger.warn(`[AI-Plugin] 向量记忆检索失败: ${err.message}`)
+            this.lastError = formatFetchError(err)
+            logger.warn(`[AI-Plugin] 向量记忆检索失败: ${this.lastError}`)
             return []
         }
     }
@@ -541,7 +626,7 @@ export class VectorDBClient {
                 dataDir: this.dataDir
             }
         } catch (err) {
-            this.lastError = err.message
+            this.lastError = formatFetchError(err)
             return {
                 enabled: true,
                 ready: false,
@@ -549,35 +634,43 @@ export class VectorDBClient {
                 model: this.modelName,
                 url: this.serverUrl,
                 dataDir: this.dataDir,
-                error: err.message
+                error: this.lastError
             }
         }
     }
 
     async reset() {
         if (!this.enabled) return false
+        return await this.enqueueWrite(() => this.resetNow())
+    }
+
+    async resetNow() {
         const ready = await this.waitForReady(60000)
         if (!ready) return false
         try {
-            const data = await postJson(`${this.serverUrl}/reset`, {}, 120000)
+            const data = await this.requestWithRetries('重置索引', () => postJson(`${this.serverUrl}/reset`, {}, 120000), 2)
             return data?.success === true
         } catch (err) {
-            this.lastError = err.message
-            logger.warn(`[AI-Plugin] 向量记忆重置失败: ${err.message}`)
+            this.lastError = formatFetchError(err)
+            logger.warn(`[AI-Plugin] 向量记忆重置失败: ${this.lastError}`)
             return false
         }
     }
 
     async deleteWhere(where = {}) {
         if (!this.enabled || !where || typeof where !== 'object' || Object.keys(where).length === 0) return false
+        return await this.enqueueWrite(() => this.deleteWhereNow(where))
+    }
+
+    async deleteWhereNow(where = {}) {
         const ready = await this.waitForReady(0)
         if (!ready) return false
         try {
-            const data = await postJson(`${this.serverUrl}/delete_where`, { where }, 120000)
+            const data = await this.requestWithRetries('条件删除', () => postJson(`${this.serverUrl}/delete_where`, { where }, 120000), 2)
             return data?.success === true
         } catch (err) {
-            this.lastError = err.message
-            logger.warn(`[AI-Plugin] 向量记忆条件删除失败: ${err.message}`)
+            this.lastError = formatFetchError(err)
+            logger.warn(`[AI-Plugin] 向量记忆条件删除失败: ${this.lastError}`)
             return false
         }
     }
