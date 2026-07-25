@@ -20,11 +20,57 @@ const PERSONAL_HISTORY_CONTEXT_MAX_CHARS = 2600
 const NOA_IMAGE_SUMMARY_MAX_CHARS = 12000
 const NOA_IMAGE_COMPACT_INPUT_MAX_CHARS = 30000
 const NOA_CAPTURE_CHUNK_CHARS = 4000
+const NOA_REPLY_CONTEXT_MAX_LOGS = 80
+const NOA_REPLY_CONTEXT_MAX_CHARS = 42000
+const NOA_TOOL_CONTEXT_MAX_CHARS = 52000
+const NOA_PROFILE_CONTEXT_MAX_CHARS = 9000
+const NOA_TRIGGER_CONTEXT_MAX_CHARS = 9000
+const NOA_FINAL_PROMPT_TARGET_CHARS = 120000
+
+function stripLoneSurrogates(text) {
+    const value = String(text || '')
+    let out = ''
+    for (let i = 0; i < value.length; i++) {
+        const code = value.charCodeAt(i)
+        if (code >= 0xD800 && code <= 0xDBFF) {
+            const next = value.charCodeAt(i + 1)
+            if (next >= 0xDC00 && next <= 0xDFFF) {
+                out += value[i] + value[i + 1]
+                i++
+            }
+            continue
+        }
+        if (code >= 0xDC00 && code <= 0xDFFF) continue
+        out += value[i]
+    }
+    return out
+}
+
+function sanitizeModelText(text) {
+    return stripLoneSurrogates(text)
+        .replace(/\r\n/g, '\n')
+        .replace(/\u0000/g, '')
+        .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ')
+}
 
 function truncateText(text, maxLength = 900) {
-    const value = String(text || '').trim()
+    const value = sanitizeModelText(text).trim()
     if (value.length <= maxLength) return value
     return value.slice(0, maxLength) + '...'
+}
+
+function truncateMiddleText(text, maxLength = 900) {
+    const value = sanitizeModelText(text).trim()
+    if (value.length <= maxLength) return value
+    const head = Math.max(1, Math.floor(maxLength * 0.65))
+    const tail = Math.max(1, maxLength - head)
+    return `${value.slice(0, head)}\n\n...【内容过长，已截断 ${value.length - maxLength} 字符】...\n\n${value.slice(-tail)}`
+}
+
+function normalizeNoaReplyContextLimit() {
+    const configured = Number(Config.NOA_CHAT_CONTEXT_LIMIT)
+    if (configured === Infinity) return NOA_REPLY_CONTEXT_MAX_LOGS
+    return Math.min(NOA_REPLY_CONTEXT_MAX_LOGS, Math.max(10, Math.floor(configured) || 60))
 }
 
 function stripMediaPartsFromHistory(history = []) {
@@ -290,13 +336,22 @@ function buildCaptureLogEntries(normalized) {
     }))
 }
 
-function formatGroupContext(logs = []) {
+function formatGroupContext(logs = [], options = {}) {
+    const maxChars = Math.max(4000, Number(options.maxChars) || NOA_REPLY_CONTEXT_MAX_CHARS)
     const lines = []
+    let used = 0
     for (const log of logs) {
         const name = log.isBot ? Config.AI_NAME : (log.nickname || `用户${log.userId}`)
         const imageHint = log.imageMeta?.length ? `（含 ${log.imageMeta.length} 张图片）` : ''
         const commandHint = log.isCommand ? ' [命令消息]' : ''
-        lines.push(`[${formatDBTimestampToBeijing(log.createdAt)}]${commandHint} ${name}(${log.userId}): ${truncateText(log.normalizedText, 700)}${imageHint}`)
+        const line = `[${formatDBTimestampToBeijing(log.createdAt)}]${commandHint} ${name}(${log.userId}): ${truncateText(log.normalizedText, 700)}${imageHint}`
+        if (used + line.length + 1 > maxChars) {
+            const omitted = Math.max(0, logs.length - lines.length)
+            lines.push(`...【群聊上下文过长，已省略剩余 ${omitted} 条；需要更多请让用户明确指定范围/关键词】...`)
+            break
+        }
+        lines.push(line)
+        used += line.length + 1
     }
     return lines.join('\n')
 }
@@ -773,9 +828,12 @@ export class NoaChatHandler extends plugin {
 
     async replyWithGroupContext(e, normalized) {
         const configuredLimit = Number(Config.NOA_CHAT_CONTEXT_LIMIT)
-        const limit = configuredLimit === Infinity ? Infinity : Math.max(10, Math.floor(configuredLimit) || 60)
+        const limit = normalizeNoaReplyContextLimit()
+        if (configuredLimit === Infinity || configuredLimit > limit) {
+            logger.info(`[AI-Plugin] [畅聊] NOA_CHAT_CONTEXT_LIMIT=${configuredLimit === Infinity ? 'unlimited' : configuredLimit}，最终回复上下文已硬限制为最近 ${limit} 条，避免请求体过大`)
+        }
         const logs = await this.conversationManager.db.getRecentGroupMessageLogs(e.group_id, limit)
-        const contextText = formatGroupContext(logs)
+        const contextText = formatGroupContext(logs, { maxChars: NOA_REPLY_CONTEXT_MAX_CHARS })
         const mentionedUserIds = extractMentionedUserIds(e.message || [], { botUserId: getBotUin(e) })
         let groupAliasMemoryText = ''
         if (mentionedUserIds.length > 0) {
@@ -795,7 +853,7 @@ export class NoaChatHandler extends plugin {
         try {
             memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(normalized.userId)
             personalMemory = truncateText(memoryData?.incrementalCheckpoint || '', PERSONAL_MEMORY_MAX_CHARS)
-            userProfileText = await loadUserProfileText(this.conversationManager.db, normalized.userId)
+            userProfileText = truncateMiddleText(await loadUserProfileText(this.conversationManager.db, normalized.userId), NOA_PROFILE_CONTEXT_MAX_CHARS)
             if (personalMemory) {
                 logger.info(`[AI-Plugin] [畅聊] 已加载触发者个人记忆摘要: 用户 ${normalized.userId}, 字符数=${personalMemory.length}`)
             }
@@ -933,10 +991,10 @@ export class NoaChatHandler extends plugin {
                                 logger.warn(`[AI-Plugin] [畅聊] group_chat_context 图片预读失败: ${err.message}`)
                             }
                         }
-                        toolContextText += injection
+                        toolContextText = truncateMiddleText(toolContextText + injection, NOA_TOOL_CONTEXT_MAX_CHARS)
                         logger.info(`[AI-Plugin] [畅聊] ${call.name} 完成，结果已注入`)
                     } else {
-                        toolContextText += `\n\n【畅聊工具失败：${call.name}】${result.error || '未知错误'}`
+                        toolContextText = truncateMiddleText(toolContextText + `\n\n【畅聊工具失败：${call.name}】${result.error || '未知错误'}`, NOA_TOOL_CONTEXT_MAX_CHARS)
                         logger.warn(`[AI-Plugin] [畅聊] ${call.name} 失败: ${result.error}`)
                     }
                 }
@@ -954,7 +1012,8 @@ export class NoaChatHandler extends plugin {
             logger.info(`[AI-Plugin] [畅聊] 已附加头像图片输入: ${avatarImageInput.imageParts.length} 张`)
         }
 
-        const prompt = `你是 ${Config.AI_NAME}，正在一个 QQ 群里自然聊天。
+        const triggerText = truncateMiddleText(normalized.normalizedText, NOA_TRIGGER_CONTEXT_MAX_CHARS)
+        let prompt = `你是 ${Config.AI_NAME}，正在一个 QQ 群里自然聊天。
 
 请基于下面的群聊上下文回复当前触发你的用户。你能看到最近群聊流水，但要注意：
 - 不要逐字复述大段历史，像正常群友一样自然接话。
@@ -976,9 +1035,9 @@ ${getBeijingTimeStr()}
 ${contextText || '暂无'}
 
 ${imageReadNotes.length > 0 ? `【本轮读图策略】\n${imageReadNotes.join('\n')}\n\n` : ''}${imageContext.summaryText ? `【本轮分批读图摘要】\n${imageContext.summaryText}\n\n` : ''}${localImageInput.noteText ? `${localImageInput.noteText}\n\n` : ''}${avatarImageInput.noteText ? `${avatarImageInput.noteText}\n\n` : ''}${groupAliasMemoryText ? `${groupAliasMemoryText}\n\n` : ''}${personalMemory ? `【触发者个人记忆摘要】\n${personalMemory}\n\n` : ''}${userProfileText ? `【触发者个人档案】\n${userProfileText}\n\n` : ''}${semanticMemoryContext ? `${semanticMemoryContext}\n\n` : ''}${toolContextText ? `【本轮工具结果】${toolContextText}\n\n` : ''}【当前触发消息】
-${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}${normalized.aliasCaptureText ? `\n\n${normalized.aliasCaptureText}` : ''}`
+${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCaptureText ? `\n\n${truncateMiddleText(normalized.aliasCaptureText, 2000)}` : ''}`
 
-        const contents = [
+        const buildContents = (promptText) => [
             ...Config.personaPrimer,
             {
                 role: 'user',
@@ -990,11 +1049,22 @@ ${normalized.nickname}(${normalized.userId}): ${normalized.normalizedText}${norm
             },
             {
                 role: 'user',
-                parts: [{ text: prompt }, ...imageParts, ...localImageInput.imageParts, ...avatarImageInput.imageParts]
+                parts: [{ text: sanitizeModelText(promptText) }, ...imageParts, ...localImageInput.imageParts, ...avatarImageInput.imageParts]
             }
         ]
+        let contents = buildContents(prompt)
+        let payload = { contents }
+        let payloadSizeMB = JSON.stringify(payload).length / (1024 * 1024)
+        if (prompt.length > NOA_FINAL_PROMPT_TARGET_CHARS || payloadSizeMB > Config.REQUEST_SIZE_WARNING_MB) {
+            logger.warn(`[AI-Plugin] [畅聊] 最终上下文过大 (prompt=${prompt.length}字, body=${payloadSizeMB.toFixed(2)}MB)，开始硬截断最终 prompt`)
+            prompt = truncateMiddleText(prompt, NOA_FINAL_PROMPT_TARGET_CHARS)
+            contents = buildContents(prompt)
+            payload = { contents }
+            payloadSizeMB = JSON.stringify(payload).length / (1024 * 1024)
+            logger.info(`[AI-Plugin] [畅聊] 最终请求体已裁剪至 ${payloadSizeMB.toFixed(2)}MB`)
+        }
 
-        const result = await this.client.makeRequest('chat', { contents }, 'flash', 4096)
+        const result = await this.client.makeRequest('chat', payload, 'flash', 4096)
         if (!result.success || !result.data) {
             await e.reply(`❌ 畅聊回复失败: ${result.error || '模型无返回'}`, true)
             return
