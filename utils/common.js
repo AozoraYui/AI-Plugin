@@ -87,8 +87,21 @@ export async function fetchWithProxy(url, options = {}) {
 }
 
 export async function urlToBuffer(url) {
-    const res = await fetchWithProxy(url)
-    if (!res.ok) throw new Error(`获取图片失败: ${res.status}`)
+    const normalizedUrl = String(url || '').replace(/&amp;/gi, '&').trim()
+    const res = await fetchWithProxy(normalizedUrl, {
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
+            Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+        }
+    })
+    if (!res.ok) {
+        let source = '未知地址'
+        try {
+            const parsed = new URL(normalizedUrl)
+            source = `${parsed.hostname}${parsed.pathname}`
+        } catch {}
+        throw new Error(`获取图片失败: HTTP ${res.status} (${source})`)
+    }
     return await res.arrayBuffer()
 }
 

@@ -73,7 +73,7 @@ function collectImageTargets(logs = [], options = {}) {
         return { targets, totalImages: 0, skippedOversizedMessages, limited: false, maxImages, autoLimit }
     }
 
-    for (const log of logs || []) {
+    for (const log of [...(logs || [])].reverse()) {
         const imageMeta = Array.isArray(log.imageMeta) ? log.imageMeta : []
         if (imageMeta.length === 0) continue
         totalImages += imageMeta.length
