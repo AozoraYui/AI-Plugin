@@ -4,6 +4,7 @@
  */
 
 import { filterToolCallsByIntent, getPrimaryUserInstruction } from '../utils/tool_intent.js'
+import { normalizeToolResult } from '../utils/tool_result.js'
 
 const TOOL_USAGE_GUIDES = {
     web_search: {
@@ -433,6 +434,7 @@ const TOOL_USAGE_GUIDES = {
         ],
         rules: [
             '命令必须具体可执行；有副作用命令只在用户明确要求时使用。',
+            'rm、磁盘操作、强制 Git、关机/重启、kill 等高风险命令只会创建待确认记录；必须由主人继续回复“#c确认执行”才会运行缓存命令。',
             '用户说在 AI-Plugin 执行时，cwd 用 plugins/AI-Plugin 或明确路径。',
             '用户要求更新当前插件时，command 通常为 git pull；cwd 用 plugins/AI-Plugin 或当前插件实际路径。',
             '局域网扫描不要猜 192.168.0.0/24 或 192.168.1.0/24；先查默认路由、网卡和 CIDR，再扫本机所在 CIDR。nmap 扫描可设置较长 timeout_ms。',
@@ -457,6 +459,7 @@ const TOOL_USAGE_GUIDES = {
         ],
         rules: [
             'action=send 时 input 必须来自主人明确要求输入/执行的内容。',
+            'action=send 中的破坏性命令同样进入待确认，不会直接发送到 tmux；确认时只能执行缓存的原始 input。',
             'action=send 返回的 tmux窗口输出就是发送后等待新输出得到的窗口快照；若等待超时、输出为空或任务仍在运行，再用 action=read 读取。',
             '用 shell_session 做 nmap/局域网扫描时，input 应先自动推断本机 iface/cidr（ip route/ip addr），再 nmap -sn "$cidr"，不要硬编码猜测网段。',
             '只是查看会话输出用 action=read；确保会话存在用 action=status。',
@@ -718,8 +721,10 @@ class ToolRegistry {
         }
 
         logger.info(`[AI-Plugin] 调用工具: ${name}, 参数: ${JSON.stringify(args)}`)
+        const startedAt = Date.now()
         try {
             const result = await tool.execute(args, { ...context, isMaster })
+            const protocol = normalizeToolResult(name, result, { elapsedMs: Date.now() - startedAt })
             const businessFailed = (result && typeof result === 'object' && result.ok === false)
                 || (typeof result === 'string' && /^【[^】]+失败】/.test(result))
             if (businessFailed) {
@@ -727,10 +732,14 @@ class ToolRegistry {
             } else {
                 logger.info(`[AI-Plugin] 工具 ${name} 执行成功`)
             }
-            return { success: true, data: result }
+            return { success: true, data: result, protocol }
         } catch (err) {
             logger.error(`[AI-Plugin] 工具 ${name} 执行失败:`, err)
-            return { success: false, error: err.message }
+            return {
+                success: false,
+                error: err.message,
+                protocol: normalizeToolResult(name, { ok: false, error: err.message }, { elapsedMs: Date.now() - startedAt })
+            }
         }
     }
 

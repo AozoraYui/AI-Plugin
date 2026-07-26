@@ -64,9 +64,14 @@ export function classifyToolCallRisk(call = {}) {
     const name = String(call?.name || '')
     const args = call?.args || {}
     if (name === 'shell_exec') return classifyShellCommandRisk(args.command)
+    if (name === 'shell_session') {
+        const action = String(args.action || '').toLowerCase()
+        if (action === 'send' && args.enter !== false) return classifyShellCommandRisk(args.input)
+        return ['restart', 'close', 'interrupt'].includes(action) ? 'medium' : 'low'
+    }
     if (name === 'config_manage') return args.action === 'update' ? 'medium' : 'low'
     if (['group_leave', 'group_kick', 'group_whole_mute', 'group_mute', 'group_request_handle'].includes(name)) return 'high'
-    if (['shell_session', 'group_send_message', 'group_set_card', 'group_set_title', 'group_essence', 'file_send', 'file_download', 'group_file_download', 'user_profile_update'].includes(name)) return 'medium'
+    if (['group_send_message', 'group_set_card', 'group_set_title', 'group_essence', 'file_send', 'file_download', 'group_file_download', 'user_profile_update'].includes(name)) return 'medium'
     return 'low'
 }
 
@@ -79,6 +84,8 @@ export function classifyAgentRisk(toolCalls = []) {
 
 export function summarizeDeterministicAgentRound(observations = []) {
     if (!Array.isArray(observations) || observations.length === 0) return null
+    const protocolDecision = deterministicToolDecision(observations.map(item => item?.protocol).filter(Boolean))
+    if (protocolDecision) return protocolDecision
     if (!observations.every(item => item?.tool === 'config_manage')) return null
 
     const failed = observations.find(item => item.status !== 'ok' || item.data?.ok === false)
@@ -110,3 +117,4 @@ export function summarizeDeterministicAgentRound(observations = []) {
         nextHint: ''
     }
 }
+import { deterministicToolDecision } from './tool_result.js'

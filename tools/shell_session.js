@@ -5,6 +5,8 @@
 
 import { toolRegistry } from './registry.js'
 import { Config } from '../utils/config.js'
+import { classifyToolCallRisk } from '../utils/agent_policy.js'
+import { formatPendingActionHint, formatPendingTtl, savePendingAction } from '../utils/pending_actions.js'
 import {
     captureShellSession,
     clearShellSession,
@@ -35,6 +37,53 @@ function limitLines(lines) {
     const value = Number(lines)
     if (!Number.isFinite(value)) return Config.SHELL_SESSION_CAPTURE_LINES
     return Math.min(Math.max(Math.trunc(value), 20), 2000)
+}
+
+async function executeShellSessionNow(args = {}, context = {}) {
+    const action = normalizeAction(args.action)
+    let result
+    if (action === 'status') {
+        result = await ensureShellSession({ cwd: args.cwd })
+    } else if (action === 'read') {
+        result = await captureShellSession({ cwd: args.cwd, lines: limitLines(args.lines), maxOutputChars: Config.SHELL_SESSION_MAX_OUTPUT_CHARS })
+    } else if (action === 'send') {
+        result = await sendToShellSession({
+            cwd: args.cwd,
+            input: args.input,
+            enter: args.enter !== false,
+            userMessage: context.userMessage || context.originalUserMessage || '',
+            readAfterSend: args.read_after_send !== false,
+            afterSendDelayMs: args.after_send_delay_ms,
+            afterSendTimeoutMs: args.after_send_timeout_ms,
+            afterSendPollMs: args.after_send_poll_ms,
+            lines: limitLines(args.lines),
+            maxOutputChars: Config.SHELL_SESSION_MAX_OUTPUT_CHARS
+        })
+    } else if (action === 'interrupt') {
+        result = await interruptShellSession({ cwd: args.cwd })
+    } else if (action === 'clear') {
+        result = await clearShellSession({ cwd: args.cwd })
+    } else if (action === 'restart') {
+        result = await restartShellSession({ cwd: args.cwd })
+    } else if (action === 'close') {
+        result = await closeShellSession()
+    }
+    return { action, actionLabel: ACTION_LABELS[action] || action, ...result }
+}
+
+export async function executePendingShellSession(pending = {}, event = null) {
+    if (global.AIPluginClient?.enableShellSession !== true) {
+        return { ok: false, error: '持久 Shell 会话已关闭，待确认命令没有执行。' }
+    }
+    return executeShellSessionNow(pending.args || {}, {
+        event,
+        isMaster: true,
+        userId: event?.user_id || pending.userId,
+        groupId: event?.group_id || '',
+        userMessage: pending.userMessage || '',
+        originalUserMessage: pending.userMessage || '',
+        confirmedPendingAction: true
+    })
 }
 
 export const shellSessionTool = {
@@ -103,37 +152,35 @@ export const shellSessionTool = {
         }
 
         const action = normalizeAction(args.action)
-        let result
-        if (action === 'status') {
-            result = await ensureShellSession({ cwd: args.cwd })
-        } else if (action === 'read') {
-            result = await captureShellSession({
-                cwd: args.cwd,
-                lines: limitLines(args.lines),
-                maxOutputChars: Config.SHELL_SESSION_MAX_OUTPUT_CHARS
-            })
-        } else if (action === 'send') {
-            result = await sendToShellSession({
-                cwd: args.cwd,
-                input: args.input,
-                enter: args.enter !== false,
+        const risk = classifyToolCallRisk({ name: 'shell_session', args: { ...args, action } })
+        if (risk === 'high' && context.confirmedPendingAction !== true) {
+            const saveResult = await savePendingAction(context.userId || event?.user_id, {
+                type: 'shell_session',
+                agentTaskId: context.agentTaskId || '',
+                args: { ...args, action },
+                command: String(args.input || ''),
+                cwd: args.cwd || '',
                 userMessage: context.userMessage || context.originalUserMessage || '',
-                readAfterSend: args.read_after_send !== false,
-                afterSendDelayMs: args.after_send_delay_ms,
-                afterSendTimeoutMs: args.after_send_timeout_ms,
-                afterSendPollMs: args.after_send_poll_ms,
-                lines: limitLines(args.lines),
-                maxOutputChars: Config.SHELL_SESSION_MAX_OUTPUT_CHARS
+                risk
             })
-        } else if (action === 'interrupt') {
-            result = await interruptShellSession({ cwd: args.cwd })
-        } else if (action === 'clear') {
-            result = await clearShellSession({ cwd: args.cwd })
-        } else if (action === 'restart') {
-            result = await restartShellSession({ cwd: args.cwd })
-        } else if (action === 'close') {
-            result = await closeShellSession()
+            if (!saveResult.ok) return { ok: false, error: saveResult.error }
+            return {
+                ok: true,
+                pending: true,
+                needs_confirmation: true,
+                action,
+                actionLabel: ACTION_LABELS[action],
+                risk,
+                command: String(args.input || ''),
+                cwd: args.cwd || '',
+                pendingId: saveResult.record.id,
+                expiresAt: saveResult.record.expiresAt,
+                confirmationHint: formatPendingActionHint(),
+                summary: '高风险 Shell 会话命令等待主人确认'
+            }
         }
+
+        const result = await executeShellSessionNow({ ...args, action }, context)
 
         if (result?.ok) {
             logger.info(`[AI-Plugin] shell_session ${action} 完成: session=${result.sessionName || Config.SHELL_SESSION_NAME}`)
@@ -141,12 +188,15 @@ export const shellSessionTool = {
             logger.warn(`[AI-Plugin] shell_session ${action} 失败: ${result?.error || '未知错误'}`)
         }
 
-        return { action, actionLabel: ACTION_LABELS[action] || action, ...result }
+        return result
     },
 
     formatResult(data) {
         if (!data || typeof data !== 'object') return String(data || '')
         const name = data.sessionName || Config.SHELL_SESSION_NAME
+        if (data.pending) {
+            return `\n\n【高风险 Shell 会话待确认】命令尚未发送到 tmux。\n风险: ${data.risk || 'high'}\n命令: ${data.command}\n目录: ${data.cwd || '沿用当前会话目录'}\n请在 ${formatPendingTtl(data)} 内回复「#c确认执行」或「#c取消」。\n${data.confirmationHint || formatPendingActionHint()}`
+        }
         if (data.ok === false) {
             let output = `\n\n【Shell会话失败】动作: ${data.actionLabel || data.action || '未知'}\n会话: ${name}\n原因: ${data.error || '未知错误'}`
             if (data.directorySafety?.safetyBlocked) {

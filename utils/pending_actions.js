@@ -65,3 +65,15 @@ export function formatPendingTtl(record = {}) {
     const seconds = Math.max(Math.ceil((Number(record.expiresAt) - Date.now()) / 1000), 1)
     return `${seconds} 秒内`
 }
+
+export function parseStrictPendingDecision(record = {}, instruction = '') {
+    if (!['shell_exec', 'shell_session'].includes(record?.type)) return null
+    const normalized = String(instruction || '').replace(/^#[A-Za-z0-9_]+\s*/i, '').trim()
+    if (/^(?:确认执行|确认|同意执行|继续执行|执行)$/.test(normalized)) {
+        return { decision: 'confirm', reason: '高风险 Shell 明确确认短语' }
+    }
+    if (/^(?:取消|取消执行|不要执行|别执行|停止)$/.test(normalized)) {
+        return { decision: 'cancel', reason: '高风险 Shell 明确取消短语' }
+    }
+    return { decision: 'none', reason: '高风险 Shell 只接受明确确认或取消短语' }
+}

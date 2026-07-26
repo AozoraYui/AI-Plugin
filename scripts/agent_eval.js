@@ -25,6 +25,10 @@ const { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutpu
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { toolRegistry } = await import('../tools/registry.js')
 const { configManageTool } = await import('../tools/config_manage.js')
+const { executePendingShellExec, shellExecTool } = await import('../tools/shell_exec.js')
+const { shellSessionTool } = await import('../tools/shell_session.js')
+const { loadPendingAction, clearPendingAction, parseStrictPendingDecision } = await import('../utils/pending_actions.js')
+const { deterministicToolDecision, normalizeToolResult } = await import('../utils/tool_result.js')
 
 const failures = []
 let passed = 0
@@ -191,6 +195,8 @@ check('只读Shell被识别为低风险', classifyToolCallRisk({ name: 'shell_ex
 check('结构化配置更新被识别为中风险', classifyToolCallRisk({ name: 'config_manage', args: { action: 'update' } }) === 'medium')
 check('破坏性Shell被识别为高风险', classifyToolCallRisk({ name: 'shell_exec', args: { command: 'rm -rf /tmp/example' } }) === 'high')
 check('sudo破坏性Shell仍被识别为高风险', classifyToolCallRisk({ name: 'shell_exec', args: { command: 'sudo rm -rf /tmp/example' } }) === 'high')
+check('持久Shell发送破坏性命令也被识别为高风险', classifyToolCallRisk({ name: 'shell_session', args: { action: 'send', input: 'rm -rf /tmp/example', enter: true } }) === 'high')
+check('持久Shell只读窗口保持低风险', classifyToolCallRisk({ name: 'shell_session', args: { action: 'read' } }) === 'low')
 check('混合工具风险取最高级', classifyAgentRisk([
     { name: 'config_manage', args: { action: 'get' } },
     { name: 'group_kick', args: { user_id: '1' } }
@@ -253,6 +259,39 @@ const deterministicSummary = summarizeDeterministicAgentRound([{
 }])
 check('结构化配置结果无需LLM即可确定完成', deterministicSummary?.completionStatus === 'ready', JSON.stringify(deterministicSummary))
 await fs.rm(tempDir, { recursive: true, force: true })
+
+const normalizedPending = normalizeToolResult('group_send_message', { ok: true, pending: true, summary: '等待确认' }, { elapsedMs: 12 })
+check('统一工具结果协议识别待确认状态', normalizedPending.ok && normalizedPending.pending && normalizedPending.metrics.elapsedMs === 12, JSON.stringify(normalizedPending))
+check('统一确定性验证器将待确认为waiting', deterministicToolDecision([normalizedPending])?.completionStatus === 'waiting')
+check('高风险确认只接受明确执行短语', parseStrictPendingDecision({ type: 'shell_exec' }, '#c确认执行')?.decision === 'confirm')
+check('高风险确认拒绝含糊同意表达', parseStrictPendingDecision({ type: 'shell_exec' }, '#c好吧')?.decision === 'none')
+
+const redisStore = new Map()
+global.redis = {
+    async set(key, value) { redisStore.set(key, value); return 'OK' },
+    async get(key) { return redisStore.get(key) || null },
+    async del(key) { return redisStore.delete(key) ? 1 : 0 }
+}
+const shellPendingResult = await shellExecTool.execute({ command: 'kill -0 $$' }, {
+    userId: 'agent-eval-user',
+    userMessage: '执行 kill -0 $$'
+})
+check('高风险Shell首次调用只创建待确认', shellPendingResult.ok && shellPendingResult.pending && shellPendingResult.success === false, JSON.stringify(shellPendingResult))
+const pendingShell = await loadPendingAction('agent-eval-user')
+check('高风险Shell参数被固化到待确认记录', pendingShell?.type === 'shell_exec' && pendingShell.command === 'kill -0 $$', JSON.stringify(pendingShell))
+const confirmedShellResult = await executePendingShellExec(pendingShell, { user_id: 'agent-eval-user' })
+check('确认后的高风险Shell只执行缓存命令', confirmedShellResult.ok && confirmedShellResult.success && confirmedShellResult.code === 0, JSON.stringify(confirmedShellResult))
+check('Shell退出码成功不会冒充业务目标已验证', confirmedShellResult.verified === false, JSON.stringify(confirmedShellResult))
+global.AIPluginClient = { enableShellSession: true }
+const sessionPendingResult = await shellSessionTool.execute({ action: 'send', input: 'rm -rf /tmp/example', enter: true }, {
+    isMaster: true,
+    userId: 'agent-eval-user',
+    userMessage: '在 shell 会话执行 rm -rf /tmp/example'
+})
+check('持久Shell高风险输入也只创建待确认', sessionPendingResult.ok && sessionPendingResult.pending && sessionPendingResult.command === 'rm -rf /tmp/example', JSON.stringify(sessionPendingResult))
+await clearPendingAction('agent-eval-user')
+delete global.AIPluginClient
+delete global.redis
 
 console.log(`\nAgent eval: ${passed} passed, ${failures.length} failed`)
 if (failures.length > 0) process.exit(1)

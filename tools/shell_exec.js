@@ -8,6 +8,8 @@ import path from 'node:path'
 import { toolRegistry } from './registry.js'
 import { Config } from '../utils/config.js'
 import { validateShellDirectorySafety } from '../utils/shell_safety.js'
+import { classifyToolCallRisk } from '../utils/agent_policy.js'
+import { formatPendingActionHint, formatPendingTtl, savePendingAction } from '../utils/pending_actions.js'
 
 function paginateText(text, offset, pageSize) {
     const full = String(text || '')
@@ -56,6 +58,72 @@ function runShellCommand(command, options = {}) {
     })
 }
 
+export async function executeShellExecNow(args = {}, context = {}) {
+    const command = String(args.command || '').trim()
+    if (!command) return { ok: false, success: false, error: '未提供 command。' }
+
+    const cwd = args.cwd ? path.resolve(String(args.cwd)) : process.cwd()
+    const directorySafety = validateShellDirectorySafety({
+        command,
+        cwd,
+        userMessage: context.userMessage || context.originalUserMessage || '',
+        toolName: 'shell_exec'
+    })
+    if (!directorySafety.ok) {
+        logger.warn(`[AI-Plugin] shell_exec 目录安全拦截: ${directorySafety.reason} command=${command}, cwd=${cwd}, expected=${directorySafety.expectedDirectory}, effective=${directorySafety.effectiveDirectory}`)
+        return {
+            ok: false,
+            command,
+            cwd,
+            success: false,
+            code: null,
+            signal: null,
+            timedOut: false,
+            elapsed: '0.00',
+            stdout: '',
+            stderr: '',
+            error: `${directorySafety.reason} 已停止执行。请先向主人确认下一步应该切换到哪个目录或如何处理。`,
+            directorySafety
+        }
+    }
+    const pageSize = Math.min(
+        Math.max(Number(args.max_output_chars) || Config.SHELL_EXEC_MAX_OUTPUT_CHARS, 1000),
+        Config.SHELL_EXEC_MAX_OUTPUT_CHARS
+    )
+    const offset = Math.max(Number(args.offset_chars) || 0, 0)
+    const result = await runShellCommand(command, { cwd, timeoutMs: args.timeout_ms })
+    const stdoutPage = paginateText(result.stdout, offset, pageSize)
+    const stderrPage = paginateText(result.stderr, offset, pageSize)
+
+    return {
+        ...result,
+        ok: result.success,
+        verified: false,
+        summary: result.success ? `Shell 命令执行成功，退出码 ${result.code}` : `Shell 命令执行失败，退出码 ${result.code}`,
+        stdout: stdoutPage.text,
+        stderr: stderrPage.text,
+        paging: {
+            offset,
+            pageSize,
+            stdoutTotal: stdoutPage.total,
+            stderrTotal: stderrPage.total,
+            hasMore: stdoutPage.hasMore || stderrPage.hasMore,
+            nextOffset: Math.max(stdoutPage.nextOffset, stderrPage.nextOffset)
+        }
+    }
+}
+
+export async function executePendingShellExec(pending = {}, event = null) {
+    return executeShellExecNow(pending.args || {}, {
+        event,
+        userId: event?.user_id || pending.userId,
+        groupId: event?.group_id || '',
+        userMessage: pending.userMessage || '',
+        originalUserMessage: pending.userMessage || '',
+        confirmedPendingAction: true
+    })
+}
+
 export const shellExecTool = {
     name: 'shell_exec',
     permission: 'master',
@@ -98,60 +166,41 @@ export const shellExecTool = {
     async execute(args = {}, context = {}) {
         const command = String(args.command || '').trim()
         if (!command) return '【Shell执行失败】未提供 command。'
-
-        const cwd = args.cwd ? path.resolve(String(args.cwd)) : process.cwd()
-        const directorySafety = validateShellDirectorySafety({
-            command,
-            cwd,
-            userMessage: context.userMessage || context.originalUserMessage || '',
-            toolName: 'shell_exec'
-        })
-        if (!directorySafety.ok) {
-            logger.warn(`[AI-Plugin] shell_exec 目录安全拦截: ${directorySafety.reason} command=${command}, cwd=${cwd}, expected=${directorySafety.expectedDirectory}, effective=${directorySafety.effectiveDirectory}`)
-            return {
-                ok: false,
+        const risk = classifyToolCallRisk({ name: 'shell_exec', args })
+        if (risk === 'high' && context.confirmedPendingAction !== true) {
+            const saveResult = await savePendingAction(context.userId || context.event?.user_id, {
+                type: 'shell_exec',
+                agentTaskId: context.agentTaskId || '',
+                args: { ...args, command },
                 command,
-                cwd,
+                cwd: args.cwd ? path.resolve(String(args.cwd)) : process.cwd(),
+                userMessage: context.userMessage || context.originalUserMessage || '',
+                risk
+            })
+            if (!saveResult.ok) return { ok: false, success: false, error: saveResult.error }
+            logger.warn(`[AI-Plugin] shell_exec 高风险命令已进入待确认: command=${command}, pending=${saveResult.record.id}`)
+            return {
+                ok: true,
                 success: false,
-                code: null,
-                signal: null,
-                timedOut: false,
-                elapsed: '0.00',
-                stdout: '',
-                stderr: '',
-                error: `${directorySafety.reason} 已停止执行。请先向主人确认下一步应该切换到哪个目录或如何处理。`,
-                directorySafety
+                pending: true,
+                needs_confirmation: true,
+                risk,
+                pendingId: saveResult.record.id,
+                expiresAt: saveResult.record.expiresAt,
+                command,
+                cwd: saveResult.record.cwd,
+                confirmationHint: formatPendingActionHint(),
+                summary: '高风险 Shell 命令等待主人确认'
             }
         }
-        // 单页大小：仍受 SHELL_EXEC_MAX_OUTPUT_CHARS 约束，避免单次请求超出模型上下文
-        const pageSize = Math.min(
-            Math.max(Number(args.max_output_chars) || Config.SHELL_EXEC_MAX_OUTPUT_CHARS, 1000),
-            Config.SHELL_EXEC_MAX_OUTPUT_CHARS
-        )
-        const offset = Math.max(Number(args.offset_chars) || 0, 0)
-        const result = await runShellCommand(command, { cwd, timeoutMs: args.timeout_ms })
-
-        // 分页（不丢数据）：超长输出按游标分页，模型可通过 offset_chars 翻页读取后续部分
-        const stdoutPage = paginateText(result.stdout, offset, pageSize)
-        const stderrPage = paginateText(result.stderr, offset, pageSize)
-
-        return {
-            ...result,
-            stdout: stdoutPage.text,
-            stderr: stderrPage.text,
-            paging: {
-                offset,
-                pageSize,
-                stdoutTotal: stdoutPage.total,
-                stderrTotal: stderrPage.total,
-                hasMore: stdoutPage.hasMore || stderrPage.hasMore,
-                nextOffset: Math.max(stdoutPage.nextOffset, stderrPage.nextOffset)
-            }
-        }
+        return executeShellExecNow(args, context)
     },
 
     formatResult(data) {
         if (!data || typeof data !== 'object') return String(data || '')
+        if (data.pending) {
+            return `\n\n【高风险 Shell 待确认】命令尚未执行。\n风险: ${data.risk || 'high'}\n命令: ${data.command}\n目录: ${data.cwd}\n请在 ${formatPendingTtl(data)} 内回复「#c确认执行」或「#c取消」。\n${data.confirmationHint || formatPendingActionHint()}\n`
+        }
         const status = data.success ? '成功' : '失败'
         let output = `\n\n【Shell执行结果】\n命令: ${data.command}\n目录: ${data.cwd}\n状态: ${status}`
         if (data.directorySafety?.safetyBlocked) {

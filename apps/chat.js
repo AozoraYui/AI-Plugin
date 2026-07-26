@@ -14,12 +14,14 @@ import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
 import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileMutationIntent, hasExplicitLocalFileReadIntent, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
-import { clearPendingAction, loadPendingAction } from '../utils/pending_actions.js'
+import { clearPendingAction, loadPendingAction, parseStrictPendingDecision } from '../utils/pending_actions.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { executePendingGroupSend } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
+import { executePendingShellExec } from '../tools/shell_exec.js'
+import { executePendingShellSession } from '../tools/shell_session.js'
 import yaml from 'yaml'
 
 function saveMainConfigSwitch(key, value) {
@@ -235,7 +237,10 @@ function extractUrlsFromText(text, limit = 10) {
 }
 
 function formatPendingActionForJudge(record = {}) {
-    const type = record.type === 'group_leave' ? '退群' : (record.type === 'group_send_message' ? '群消息代发' : record.type || '未知操作')
+    const type = record.type === 'group_leave' ? '退群' : (record.type === 'group_send_message' ? '群消息代发' : (['shell_exec', 'shell_session'].includes(record.type) ? '高风险 Shell 命令' : record.type || '未知操作'))
+    if (['shell_exec', 'shell_session'].includes(record.type)) {
+        return `操作类型：${type}\n风险等级：${record.risk || 'high'}\n命令：${record.command || record.args?.command || ''}\n目录：${record.cwd || record.args?.cwd || process.cwd()}`
+    }
     const groups = Array.isArray(record.groups) ? record.groups : []
     const groupLines = groups
         .map((group, index) => {
@@ -251,6 +256,8 @@ function formatPendingActionForJudge(record = {}) {
 async function judgePendingActionDecision(client, modelGroupKey, providerFilter, pending, instruction = '') {
     const text = String(instruction || '').trim()
     if (!text || !client?.makeRequest) return { decision: 'none', reason: 'empty' }
+    const strictDecision = parseStrictPendingDecision(pending, text)
+    if (strictDecision) return strictDecision
 
     const prompt = `你是“待确认操作”的意图判断器，只判断当前用户这条 #c 消息是否在确认或取消下方缓存的待确认操作。
 
@@ -300,11 +307,23 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
     if (judgement.decision === 'cancel') {
         await clearPendingAction(e.user_id)
         await updatePendingActionAgentTask(e, pending, { ok: false, error: '用户取消待确认操作。' }, 'cancel')
-        await e.reply(`已取消待确认操作：${pending.type === 'group_leave' ? '退群' : '群消息代发'}。`, true)
+        const cancelledName = pending.type === 'group_leave' ? '退群' : (['shell_exec', 'shell_session'].includes(pending.type) ? '高风险 Shell 命令' : '群消息代发')
+        await e.reply(`已取消待确认操作：${cancelledName}。`, true)
         return true
     }
 
     if (judgement.decision !== 'confirm') return false
+
+    if (pending.type === 'shell_exec' || pending.type === 'shell_session') {
+        await clearPendingAction(e.user_id)
+        const result = pending.type === 'shell_exec'
+            ? await executePendingShellExec(pending, e)
+            : await executePendingShellSession(pending, e)
+        const formatted = toolRegistry.formatToolResult(pending.type, result).trim()
+        await updatePendingActionAgentTask(e, pending, result, 'confirm')
+        await e.reply(formatted || (result.ok ? '高风险 Shell 命令已执行。' : `执行失败：${result.error || '未知错误'}`), true)
+        return true
+    }
 
     if (pending.type === 'group_leave' && e.group_id) {
         const currentGroupId = String(e.group_id)
@@ -421,7 +440,7 @@ async function updatePendingActionAgentTask(e, pending = {}, result = {}, decisi
 
     const actionName = pending.type === 'group_leave'
         ? '退群'
-        : (pending.type === 'group_send_message' ? '群消息代发' : pending.type || '待确认操作')
+        : (pending.type === 'group_send_message' ? '群消息代发' : (['shell_exec', 'shell_session'].includes(pending.type) ? '高风险 Shell 命令' : pending.type || '待确认操作'))
     const finalStatus = decision === 'cancel'
         ? 'cancelled'
         : ((result?.ok || result?.partial) ? 'completed' : 'blocked')
@@ -2361,7 +2380,7 @@ export class ChatHandler extends plugin {
                             logger.warn(`[AI-Plugin] ${call.name} 失败: ${result.error}`)
                             const failureText = `工具 ${call.name} 执行失败：${result.error || '未知错误'}`
                             userMessage = userMessage + `\n\n【工具执行失败：${call.name}】${result.error || '未知错误'}`
-                            roundObservations.push({ tool: call.name, args: call.args, status: 'failed', text: failureText })
+                            roundObservations.push({ tool: call.name, args: call.args, status: 'failed', text: failureText, protocol: result.protocol })
                             await recordAgentStep(this.conversationManager.db, agentTask, {
                                 stepIndex: agentRound * 100 + roundCallIndex,
                                 stepType: 'tool',
@@ -2384,7 +2403,8 @@ export class ChatHandler extends plugin {
                             args: call.args,
                             status: toolStatus,
                             text: agentFormattedResult,
-                            data: result.data
+                            data: result.data,
+                            protocol: result.protocol
                         })
                         await recordAgentStep(this.conversationManager.db, agentTask, {
                             stepIndex: agentRound * 100 + roundCallIndex,
