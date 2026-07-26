@@ -13,7 +13,7 @@ const {
     parseGroupSendRequest
 } = await import('../utils/tool_intent.js')
 const { decideAgentContinuation, normalizeAgentPlan } = await import('../utils/agent_policy.js')
-const { isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
+const { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
 const { toolRegistry } = await import('../tools/registry.js')
 
 const failures = []
@@ -144,6 +144,8 @@ check('未闭合think标签不会回退泄露', sanitizeModelOutput('<think>内�
 check('Analysis区块只保留最终答案', sanitizeModelOutput('Analysis:\n先查看文件\n\nFinal Answer:\ntag 是 image') === 'tag 是 image')
 check('纯工具规划会被识别', isPlanOnlyResponse('【工具规划】查看 sendImage.js 文件内容'))
 check('正常解释中的分析一词不会误删', sanitizeModelOutput('这个分析是合理的，因为已有真实结果。') === '这个分析是合理的，因为已有真实结果。')
+check('无工具纠正提示禁止伪造执行结果', buildFinalAnswerRetryInstruction({ hasActualToolResults: false }).includes('本轮没有执行任何工具'))
+check('有工具纠正提示限定系统结果区块', buildFinalAnswerRetryInstruction({ hasActualToolResults: true }).includes('由系统注入的工具结果区块'))
 
 console.log(`\nAgent eval: ${passed} passed, ${failures.length} failed`)
 if (failures.length > 0) process.exit(1)

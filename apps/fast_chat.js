@@ -12,7 +12,7 @@ import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memory_context.js'
 import { filterToolCallsByIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
-import { FINAL_ANSWER_RETRY_INSTRUCTION, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
+import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 
 const replyCooldown = new Map()
 const PERSONAL_MEMORY_MAX_CHARS = 2600
@@ -1432,8 +1432,14 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             const retryPayload = {
                 contents: [
                     ...contents,
-                    { role: 'model', parts: [{ text: String(result.data) }] },
-                    { role: 'user', parts: [{ text: FINAL_ANSWER_RETRY_INSTRUCTION }] }
+                    {
+                        role: 'user',
+                        parts: [{
+                            text: buildFinalAnswerRetryInstruction({
+                                hasActualToolResults: Boolean(ctx.toolContextText)
+                            })
+                        }]
+                    }
                 ]
             }
             const retryResult = await this.client.makeRequest('chat', retryPayload, 'flash', 4096)

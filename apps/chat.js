@@ -16,7 +16,7 @@ import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCar
 import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction } from '../utils/pending_actions.js'
 import { decideAgentContinuation, normalizeAgentPlan } from '../utils/agent_policy.js'
-import { FINAL_ANSWER_RETRY_INSTRUCTION, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
+import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { executePendingGroupSend } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
@@ -2307,6 +2307,7 @@ export class ChatHandler extends plugin {
                     })
                 }
                 const executedShellCommands = []
+                let actualToolExecutionCount = 0
                 let groupChatContextToolUsed = false
                 let memorySearchToolUsed = false
                 let suppressAutoFastChatContext = false
@@ -2333,6 +2334,7 @@ export class ChatHandler extends plugin {
                         seenToolCalls.add(toolCallKey(call))
                         const toolContext = { userId: e.user_id, groupId: e.group_id, event: e, userMessage: originalUserMessage, originalUserMessage, agentTaskId: agentTask?.taskId || '' }
                         const result = await toolRegistry.execute(call.name, call.args, e.isMaster, toolContext)
+                        actualToolExecutionCount++
                         if (!result.success) {
                             logger.warn(`[AI-Plugin] ${call.name} 失败: ${result.error}`)
                             const failureText = `工具 ${call.name} 执行失败：${result.error || '未知错误'}`
@@ -2717,6 +2719,7 @@ export class ChatHandler extends plugin {
                         }
                         logger.warn(`[AI-Plugin] Shell 补查第 ${round} 轮: ${command}${isPaging ? ` (offset=${offsetChars})` : ''}`)
                         const result = await toolRegistry.execute('shell_exec', args, e.isMaster, toolContext)
+                        actualToolExecutionCount++
                         if (!result.success) {
                             logger.warn(`[AI-Plugin] Shell 补查失败: ${result.error}`)
                             userMessage += `\n\n【Shell补查失败】命令: ${command}\n错误: ${result.error}\n`
@@ -2996,8 +2999,14 @@ export class ChatHandler extends plugin {
                     const retryPayload = {
                         contents: [
                             ...contents,
-                            { role: 'model', parts: [{ text: rawResponseText }] },
-                            { role: 'user', parts: [{ text: FINAL_ANSWER_RETRY_INSTRUCTION }] }
+                            {
+                                role: 'user',
+                                parts: [{
+                                    text: buildFinalAnswerRetryInstruction({
+                                        hasActualToolResults: actualToolExecutionCount > 0
+                                    })
+                                }]
+                            }
                         ]
                     }
                     const retryResult = await this.client.makeRequest('chat', retryPayload, modelGroupKey, 8192, providerFilter)

@@ -61,5 +61,9 @@ export function needsFinalAnswerRetry(text, options = {}) {
     return !sanitized || isPlanOnlyResponse(sanitized)
 }
 
-export const FINAL_ANSWER_RETRY_INSTRUCTION = `上一条输出是内部思考或行动规划，不是可发送给用户的最终答复。请基于现有上下文和已经提供的真实工具结果，直接回答用户的问题。不要输出 Thinking、Analysis、思考过程、工具规划或下一步计划；不要声称执行了尚未执行的工具。如果缺少完成请求所需的真实结果，请明确说明目前无法确认，不能猜测。`
-
+export function buildFinalAnswerRetryInstruction(options = {}) {
+    const toolAudit = options.hasActualToolResults === true
+        ? '本轮确实执行过工具；只有原始上下文中由系统注入的工具结果区块才是真实工具结果。'
+        : '本轮没有执行任何工具；不得声称刚刚查看了文件、运行了命令、搜索了网页或取得了新的工具结果。'
+    return `上一条输出是内部思考或行动规划，不是可发送给用户的最终答复，而且上一条异常输出本身不可信，不能把其中声称的工具调用或结果当作事实。${toolAudit}请重新基于原始上下文直接回答用户的问题。不要输出 Thinking、Analysis、思考过程、工具规划或下一步计划；不要声称执行了尚未执行的工具。如果缺少完成请求所需的真实结果，请明确说明目前无法确认，不能猜测。`
+}
