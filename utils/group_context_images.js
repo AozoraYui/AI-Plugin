@@ -24,18 +24,18 @@ function cleanModelText(text) {
 }
 
 function getConfiguredMaxImages() {
-    const configured = Number(Config.NOA_CHAT_MAX_CONTEXT_IMAGES)
+    const configured = Number(Config.FAST_CHAT_MAX_CONTEXT_IMAGES)
     if (configured === Infinity) return Infinity
     if (!Number.isFinite(configured)) return 3
     return Math.max(0, Math.floor(configured))
 }
 
 function getImageBatchSize() {
-    return Math.max(1, Math.floor(Number(Config.NOA_CHAT_IMAGE_BATCH_SIZE) || 3))
+    return Math.max(1, Math.floor(Number(Config.FAST_CHAT_IMAGE_BATCH_SIZE) || 3))
 }
 
 function getAutoReadLimit() {
-    const value = Number(Config.NOA_CHAT_AUTO_READ_IMAGE_LIMIT)
+    const value = Number(Config.FAST_CHAT_AUTO_READ_IMAGE_LIMIT)
     return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 2
 }
 
@@ -174,7 +174,7 @@ export async function buildGroupContextImageSummary(client, logs = [], triggerTe
     const notes = []
 
     if (plan.maxImages <= 0) {
-        notes.push('当前配置 NOA_CHAT_MAX_CONTEXT_IMAGES 为 0，本轮没有读取群聊上下文图片内容。')
+        notes.push('当前配置 FAST_CHAT_MAX_CONTEXT_IMAGES 为 0，本轮没有读取群聊上下文图片内容。')
         return { summaryText: '', notes, requestedCount: 0, processedCount: 0, totalImages: plan.totalImages, skippedOversizedMessages: 0 }
     }
 
@@ -186,7 +186,7 @@ export async function buildGroupContextImageSummary(client, logs = [], triggerTe
     }
 
     if (plan.limited && plan.maxImages !== Infinity) {
-        notes.push(`群聊上下文里共有约 ${plan.totalImages} 张图片，本轮按 NOA_CHAT_MAX_CONTEXT_IMAGES=${plan.maxImages} 只读取前 ${plan.targets.length} 张。`)
+        notes.push(`群聊上下文里共有约 ${plan.totalImages} 张图片，本轮按 FAST_CHAT_MAX_CONTEXT_IMAGES=${plan.maxImages} 只读取前 ${plan.targets.length} 张。`)
     }
     if (plan.skippedOversizedMessages > 0) {
         notes.push(`有 ${plan.skippedOversizedMessages} 条消息的图片数超过自动读图阈值 ${plan.autoLimit}，本轮已跳过这些消息；明确要求读图时可放宽。`)

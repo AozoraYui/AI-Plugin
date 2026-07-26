@@ -202,20 +202,20 @@ enable_web_fetch: false
 #   支持群号、唯一群名、本群/当前群；显式列出多个目标时可批量（最多 5 个）
 #   不接受“所有群/全部群/不友好那些群”这类开放式集合；所有退群都会先创建待确认操作
 #
-# enable_noa_chat: 是否启用畅聊模式（默认 false）
+# enable_fast_chat: 是否启用畅聊模式（默认 false）
 #   开启后，插件会全局捕获群聊消息流水（黑名单群/用户除外；文本化内容 + 图片元信息，不存图片本体）
 #   当群里当前消息提到「诺亚/noa/AI名称」或 @ 机器人，且当前群/用户有访问权限时，AI 会基于最近群上下文自然回复
 #   触发判断只看当前消息文本，不会因为引用/合并转发里出现「诺亚」而误触发
 #   # 开头命令消息也会入库，并在上下文里标记为历史命令记录；合并/嵌套合并消息会展开，过长内容会自动分段入库
-#   NOA_CHAT_CONTEXT_LIMIT: 每次回复/群聊记录查询读取最近多少条畅聊流水；可设 unlimited / -1 表示尽量读取全部记录
+#   FAST_CHAT_CONTEXT_LIMIT: 每次回复/群聊记录查询读取最近多少条畅聊流水；可设 unlimited / -1 表示尽量读取全部记录
 #     普通 #c 自动上下文和畅聊最终回复都会额外内部限量，避免一次塞入几千条流水；明确询问某群/跨群记录时会单独查询
 #     注意：unlimited 不代表最终回复会把全库直接喂给模型；数据库保留全部，最终 prompt 会按安全上限截取
 #     该配置只影响本轮上下文，不会删除数据库记录
-#   NOA_CHAT_REPLY_COOLDOWN_MS: 同一群两次畅聊主动回复之间的冷却时间，避免刷屏
-#   NOA_CHAT_AUTO_READ_IMAGE_LIMIT: 自动读图阈值；触发消息含图数 <= 该值时自动临时读图，超过则需明确说“读图/看图/分析图片”
-#   NOA_CHAT_MAX_CONTEXT_IMAGES: 本轮最多读取多少张图；3 表示最多读 3 张，不是超过 3 张就分批；0 表示禁用畅聊读图
-#   NOA_CHAT_MAX_CONTEXT_IMAGES 可设为 unlimited / -1 表示本轮读图数量不限制
-#   NOA_CHAT_IMAGE_BATCH_SIZE: 分批读图批大小；待读图片超过该值时，会按批预读成文字摘要后再最终回复
+#   FAST_CHAT_REPLY_COOLDOWN_MS: 同一群两次畅聊主动回复之间的冷却时间，避免刷屏
+#   FAST_CHAT_AUTO_READ_IMAGE_LIMIT: 自动读图阈值；触发消息含图数 <= 该值时自动临时读图，超过则需明确说“读图/看图/分析图片”
+#   FAST_CHAT_MAX_CONTEXT_IMAGES: 本轮最多读取多少张图；3 表示最多读 3 张，不是超过 3 张就分批；0 表示禁用畅聊读图
+#   FAST_CHAT_MAX_CONTEXT_IMAGES 可设为 unlimited / -1 表示本轮读图数量不限制
+#   FAST_CHAT_IMAGE_BATCH_SIZE: 分批读图批大小；待读图片超过该值时，会按批预读成文字摘要后再最终回复
 #   普通“刚才聊了什么/前情总结”只读取文本和图片元信息，不会自动预读历史图片；明确问图或要求读图时才会临时读取图片
 #   畅聊只保存图片元信息，不会把图片本体或 base64 写入数据库
 #
@@ -243,12 +243,12 @@ enable_web_fetch: false
 # enable_group_admin: false
 # enable_group_send: false            # 代发群消息，主人专用；高风险跨群发言，默认关闭
 # enable_group_leave: false           # 遥控退群，主人专用；高风险操作，默认关闭，执行前需二次确认
-# enable_noa_chat: false              # 是否开启畅聊：全局捕获群消息（黑名单除外，含 # 命令消息），有权限时自然回复
-# NOA_CHAT_CONTEXT_LIMIT: 60          # 每次回复/记录查询读取最近 60 条畅聊流水；unlimited / -1 为不限制。普通 #c 自动上下文和畅聊最终回复会内部限量
-# NOA_CHAT_REPLY_COOLDOWN_MS: 8000    # 同一群畅聊回复冷却 8000ms，防止连续触发刷屏
-# NOA_CHAT_MAX_CONTEXT_IMAGES: 3      # 本轮最多读 3 张图；unlimited / -1 为不限制，0 为禁用读图
-# NOA_CHAT_AUTO_READ_IMAGE_LIMIT: 2   # 单条触发消息最多 2 张图时自动读图，超过则需明确要求读图
-# NOA_CHAT_IMAGE_BATCH_SIZE: 3        # 待读图片超过 3 张时，每批 3 张先生成读图摘要再回复
+# enable_fast_chat: false              # 是否开启畅聊：全局捕获群消息（黑名单除外，含 # 命令消息），有权限时自然回复
+# FAST_CHAT_CONTEXT_LIMIT: 60          # 每次回复/记录查询读取最近 60 条畅聊流水；unlimited / -1 为不限制。普通 #c 自动上下文和畅聊最终回复会内部限量
+# FAST_CHAT_REPLY_COOLDOWN_MS: 8000    # 同一群畅聊回复冷却 8000ms，防止连续触发刷屏
+# FAST_CHAT_MAX_CONTEXT_IMAGES: 3      # 本轮最多读 3 张图；unlimited / -1 为不限制，0 为禁用读图
+# FAST_CHAT_AUTO_READ_IMAGE_LIMIT: 2   # 单条触发消息最多 2 张图时自动读图，超过则需明确要求读图
+# FAST_CHAT_IMAGE_BATCH_SIZE: 3        # 待读图片超过 3 张时，每批 3 张先生成读图摘要再回复
 # 普通群聊前情总结不会自动读历史图片；只有明确问图/要求读图才会按以上配置临时读取图片
 # enable_vector_memory: false         # 本地向量记忆；开启前先安装 scripts/requirements.txt 里的 Python 依赖
 # VECTOR_MODEL: shibing624/text2vec-base-chinese

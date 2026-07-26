@@ -21,7 +21,13 @@ function saveRuntimeSwitch(key, value) {
                 value.enable_group_admin !== undefined ||
                 value.enable_group_send !== undefined ||
                 value.enable_group_leave !== undefined ||
-                value.enable_noa_chat !== undefined ||
+                value.enable_fast_chat !== undefined ||
+                value.FAST_CHAT_TRIGGER_KEYWORDS !== undefined ||
+                value.FAST_CHAT_CONTEXT_LIMIT !== undefined ||
+                value.FAST_CHAT_REPLY_COOLDOWN_MS !== undefined ||
+                value.FAST_CHAT_MAX_CONTEXT_IMAGES !== undefined ||
+                value.FAST_CHAT_AUTO_READ_IMAGE_LIMIT !== undefined ||
+                value.FAST_CHAT_IMAGE_BATCH_SIZE !== undefined ||
                 value.show_thinking !== undefined ||
                 value.draw_review_after_generate !== undefined
             )
@@ -51,7 +57,7 @@ export class ManagementHandler extends plugin {
                 { reg: /^#?ai(开启|关闭)群管理$/i, fnc: 'switchGroupAdmin', permission: 'master' },
                 { reg: /^#?ai(开启|关闭)代发$/i, fnc: 'switchGroupSend', permission: 'master' },
                 { reg: /^#?ai(开启|关闭)退群$/i, fnc: 'switchGroupLeave', permission: 'master' },
-                { reg: /^#?ai(开启|关闭)畅聊$/i, fnc: 'switchNoaChat', permission: 'master' },
+                { reg: /^#?ai(开启|关闭)畅聊$/i, fnc: 'switchFastChat', permission: 'master' },
                 { reg: /^#ai向量(?:库)?(状态|迁移|重建|重建索引)$/i, fnc: 'handleVectorMemoryIndex', permission: 'master' },
                 { reg: /^#ai状态$/i, fnc: 'showStatus', permission: 'master' },
             ]
@@ -274,12 +280,12 @@ export class ManagementHandler extends plugin {
         return true
     }
 
-    async switchNoaChat(e) {
+    async switchFastChat(e) {
         const isTurnOn = e.msg.includes('开启')
         try {
-            saveRuntimeSwitch('enable_noa_chat', isTurnOn)
-            Config.enable_noa_chat = isTurnOn
-            this.client.noaChatConfig = { enabled: isTurnOn }
+            saveRuntimeSwitch('enable_fast_chat', isTurnOn)
+            Config.enable_fast_chat = isTurnOn
+            this.client.fastChatConfig = { enabled: isTurnOn }
             logger.info(`[AI-Plugin] 畅聊模式已${isTurnOn ? '开启' : '关闭'}（运行时立即生效）`)
             await e.reply(isTurnOn
                 ? '✅ 已开启畅聊模式。群消息会被捕获；有人在当前消息里提到诺亚/noa 或 @我 时，我会基于最近群上下文自然回复。'
@@ -449,7 +455,7 @@ export class ManagementHandler extends plugin {
             const groupAdminMode = this.client.enableGroupAdmin ? '✅ 开启' : '🚫 关闭'
             const groupSendMode = this.client.enableGroupSend ? '✅ 开启' : '🚫 关闭'
             const groupLeaveMode = this.client.enableGroupLeave ? '✅ 开启' : '🚫 关闭'
-            const noaChatMode = (this.client.enableNoaChat || Config.enable_noa_chat) ? '✅ 开启' : '🚫 关闭'
+            const fastChatMode = (this.client.enableFastChat || Config.enable_fast_chat) ? '✅ 开启' : '🚫 关闭'
 
             const trustedGroups = Config.trustedGroups
             const trustedGroupCount = trustedGroups.length
@@ -472,7 +478,7 @@ export class ManagementHandler extends plugin {
                 `  - 群管理工具: ${groupAdminMode}`,
                 `  - 群消息代发: ${groupSendMode}`,
                 `  - 遥控退群: ${groupLeaveMode}`,
-                `  - 畅聊模式: ${noaChatMode}`,
+                `  - 畅聊模式: ${fastChatMode}`,
                 `  - 信任群聊: ${trustedGroupCount} 个`,
                 '=============================='
             ].join('\n')

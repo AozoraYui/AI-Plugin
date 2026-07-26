@@ -84,13 +84,13 @@ const defaultConfig = {
     draw_review_after_generate: false,
     enable_group_send: false,
     enable_group_leave: false,
-    enable_noa_chat: false,
-    NOA_CHAT_TRIGGER_KEYWORDS: ['诺亚', 'noa'],
-    NOA_CHAT_CONTEXT_LIMIT: 60,
-    NOA_CHAT_REPLY_COOLDOWN_MS: 8000,
-    NOA_CHAT_MAX_CONTEXT_IMAGES: 3,
-    NOA_CHAT_AUTO_READ_IMAGE_LIMIT: 2,
-    NOA_CHAT_IMAGE_BATCH_SIZE: 3,
+    enable_fast_chat: false,
+    FAST_CHAT_TRIGGER_KEYWORDS: ['诺亚', 'noa'],
+    FAST_CHAT_CONTEXT_LIMIT: 60,
+    FAST_CHAT_REPLY_COOLDOWN_MS: 8000,
+    FAST_CHAT_MAX_CONTEXT_IMAGES: 3,
+    FAST_CHAT_AUTO_READ_IMAGE_LIMIT: 2,
+    FAST_CHAT_IMAGE_BATCH_SIZE: 3,
     // ========== 文件白名单与 Shell 工具配置 ==========
     // 本地图片路径输入的单文件最大大小（字节），默认 8MB
     FILE_MAX_SIZE: 8388608,
@@ -412,25 +412,25 @@ export const Config = {
     set enable_group_send(val) { config.enable_group_send = val === true },
     get enable_group_leave() { return config.enable_group_leave ?? defaultConfig.enable_group_leave },
     set enable_group_leave(val) { config.enable_group_leave = val === true },
-    get enable_noa_chat() { return config.enable_noa_chat ?? defaultConfig.enable_noa_chat },
-    set enable_noa_chat(val) { config.enable_noa_chat = val === true },
-    get NOA_CHAT_TRIGGER_KEYWORDS() { return config.NOA_CHAT_TRIGGER_KEYWORDS ?? defaultConfig.NOA_CHAT_TRIGGER_KEYWORDS },
-    set NOA_CHAT_TRIGGER_KEYWORDS(val) { config.NOA_CHAT_TRIGGER_KEYWORDS = Array.isArray(val) ? val : defaultConfig.NOA_CHAT_TRIGGER_KEYWORDS },
-    get NOA_CHAT_CONTEXT_LIMIT() { return parseContextLimit(config.NOA_CHAT_CONTEXT_LIMIT, defaultConfig.NOA_CHAT_CONTEXT_LIMIT) },
-    set NOA_CHAT_CONTEXT_LIMIT(val) { config.NOA_CHAT_CONTEXT_LIMIT = parseContextLimit(val, defaultConfig.NOA_CHAT_CONTEXT_LIMIT) },
-    get NOA_CHAT_REPLY_COOLDOWN_MS() { return config.NOA_CHAT_REPLY_COOLDOWN_MS ?? defaultConfig.NOA_CHAT_REPLY_COOLDOWN_MS },
-    set NOA_CHAT_REPLY_COOLDOWN_MS(val) { config.NOA_CHAT_REPLY_COOLDOWN_MS = Number(val) || defaultConfig.NOA_CHAT_REPLY_COOLDOWN_MS },
-    get NOA_CHAT_MAX_CONTEXT_IMAGES() { return parseImageLimit(config.NOA_CHAT_MAX_CONTEXT_IMAGES, defaultConfig.NOA_CHAT_MAX_CONTEXT_IMAGES) },
-    set NOA_CHAT_MAX_CONTEXT_IMAGES(val) {
-        config.NOA_CHAT_MAX_CONTEXT_IMAGES = parseImageLimit(val, defaultConfig.NOA_CHAT_MAX_CONTEXT_IMAGES)
+    get enable_fast_chat() { return config.enable_fast_chat ?? defaultConfig.enable_fast_chat },
+    set enable_fast_chat(val) { config.enable_fast_chat = val === true },
+    get FAST_CHAT_TRIGGER_KEYWORDS() { return config.FAST_CHAT_TRIGGER_KEYWORDS ?? defaultConfig.FAST_CHAT_TRIGGER_KEYWORDS },
+    set FAST_CHAT_TRIGGER_KEYWORDS(val) { config.FAST_CHAT_TRIGGER_KEYWORDS = Array.isArray(val) ? val : defaultConfig.FAST_CHAT_TRIGGER_KEYWORDS },
+    get FAST_CHAT_CONTEXT_LIMIT() { return parseContextLimit(config.FAST_CHAT_CONTEXT_LIMIT, defaultConfig.FAST_CHAT_CONTEXT_LIMIT) },
+    set FAST_CHAT_CONTEXT_LIMIT(val) { config.FAST_CHAT_CONTEXT_LIMIT = parseContextLimit(val, defaultConfig.FAST_CHAT_CONTEXT_LIMIT) },
+    get FAST_CHAT_REPLY_COOLDOWN_MS() { return config.FAST_CHAT_REPLY_COOLDOWN_MS ?? defaultConfig.FAST_CHAT_REPLY_COOLDOWN_MS },
+    set FAST_CHAT_REPLY_COOLDOWN_MS(val) { config.FAST_CHAT_REPLY_COOLDOWN_MS = Number(val) || defaultConfig.FAST_CHAT_REPLY_COOLDOWN_MS },
+    get FAST_CHAT_MAX_CONTEXT_IMAGES() { return parseImageLimit(config.FAST_CHAT_MAX_CONTEXT_IMAGES, defaultConfig.FAST_CHAT_MAX_CONTEXT_IMAGES) },
+    set FAST_CHAT_MAX_CONTEXT_IMAGES(val) {
+        config.FAST_CHAT_MAX_CONTEXT_IMAGES = parseImageLimit(val, defaultConfig.FAST_CHAT_MAX_CONTEXT_IMAGES)
     },
-    get NOA_CHAT_AUTO_READ_IMAGE_LIMIT() { return config.NOA_CHAT_AUTO_READ_IMAGE_LIMIT ?? defaultConfig.NOA_CHAT_AUTO_READ_IMAGE_LIMIT },
-    set NOA_CHAT_AUTO_READ_IMAGE_LIMIT(val) {
+    get FAST_CHAT_AUTO_READ_IMAGE_LIMIT() { return config.FAST_CHAT_AUTO_READ_IMAGE_LIMIT ?? defaultConfig.FAST_CHAT_AUTO_READ_IMAGE_LIMIT },
+    set FAST_CHAT_AUTO_READ_IMAGE_LIMIT(val) {
         const num = Number(val)
-        config.NOA_CHAT_AUTO_READ_IMAGE_LIMIT = Number.isFinite(num) && num >= 0 ? num : defaultConfig.NOA_CHAT_AUTO_READ_IMAGE_LIMIT
+        config.FAST_CHAT_AUTO_READ_IMAGE_LIMIT = Number.isFinite(num) && num >= 0 ? num : defaultConfig.FAST_CHAT_AUTO_READ_IMAGE_LIMIT
     },
-    get NOA_CHAT_IMAGE_BATCH_SIZE() { return config.NOA_CHAT_IMAGE_BATCH_SIZE ?? defaultConfig.NOA_CHAT_IMAGE_BATCH_SIZE },
-    set NOA_CHAT_IMAGE_BATCH_SIZE(val) { config.NOA_CHAT_IMAGE_BATCH_SIZE = parsePositiveInteger(val, defaultConfig.NOA_CHAT_IMAGE_BATCH_SIZE) },
+    get FAST_CHAT_IMAGE_BATCH_SIZE() { return config.FAST_CHAT_IMAGE_BATCH_SIZE ?? defaultConfig.FAST_CHAT_IMAGE_BATCH_SIZE },
+    set FAST_CHAT_IMAGE_BATCH_SIZE(val) { config.FAST_CHAT_IMAGE_BATCH_SIZE = parsePositiveInteger(val, defaultConfig.FAST_CHAT_IMAGE_BATCH_SIZE) },
     get FILE_ROOTS() { return loadedFileRoots ?? defaultConfig.FILE_ROOTS },
     get FILE_MAX_SIZE() { return config.FILE_MAX_SIZE ?? defaultConfig.FILE_MAX_SIZE },
     get SHELL_EXEC_TIMEOUT_MS() { return config.SHELL_EXEC_TIMEOUT_MS ?? defaultConfig.SHELL_EXEC_TIMEOUT_MS },
