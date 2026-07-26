@@ -252,7 +252,7 @@ export function hasExplicitGroupChatContextIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
 
-    if (/(加了哪些群|加入了哪些群|在哪些群|能看到哪些群|可见群|群列表|所有群列表|有哪些群|有什么群|机器人.*群|你.*群)/i.test(value)) return true
+    if (/(加了哪些群|加入了哪些群|在哪些群|能看到哪些群|可见群|群列表|所有群列表|有哪些群|有什么群|机器人.{0,16}(?:加了|加入|在|能看|能看到|可见).{0,12}群|你.{0,8}(?:加了|加入|在|能看|能看到|可见).{0,12}(?:哪些|什么|多少)?群)/i.test(value)) return true
     if (/(我|俺|咱).{0,18}(别的群|其他群|其它群|别群|跨群).{0,24}(发|说|聊|消息|看到|看见|记录|记得|知道)/i.test(value)) return true
     if (/(别的群|其他群|其它群|别群|跨群).{0,18}(我|俺|咱).{0,24}(发|说|聊|消息|看到|看见|记录|记得|知道)/i.test(value)) return true
     if (hasGroupChatContextQuestion(value)) return true
@@ -479,6 +479,16 @@ export function hasExplicitLocalFileReadIntent(text) {
     const fieldQuestion = '(?:(?:name|tag|字段|导出|定义|名称|名字).{0,18}(?:是什么|叫什[么麼]|是哪(?:个|些)?|有没[有无]|多少)|(?:是什么|叫什[么麼]|是哪(?:个|些)?|有没[有无]|多少).{0,18}(?:name|tag|字段|导出|定义|名称|名字))'
     return new RegExp(`${readAction}.{0,24}${fileName}(?:.{0,36}${contentTarget})?`, 'i').test(value)
         || new RegExp(`${fileName}.{0,36}(?:${readAction}|${fieldQuestion})`, 'i').test(value)
+}
+
+export function parseExplicitLocalFileReadRequest(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!hasExplicitLocalFileReadIntent(value)) return null
+    const match = value.match(/\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)[^\s，。；;]*/i)
+    if (!match) return null
+    const raw = match[0].replace(/[，。；;,]+$/g, '')
+    const fileMatch = raw.match(/^(.+?\.(?:tar\.gz|txt|log|md|json|ya?ml|js|mjs|cjs|ts|tsx|jsx|py|sh|zsh|bash|toml|ini|conf|cfg|xml|html|css|vue|svelte|go|rs|java|kt|c|cc|cpp|h|hpp|sql|db|sqlite|bin))\b/i)
+    return fileMatch?.[1] ? { path: fileMatch[1] } : null
 }
 
 export function isContinuationToolInstruction(text) {

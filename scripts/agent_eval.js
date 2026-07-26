@@ -4,13 +4,15 @@ const {
     filterToolCallsByIntent,
     hasExplicitMemorySearchIntent,
     hasExplicitLocalFileReadIntent,
+    hasExplicitGroupChatContextIntent,
     hasExplicitShellIntent,
     hasExplicitUserProfileHistoryExtractionIntent,
     hasExplicitUserProfileUpdateIntent,
     hasGroupChatContextQuestion,
     hasStrongGroupChatContextQuestion,
     parseGroupLeaveRequest,
-    parseGroupSendRequest
+    parseGroupSendRequest,
+    parseExplicitLocalFileReadRequest
 } = await import('../utils/tool_intent.js')
 const { decideAgentContinuation, normalizeAgentPlan } = await import('../utils/agent_policy.js')
 const { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
@@ -70,6 +72,16 @@ const routingCases = [
         name: '普通提及脚本名不会误触发Shell',
         text: '#csendimage.js这个名字挺直观的',
         assert: text => !hasExplicitLocalFileReadIntent(text) && !hasExplicitShellIntent(text)
+    },
+    {
+        name: '指定配置文件读取不会误判群列表',
+        text: '#c你看一下/root/Yunzai/config/config/group.yaml是不是有7100什么的群',
+        assert: text => parseExplicitLocalFileReadRequest(text)?.path === '/root/Yunzai/config/config/group.yaml' && !hasExplicitGroupChatContextIntent(text)
+    },
+    {
+        name: '明确询问机器人群列表仍正常命中',
+        text: '#c你加入了哪些群？',
+        assert: text => hasExplicitGroupChatContextIntent(text)
     }
 ]
 

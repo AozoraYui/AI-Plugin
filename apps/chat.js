@@ -13,7 +13,7 @@ import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
-import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
+import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction } from '../utils/pending_actions.js'
 import { decideAgentContinuation, normalizeAgentPlan } from '../utils/agent_policy.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
@@ -885,6 +885,10 @@ function parseForceExt(text) {
     return match ? `.${match[1].toLowerCase()}` : ''
 }
 
+function quoteShellArgument(value) {
+    return `'${String(value || '').replace(/'/g, `'"'"'`)}'`
+}
+
 function parseShellCommand(text) {
     const value = String(text || '').trim()
     const patterns = [
@@ -1152,6 +1156,24 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         }
     }
 
+    // 5.5) 明确读取指定绝对路径文件时，文件目标优先于内容中的“群/群号”等业务关键词。
+    if (isMaster && hasTool(enabledTools, 'shell_exec')) {
+        const fileRead = parseExplicitLocalFileReadRequest(routeText)
+        if (fileRead?.path) {
+            return {
+                intent: '规则预路由：主人明确要求读取指定服务器文件；应以该文件实际内容回答，不改用群列表或其他业务工具。',
+                tools: [{
+                    name: 'shell_exec',
+                    args: {
+                        command: `cat -- ${quoteShellArgument(fileRead.path)}`,
+                        cwd: path.dirname(fileRead.path)
+                    }
+                }],
+                routedBy: 'rule'
+            }
+        }
+    }
+
     // 6) 明确要求查看/总结链接内容：直接走 web_fetch（仅在工具已启用时）。
     if (hasTool(enabledTools, 'web_fetch') && urls.length > 0) {
         if (hasExplicitWebFetchIntent(routeText, urls)) {
@@ -1191,7 +1213,7 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
     if (hasTool(enabledTools, 'group_chat_context')) {
         if (!hasExplicitGroupChatContextIntent(routeText) && !hasStrongGroupChatContextQuestion(routeText)) return null
 
-        const asksGroupList = isMaster && /(加了哪些群|加入了哪些群|在哪些群|能看到哪些群|可见群|群列表|所有群列表|有哪些群|有什么群|机器人.*群|你.*群)/i.test(routeText)
+        const asksGroupList = isMaster && /(加了哪些群|加入了哪些群|在哪些群|能看到哪些群|可见群|群列表|所有群列表|有哪些群|有什么群|机器人.{0,16}(?:加了|加入|在|能看|能看到|可见).{0,12}群|你.{0,8}(?:加了|加入|在|能看|能看到|可见).{0,12}(?:哪些|什么|多少)?群)/i.test(routeText)
         if (asksGroupList) {
             return {
                 intent: '规则预路由：主人询问机器人可见或已捕获的群列表。',
