@@ -452,6 +452,7 @@ export function hasExplicitShellIntent(text, toolName = '') {
     if (toolName === 'shell_session' && new RegExp(sessionWords, 'i').test(value)) return true
     if (/\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\b/i.test(value)
         && /(?:看|看看|读|读取|打开|检查|分析|搜索|查找|统计|内容|日志|配置|脚本|文件|目录)/i.test(value)) return true
+    if (hasExplicitLocalFileReadIntent(value)) return true
     if (/(?:局域网|内网|LAN|网段|入网设备|在线设备|网关|路由器).{0,24}(?:扫描|探测|查|查看|多少|有哪些|nmap)|(?:扫描|探测|查|查看).{0,24}(?:局域网|内网|LAN|网段|入网设备|在线设备|网关|路由器)/i.test(value)) return true
     if (/(?:执行|运行|调用).{0,12}(?:shell|命令|终端|命令行|脚本)|(?:shell|命令)[:：]/i.test(value)) return true
     if (new RegExp(`(?:执行|运行|调用).{0,8}(?:${commandKeywords})\\b`, 'i').test(value)) return true
@@ -467,6 +468,17 @@ export function hasExplicitShellIntent(text, toolName = '') {
     if (/(?:更新|拉取|重启|启动|停止|检查|诊断|搜索|查|看).{0,16}(?:插件|仓库|代码|服务|进程|容器|日志|服务器|系统|主机)/i.test(value)) return true
     if (/(?:插件|仓库|代码|服务|进程|容器|日志|服务器|系统|主机).{0,16}(?:更新|拉取|重启|启动|停止|检查|诊断|搜索|查|看)/i.test(value)) return true
     return false
+}
+
+export function hasExplicitLocalFileReadIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value || hasExplicitFileSendIntent(value)) return false
+    const fileName = '(?:\\.{0,2}\\/)?(?:[\\w@+.-]+\\/)*[\\w@+.-]+\\.(?:js|mjs|cjs|ts|tsx|jsx|json|ya?ml|md|txt|log|py|sh|zsh|bash|toml|ini|conf|cfg|xml|html|css|vue|svelte|go|rs|java|kt|c|cc|cpp|h|hpp|sql)'
+    const readAction = '(?:看|看看|看下|看一下|读|读取|打开|检查|分析|搜索|查找|确认|告诉我|查)'
+    const contentTarget = '(?:内容|代码|配置|脚本|文件|名称|名字|name|tag|字段|导出|定义|实现|是什么|叫什[么麼])'
+    const fieldQuestion = '(?:(?:name|tag|字段|导出|定义|名称|名字).{0,18}(?:是什么|叫什[么麼]|是哪(?:个|些)?|有没[有无]|多少)|(?:是什么|叫什[么麼]|是哪(?:个|些)?|有没[有无]|多少).{0,18}(?:name|tag|字段|导出|定义|名称|名字))'
+    return new RegExp(`${readAction}.{0,24}${fileName}(?:.{0,36}${contentTarget})?`, 'i').test(value)
+        || new RegExp(`${fileName}.{0,36}(?:${readAction}|${fieldQuestion})`, 'i').test(value)
 }
 
 export function isContinuationToolInstruction(text) {

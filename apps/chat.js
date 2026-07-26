@@ -13,9 +13,10 @@ import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
-import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
+import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction } from '../utils/pending_actions.js'
 import { decideAgentContinuation, normalizeAgentPlan } from '../utils/agent_policy.js'
+import { FINAL_ANSWER_RETRY_INSTRUCTION, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { executePendingGroupSend } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
@@ -1272,10 +1273,7 @@ function hasGroupAdminToolIntent(text) {
 }
 
 function hasLocalPathReadIntent(text) {
-    const value = getPrimaryUserInstruction(text)
-    if (!value || !extractAbsolutePath(value)) return false
-    if (hasExplicitFileSendIntent(value)) return false
-    return /(?:看|看看|读|读取|打开|检查|分析|搜索|查找|统计|内容|日志|配置|脚本|文件|目录|cat|tail|head|rg|grep|ls)/i.test(value)
+    return hasExplicitLocalFileReadIntent(text)
 }
 
 function narrowToolCandidatesForPlanning(enabledTools, userMessage, options = {}) {
@@ -2988,31 +2986,30 @@ export class ChatHandler extends plugin {
                 logger.info(`[AI-Plugin] 请求体已裁剪至 ${currentSizeMB.toFixed(2)}MB`)
             }
             
-            const result = await this.client.makeRequest('chat', currentPayload, modelGroupKey, 8192, providerFilter)
+            let result = await this.client.makeRequest('chat', currentPayload, modelGroupKey, 8192, providerFilter)
 
             if (result.success) {
-                let rawResponseText = result.data.trim()
-                let finalResponseText = rawResponseText
-                if (!Config.show_thinking) {
-                    const blocks = rawResponseText.split('\n\n')
-                    let startContentIndex = 0
-                    let foundContent = false
-                    for (let i = 0; i < blocks.length; i++) {
-                        const currentBlock = blocks[i].trim()
-                        const isThinkingBlock = currentBlock.startsWith('*Thinking') || currentBlock.startsWith('>')
-                        if (!isThinkingBlock) {
-                            startContentIndex = i
-                            foundContent = true
-                            break
-                        }
+                let rawResponseText = String(result.data || '').trim()
+                let finalResponseText = sanitizeModelOutput(rawResponseText, { showThinking: Config.show_thinking })
+                if (!finalResponseText || isPlanOnlyResponse(finalResponseText)) {
+                    logger.warn(`[AI-Plugin] 最终回复疑似仅含内部思考或工具规划，触发一次纠正重试: ${rawResponseText.slice(0, 180)}`)
+                    const retryPayload = {
+                        contents: [
+                            ...contents,
+                            { role: 'model', parts: [{ text: rawResponseText }] },
+                            { role: 'user', parts: [{ text: FINAL_ANSWER_RETRY_INSTRUCTION }] }
+                        ]
                     }
-                    if (foundContent) {
-                        finalResponseText = blocks.slice(startContentIndex).join('\n\n').trim()
-                        finalResponseText = finalResponseText.replace(/^>\s*/, '').trim()
+                    const retryResult = await this.client.makeRequest('chat', retryPayload, modelGroupKey, 8192, providerFilter)
+                    if (retryResult.success && retryResult.data) {
+                        result = retryResult
+                        rawResponseText = String(retryResult.data).trim()
+                        finalResponseText = sanitizeModelOutput(rawResponseText, { showThinking: Config.show_thinking })
                     }
-                    if (!finalResponseText) {
-                        finalResponseText = rawResponseText
-                    }
+                }
+                if (!finalResponseText || isPlanOnlyResponse(finalResponseText)) {
+                    logger.warn('[AI-Plugin] 最终回复纠正失败，使用安全提示替代内部思考/工具规划文本')
+                    finalResponseText = '这次没有拿到可验证的最终结果，我不能把内部规划当成答案发给你。请再试一次；如果需要读取文件或执行命令，我会先实际调用工具再回答。'
                 }
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
 

@@ -12,6 +12,7 @@ import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memory_context.js'
 import { filterToolCallsByIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
+import { FINAL_ANSWER_RETRY_INSTRUCTION, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 
 const replyCooldown = new Map()
 const PERSONAL_MEMORY_MAX_CHARS = 2600
@@ -695,15 +696,7 @@ async function prepareFastChatImageContext(client, imageReadPlan, normalized) {
 }
 
 function cleanModelText(text) {
-    let result = String(text || '').trim()
-    if (Config.show_thinking) return result
-    result = result.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
-    const blocks = result.split('\n\n')
-    const firstContent = blocks.findIndex(block => {
-        const trimmed = block.trim()
-        return trimmed && !trimmed.startsWith('*Thinking') && !trimmed.startsWith('>')
-    })
-    return firstContent >= 0 ? blocks.slice(firstContent).join('\n\n').replace(/^>\s*/, '').trim() : result
+    return sanitizeModelOutput(text, { showThinking: Config.show_thinking })
 }
 
 function estimateFastChatPayloadSizeMB(buildContents, promptText) {
@@ -1427,13 +1420,32 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             logger.info(`[AI-Plugin] [畅聊] 最终请求体已裁剪至 ${payloadSizeMB.toFixed(2)}MB`)
         }
 
-        const result = await this.client.makeRequest('chat', payload, 'flash', 4096)
+        let result = await this.client.makeRequest('chat', payload, 'flash', 4096)
         if (!result.success || !result.data) {
             await e.reply(`❌ 畅聊回复失败: ${result.error || '模型无返回'}`, true)
             return
         }
 
-        const replyText = cleanModelText(result.data)
+        let replyText = cleanModelText(result.data)
+        if (!replyText || isPlanOnlyResponse(replyText)) {
+            logger.warn(`[AI-Plugin] [畅聊] 最终回复疑似仅含内部思考或工具规划，触发一次纠正重试: ${String(result.data).slice(0, 180)}`)
+            const retryPayload = {
+                contents: [
+                    ...contents,
+                    { role: 'model', parts: [{ text: String(result.data) }] },
+                    { role: 'user', parts: [{ text: FINAL_ANSWER_RETRY_INSTRUCTION }] }
+                ]
+            }
+            const retryResult = await this.client.makeRequest('chat', retryPayload, 'flash', 4096)
+            if (retryResult.success && retryResult.data) {
+                result = retryResult
+                replyText = cleanModelText(retryResult.data)
+            }
+        }
+        if (!replyText || isPlanOnlyResponse(replyText)) {
+            logger.warn('[AI-Plugin] [畅聊] 最终回复纠正失败，使用安全提示替代内部思考/工具规划文本')
+            replyText = '这次没有拿到可验证的最终结果，我不能把内部规划当成答案发出来。你可以再问一次，我会在拿到真实结果后直接回答。'
+        }
         await e.reply(replyText, true)
         await this.saveFastChatToPersonalHistory(e, normalized, contextText, replyText, memoryContext?.history)
 

@@ -3,6 +3,7 @@ global.logger = global.logger || { info() {}, warn() {}, error() {}, debug() {} 
 const {
     filterToolCallsByIntent,
     hasExplicitMemorySearchIntent,
+    hasExplicitLocalFileReadIntent,
     hasExplicitShellIntent,
     hasExplicitUserProfileHistoryExtractionIntent,
     hasExplicitUserProfileUpdateIntent,
@@ -12,6 +13,7 @@ const {
     parseGroupSendRequest
 } = await import('../utils/tool_intent.js')
 const { decideAgentContinuation, normalizeAgentPlan } = await import('../utils/agent_policy.js')
+const { isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
 const { toolRegistry } = await import('../tools/registry.js')
 
 const failures = []
@@ -57,6 +59,16 @@ const routingCases = [
         name: '明确历史检索命中语义记忆',
         text: '#c历史里查一下我以前说过的居住城市',
         assert: text => hasExplicitMemorySearchIntent(text)
+    },
+    {
+        name: '查看相对脚本字段命中Shell',
+        text: '#c看下sendimage.js的tag名称是什么',
+        assert: text => hasExplicitLocalFileReadIntent(text) && hasExplicitShellIntent(text)
+    },
+    {
+        name: '普通提及脚本名不会误触发Shell',
+        text: '#csendimage.js这个名字挺直观的',
+        assert: text => !hasExplicitLocalFileReadIntent(text) && !hasExplicitShellIntent(text)
     }
 ]
 
@@ -126,6 +138,12 @@ const cityHints = toolRegistry._extractWeatherCityHints(
     []
 )
 check('天气工具能从个人档案提取城市', cityHints.includes('中山'), JSON.stringify(cityHints))
+
+check('标准think标签会被清除', sanitizeModelOutput('<think>内部推理</think>最终答案') === '最终答案')
+check('未闭合think标签不会回退泄露', sanitizeModelOutput('<think>内部推理') === '')
+check('Analysis区块只保留最终答案', sanitizeModelOutput('Analysis:\n先查看文件\n\nFinal Answer:\ntag 是 image') === 'tag 是 image')
+check('纯工具规划会被识别', isPlanOnlyResponse('【工具规划】查看 sendImage.js 文件内容'))
+check('正常解释中的分析一词不会误删', sanitizeModelOutput('这个分析是合理的，因为已有真实结果。') === '这个分析是合理的，因为已有真实结果。')
 
 console.log(`\nAgent eval: ${passed} passed, ${failures.length} failed`)
 if (failures.length > 0) process.exit(1)
