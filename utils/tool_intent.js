@@ -575,6 +575,11 @@ export function isExplicitToolIntent(toolName, text, options = {}) {
         case 'shell_exec':
         case 'shell_session':
             return hasExplicitShellIntent(text, toolName)
+        case 'config_manage': {
+            const action = String(options.toolArgs?.action || '').trim()
+            if (action === 'update') return hasExplicitLocalFileMutationIntent(text)
+            return hasExplicitLocalFileReadIntent(text) || hasExplicitLocalFileMutationIntent(text)
+        }
         case 'file_download':
             return hasExplicitFileDownloadIntent(text, options)
         case 'file_send':
@@ -613,7 +618,7 @@ export function filterToolCallsByIntent(toolCalls = [], text = '', options = {})
     const continuationTools = new Set(Array.isArray(options.continuationTools) ? options.continuationTools : [])
     for (const call of toolCalls || []) {
         if (!call?.name) continue
-        if (!isExplicitToolIntent(call.name, instruction, options)) {
+        if (!isExplicitToolIntent(call.name, instruction, { ...options, toolArgs: call.args || call.params || {} })) {
             if (allowContinuation && continuationTools.has(call.name)) {
                 filtered.push(call)
                 continue

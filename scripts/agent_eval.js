@@ -1,5 +1,9 @@
 global.logger = global.logger || { info() {}, warn() {}, error() {}, debug() {} }
 
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+
 const {
     filterToolCallsByIntent,
     hasExplicitMemorySearchIntent,
@@ -16,10 +20,11 @@ const {
     parseGroupSendRequest,
     parseExplicitLocalFileReadRequest
 } = await import('../utils/tool_intent.js')
-const { decideAgentContinuation, normalizeAgentPlan } = await import('../utils/agent_policy.js')
+const { classifyAgentRisk, classifyToolCallRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } = await import('../utils/agent_policy.js')
 const { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { toolRegistry } = await import('../tools/registry.js')
+const { configManageTool } = await import('../tools/config_manage.js')
 
 const failures = []
 let passed = 0
@@ -181,6 +186,73 @@ check('有工具纠正提示限定系统结果区块', buildFinalAnswerRetryInst
 check('代码中出现图片字样不会误触发历史读图', !isGroupContextImageQuestion("dsc: '发送随机图片'"))
 check('明确询问刚才图片会触发历史读图', isGroupContextImageQuestion('刚才那张图里写了什么？'))
 check('过期QQ临时图片链接会被跳过', isExpiredGroupContextImageUrl('https://multimedia.nt.qq.com.cn/download?appid=1407&rkey=test', '2026-07-26 14:00:00', Date.parse('2026-07-26T14:10:01Z')))
+
+check('只读Shell被识别为低风险', classifyToolCallRisk({ name: 'shell_exec', args: { command: "cat -- '/root/Yunzai/config/config/group.yaml'" } }) === 'low')
+check('结构化配置更新被识别为中风险', classifyToolCallRisk({ name: 'config_manage', args: { action: 'update' } }) === 'medium')
+check('破坏性Shell被识别为高风险', classifyToolCallRisk({ name: 'shell_exec', args: { command: 'rm -rf /tmp/example' } }) === 'high')
+check('sudo破坏性Shell仍被识别为高风险', classifyToolCallRisk({ name: 'shell_exec', args: { command: 'sudo rm -rf /tmp/example' } }) === 'high')
+check('混合工具风险取最高级', classifyAgentRisk([
+    { name: 'config_manage', args: { action: 'get' } },
+    { name: 'group_kick', args: { user_id: '1' } }
+]) === 'high')
+
+let compilerCalls = 0
+const directPlan = await toolRegistry.compileToolPlan({
+    need_tools: true,
+    reason: '更新群配置',
+    resolved_request: '把插件加入指定群的 disable 列表',
+    tool_plan: [{
+        tool: 'config_manage',
+        params: {
+            action: 'update',
+            path: '/root/Yunzai/config/config/group.yaml',
+            key_path: '710024443.disable',
+            operation: 'append',
+            value: '[无用插件]发送图片'
+        }
+    }]
+}, {
+    webSearchIntentModels: [],
+    async makeRequest() {
+        compilerCalls++
+        return { success: false }
+    }
+}, ['config_manage'], {
+    currentInstruction: '帮我把“[无用插件]发送图片”写到 /root/Yunzai/config/config/group.yaml 里 710024443 的 disable 里面'
+})
+check('主模型完整参数可跳过二次编译', compilerCalls === 0 && directPlan.routedBy === 'main_model_direct' && directPlan.tools.length === 1, JSON.stringify(directPlan))
+
+const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-plugin-config-eval-'))
+const yamlPath = path.join(tempDir, 'group.yaml')
+await fs.writeFile(yamlPath, '# 保留这条注释\n710024443:\n  disable:\n    - existing\n', 'utf8')
+const updateResult = await configManageTool.execute({
+    action: 'update',
+    path: yamlPath,
+    key_path: '710024443.disable',
+    operation: 'append',
+    value: '[无用插件]发送图片',
+    backup: false
+})
+const firstContent = await fs.readFile(yamlPath, 'utf8')
+check('结构化YAML更新成功并验证', updateResult.ok && updateResult.changed && updateResult.verified, JSON.stringify(updateResult))
+check('结构化YAML更新保留注释', firstContent.includes('# 保留这条注释'), firstContent)
+const idempotentResult = await configManageTool.execute({
+    action: 'update',
+    path: yamlPath,
+    key_path: '710024443.disable',
+    operation: 'append',
+    value: '[无用插件]发送图片',
+    backup: false
+})
+check('结构化列表追加具备幂等性', idempotentResult.ok && !idempotentResult.changed && idempotentResult.verified, JSON.stringify(idempotentResult))
+const deterministicSummary = summarizeDeterministicAgentRound([{
+    tool: 'config_manage',
+    args: { action: 'update' },
+    status: 'ok',
+    data: updateResult
+}])
+check('结构化配置结果无需LLM即可确定完成', deterministicSummary?.completionStatus === 'ready', JSON.stringify(deterministicSummary))
+await fs.rm(tempDir, { recursive: true, force: true })
 
 console.log(`\nAgent eval: ${passed} passed, ${failures.length} failed`)
 if (failures.length > 0) process.exit(1)

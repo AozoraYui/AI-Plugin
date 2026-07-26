@@ -6,8 +6,9 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "node scripts/agent_eval.js",
-    "eval:agent": "node scripts/agent_eval.js"
+    "test": "node scripts/agent_eval.js && node scripts/agent_replay_eval.js",
+    "eval:agent": "node scripts/agent_eval.js && node scripts/agent_replay_eval.js",
+    "eval:agent:replay": "node scripts/agent_replay_eval.js"
   },
   "dependencies": {
     "yaml": "^2.3.4",

@@ -15,7 +15,7 @@ import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
 import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileMutationIntent, hasExplicitLocalFileReadIntent, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction } from '../utils/pending_actions.js'
-import { decideAgentContinuation, normalizeAgentPlan } from '../utils/agent_policy.js'
+import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { executePendingGroupSend } from '../tools/group_send.js'
@@ -47,6 +47,7 @@ const CONTINUATION_ALLOWED_TOOLS = [
     'web_fetch',
     'system_info',
     'shell_exec',
+    'config_manage',
     'shell_session',
     'memory_search',
     'user_profile_update',
@@ -63,6 +64,7 @@ const AGENT_LOOP_ALLOWED_TOOLS = [
     'web_fetch',
     'system_info',
     'shell_exec',
+    'config_manage',
     'shell_session',
     'memory_search',
     'group_chat_context',
@@ -99,6 +101,7 @@ const TASK_CONTEXT_CONTINUATION_TOOLS = [
     'web_fetch',
     'system_info',
     'shell_exec',
+    'config_manage',
     'shell_session',
     'memory_search',
     'group_chat_context',
@@ -108,23 +111,6 @@ const TASK_CONTEXT_CONTINUATION_TOOLS = [
     'group_member_resolve',
     'group_file_list'
 ]
-const AGENT_HIGH_RISK_TOOLS = [
-    'shell_exec',
-    'shell_session',
-    'file_send',
-    'file_download',
-    'group_file_download',
-    'group_send_message',
-    'group_leave',
-    'group_mute',
-    'group_whole_mute',
-    'group_kick',
-    'group_set_card',
-    'group_set_title',
-    'group_essence',
-    'group_request_handle'
-]
-
 function recentImageCacheKeys(e) {
     if (!e) return []
     if (e.group_id) {
@@ -599,6 +585,7 @@ function getRecentTaskToolCandidates(task, enabledTools = []) {
         add('shell_session')
         add('system_info')
     }
+    if (/(?:配置|yaml|yml|json|disable|enable|白名单|黑名单)/i.test(taskText)) add('config_manage')
     if (/(?:群聊|群消息|聊天记录|消息流水|前情|大家|他们|她们)/i.test(taskText)) {
         add('group_chat_context')
         add('group_chat_digest')
@@ -616,8 +603,9 @@ function summarizeToolArgs(args = {}) {
     return truncateForPrompt(stableStringify(args || {}), 1000)
 }
 
-function classifyAgentRisk(toolCalls = []) {
-    return (toolCalls || []).some(call => AGENT_HIGH_RISK_TOOLS.includes(call?.name)) ? 'high' : 'low'
+function mergeAgentRisk(previous = 'low', next = 'low') {
+    const rank = { low: 0, medium: 1, high: 2 }
+    return (rank[next] || 0) > (rank[previous] || 0) ? next : previous
 }
 
 function buildAgentObjective(currentInstruction = '', userMessage = '', toolIntent = '') {
@@ -727,6 +715,8 @@ function isPendingConfirmationToolResult(callName, resultData) {
 }
 
 async function summarizeAgentRound(client, modelGroupKey, providerFilter, task, round, observations = [], plan = {}) {
+    const deterministic = summarizeDeterministicAgentRound(observations)
+    if (deterministic) return deterministic
     if (!client?.makeRequest || observations.length === 0) return null
     const observationText = observations.map((item, index) => {
         const args = item.args ? `\n参数：${summarizeToolArgs(item.args)}` : ''
@@ -1316,12 +1306,15 @@ function narrowToolCandidatesForPlanning(enabledTools, userMessage, options = {}
     const explicitShellSession = /(?:tmux|ai-shell|shell\s*session|shell会话|shell窗口|独立shell|终端会话)/i.test(routeText)
         && hasExplicitShellIntent(routeText, 'shell_session')
     const explicitShell = explicitShellSession || hasExplicitShellIntent(routeText) || hasLocalPathReadIntent(routeText)
+    const explicitConfig = hasExplicitLocalFileMutationIntent(routeText)
+        || (hasExplicitLocalFileReadIntent(routeText) && /(?:\.ya?ml|\.json)\b/i.test(routeText))
 
     if (hasExplicitFileSendIntent(routeText)) add(['file_send'])
     if (hasExplicitFileDownloadIntent(routeText, { hasImages })) add(['file_download'])
     if (hasGroupFileToolIntent(routeText)) add(['group_file_list', 'group_file_download'])
     if (hasExplicitWebFetchIntent(routeText, urls) || (options.webFetchFlag === true && urls.length > 0)) add(['web_fetch'])
     if ((hasExplicitWebSearchIntent(routeText) && !explicitShell) || options.webSearchFlag === true) add(['web_search', 'web_fetch'])
+    if (explicitConfig) add(['config_manage', 'shell_exec'])
     if (explicitShellSession) add(['shell_session', 'shell_exec', 'system_info'])
     else if (explicitShell) add(['shell_exec', 'shell_session', 'system_info'])
     if (hasExplicitDrawIntent(routeText, { hasImages, hasRecentImages })) add(['draw_image'])
@@ -1556,24 +1549,25 @@ ${toolSummary}
 - 如果提供了【近期工具任务语境】，它只用于理解当前指令中的续接、省略和数量改写；不要仅因语境里有工具名或命令而计划工具。对于“再看 N 条/多查一点/换成 N 条”这类明显续接，可以在不改变任务类型的前提下计划对应的只读工具。
 - 如果用户说“看看这个/总结上面/下载引用文件/打开这个链接”，可以把引用/转发内容当作工具参数来源；否则不要因为引用内容本身包含工具词而计划工具。
 - 服务器文件/目录查看统一使用 shell_exec 或 shell_session；本地图片绝对路径由对话流程自动附加为图片输入。
-- 主人明确要求把内容写入/添加到/删除自服务器配置文件、配置字段、disable/enable/白名单/黑名单时，这是文件修改任务，应计划 shell_exec；不要误判为 file_send。若目标路径可从刚刚完成的文件读取任务或最近对话明确解析，可以沿用该路径，不要声称没有 Shell 能力。
-- 配置文件修改应按“先确认目标结构和现值 → 执行最小修改 → 再次读取或校验语法确认结果”的多步任务规划；不要只给用户一条命令让用户自己执行。
+- YAML/JSON 配置文件的读取、字段查询、语法校验和修改优先使用 config_manage；普通代码、日志、目录和非结构化文件仍使用 shell_exec。
+- 主人明确要求把内容写入/添加到/删除自服务器配置字段、disable/enable/白名单/黑名单时，应计划 config_manage(action=update)，不要误判为 file_send，也不要现场生成 sed/Python 文本修改命令。若目标路径可从刚刚完成的配置读取任务或近期任务语境明确解析，可以沿用该路径。
+- config_manage 必须给出可直接执行的 params：path、action，以及 update 所需的 key_path、operation、value。配置写入由工具内部自动备份、原子写入并重新解析验证，通常不需要再追加 Shell 验证。
 - 普通快速一次性命令优先 shell_exec；预计耗时较长、持续输出、需要保留状态或用户明确提到 tmux/ai-shell/shell会话/独立shell 时，优先计划 shell_session。如果 shell_exec 未启用但 shell_session 可用，主人明确要求执行服务器命令时也可以计划 shell_session。
 - 规划 shell_session action=send 时，input 只应包含真实要发进终端的内容；不要把“命令/执行命令/输入命令”等中文引导词粘进 input。
 - “记录/历史/变更”要看对象：git、commit、插件、仓库、代码变更记录属于服务器/代码仓库查询，主人可计划 shell_exec；群里、群聊、消息、大家/他们说了什么才属于 group_chat_context 或 group_chat_digest。
 - 主人要求更新插件/仓库并查看更新内容时，应先计划更新命令；看到 git pull 成功且确实有新提交后，如果用户要求“看看更新内容/有哪些变化”，继续计划 git log/diff 查看 ORIG_HEAD..HEAD 或最近提交摘要；如果 already up to date，就停止工具并说明没有新更新。
 - 用户要求 nmap/局域网/内网入网设备扫描时，不要猜 192.168.0.0/24 或 192.168.1.0/24；应先计划 shell_exec 获取本机网络信息（如 ip route get 1.1.1.1、ip -o -4 addr show scope global、ip route show default），再由 Shell 补查根据实际 CIDR 执行 nmap -sn。若只能用 shell_session，应发送能自动推断 iface/cidr 的命令，避免扫描公网或无关网段。
 - 链接只在用户明确要求查看/总结/分析网页内容时计划 web_fetch；只是出现链接不代表需要抓取。
-- 用户询问天气但当前消息没写城市时，如果长期记忆摘要或最近对话中明确给出了用户常住地/所在地/所在城市，可以计划 weather 并在 params_hint 写入该城市；没有明确地点时不要猜，返回 need_tools=false 并说明需要追问城市。
+- 用户询问天气但当前消息没写城市时，如果长期记忆摘要或最近对话中明确给出了用户常住地/所在地/所在城市，可以计划 weather 并在 params 写入该城市；没有明确地点时不要猜，返回 need_tools=false 并说明需要追问城市。
 - 当前消息包含图片：${hasImages ? '是' : '否'}；最近图片缓存可用：${hasRecentImages ? '是' : '否'}。规划阶段不会收到图片内容；如果用户只是让你看图/描述图且没有明确工具需求，交给最终多模态/视觉流程，不要计划工具。
 - draw_image 可以自动提取当前消息图、引用图、@头像，也可以在用户说“刚才那张/这张图/用 p 模型处理/修图/去水印/二维码/套预设”等时复用最近图片缓存。用户明确要求基于图片生成、重绘、修图、去水印或套风格时，可以计划 draw_image，但不要承诺精准像素级编辑。
 - 如果当前消息包含引用/转发内容，判断是否画图时只能看“用户本条指令”，不要因为引用聊天记录里出现“作图/做图/画/AI做图”等词就计划 draw_image；“不是让你画图/不要画/别生成图”等否定句必须返回 need_tools=false。
 - 当前操作者是否主人：${isMaster ? '是' : '否'}。
 - 用户询问“他们刚才聊了啥/群里刚刚发生了什么/最近前情/总结一下刚才群聊”这类短前情时，可计划 group_chat_context 自动读取畅聊捕获的群流水；不要求用户额外说“读取记录”。
 - 用户要求较长时间范围的群聊总结，例如“最近几天/昨天/今天/最近几个小时/我不在的时候/从我上次发言后群里聊了什么/帮我补课”，计划 group_chat_digest；它会分页读取并分段摘要，避免一次塞入大量群流水。短前情不要用 group_chat_digest。
-- 主人问“你加了哪些群/能看到哪些群/群列表/有哪些群”时，计划 group_chat_context，params_hint 写 scope=group_list；私聊中也可以使用。
-- 用户问“我刚在别的群/其他群发了什么”“你看到我在别的群说的话吗”时，计划 group_chat_context，params_hint 写 scope=other_group_messages、exclude_current_group=true；这只查询当前触发者自己的跨群消息。
-- 只有当前操作者是主人且用户明确要求跨群/所有群/指定群的已捕获流水时，才计划 group_chat_context 的 scope=all_groups 或 specific_group；非主人不要计划读取其他人的跨群消息。主人按群名问某个群但你暂时没有群号时，可在 params_hint 里把群名写入 query，工具会尝试解析群号。
+- 主人问“你加了哪些群/能看到哪些群/群列表/有哪些群”时，计划 group_chat_context，params 写 scope=group_list；私聊中也可以使用。
+- 用户问“我刚在别的群/其他群发了什么”“你看到我在别的群说的话吗”时，计划 group_chat_context，params 写 scope=other_group_messages、exclude_current_group=true；这只查询当前触发者自己的跨群消息。
+- 只有当前操作者是主人且用户明确要求跨群/所有群/指定群的已捕获流水时，才计划 group_chat_context 的 scope=all_groups 或 specific_group；非主人不要计划读取其他人的跨群消息。主人按群名问某个群但你暂时没有群号时，可在 params 里把群名写入 query，工具会尝试解析群号。
 - 用户要求从历史/记忆/旧对话里查找某个话题，或问“以前有没有说过/还记得我之前提过什么/相关记忆/语义检索”时，计划 memory_search；它是只读检索，不会写档案。当前群“刚才聊啥”这种需要原始时间线的问题优先 group_chat_context。
 - 用户问“这个人是谁/@某某有什么外号/谁是杂鱼/谁被叫过xxx/本群怎么称呼某人”时，计划 group_member_aliases 查询本群称呼记忆；这类结果只代表群内公开聊天里的称呼记录，不是真实身份断言。
 - 用户明确要求“记到我的个人档案/写进我的用户画像/更新个人档案/从刚才聊天提炼我的档案”时，计划 user_profile_update；“全面读我们的对话提炼档案/从我在所有群的发言里提炼/结合当前群上下文更新画像”也计划 user_profile_update，让工具按自然语言选择来源。只是询问“能不能写档案/有没有档案”不要计划。普通用户只更新自己的档案，主人明确指定用户时才可带 user_id。
@@ -1581,7 +1575,7 @@ ${toolSummary}
 - 主人明确要求“退出/离开/退了某群”时，才计划 group_leave；支持群号、唯一群名、本群/当前群，以及显式列出的多个目标。开放式“所有群/全部群/不友好那些群”不要计划，需让主人先明确群号或群名。group_leave 只创建待确认操作，确认后才真正退群。
 - 只计划“可用工具”中列出的工具，最多 5 个。
 - 群管理成员操作必须有明确目标；如果用户只给昵称/群名片且不确定 QQ 号，先计划 group_member_list 或 group_member_resolve。
-- 如果当前消息 @ 了唯一成员，用户说“这个人/他/她/这位/被 @ 的人”等指代时，应把该 @ 成员作为明确目标，可以直接计划对应群管理工具并在 params_hint 中写入 user_id。
+- 如果当前消息 @ 了唯一成员，用户说“这个人/他/她/这位/被 @ 的人”等指代时，应把该 @ 成员作为明确目标，可以直接计划对应群管理工具并在 params 中写入 user_id。
 - 入群审核的申请人还不是群成员；用户说“通过刚才那个/同意他进群/拒绝那个人”时，可以计划 group_request_handle 并省略 user_id，由工具在当前群只有一条待审申请时定位；用户说“让幸福的进来/拒绝昵称里有xxx的”时，把昵称、QQ、留言关键词或用户原话写入 target。
 - 全员禁言、处理入群申请等高影响操作必须从用户原话中明确得到开启/解除、通过/拒绝方向；不明确时不要计划操作工具。
 
@@ -1606,7 +1600,7 @@ ${agentRoundBlock}
     {
       "tool": "工具名",
       "purpose": "调用这个工具要获得什么",
-      "params_hint": {"参数名": "参数线索"}
+      "params": {"参数名": "可直接执行的准确参数"}
     }
   ]
 }
@@ -2079,6 +2073,7 @@ export class ChatHandler extends plugin {
             // Shell 执行：主人开启 enable_shell_exec 后可用一次性命令；本地文件查看也统一走 shell。
             const shellEnabled = e.isMaster && this.client.enableShellExec
             if (shellEnabled) {
+                enabledTools.push('config_manage')
                 enabledTools.push('shell_exec')
             }
             if (e.isMaster && this.client.enableShellSession) {
@@ -2308,11 +2303,13 @@ export class ChatHandler extends plugin {
                         }
                     } else {
                         try {
+                            const nextRiskLevel = mergeAgentRisk(agentTask.riskLevel, classifyAgentRisk(toolCalls))
                             await this.conversationManager.db.updateAgentTask?.(agentTask.taskId, {
                                 status: 'active',
-                                riskLevel: classifyAgentRisk(toolCalls) === 'high' ? 'high' : agentTask.riskLevel
+                                riskLevel: nextRiskLevel
                             })
                             agentTask.status = 'active'
+                            agentTask.riskLevel = nextRiskLevel
                         } catch (err) {
                             logger.warn(`[AI-Plugin] Agent任务续接更新失败: ${err.message}`)
                         }
@@ -2386,7 +2383,8 @@ export class ChatHandler extends plugin {
                             tool: call.name,
                             args: call.args,
                             status: toolStatus,
-                            text: agentFormattedResult
+                            text: agentFormattedResult,
+                            data: result.data
                         })
                         await recordAgentStep(this.conversationManager.db, agentTask, {
                             stepIndex: agentRound * 100 + roundCallIndex,
@@ -2457,6 +2455,11 @@ export class ChatHandler extends plugin {
                             userMessage = userMessage + '\n\n【重要指令】以上为服务器 Shell 命令的实际执行结果。请严格基于 stdout/stderr/退出码回答，不要编造未执行的结果。' + formattedResult
                             executedShellCommands.push(normalizeShellCommand(result.data?.command || call.args?.command))
                             logger.warn(`[AI-Plugin] shell_exec 完成，结果已注入`)
+                        } else if (call.name === 'config_manage') {
+                            suppressAutoFastChatContext = true
+                            const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
+                            userMessage = userMessage + '\n\n【重要指令】以上为结构化配置工具的真实结果。只有 verified=true 才能声称读取、校验或修改成功；changed=false 表示原配置已经满足目标，不要声称重复写入。' + formattedResult
+                            logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (call.name === 'shell_session') {
                             suppressAutoFastChatContext = true
                             const formattedResult = toolRegistry.formatToolResult('shell_session', result.data)

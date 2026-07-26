@@ -40,6 +40,7 @@ const FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS = [
     'web_fetch',
     'system_info',
     'shell_exec',
+    'config_manage',
     'shell_session',
     'memory_search',
     'group_chat_context',
@@ -149,6 +150,7 @@ function getRecentTaskToolCandidates(task, enabledTools = []) {
         add('shell_session')
         add('system_info')
     }
+    if (/(?:配置|yaml|yml|json|disable|enable|白名单|黑名单)/i.test(taskText)) add('config_manage')
     if (/(?:群聊|群消息|聊天记录|消息流水|前情|大家|他们|她们)/i.test(taskText)) {
         add('group_chat_context')
         add('group_chat_digest')
@@ -981,6 +983,7 @@ async function buildFastChatEnabledTools(e, client) {
     }
     const shellEnabled = e.isMaster && client.enableShellExec
     if (shellEnabled) {
+        enabledTools.push('config_manage')
         enabledTools.push('shell_exec')
     }
     if (e.isMaster && client.enableShellSession) {
@@ -1052,6 +1055,9 @@ function formatFastChatToolInjection(toolName, result) {
     }
     if (toolName === 'shell_exec' || toolName === 'shell_session') {
         return `\n\n【畅聊工具结果：服务器信息】请严格基于以下实际结果回答，不要编造未执行的内容。${formattedResult}`
+    }
+    if (toolName === 'config_manage') {
+        return `\n\n【畅聊工具结果：结构化配置】请严格依据以下真实结果回答；只有 verified=true 才能声称成功，changed=false 表示原配置已满足目标。${formattedResult}`
     }
     if (toolName === 'file_send' || toolName === 'file_download' || toolName === 'group_file_list' || toolName === 'group_file_download') {
         return `\n\n【畅聊工具结果：文件操作】请如实告知操作结果。${formattedResult}`
