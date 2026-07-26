@@ -3,6 +3,7 @@ global.logger = global.logger || { info() {}, warn() {}, error() {}, debug() {} 
 const {
     filterToolCallsByIntent,
     hasExplicitFileSendIntent,
+    hasExplicitLocalFileDiscoveryIntent,
     hasExplicitLocalFileMutationIntent,
     hasExplicitLocalFileReadIntent,
     hasExplicitUserProfileUpdateIntent,
@@ -20,6 +21,18 @@ const incidents = [
         id: 'read-relative-source-file',
         input: '#c读一下sendImage.js里 constructor 的 name',
         pass: text => hasExplicitLocalFileReadIntent(text)
+    },
+    {
+        id: 'discover-and-send-local-plugin',
+        input: '#c诺亚帮我看下plugins/example目录下是不是有个叫who are you的插件，如果有，帮我发出来到群里并且给我一份这个插件的使用方法',
+        pass: text => hasExplicitLocalFileDiscoveryIntent(text)
+            && hasExplicitFileSendIntent(text)
+            && !hasGroupChatContextQuestion(text)
+    },
+    {
+        id: 'upload-natural-plugin-name',
+        input: '#c不是，我的意思是把who are you插件上传到群里',
+        pass: text => hasExplicitFileSendIntent(text) && !hasGroupChatContextQuestion(text)
     },
     {
         id: 'absolute-config-file-priority',

@@ -248,8 +248,20 @@ export function hasExplicitFileSendIntent(text) {
     if (!value) return false
     if (hasExplicitLocalFileMutationIntent(value)) return false
     const sendIntent = /(?:发给我|发我|发送|发出来|发到(?:群里|这里)?|传给我|上传(?:到(?:群里|这里)?)?|把.{0,80}上传|试(?:一下|下)?上传)/i.test(value)
-    const targetHint = /\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\b|[\w.-]+\.(?:png|jpe?g|webp|gif|mp4|mov|avi|mkv|mp3|wav|ogg|flac|zip|7z|rar|gz|pdf|txt|log|md|json|ya?ml|js|ts|db|sqlite|bin)\b|(?:日志|配置|脚本|文件|目录|压缩包|这个|刚才|上面)/i.test(value)
+    const targetHint = /\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\b|(?:\.{0,2}\/)?(?:[\w@+.-]+\/)+[\w@+.-]*|[\w.-]+\.(?:png|jpe?g|webp|gif|mp4|mov|avi|mkv|mp3|wav|ogg|flac|zip|7z|rar|gz|pdf|txt|log|md|json|ya?ml|js|ts|db|sqlite|bin)\b|(?:日志|配置|插件|源码|源文件|脚本|文件|目录|压缩包|这个|那个|刚才|上面)/i.test(value)
     return sendIntent && targetHint
+}
+
+export function hasExplicitLocalFileDiscoveryIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    const relativePath = '(?:\\.{0,2}\\/)?(?:[\\w@+.-]+\\/)+[\\w@+.-]*'
+    const discoveryAction = '(?:看|看看|看下|看一下|检查|确认|查|查询|查找|搜索|找)'
+    const existenceHint = '(?:有没[有无]|是否有|是不是有|存在|叫|名为|名称|名字|哪个|哪一个|列出|里面|目录下)'
+    const localObject = '(?:插件|源码|源文件|脚本|文件|目录|代码)'
+    return new RegExp(`${discoveryAction}.{0,60}${relativePath}.{0,80}(?:${existenceHint}|${localObject})`, 'i').test(value)
+        || new RegExp(`${relativePath}.{0,80}(?:${discoveryAction}|${existenceHint}).{0,80}${localObject}`, 'i').test(value)
+        || new RegExp(`${relativePath}.{0,80}${existenceHint}`, 'i').test(value)
 }
 
 export function hasExplicitLocalFileMutationIntent(text) {
@@ -337,10 +349,12 @@ export function parseRecentGroupChatFollowupRequest(text, previousArgs = {}, use
 
 function hasNonChatRecordDomain(value = '') {
     const text = String(value || '')
-    const groupAnchor = /(?:群里|群内|群聊|群消息|聊天记录|消息记录|消息流水|畅聊记录|群上下文|大家|他们|她们|别人|群友|所有群|全部群|跨群|各群|别的群|其他群|其它群|本群|当前群|这个群|这群)/i.test(text)
-    if (groupAnchor) return false
-    return /(?:git|commit|提交|提交记录|变更记录|更新记录|改动记录|changelog|change\s*log|代码变更|仓库|repo|repository|分支|branch|diff|pull|插件|AI-Plugin)/i.test(text)
+    const nonChatDomain = /(?:git|commit|提交|提交记录|变更记录|更新记录|改动记录|changelog|change\s*log|代码变更|仓库|repo|repository|分支|branch|diff|pull|插件|AI-Plugin)/i.test(text)
         && /(?:看|查看|查|查询|列出|读取|读|总结|整理|回顾|分析|最近|前|最新|历史|记录|日志|log|变更|改动|提交)/i.test(text)
+    if (!nonChatDomain) return false
+    const explicitChatContext = /(?:群聊|群消息|聊天记录|消息记录|消息流水|畅聊记录|群上下文|大家|他们|她们|别人|群友|所有群|全部群|跨群|各群|别的群|其他群|其它群|本群|当前群|这个群|这群)/i.test(text)
+        || /(?:群里|群内).{0,24}(?:聊了啥|聊了什么|说了啥|说了什么|发了啥|发了什么|发生了什么|前情|总结|记录|流水)/i.test(text)
+    return !explicitChatContext
 }
 
 export function hasExplicitGroupChatDigestIntent(text) {
@@ -408,7 +422,7 @@ export function hasStrongGroupChatContextQuestion(text) {
     const groupActors = '(?:群里|群内|群聊|群消息|群友|大家|他们|她们|别人|本群|当前群|这个群|这群)'
     const crossGroupWords = '(?:所有群|全部群|跨群|各群|别的群|其他群|其它群|别群|那边群|别处群)'
     const shortTimeWords = '(?:刚才|刚刚|前面|之前|这会儿|刚才那会儿)'
-    const chatActions = '(?:聊(?:了|过)?(?:啥|什么|些啥|些什么)?|在聊(?:啥|什么)|说(?:了|过)?(?:啥|什么|些啥|些什么)?|在说(?:啥|什么)|发(?:了|过)?(?:啥|什么|些啥|些什么)?|发生(?:了)?(?:啥|什么|什么事)?|什么情况|啥情况|咋了|怎么了|在干嘛|在干什么|前情|前情提要)'
+    const chatActions = '(?:聊(?:了|过)?(?:啥|什么|些啥|些什么)|在聊(?:啥|什么)|说(?:了|过)?(?:啥|什么|些啥|些什么)|在说(?:啥|什么)|发(?:了|过)?(?:啥|什么|些啥|些什么)|发生(?:了)?(?:啥|什么|什么事)|什么情况|啥情况|咋了|怎么了|在干嘛|在干什么|前情|前情提要)'
     const recordActions = '(?:总结|概括|回顾|消息|记录|流水)'
 
     return new RegExp(`${groupActors}.{0,28}(?:${chatActions}|${recordActions})|(?:${chatActions}|${recordActions}).{0,24}${groupActors}`, 'i').test(value)
@@ -523,6 +537,7 @@ export function hasExplicitShellIntent(text, toolName = '') {
         return false
     }
     if (hasExplicitLocalFileMutationIntent(value)) return true
+    if (hasExplicitLocalFileDiscoveryIntent(value)) return true
     if (toolName === 'shell_session' && new RegExp(sessionWords, 'i').test(value)) return true
     if (/\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\b/i.test(value)
         && /(?:看|看看|读|读取|打开|检查|分析|搜索|查找|统计|内容|日志|配置|脚本|文件|目录)/i.test(value)) return true

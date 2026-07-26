@@ -68,10 +68,20 @@ export function resolvePathInput(inputPath, context = {}) {
     return raw
 }
 
+export function normalizeFuzzyFileName(value) {
+    return String(value || '')
+        .normalize('NFKC')
+        .toLowerCase()
+        .replace(/(?:这个|那个|刚才|上面|前面|名为|名字叫|叫做|叫|插件|源码|源文件|脚本|文件|目录)+/g, '')
+        .replace(/\.(?:tar\.gz|[a-z0-9]{1,8})$/i, '')
+        .replace(/[\s_.\-–—()（）\[\]【】'"“”‘’]+/g, '')
+}
+
 export function findFuzzyPathInAllowedRoots(inputPath) {
     if (!inputPath || typeof inputPath !== 'string') return null
 
     const query = path.basename(inputPath.trim()).toLowerCase().replace(/(目录|文件)$/g, '')
+    const normalizedQuery = normalizeFuzzyFileName(query)
     if (!query) return null
 
     const roots = Config.FILE_ROOTS
@@ -84,6 +94,17 @@ export function findFuzzyPathInAllowedRoots(inputPath) {
     let visited = 0
     let exactMatch = null
     let fuzzyMatch = null
+    let fuzzyScore = Number.POSITIVE_INFINITY
+
+    const considerFuzzyMatch = (fullPath, name) => {
+        const normalizedName = normalizeFuzzyFileName(name)
+        if (!normalizedQuery || !normalizedName.includes(normalizedQuery)) return
+        const score = normalizedName.length - normalizedQuery.length
+        if (!fuzzyMatch || score < fuzzyScore) {
+            fuzzyMatch = fullPath
+            fuzzyScore = score
+        }
+    }
 
     function walk(dir, depth = 0) {
         if (visited >= maxVisited || depth > maxDepth || exactMatch) return
@@ -107,9 +128,7 @@ export function findFuzzyPathInAllowedRoots(inputPath) {
                     exactMatch = fullPath
                     return
                 }
-                if (!fuzzyMatch && name.includes(query)) {
-                    fuzzyMatch = fullPath
-                }
+                considerFuzzyMatch(fullPath, name)
             } else if (entry.isDirectory()) {
                 if (ignoredDirs.has(entry.name)) continue
                 visited++
@@ -117,9 +136,7 @@ export function findFuzzyPathInAllowedRoots(inputPath) {
                     exactMatch = fullPath
                     return
                 }
-                if (!fuzzyMatch && name.includes(query)) {
-                    fuzzyMatch = fullPath
-                }
+                considerFuzzyMatch(fullPath, name)
                 walk(fullPath, depth + 1)
             }
         }
@@ -134,7 +151,7 @@ export function findFuzzyPathInAllowedRoots(inputPath) {
             if (stat.isFile()) {
                 const name = path.basename(realRoot).toLowerCase()
                 if (name === query) return realRoot
-                if (!fuzzyMatch && name.includes(query)) fuzzyMatch = realRoot
+                considerFuzzyMatch(realRoot, name)
             } else if (stat.isDirectory()) {
                 walk(realRoot)
             }

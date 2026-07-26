@@ -11,6 +11,7 @@ const {
     hasExplicitLocalFileMutationIntent,
     hasExplicitLocalFileReadIntent,
     hasExplicitFileSendIntent,
+    hasExplicitLocalFileDiscoveryIntent,
     hasExplicitGroupChatContextIntent,
     hasExplicitShellIntent,
     hasExplicitUserProfileHistoryExtractionIntent,
@@ -26,6 +27,7 @@ const {
 const { classifyAgentRisk, classifyToolCallRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } = await import('../utils/agent_policy.js')
 const { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
+const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
 const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
@@ -92,6 +94,20 @@ const routingCases = [
         assert: text => hasExplicitLocalFileReadIntent(text) && hasExplicitShellIntent(text)
     },
     {
+        name: '查找插件并发送命中复合工具语义',
+        text: '#c帮我看下plugins/example目录下是不是有个叫who are you的插件，如果有，帮我发出来到群里',
+        assert: text => hasExplicitLocalFileDiscoveryIntent(text)
+            && hasExplicitShellIntent(text)
+            && hasExplicitFileSendIntent(text)
+            && !hasGroupChatContextQuestion(text)
+            && !hasStrongGroupChatContextQuestion(text)
+    },
+    {
+        name: '自然语言插件上传命中文件发送',
+        text: '#c不是，我的意思是把who are you插件上传到群里',
+        assert: text => hasExplicitFileSendIntent(text) && !hasGroupChatContextQuestion(text)
+    },
+    {
         name: '普通提及脚本名不会误触发Shell',
         text: '#csendimage.js这个名字挺直观的',
         assert: text => !hasExplicitLocalFileReadIntent(text) && !hasExplicitShellIntent(text)
@@ -142,6 +158,12 @@ const routingCases = [
 ]
 
 for (const item of routingCases) check(item.name, item.assert(item.text), item.text)
+
+const compoundLocalPluginGuard = filterToolCallsByIntent([
+    { name: 'shell_exec', args: { command: "find plugins/example -maxdepth 1 -type f -iname '*who*are*you*'" } },
+    { name: 'file_send', args: { path: 'who are you插件' } }
+], '#c帮我看下plugins/example目录下是不是有个叫who are you的插件，如果有，帮我发出来到群里')
+check('复合插件任务允许查找后发送', compoundLocalPluginGuard.tools.length === 2, JSON.stringify(compoundLocalPluginGuard))
 
 const previousConversationManager = global.AIPluginConversationManager
 let namedGroupQueryOptions = null
@@ -285,6 +307,7 @@ check('有工具纠正提示限定系统结果区块', buildFinalAnswerRetryInst
 check('代码中出现图片字样不会误触发历史读图', !isGroupContextImageQuestion("dsc: '发送随机图片'"))
 check('明确询问刚才图片会触发历史读图', isGroupContextImageQuestion('刚才那张图里写了什么？'))
 check('过期QQ临时图片链接会被跳过', isExpiredGroupContextImageUrl('https://multimedia.nt.qq.com.cn/download?appid=1407&rkey=test', '2026-07-26 14:00:00', Date.parse('2026-07-26T14:10:01Z')))
+check('自然语言插件名可匹配实际文件名', normalizeFuzzyFileName('who_are_you1.18.2.js').includes(normalizeFuzzyFileName('who are you插件')))
 
 check('只读Shell被识别为低风险', classifyToolCallRisk({ name: 'shell_exec', args: { command: "cat -- '/root/Yunzai/config/config/group.yaml'" } }) === 'low')
 check('结构化配置更新被识别为中风险', classifyToolCallRisk({ name: 'config_manage', args: { action: 'update' } }) === 'medium')
