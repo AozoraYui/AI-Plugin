@@ -67,8 +67,8 @@ function classifyShellCommandRisk(command = '') {
         .split(/(?:&&|\|\||[;|])/)
         .map(item => item.trim())
         .filter(Boolean)
-    const readOnly = /^(?:(?:sudo|env)\s+)*(?:pwd|ls|find|rg|grep|cat|head|tail|less|more|stat|file|wc|du|df|which|whereis|type|realpath|readlink|date|uptime|ps|pgrep|ip|ss|netstat|lsof|jq|yq|awk|sed\b(?!.*\s-i)|git\s+(?:status|log|diff|show|branch|rev-parse|remote)|npm\s+(?:list|view)|pnpm\s+list|yarn\s+list)\b/i
-    return segments.length > 0 && segments.every(segment => readOnly.test(segment)) ? 'low' : 'medium'
+    const readOnly = /^(?:(?:sudo|env)\s+)*(?:(?:\/usr)?\/bin\/)?(?:pwd|ls|find|rg|grep|cat|head|tail|less|more|stat|file|wc|du|df|free|uname|hostname|whoami|id|echo|printf|which|whereis|type|realpath|readlink|date|uptime|ps|pgrep|ip|ss|netstat|lsof|jq|yq|awk|sed\b(?!.*\s-i)|git\s+(?:status|log|diff|show|branch|rev-parse|remote|ls-files|grep)|npm\s+(?:list|view)|pnpm\s+list|yarn\s+list)\b/i
+    return segments.length > 0 && segments.every(segment => readOnly.test(segment)) ? 'low' : 'high'
 }
 
 export function classifyToolCallRisk(call = {}) {

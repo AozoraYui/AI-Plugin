@@ -31,11 +31,14 @@ const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
 const { executePendingShellExec, shellExecTool } = await import('../tools/shell_exec.js')
 const { shellSessionTool } = await import('../tools/shell_session.js')
+await import('../tools/group_admin.js')
 const { savePendingAction, loadPendingAction, listPendingActions, clearPendingAction, parseStrictPendingDecision } = await import('../utils/pending_actions.js')
 const { deterministicToolDecision, normalizeToolResult } = await import('../utils/tool_result.js')
 const { agentToolCallKey, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound } = await import('../utils/agent_runtime.js')
 const { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, updateAgentTaskProgress } = await import('../utils/agent_task_runtime.js')
 const { normalizeAgentTaskPlan, selectNextAgentPlanStep } = await import('../utils/agent_plan.js')
+const { getRecentTaskToolArgs, hasImplicitRecentTaskReference } = await import('../utils/agent_reference.js')
+const { executeConfirmedPendingToolCall, validatePendingToolCallScene } = await import('../utils/tool_execution_policy.js')
 const { AIDatabase } = await import('../utils/database.js')
 const { default: sqlite3 } = await import('sqlite3')
 
@@ -357,6 +360,14 @@ check('统一工具结果协议识别待确认状态', normalizedPending.ok && n
 check('统一确定性验证器将待确认为waiting', deterministicToolDecision([normalizedPending])?.completionStatus === 'waiting')
 check('高风险确认只接受明确执行短语', parseStrictPendingDecision({ type: 'shell_exec' }, '#c确认执行')?.decision === 'confirm')
 check('高风险确认拒绝含糊同意表达', parseStrictPendingDecision({ type: 'shell_exec' }, '#c好吧')?.decision === 'none')
+check('统一高风险工具确认同样拒绝含糊表达', parseStrictPendingDecision({ type: 'tool_call', risk: 'high' }, '#c好吧')?.decision === 'none')
+check('共享指代解析识别括号群续问', hasImplicitRecentTaskReference('#c我在括号那个群还说了些啥'))
+check('共享指代解析不污染完整指定群请求', !hasImplicitRecentTaskReference('#c你看看名字叫「【】」的群最近几个小时聊了些啥'))
+check('共享任务参数读取选择最近一次同名工具', getRecentTaskToolArgs({ steps: [
+    { toolName: 'group_chat_context', toolArgs: { query: '旧群' } },
+    { toolName: 'shell_exec', toolArgs: { command: 'pwd' } },
+    { toolName: 'group_chat_context', toolArgs: { query: '【】' } }
+] }, 'group_chat_context')?.query === '【】')
 
 const highRiskShellCommands = [
     "bash -c 'rm -rf /tmp/example'",
@@ -375,6 +386,9 @@ for (const command of highRiskShellCommands) {
 for (const command of ['cat package.json', 'rg -n "agent" utils', 'git status']) {
     check(`只读Shell仍判定低风险: ${command.split(' ')[0]}`, classifyToolCallRisk({ name: 'shell_exec', args: { command } }) === 'low', command)
 }
+check('系统绝对路径只读命令保持低风险', classifyToolCallRisk({ name: 'shell_exec', args: { command: '/bin/cat /etc/os-release' } }) === 'low')
+check('系统绝对路径破坏命令仍判定高风险', classifyToolCallRisk({ name: 'shell_exec', args: { command: '/bin/rm -rf /tmp/example' } }) === 'high')
+check('无法静态理解的Shell默认判定高风险', classifyToolCallRisk({ name: 'shell_exec', args: { command: 'custom-deploy-tool --run' } }) === 'high')
 
 const redisStore = new Map()
 global.redis = {
@@ -382,6 +396,52 @@ global.redis = {
     async get(key) { return redisStore.get(key) || null },
     async del(key) { return redisStore.delete(key) ? 1 : 0 }
 }
+const centralAdminPending = await toolRegistry.execute('group_kick', {
+    user_id: '12345678',
+    block: false
+}, true, {
+    userId: 'policy-user',
+    groupId: '10001',
+    event: { user_id: 'policy-user', group_id: '10001', isMaster: true },
+    userMessage: '把 12345678 踢出群'
+})
+check('注册表统一拦截高风险群管理操作', centralAdminPending.success
+    && centralAdminPending.data?.pending
+    && centralAdminPending.data?.centrallyManagedPending,
+JSON.stringify(centralAdminPending))
+check('统一高风险待确认回执明确说明尚未执行', /尚未执行/.test(toolRegistry.formatToolResult('group_kick', centralAdminPending.data)), toolRegistry.formatToolResult('group_kick', centralAdminPending.data))
+const centralAdminRecord = await loadPendingAction('policy-user', centralAdminPending.data?.pendingId)
+check('高风险群管理参数被冻结到待确认记录', centralAdminRecord?.type === 'tool_call'
+    && centralAdminRecord?.toolName === 'group_kick'
+    && centralAdminRecord?.args?.user_id === '12345678',
+JSON.stringify(centralAdminRecord))
+check('高风险待确认操作只能在原群恢复', !validatePendingToolCallScene(centralAdminRecord, {
+    user_id: 'policy-user',
+    group_id: 'other-group'
+}).ok)
+let confirmedPendingInvocation = null
+const confirmedPendingExecution = await executeConfirmedPendingToolCall(centralAdminRecord, {
+    user_id: 'policy-user',
+    group_id: '10001',
+    isMaster: true
+}, {
+    async execute(name, args, isMaster, context) {
+        confirmedPendingInvocation = { name, args, isMaster, context }
+        return { success: true, data: { ok: true } }
+    }
+})
+check('确认后只执行被冻结的工具参数', confirmedPendingExecution.success
+    && confirmedPendingInvocation?.name === 'group_kick'
+    && confirmedPendingInvocation?.args?.user_id === '12345678'
+    && confirmedPendingInvocation?.context?.confirmedPendingAction === true,
+JSON.stringify(confirmedPendingInvocation))
+const ambiguousAdminCall = await toolRegistry.execute('group_kick', { target: '那个人' }, true, {
+    userId: 'policy-user-ambiguous',
+    groupId: '10001',
+    event: { user_id: 'policy-user-ambiguous', group_id: '10001', isMaster: true }
+})
+check('高风险群管理拒绝在确认阶段重新猜目标', !ambiguousAdminCall.success && /固定目标 QQ 号/.test(ambiguousAdminCall.error || ''), JSON.stringify(ambiguousAdminCall))
+await clearPendingAction('policy-user', centralAdminPending.data?.pendingId)
 const shellPendingResult = await shellExecTool.execute({ command: 'kill -0 $$' }, {
     userId: 'agent-eval-user',
     userMessage: '执行 kill -0 $$'

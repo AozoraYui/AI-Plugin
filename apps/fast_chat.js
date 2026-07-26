@@ -10,11 +10,12 @@ import { buildGroupContextImageSummary, formatGroupContextImageSummary, isExpire
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memory_context.js'
-import { filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest } from '../utils/tool_intent.js'
+import { filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 import { executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound } from '../utils/agent_runtime.js'
 import { classifyAgentRisk } from '../utils/agent_policy.js'
+import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
 import { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, updateAgentTaskProgress } from '../utils/agent_task_runtime.js'
 
 const replyCooldown = new Map()
@@ -119,16 +120,6 @@ function parseDBTimestampMs(value = '') {
     const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized)
     const ms = Date.parse(hasZone ? normalized : `${normalized}Z`)
     return Number.isFinite(ms) ? ms : 0
-}
-
-function hasImplicitRecentTaskReference(text = '') {
-    const value = String(text || '').replace(/^#[A-Za-z0-9_]+\s*/i, '').trim()
-    if (!value) return false
-    if (/^(?:任务|agent).{0,12}(?:状态|进度|取消|停止|终止)/i.test(value)) return false
-    return /^(?:接着|继续|再|重新|还有|刚才|刚刚|上次|前面)[，,。\s]*/i.test(value)
-        || /^(?:这样吧|那|那么|然后|顺便|另外)[，,。\s]*(?:再|继续|接着|看|看看|查|查看|读|读取|列|列出|总结|整理|分析|输出|换成|改成|多看|多查|更多|完整|详细)/i.test(value)
-        || /(?:再|继续|接着|重新|顺便|另外|还有|刚才|刚刚|上次|前面|更多|完整|详细|展开|换成|改成|多看|多查).{0,30}(?:看|看看|查|查看|读|读取|列|列出|总结|整理|分析|输出|结果|记录|条)/i.test(value)
-        || /(?:看|看看|查|查看|读|读取|列|列出|总结|整理|分析).{0,30}(?:更多|完整|详细|展开|前|后|最近|上次|刚才|刚刚|\d{1,4}\s*条|[一二两三四五六七八九十百]{1,4}\s*条)/i.test(value)
 }
 
 function formatRecentAgentStepLine(step, index) {
@@ -1294,7 +1285,17 @@ export class FastChatHandler extends plugin {
                 const namedGroupContextArgs = e.isMaster && enabledTools.includes('group_chat_context')
                     ? parseNamedGroupChatContextRequest(toolRoutingText)
                     : null
-                if (namedGroupContextArgs) {
+                const recentGroupFollowupArgs = recentAgentTaskForPlanning && enabledTools.includes('group_chat_context')
+                    ? parseRecentGroupChatFollowupRequest(
+                        toolRoutingText,
+                        getRecentTaskToolArgs(recentAgentTaskForPlanning, 'group_chat_context') || {},
+                        normalized.userId
+                    )
+                    : null
+                if (recentGroupFollowupArgs) {
+                    toolCalls = [{ name: 'group_chat_context', args: recentGroupFollowupArgs }]
+                    logger.info('[AI-Plugin] [畅聊] 规则预路由命中: group_chat_context - 继承刚才查询的群目标并继续读取当前用户发言')
+                } else if (namedGroupContextArgs) {
                     toolCalls = [{ name: 'group_chat_context', args: namedGroupContextArgs }]
                     logger.info(`[AI-Plugin] [畅聊] 规则预路由命中: group_chat_context - 主人明确查询指定群「${namedGroupContextArgs.query}」`)
                 } else if (groupChatDigestArgs) {

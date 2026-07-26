@@ -170,13 +170,13 @@ export function formatPendingTtl(record = {}) {
 }
 
 export function parseStrictPendingDecision(record = {}, instruction = '') {
-    if (!['shell_exec', 'shell_session'].includes(record?.type)) return null
+    if (!['shell_exec', 'shell_session', 'tool_call'].includes(record?.type) && record?.risk !== 'high') return null
     const normalized = String(instruction || '').replace(/^#[A-Za-z0-9_]+\s*/i, '').trim()
     if (/^(?:确认执行|确认|同意执行|继续执行|执行)$/.test(normalized)) {
-        return { decision: 'confirm', reason: '高风险 Shell 明确确认短语' }
+        return { decision: 'confirm', reason: '高风险操作明确确认短语' }
     }
     if (/^(?:取消|取消执行|不要执行|别执行|停止)$/.test(normalized)) {
-        return { decision: 'cancel', reason: '高风险 Shell 明确取消短语' }
+        return { decision: 'cancel', reason: '高风险操作明确取消短语' }
     }
-    return { decision: 'none', reason: '高风险 Shell 只接受明确确认或取消短语' }
+    return { decision: 'none', reason: '高风险操作只接受明确确认或取消短语' }
 }

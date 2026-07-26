@@ -5,6 +5,7 @@
 
 import { filterToolCallsByIntent, getPrimaryUserInstruction } from '../utils/tool_intent.js'
 import { normalizeToolResult } from '../utils/tool_result.js'
+import { applyToolExecutionPolicy, formatCentralPendingToolResult } from '../utils/tool_execution_policy.js'
 
 const TOOL_USAGE_GUIDES = {
     web_search: {
@@ -720,6 +721,24 @@ class ToolRegistry {
             return { success: false, error: '权限不足：此工具仅限机器人主人使用' }
         }
 
+        const policy = await applyToolExecutionPolicy(name, args, { ...context, isMaster })
+        if (!policy.allowed) {
+            if (policy.pending) {
+                logger.warn(`[AI-Plugin] 高风险工具已进入待确认: tool=${name}, pending=${policy.data.pendingId}`)
+                return {
+                    success: true,
+                    data: policy.data,
+                    protocol: normalizeToolResult(name, policy.data)
+                }
+            }
+            logger.warn(`[AI-Plugin] 工具 ${name} 被统一安全策略阻止: ${policy.error}`)
+            return {
+                success: false,
+                error: policy.error,
+                protocol: normalizeToolResult(name, { ok: false, error: policy.error })
+            }
+        }
+
         logger.info(`[AI-Plugin] 调用工具: ${name}, 参数: ${JSON.stringify(args)}`)
         const startedAt = Date.now()
         try {
@@ -745,6 +764,7 @@ class ToolRegistry {
 
     /** 格式化工具结果为文本（注入到 prompt） */
     formatToolResult(name, data) {
+        if (data?.centrallyManagedPending) return formatCentralPendingToolResult(data)
         const tool = this.tools.get(name)
         if (tool?.formatResult) {
             return tool.formatResult(data)

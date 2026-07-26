@@ -15,7 +15,9 @@ import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
 import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileMutationIntent, hasExplicitLocalFileReadIntent, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction, parseStrictPendingDecision } from '../utils/pending_actions.js'
+import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
+import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 import { executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound, stableAgentStringify } from '../utils/agent_runtime.js'
 import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK_SUMMARY_MAX_CHARS, mergeAgentRisk, recordAgentTaskStep } from '../utils/agent_task_runtime.js'
@@ -236,9 +238,18 @@ function extractUrlsFromText(text, limit = 10) {
 }
 
 function formatPendingActionForJudge(record = {}) {
-    const type = record.type === 'group_leave' ? '退群' : (record.type === 'group_send_message' ? '群消息代发' : (['shell_exec', 'shell_session'].includes(record.type) ? '高风险 Shell 命令' : record.type || '未知操作'))
+    const type = record.type === 'group_leave'
+        ? '退群'
+        : (record.type === 'group_send_message'
+            ? '群消息代发'
+            : (['shell_exec', 'shell_session'].includes(record.type)
+                ? '高风险 Shell 命令'
+                : (record.type === 'tool_call' ? getToolActionLabel(record.toolName) : record.type || '未知操作')))
     if (['shell_exec', 'shell_session'].includes(record.type)) {
         return `操作类型：${type}\n风险等级：${record.risk || 'high'}\n命令：${record.command || record.args?.command || ''}\n目录：${record.cwd || record.args?.cwd || process.cwd()}`
+    }
+    if (record.type === 'tool_call') {
+        return `操作类型：${type}\n风险等级：${record.risk || 'high'}\n工具：${record.toolName || ''}\n参数：${JSON.stringify(record.args || {})}\n目标群：${record.groupId || '当前群'}`
     }
     const groups = Array.isArray(record.groups) ? record.groups : []
     const groupLines = groups
@@ -293,7 +304,7 @@ ${text}
 }
 
 async function handlePendingActionShortcut(e, instruction = '', client = null, modelGroupKey = Config.DEFAULT_MODEL_GROUP, providerFilter = null) {
-    if (!e?.isMaster) return false
+    if (!e?.user_id) return false
     const text = getPrimaryUserInstruction(instruction).trim()
     if (!text) return false
 
@@ -306,12 +317,23 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
     if (judgement.decision === 'cancel') {
         await clearPendingAction(e.user_id, pending.id)
         await updatePendingActionAgentTask(e, pending, { ok: false, error: '用户取消待确认操作。' }, 'cancel')
-        const cancelledName = pending.type === 'group_leave' ? '退群' : (['shell_exec', 'shell_session'].includes(pending.type) ? '高风险 Shell 命令' : '群消息代发')
+        const cancelledName = pending.type === 'group_leave'
+            ? '退群'
+            : (['shell_exec', 'shell_session'].includes(pending.type)
+                ? '高风险 Shell 命令'
+                : (pending.type === 'tool_call' ? getToolActionLabel(pending.toolName) : '群消息代发'))
         await e.reply(`已取消待确认操作：${cancelledName}。`, true)
         return true
     }
 
     if (judgement.decision !== 'confirm') return false
+    if (pending.type === 'tool_call') {
+        const scene = validatePendingToolCallScene(pending, e)
+        if (!scene.ok) {
+            await e.reply(`${scene.error} 如果不执行，可以在这里回复「#c取消」。`, true)
+            return true
+        }
+    }
 
     if (pending.type === 'shell_exec' || pending.type === 'shell_session') {
         await clearPendingAction(e.user_id, pending.id)
@@ -321,6 +343,18 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
         const formatted = toolRegistry.formatToolResult(pending.type, result).trim()
         await updatePendingActionAgentTask(e, pending, result, 'confirm')
         await e.reply(formatted || (result.ok ? '高风险 Shell 命令已执行。' : `执行失败：${result.error || '未知错误'}`), true)
+        return true
+    }
+
+    if (pending.type === 'tool_call') {
+        await clearPendingAction(e.user_id, pending.id)
+        const execution = await executeConfirmedPendingToolCall(pending, e, toolRegistry)
+        const result = execution.success ? execution.data : { ok: false, error: execution.error || '工具执行失败' }
+        const formatted = execution.success
+            ? toolRegistry.formatToolResult(pending.toolName, result).trim()
+            : `执行失败：${execution.error || '未知错误'}`
+        await updatePendingActionAgentTask(e, pending, result, 'confirm')
+        await e.reply(formatted || (result?.ok ? `${getToolActionLabel(pending.toolName)}已执行。` : `执行失败：${result?.error || '未知错误'}`), true)
         return true
     }
 
@@ -421,6 +455,9 @@ async function loadAgentTaskForPendingAction(e, pending = {}) {
 }
 
 function formatPendingActionResultForAgent(toolName, result) {
+    if (result && typeof result === 'object' && result.ok === false && result.error) {
+        return `执行失败：${result.error}`
+    }
     try {
         const formatted = toolRegistry.formatToolResult(toolName, result).trim()
         if (formatted) return formatted
@@ -437,13 +474,18 @@ async function updatePendingActionAgentTask(e, pending = {}, result = {}, decisi
     const task = await loadAgentTaskForPendingAction(e, pending)
     if (!task?.taskId) return
 
+    const effectiveToolName = pending.type === 'tool_call' ? pending.toolName : pending.type
     const actionName = pending.type === 'group_leave'
         ? '退群'
-        : (pending.type === 'group_send_message' ? '群消息代发' : (['shell_exec', 'shell_session'].includes(pending.type) ? '高风险 Shell 命令' : pending.type || '待确认操作'))
+        : (pending.type === 'group_send_message'
+            ? '群消息代发'
+            : (['shell_exec', 'shell_session'].includes(pending.type)
+                ? '高风险 Shell 命令'
+                : (pending.type === 'tool_call' ? getToolActionLabel(pending.toolName) : pending.type || '待确认操作')))
     const finalStatus = decision === 'cancel'
         ? 'cancelled'
         : ((result?.ok || result?.partial) ? 'completed' : 'blocked')
-    const formattedResult = formatPendingActionResultForAgent(pending.type, result)
+    const formattedResult = formatPendingActionResultForAgent(effectiveToolName, result)
     const observation = decision === 'cancel'
         ? `用户已取消待确认操作：${actionName}。`
         : `用户已确认待确认操作：${actionName}；执行状态：${finalStatus}。\n${formattedResult}`
@@ -453,7 +495,7 @@ async function updatePendingActionAgentTask(e, pending = {}, result = {}, decisi
     await recordAgentStep(db, task, {
         stepIndex: 9000,
         stepType: 'confirmation',
-        toolName: pending.type || '',
+        toolName: effectiveToolName || '',
         toolArgs: {
             pendingId: pending.id || '',
             decision
@@ -517,31 +559,6 @@ function parseDBTimestampMs(value = '') {
     const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized)
     const ms = Date.parse(hasZone ? normalized : `${normalized}Z`)
     return Number.isFinite(ms) ? ms : 0
-}
-
-function hasImplicitRecentTaskReference(text = '') {
-    const value = getPrimaryUserInstruction(text)
-        .replace(/^#[A-Za-z0-9_]+\s*/i, '')
-        .trim()
-    if (!value) return false
-    if (/^(?:任务|agent).{0,12}(?:状态|进度|取消|停止|终止)/i.test(value)) return false
-    if (parseNamedGroupChatContextRequest(value)) return false
-
-    return hasExplicitLocalFileMutationIntent(value)
-        || /^(?:接着|继续|再|重新|还有|刚才|刚刚|上次|前面)[，,。\s]*/i.test(value)
-        || /^(?:这样吧|那|那么|然后|顺便|另外)[，,。\s]*(?:再|继续|接着|看|看看|查|查看|读|读取|列|列出|总结|整理|分析|输出|换成|改成|多看|多查|更多|完整|详细)/i.test(value)
-        || /(?:再|继续|接着|重新|顺便|另外|还有|刚才|刚刚|上次|前面|更多|完整|详细|展开|换成|改成|多看|多查).{0,30}(?:看|看看|查|查看|读|读取|列|列出|总结|整理|分析|输出|结果|记录|条)/i.test(value)
-        || /(?:看|看看|查|查看|读|读取|列|列出|总结|整理|分析).{0,30}(?:更多|完整|详细|展开|前|后|最近|上次|刚才|刚刚|\d{1,4}\s*条|[一二两三四五六七八九十百]{1,4}\s*条)/i.test(value)
-        || /(?:(?:括号|方括号)(?:那个|这个)?|刚才查的|刚才看的|前面查的|前面看的|刚才那个|前面那个|上个|那个|这个|该)\s*(?:的)?群.{0,30}(?:还|又|另外|其他|其它|别的|更多|说|发|聊|消息|发言)/i.test(value)
-}
-
-function getRecentTaskToolArgs(task, toolName) {
-    const steps = Array.isArray(task?.steps) ? task.steps : []
-    for (let index = steps.length - 1; index >= 0; index--) {
-        const step = steps[index]
-        if (step?.toolName === toolName && step.toolArgs && typeof step.toolArgs === 'object') return step.toolArgs
-    }
-    return null
 }
 
 function getRecentTaskToolCandidates(task, enabledTools = []) {
