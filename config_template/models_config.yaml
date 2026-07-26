@@ -217,6 +217,7 @@ enable_web_fetch: false
 #   FAST_CHAT_MAX_CONTEXT_IMAGES: 本轮最多读取多少张图；3 表示最多读 3 张，不是超过 3 张就分批；0 表示禁用畅聊读图
 #   FAST_CHAT_MAX_CONTEXT_IMAGES 可设为 unlimited / -1 表示本轮读图数量不限制
 #   FAST_CHAT_IMAGE_BATCH_SIZE: 分批读图批大小；待读图片超过该值时，会按批预读成文字摘要后再最终回复
+#   FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS: 历史 QQ 临时图片链接最大可读年龄；默认 300 秒，超过后跳过以避免过期 rkey 返回 HTTP 400；0 表示不限制
 #   普通“刚才聊了什么/前情总结”只读取文本和图片元信息，不会自动预读历史图片；明确问图或要求读图时才会临时读取图片
 #   畅聊只保存图片元信息，不会把图片本体或 base64 写入数据库
 #
@@ -250,6 +251,7 @@ enable_web_fetch: false
 # FAST_CHAT_MAX_CONTEXT_IMAGES: 3      # 本轮最多读 3 张图；unlimited / -1 为不限制，0 为禁用读图
 # FAST_CHAT_AUTO_READ_IMAGE_LIMIT: 2   # 单条触发消息最多 2 张图时自动读图，超过则需明确要求读图
 # FAST_CHAT_IMAGE_BATCH_SIZE: 3        # 待读图片超过 3 张时，每批 3 张先生成读图摘要再回复
+# FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS: 300 # 历史 QQ 临时图片链接最多读取 5 分钟内的；0 表示不限制（可能遇到过期 rkey 400）
 # 普通群聊前情总结不会自动读历史图片；只有明确问图/要求读图才会按以上配置临时读取图片
 # enable_vector_memory: false         # 本地向量记忆；开启前先安装 scripts/requirements.txt 里的 Python 依赖
 # VECTOR_MODEL: shibing624/text2vec-base-chinese

@@ -91,6 +91,7 @@ const defaultConfig = {
     FAST_CHAT_MAX_CONTEXT_IMAGES: 3,
     FAST_CHAT_AUTO_READ_IMAGE_LIMIT: 2,
     FAST_CHAT_IMAGE_BATCH_SIZE: 3,
+    FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS: 300,
     // ========== 文件白名单与 Shell 工具配置 ==========
     // 本地图片路径输入的单文件最大大小（字节），默认 8MB
     FILE_MAX_SIZE: 8388608,
@@ -431,6 +432,11 @@ export const Config = {
     },
     get FAST_CHAT_IMAGE_BATCH_SIZE() { return config.FAST_CHAT_IMAGE_BATCH_SIZE ?? defaultConfig.FAST_CHAT_IMAGE_BATCH_SIZE },
     set FAST_CHAT_IMAGE_BATCH_SIZE(val) { config.FAST_CHAT_IMAGE_BATCH_SIZE = parsePositiveInteger(val, defaultConfig.FAST_CHAT_IMAGE_BATCH_SIZE) },
+    get FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS() { return config.FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS ?? defaultConfig.FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS },
+    set FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS(val) {
+        const num = Number(val)
+        config.FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS = Number.isFinite(num) && num >= 0 ? num : defaultConfig.FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS
+    },
     get FILE_ROOTS() { return loadedFileRoots ?? defaultConfig.FILE_ROOTS },
     get FILE_MAX_SIZE() { return config.FILE_MAX_SIZE ?? defaultConfig.FILE_MAX_SIZE },
     get SHELL_EXEC_TIMEOUT_MS() { return config.SHELL_EXEC_TIMEOUT_MS ?? defaultConfig.SHELL_EXEC_TIMEOUT_MS },

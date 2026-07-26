@@ -6,7 +6,7 @@ import { formatDBTimestampToBeijing, getBeijingTimeStr, getTodayDateStr, takeSou
 import { processImagesInBatches } from '../utils/image.js'
 import { buildEnvironmentHint, expandForwardMsg, extractCardInfo } from '../utils/message_context.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedUserIds } from '../utils/group_alias.js'
-import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
+import { buildGroupContextImageSummary, formatGroupContextImageSummary, isExpiredGroupContextImageUrl, isGroupContextImageQuestion, shouldReadGroupContextImages } from '../utils/group_context_images.js'
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memory_context.js'
@@ -372,7 +372,7 @@ async function normalizeGroupMessage(e) {
 }
 
 function isImageQuestion(text) {
-    return /(图|图片|截图|照片|表情|刚才那张|刚才那些|这张|这几张|这些图|那张|那几张|那些图|上面那张|上面那些)/i.test(text || '')
+    return isGroupContextImageQuestion(text)
 }
 
 function isExplicitImageReadRequest(text, hasCurrentImages = false) {
@@ -474,6 +474,7 @@ function collectRecentImageUrls(logs = [], limit = 3, options = {}) {
     } = options
     const urls = []
     let skippedOversizedMessages = 0
+    let skippedExpiredImages = 0
     for (const log of [...logs].reverse()) {
         if (excludeMessageIds.has(String(log.messageId || ''))) continue
         const imageMeta = log.imageMeta || []
@@ -483,12 +484,16 @@ function collectRecentImageUrls(logs = [], limit = 3, options = {}) {
         }
         for (const item of log.imageMeta || []) {
             if (!item.url || seen.has(item.url)) continue
+            if (isExpiredGroupContextImageUrl(item.url, log.createdAt)) {
+                skippedExpiredImages++
+                continue
+            }
             seen.add(item.url)
             urls.push(item.url)
-            if (urls.length >= limit) return { urls, skippedOversizedMessages }
+            if (urls.length >= limit) return { urls, skippedOversizedMessages, skippedExpiredImages }
         }
     }
-    return { urls, skippedOversizedMessages }
+    return { urls, skippedOversizedMessages, skippedExpiredImages }
 }
 
 function buildImageReadPlan(normalized, logs = []) {
@@ -553,6 +558,10 @@ function buildImageReadPlan(normalized, logs = []) {
         if (recentResult.skippedOversizedMessages > 0 && !explicitRead) {
             notes.push(`最近群聊中有 ${recentResult.skippedOversizedMessages} 条消息的图片数超过自动读图阈值 ${autoLimit}，本轮未自动读取这些图片。`)
             logLines.push(`[AI-Plugin] [畅聊] 最近图片读取跳过 ${recentResult.skippedOversizedMessages} 条超过阈值的图片消息`)
+        }
+        if (recentResult.skippedExpiredImages > 0) {
+            notes.push(`最近群聊中有 ${recentResult.skippedExpiredImages} 张 QQ 临时图片链接已过期，本轮已跳过，避免 HTTP 400。`)
+            logLines.push(`[AI-Plugin] [畅聊] 最近图片读取跳过 ${recentResult.skippedExpiredImages} 张过期 QQ 临时链接`)
         }
     }
 

@@ -14,6 +14,7 @@ const {
 } = await import('../utils/tool_intent.js')
 const { decideAgentContinuation, normalizeAgentPlan } = await import('../utils/agent_policy.js')
 const { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
+const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { toolRegistry } = await import('../tools/registry.js')
 
 const failures = []
@@ -146,6 +147,9 @@ check('纯工具规划会被识别', isPlanOnlyResponse('【工具规划】查�
 check('正常解释中的分析一词不会误删', sanitizeModelOutput('这个分析是合理的，因为已有真实结果。') === '这个分析是合理的，因为已有真实结果。')
 check('无工具纠正提示禁止伪造执行结果', buildFinalAnswerRetryInstruction({ hasActualToolResults: false }).includes('本轮没有执行任何工具'))
 check('有工具纠正提示限定系统结果区块', buildFinalAnswerRetryInstruction({ hasActualToolResults: true }).includes('由系统注入的工具结果区块'))
+check('代码中出现图片字样不会误触发历史读图', !isGroupContextImageQuestion("dsc: '发送随机图片'"))
+check('明确询问刚才图片会触发历史读图', isGroupContextImageQuestion('刚才那张图里写了什么？'))
+check('过期QQ临时图片链接会被跳过', isExpiredGroupContextImageUrl('https://multimedia.nt.qq.com.cn/download?appid=1407&rkey=test', '2026-07-26 14:00:00', Date.parse('2026-07-26T14:10:01Z')))
 
 console.log(`\nAgent eval: ${passed} passed, ${failures.length} failed`)
 if (failures.length > 0) process.exit(1)

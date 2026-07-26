@@ -40,7 +40,35 @@ function getAutoReadLimit() {
 }
 
 export function isGroupContextImageQuestion(text) {
-    return /(图|图片|截图|照片|表情|刚才那张|刚才那些|这张|这几张|这些图|那张|那几张|那些图|上面那张|上面那些|隔壁.{0,12}图|别的群.{0,12}图|其他群.{0,12}图|跨群.{0,12}图)/i.test(String(text || ''))
+    const value = String(text || '')
+    return /(?:刚才|刚刚|前面|上面|这|那)(?:发的|说的|贴的)?(?:个|一?张|几张|这些|那些)?(?:图|图片|截图|照片|表情)/i.test(value)
+        || /(?:图|图片|截图|照片|表情)(?:里|上|中)?.{0,18}(?:是什么|有什么|有啥|写了|内容|什么意思|是谁|哪(?:个|些)|看不清|看懂|说什么|怎么样|咋样|呢|吗)/i.test(value)
+        || /(?:隔壁|别的群|其他群|其它群|跨群).{0,18}(?:图|图片|截图|照片|表情)/i.test(value)
+}
+
+function parseDBTimestampMs(value) {
+    const raw = String(value || '').trim()
+    if (!raw) return 0
+    const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T')
+    const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized)
+    const timestamp = new Date(hasZone ? normalized : `${normalized}Z`).getTime()
+    return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+function isTemporaryQQImageUrl(url) {
+    try {
+        const hostname = new URL(String(url || '').replace(/&amp;/gi, '&')).hostname.toLowerCase()
+        return hostname === 'multimedia.nt.qq.com.cn' || hostname.endsWith('.qpic.cn') || hostname.endsWith('.qq.com')
+    } catch {
+        return false
+    }
+}
+
+export function isExpiredGroupContextImageUrl(url, createdAt, nowMs = Date.now()) {
+    const maxAgeSeconds = Number(Config.FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS)
+    if (!Number.isFinite(maxAgeSeconds) || maxAgeSeconds <= 0 || !isTemporaryQQImageUrl(url)) return false
+    const createdMs = parseDBTimestampMs(createdAt)
+    return createdMs > 0 && nowMs - createdMs > maxAgeSeconds * 1000
 }
 
 export function isExplicitGroupContextImageReadRequest(text) {
@@ -67,10 +95,11 @@ function collectImageTargets(logs = [], options = {}) {
     const seen = new Set()
     const targets = []
     let skippedOversizedMessages = 0
+    let skippedExpiredImages = 0
     let totalImages = 0
 
     if (maxImages <= 0) {
-        return { targets, totalImages: 0, skippedOversizedMessages, limited: false, maxImages, autoLimit }
+        return { targets, totalImages: 0, skippedOversizedMessages, skippedExpiredImages, limited: false, maxImages, autoLimit }
     }
 
     for (const log of [...(logs || [])].reverse()) {
@@ -86,6 +115,10 @@ function collectImageTargets(logs = [], options = {}) {
         for (let i = 0; i < imageMeta.length; i++) {
             const item = imageMeta[i]
             if (!item?.url || seen.has(item.url)) continue
+            if (isExpiredGroupContextImageUrl(item.url, log.createdAt)) {
+                skippedExpiredImages++
+                continue
+            }
             seen.add(item.url)
             targets.push({
                 url: item.url,
@@ -98,12 +131,12 @@ function collectImageTargets(logs = [], options = {}) {
                 imageCount: imageMeta.length
             })
             if (maxImages !== Infinity && targets.length >= maxImages) {
-                return { targets, totalImages, skippedOversizedMessages, limited: true, maxImages, autoLimit }
+                return { targets, totalImages, skippedOversizedMessages, skippedExpiredImages, limited: true, maxImages, autoLimit }
             }
         }
     }
 
-    return { targets, totalImages, skippedOversizedMessages, limited: totalImages > targets.length, maxImages, autoLimit }
+    return { targets, totalImages, skippedOversizedMessages, skippedExpiredImages, limited: totalImages > targets.length, maxImages, autoLimit }
 }
 
 function buildImageSummaryPrompt(targets, triggerText, batchIndex, totalBatches, startIndex, processedCount) {
@@ -179,10 +212,13 @@ export async function buildGroupContextImageSummary(client, logs = [], triggerTe
     }
 
     if (plan.targets.length === 0) {
+        if (plan.skippedExpiredImages > 0) {
+            notes.push(`群聊上下文中有 ${plan.skippedExpiredImages} 张 QQ 临时图片链接已超过有效读取时限，本轮已跳过，避免请求过期 rkey 导致 HTTP 400。`)
+        }
         if (plan.skippedOversizedMessages > 0) {
             notes.push(`群聊上下文中有 ${plan.skippedOversizedMessages} 条消息的图片数超过自动读图阈值 ${plan.autoLimit}，本轮未自动读取；可明确要求“读图/看图”后再试。`)
         }
-        return { summaryText: '', notes, requestedCount: 0, processedCount: 0, totalImages: plan.totalImages, skippedOversizedMessages: plan.skippedOversizedMessages }
+        return { summaryText: '', notes, requestedCount: 0, processedCount: 0, totalImages: plan.totalImages, skippedOversizedMessages: plan.skippedOversizedMessages, skippedExpiredImages: plan.skippedExpiredImages }
     }
 
     if (plan.limited && plan.maxImages !== Infinity) {
@@ -190,6 +226,9 @@ export async function buildGroupContextImageSummary(client, logs = [], triggerTe
     }
     if (plan.skippedOversizedMessages > 0) {
         notes.push(`有 ${plan.skippedOversizedMessages} 条消息的图片数超过自动读图阈值 ${plan.autoLimit}，本轮已跳过这些消息；明确要求读图时可放宽。`)
+    }
+    if (plan.skippedExpiredImages > 0) {
+        notes.push(`有 ${plan.skippedExpiredImages} 张 QQ 临时图片链接已超过 ${Config.FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS} 秒读取时限，本轮已跳过，避免过期 rkey 返回 HTTP 400。`)
     }
 
     const batchSize = getImageBatchSize()
@@ -245,7 +284,8 @@ export async function buildGroupContextImageSummary(client, logs = [], triggerTe
         requestedCount: plan.targets.length,
         processedCount,
         totalImages: plan.totalImages,
-        skippedOversizedMessages: plan.skippedOversizedMessages
+        skippedOversizedMessages: plan.skippedOversizedMessages,
+        skippedExpiredImages: plan.skippedExpiredImages
     }
 }
 
