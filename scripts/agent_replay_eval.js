@@ -7,7 +7,9 @@ const {
     hasExplicitLocalFileReadIntent,
     hasExplicitUserProfileUpdateIntent,
     hasGroupChatContextQuestion,
-    parseExplicitLocalFileReadRequest
+    parseExplicitLocalFileReadRequest,
+    parseNamedGroupChatContextRequest,
+    hasExplicitDrawIntent
 } = await import('../utils/tool_intent.js')
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
@@ -42,6 +44,16 @@ const incidents = [
         id: 'git-record-not-group-context',
         input: '#c看最近16条git变更记录',
         pass: text => !hasGroupChatContextQuestion(text)
+    },
+    {
+        id: 'named-group-cross-context',
+        input: '#c你看看名字叫「【】」的群最近聊了些啥',
+        pass: text => parseNamedGroupChatContextRequest(text)?.query === '【】'
+    },
+    {
+        id: 'bootanimation-not-draw-intent',
+        input: '#uc我以前自己做安卓的启动动画bootanimation.zip，这个使用压缩算法就没效果了',
+        pass: text => !hasExplicitDrawIntent(text)
     }
 ]
 

@@ -6,6 +6,7 @@ import path from 'node:path'
 
 const {
     filterToolCallsByIntent,
+    hasExplicitDrawIntent,
     hasExplicitMemorySearchIntent,
     hasExplicitLocalFileMutationIntent,
     hasExplicitLocalFileReadIntent,
@@ -18,12 +19,14 @@ const {
     hasStrongGroupChatContextQuestion,
     parseGroupLeaveRequest,
     parseGroupSendRequest,
-    parseExplicitLocalFileReadRequest
+    parseExplicitLocalFileReadRequest,
+    parseNamedGroupChatContextRequest
 } = await import('../utils/tool_intent.js')
 const { classifyAgentRisk, classifyToolCallRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } = await import('../utils/agent_policy.js')
 const { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { toolRegistry } = await import('../tools/registry.js')
+const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
 const { executePendingShellExec, shellExecTool } = await import('../tools/shell_exec.js')
 const { shellSessionTool } = await import('../tools/shell_session.js')
@@ -105,10 +108,73 @@ const routingCases = [
         name: '询问配置修改方法不会直接执行',
         text: '#c这个配置应该怎么修改？',
         assert: text => !hasExplicitLocalFileMutationIntent(text)
+    },
+    {
+        name: '指定群名聊天查询命中跨群上下文',
+        text: '#c你看看名字叫「【】」的群最近聊了些啥',
+        assert: text => hasGroupChatContextQuestion(text) || parseNamedGroupChatContextRequest(text)?.query === '【】'
+    },
+    {
+        name: '讨论启动动画不会误触发生图',
+        text: '#uc我以前自己做安卓的启动动画bootanimation.zip，这个使用压缩算法就没效果了',
+        assert: text => !hasExplicitDrawIntent(text)
+    },
+    {
+        name: '明确制作架构图仍会触发生图',
+        text: '#c做一张Agent架构图',
+        assert: text => hasExplicitDrawIntent(text)
     }
 ]
 
 for (const item of routingCases) check(item.name, item.assert(item.text), item.text)
+
+const previousConversationManager = global.AIPluginConversationManager
+let namedGroupQueryOptions = null
+global.AIPluginConversationManager = {
+    db: {
+        async getRecentGroupMessageLogs() { return [] },
+        async getGroupMessageLogs(options) {
+            namedGroupQueryOptions = options
+            return [{
+                groupId: '1061970295',
+                userId: 'member-1',
+                nickname: '群友',
+                normalizedText: '正在讨论 Agent 技术',
+                imageMeta: [],
+                isCommand: false,
+                isBot: false,
+                createdAt: '2026-07-26 23:36:35'
+            }]
+        }
+    }
+}
+const namedGroupToolResult = await groupChatContextTool.execute({
+    scope: 'specific_group',
+    query: '【】',
+    limit: 40
+}, {
+    userId: 'master-user',
+    groupId: '1039793252',
+    isMaster: true,
+    userMessage: '你看看名字叫「【】」的群最近聊了些啥',
+    event: {
+        group_id: '1039793252',
+        isMaster: true,
+        bot: {
+            async sendApi(name) {
+                if (name !== 'get_group_list') return []
+                return [{ group_id: '1061970295', group_name: '【】' }]
+            }
+        }
+    }
+})
+check('指定群名可解析为真实群号并读取该群流水', namedGroupToolResult.ok
+    && namedGroupToolResult.scope === 'specific_group'
+    && namedGroupToolResult.groupId === '1061970295'
+    && namedGroupQueryOptions?.groupId === '1061970295'
+    && !namedGroupQueryOptions?.query,
+JSON.stringify(namedGroupToolResult))
+global.AIPluginConversationManager = previousConversationManager
 
 const sendRequest = parseGroupSendRequest('帮我在测试群发一句：今晚维护')
 check('明确群代发可解析目标和正文', Boolean(sendRequest?.target && sendRequest?.message), JSON.stringify(sendRequest))

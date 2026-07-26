@@ -192,7 +192,7 @@ function isQuestionAboutTool(text = '', keywordPattern = '') {
 }
 
 export function hasExplicitDrawIntent(text, options = {}) {
-    const value = getPrimaryUserInstruction(text)
+    const value = getPrimaryUserInstruction(text).replace(/^#[A-Za-z0-9_]+\s*/i, '').trim()
     if (!value || hasNegatedDrawIntent(value)) return false
     if (/^(?:你|诺亚|noa)?\s*(?:会不会|会|能不能|可以|能).{0,16}(?:画|绘制).{0,40}(?:吗|嘛|么|？|\?)/i.test(value)
         && !/(?:帮我|给我|请|麻烦)/i.test(value)) {
@@ -203,8 +203,11 @@ export function hasExplicitDrawIntent(text, options = {}) {
     }
 
     const hasImageContext = options.hasImages === true || options.hasRecentImages === true
-    const generationIntent = /(?:帮我|给我|请|麻烦你?)?\s*(?:画|绘制|生成|创作|做)(?:个|一张|一下|张)?[\s\S]{0,100}(?:图|图片|画|插画|头像|壁纸|表情包|设定图|立绘|你自己|你本人|AI本人|自画像|你长什么样|你的样子|诺亚|noa)/i.test(value)
-        || /(?:帮我|给我|请|麻烦你?)?\s*(?:画|绘制)(?:个|一张|一下|张)?\s*[\s\S]{1,80}$/i.test(value)
+    const drawCue = '(?:^|[，,。；;！？!?\\s]|帮我|给我|请|麻烦你?|想让你|让你|要你|你来|你能不能|能不能|可以帮我)'
+    const generationIntent = new RegExp(`${drawCue}\\s*(?:再|重新)?\\s*(?:画|绘制|生成|创作)(?:个|一张|一下|张)?[\\s\\S]{0,100}(?:图|图片|插画|头像|壁纸|表情包|设定图|立绘|你自己|你本人|AI本人|自画像|你长什么样|你的样子|诺亚|noa)`, 'i').test(value)
+        || new RegExp(`${drawCue}\\s*(?:再|重新)?\\s*(?:画|绘制)(?:个|一张|一下|张)?\\s*[\\s\\S]{1,80}$`, 'i').test(value)
+        || /(?:帮我|给我|请|麻烦你?|想让你|让你|要你|你来|你能不能|能不能|可以帮我).{0,12}做(?:个|一个|一张|一下)?[\s\S]{0,80}(?:图|图片|插画|头像|壁纸|表情包|设定图|立绘)/i.test(value)
+        || /(?:^|[，,。；;！？!?\s])做(?:个|一个|一张)[\s\S]{0,80}(?:图|图片|插画|头像|壁纸|表情包|设定图|立绘)[。！!？?\s]*$/i.test(value)
         || /(?:看看|给我看看)(?:你长什么样|你的样子)/i.test(value)
     const imageEditIntent = hasImageContext
         && /(?:去掉|去除|移除|擦除|消除|抹掉|清理|删掉|去水印|水印|二维码|改成|变成|转成|风格化|手办化|inpaint|inpainting|修图|处理图片|p图|P图)/i.test(value)
@@ -264,6 +267,7 @@ export function hasExplicitGroupChatContextIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
 
+    if (parseNamedGroupChatContextRequest(value)) return true
     if (/(加了哪些群|加入了哪些群|在哪些群|能看到哪些群|可见群|群列表|所有群列表|有哪些群|有什么群|机器人.{0,16}(?:加了|加入|在|能看|能看到|可见).{0,12}群|你.{0,8}(?:加了|加入|在|能看|能看到|可见).{0,12}(?:哪些|什么|多少)?群)/i.test(value)) return true
     if (/(我|俺|咱).{0,18}(别的群|其他群|其它群|别群|跨群).{0,24}(发|说|聊|消息|看到|看见|记录|记得|知道)/i.test(value)) return true
     if (/(别的群|其他群|其它群|别群|跨群).{0,18}(我|俺|咱).{0,24}(发|说|聊|消息|看到|看见|记录|记得|知道)/i.test(value)) return true
@@ -272,6 +276,29 @@ export function hasExplicitGroupChatContextIntent(text) {
     const action = '(?:读取|读一下|查看|看看|查询|查一下|检索|搜索|拉一下|调出|翻一下|总结|整理|回顾|概括)'
     const object = '(?:群聊|群消息|聊天记录|群聊记录|消息记录|消息流水|畅聊记录|群上下文|聊天上下文|前情|所有群|全部群|其他群|其它群|别的群|跨群)'
     return new RegExp(`${action}.{0,20}${object}|${object}.{0,20}${action}`, 'i').test(value)
+}
+
+export function parseNamedGroupChatContextRequest(text) {
+    const value = getPrimaryUserInstruction(text).trim()
+    if (!value) return null
+    const asksForContext = /(?:最近|刚才|刚刚|之前|前面|这会儿|聊天|群聊|消息|记录|流水|前情|聊(?:了|过|啥|什么)|在聊|说(?:了|过|啥|什么)|在说|发言|发(?:了|过|啥|什么)|发生(?:了)?|总结|整理|回顾|概括|看看|看一下|查询|查一下)/i.test(value)
+    if (!asksForContext || hasNonChatRecordDomain(value)) return null
+
+    const patterns = [
+        /(?:名字叫|名为|叫)\s*[「“"『]([^」”"』\n]{1,60})[」”"』]\s*(?:的)?群/i,
+        /[「“"『]([^」”"』\n]{1,60})[」”"』]\s*(?:这个|那个|名字的|的)?群/i,
+        /(?:名字叫|名为)\s*([^，,。；;！？!?\n]{1,50}?)\s*(?:的)?群/i
+    ]
+    let target = ''
+    for (const pattern of patterns) {
+        const match = value.match(pattern)
+        if (match?.[1]) {
+            target = match[1].trim()
+            break
+        }
+    }
+    if (!target || /^(?:本|当前|这个|那个|这|那|所有|全部|其他|其它|别的|各个?)$/i.test(target)) return null
+    return { scope: 'specific_group', query: target, limit: 40 }
 }
 
 function hasNonChatRecordDomain(value = '') {

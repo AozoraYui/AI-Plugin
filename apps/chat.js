@@ -13,7 +13,7 @@ import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
-import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileMutationIntent, hasExplicitLocalFileReadIntent, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
+import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileMutationIntent, hasExplicitLocalFileReadIntent, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction, parseStrictPendingDecision } from '../utils/pending_actions.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
@@ -1000,12 +1000,10 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
     if (hasTool(enabledTools, 'draw_image')) {
         const drawRouteText = routeText
         const negatedDrawIntent = hasNegatedDrawIntent(drawRouteText)
-        const characters = detectCharactersFromText(drawRouteText)
-        const character = characters.length === 1 ? characters[0] : ''
-        const hasCharacter = characters.length > 0
         const explicitDrawIntent = hasExplicitDrawIntent(drawRouteText, { hasImages: false, hasRecentImages: false })
-        const drawIntent = !negatedDrawIntent && (explicitDrawIntent
-            || (hasCharacter && /(?:帮我|给我)?(?:画|绘制|生成|创作|做)(?:个|一张|一下)?/i.test(drawRouteText)))
+        const characters = explicitDrawIntent ? detectCharactersFromText(drawRouteText) : []
+        const character = characters.length === 1 ? characters[0] : ''
+        const drawIntent = !negatedDrawIntent && explicitDrawIntent
         const imageEditIntent = !negatedDrawIntent && hasImageContext
             && /(?:去掉|去除|移除|擦除|消除|抹掉|清理|删掉|去水印|水印|二维码|改成|变成|转成|风格化|手办化|inpaint|inpainting)/i.test(drawRouteText)
             && /(?:图片|照片|图|原图|参考图|这张|那张|水印|二维码|手办化|风格化)/i.test(drawRouteText)
@@ -1156,6 +1154,15 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
     // 9) 群聊流水查询：自然询问“刚才聊啥”也可自动读取；跨群仍由主人权限限制。
     if (hasTool(enabledTools, 'group_chat_context')) {
         if (!hasExplicitGroupChatContextIntent(routeText) && !hasStrongGroupChatContextQuestion(routeText)) return null
+
+        const namedGroupRequest = isMaster ? parseNamedGroupChatContextRequest(routeText) : null
+        if (namedGroupRequest) {
+            return {
+                intent: `规则预路由：主人询问指定群「${namedGroupRequest.query}」的已捕获聊天流水。`,
+                tools: [{ name: 'group_chat_context', args: namedGroupRequest }],
+                routedBy: 'rule'
+            }
+        }
 
         const asksGroupList = isMaster && /(加了哪些群|加入了哪些群|在哪些群|能看到哪些群|可见群|群列表|所有群列表|有哪些群|有什么群|机器人.{0,16}(?:加了|加入|在|能看|能看到|可见).{0,12}群|你.{0,8}(?:加了|加入|在|能看|能看到|可见).{0,12}(?:哪些|什么|多少)?群)/i.test(routeText)
         if (asksGroupList) {

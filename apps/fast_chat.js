@@ -10,7 +10,7 @@ import { buildGroupContextImageSummary, formatGroupContextImageSummary, isExpire
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memory_context.js'
-import { filterToolCallsByIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
+import { filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 import { executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound } from '../utils/agent_runtime.js'
@@ -963,9 +963,10 @@ function extractUrlsFromText(text, limit = 10) {
 function shouldRouteFastChatTools(text, urls = []) {
     const value = String(text || '')
     if (urls.length > 0 && /(看|看看|打开|总结|分析|解释|读|抓取|链接|网页|网站)/i.test(value)) return true
+    if (hasExplicitDrawIntent(value)) return true
     if (hasExplicitGroupChatDigestIntent(value)) return true
     if (hasExplicitMemorySearchIntent(value)) return true
-    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|代发|转达|帮我.{0,20}(群|发|说|告诉)|个人档案|用户档案|用户画像|个人画像|长期记忆|tmux|ai-shell|shell会话|shell窗口|独立shell|画|绘制|生成|作图|手办化|图片处理|修图|执行|运行|调用|命令|shell|终端|命令行|脚本|插件.{0,8}更新|更新.{0,8}插件|\b(?:ssh|scp|rsync|git|pull|push|status|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head)\b|(?:读取|查看|查询|总结|整理).{0,12}(群聊|群消息|聊天记录|消息流水|畅聊记录|群上下文)|别的群|其他群|其它群|跨群|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
+    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|代发|转达|帮我.{0,20}(群|发|说|告诉)|个人档案|用户档案|用户画像|个人画像|长期记忆|tmux|ai-shell|shell会话|shell窗口|独立shell|执行|运行|调用|命令|shell|终端|命令行|脚本|插件.{0,8}更新|更新.{0,8}插件|\b(?:ssh|scp|rsync|git|pull|push|status|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head)\b|(?:读取|查看|查询|总结|整理).{0,12}(群聊|群消息|聊天记录|消息流水|畅聊记录|群上下文)|别的群|其他群|其它群|跨群|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
 }
 
 function shouldLetFastChatToolModelJudge(text, isMaster = false) {
@@ -1290,7 +1291,13 @@ export class FastChatHandler extends plugin {
                 const memorySearchArgs = enabledTools.includes('memory_search')
                     ? parseMemorySearchRequest(toolRoutingText)
                     : null
-                if (groupChatDigestArgs) {
+                const namedGroupContextArgs = e.isMaster && enabledTools.includes('group_chat_context')
+                    ? parseNamedGroupChatContextRequest(toolRoutingText)
+                    : null
+                if (namedGroupContextArgs) {
+                    toolCalls = [{ name: 'group_chat_context', args: namedGroupContextArgs }]
+                    logger.info(`[AI-Plugin] [畅聊] 规则预路由命中: group_chat_context - 主人明确查询指定群「${namedGroupContextArgs.query}」`)
+                } else if (groupChatDigestArgs) {
                     toolCalls = [{ name: 'group_chat_digest', args: groupChatDigestArgs }]
                     logger.info('[AI-Plugin] [畅聊] 规则预路由命中: group_chat_digest - 用户明确要求时间范围群聊总结')
                 } else if (memorySearchArgs) {
