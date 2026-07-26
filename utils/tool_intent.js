@@ -298,7 +298,41 @@ export function parseNamedGroupChatContextRequest(text) {
         }
     }
     if (!target || /^(?:本|当前|这个|那个|这|那|所有|全部|其他|其它|别的|各个?)$/i.test(target)) return null
-    return { scope: 'specific_group', query: target, limit: 40 }
+    const hoursMatch = value.match(/(?:最近|近|过去|这)?\s*(\d{1,3}|[一二两三四五六七八九十两几]+)\s*(?:个)?小时/i)
+    let hours
+    if (hoursMatch?.[1]) {
+        const rawHours = hoursMatch[1]
+        const chineseHours = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 几: 3 }
+        hours = /^\d+$/.test(rawHours) ? Number(rawHours) : chineseHours[rawHours]
+    }
+    return {
+        scope: 'specific_group',
+        query: target,
+        limit: hours ? 120 : 40,
+        ...(hours ? { hours: Math.min(Math.max(hours, 1), 168) } : {})
+    }
+}
+
+export function parseRecentGroupChatFollowupRequest(text, previousArgs = {}, userId = '') {
+    const value = getPrimaryUserInstruction(text).replace(/^#[A-Za-z0-9_]+\s*/i, '').trim()
+    if (!value || parseNamedGroupChatContextRequest(value)) return null
+    const referencesPreviousGroup = /(?:括号|方括号)(?:那个|这个)?\s*(?:的)?群|(?:刚才查的|刚才看的|前面查的|前面看的|刚才那个|前面那个|上个|那个|这个|该)\s*(?:的)?群/i.test(value)
+    const asksForMoreMessages = /(?:还|又|另外|其他|其它|别的|更多).{0,18}(?:说|发|聊|消息|发言)|(?:说|发|聊).{0,18}(?:啥|什么|哪些|内容)/i.test(value)
+    if (!referencesPreviousGroup || !asksForMoreMessages) return null
+
+    const previousScope = String(previousArgs.scope || '').trim()
+    const previousGroupId = String(previousArgs.group_id || previousArgs.groupId || '').trim()
+    const previousQuery = String(previousArgs.query || '').trim()
+    if (!['specific_group', 'all_groups'].includes(previousScope) || (!previousGroupId && !previousQuery)) return null
+
+    const asksForSelf = /(?:^|[，,。！？!?\s])(我|俺|咱)(?:在|还|又|都|之前|刚才|前面)?/i.test(value)
+    return {
+        scope: 'specific_group',
+        ...(previousGroupId ? { group_id: previousGroupId } : { query: previousQuery }),
+        ...(asksForSelf && userId ? { user_id: String(userId) } : {}),
+        limit: Math.min(Math.max(Number(previousArgs.limit) || 40, 5), 120),
+        ...(previousArgs.hours ? { hours: previousArgs.hours } : {})
+    }
 }
 
 function hasNonChatRecordDomain(value = '') {

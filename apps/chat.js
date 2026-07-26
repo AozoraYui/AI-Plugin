@@ -13,7 +13,7 @@ import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
-import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileMutationIntent, hasExplicitLocalFileReadIntent, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest } from '../utils/tool_intent.js'
+import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileMutationIntent, hasExplicitLocalFileReadIntent, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction, parseStrictPendingDecision } from '../utils/pending_actions.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
@@ -525,12 +525,23 @@ function hasImplicitRecentTaskReference(text = '') {
         .trim()
     if (!value) return false
     if (/^(?:任务|agent).{0,12}(?:状态|进度|取消|停止|终止)/i.test(value)) return false
+    if (parseNamedGroupChatContextRequest(value)) return false
 
     return hasExplicitLocalFileMutationIntent(value)
         || /^(?:接着|继续|再|重新|还有|刚才|刚刚|上次|前面)[，,。\s]*/i.test(value)
         || /^(?:这样吧|那|那么|然后|顺便|另外)[，,。\s]*(?:再|继续|接着|看|看看|查|查看|读|读取|列|列出|总结|整理|分析|输出|换成|改成|多看|多查|更多|完整|详细)/i.test(value)
         || /(?:再|继续|接着|重新|顺便|另外|还有|刚才|刚刚|上次|前面|更多|完整|详细|展开|换成|改成|多看|多查).{0,30}(?:看|看看|查|查看|读|读取|列|列出|总结|整理|分析|输出|结果|记录|条)/i.test(value)
         || /(?:看|看看|查|查看|读|读取|列|列出|总结|整理|分析).{0,30}(?:更多|完整|详细|展开|前|后|最近|上次|刚才|刚刚|\d{1,4}\s*条|[一二两三四五六七八九十百]{1,4}\s*条)/i.test(value)
+        || /(?:(?:括号|方括号)(?:那个|这个)?|刚才查的|刚才看的|前面查的|前面看的|刚才那个|前面那个|上个|那个|这个|该)\s*(?:的)?群.{0,30}(?:还|又|另外|其他|其它|别的|更多|说|发|聊|消息|发言)/i.test(value)
+}
+
+function getRecentTaskToolArgs(task, toolName) {
+    const steps = Array.isArray(task?.steps) ? task.steps : []
+    for (let index = steps.length - 1; index >= 0; index--) {
+        const step = steps[index]
+        if (step?.toolName === toolName && step.toolArgs && typeof step.toolArgs === 'object') return step.toolArgs
+    }
+    return null
 }
 
 function getRecentTaskToolCandidates(task, enabledTools = []) {
@@ -2110,6 +2121,7 @@ export class ChatHandler extends plugin {
             let agentTaskFinalStatus = ''
             let agentTaskLatestSummary = agentTask?.summary || ''
             let agentTaskLatestObservation = agentTask?.lastObservation || ''
+            let actualToolExecutionCount = 0
             if (enabledTools.length > 0) {
                 const candidateUrls = extractUrlsFromText(userMessage, 10)
                 let recentAgentTaskForPlanning = null
@@ -2132,13 +2144,26 @@ export class ChatHandler extends plugin {
                 const toolPlanningUserMessage = recentAgentTaskPlanningContext
                     ? `${userMessage}\n\n${recentAgentTaskPlanningContext}`
                     : userMessage
-                const preRouted = preRouteToolIntent(currentToolInstruction || userMessage, enabledTools, {
+                const recentGroupFollowupArgs = recentAgentTaskForPlanning
+                    ? parseRecentGroupChatFollowupRequest(
+                        currentToolInstruction || userMessage,
+                        getRecentTaskToolArgs(recentAgentTaskForPlanning, 'group_chat_context') || {},
+                        e.user_id
+                    )
+                    : null
+                const preRouted = recentGroupFollowupArgs && enabledTools.includes('group_chat_context')
+                    ? {
+                        intent: '规则预路由：继承刚才查询的群目标，继续读取该群中当前用户的发言。',
+                        tools: [{ name: 'group_chat_context', args: recentGroupFollowupArgs }],
+                        routedBy: 'recent_group_followup'
+                    }
+                    : preRouteToolIntent(currentToolInstruction || userMessage, enabledTools, {
                     hasImages: allImages.length > 0 || hasLocalImageInput,
                     hasRecentImages: recentImageInfo.available,
                     urls: candidateUrls,
                     isMaster: e.isMaster === true,
                     hasGroup: Boolean(e.group_id)
-                })
+                    })
                 let toolAnalysis
                 if (preRouted) {
                     toolAnalysis = preRouted
@@ -2289,7 +2314,6 @@ export class ChatHandler extends plugin {
                     })
                 }
                 const executedShellCommands = []
-                let actualToolExecutionCount = 0
                 let groupChatContextToolUsed = false
                 let memorySearchToolUsed = false
                 let suppressAutoFastChatContext = false

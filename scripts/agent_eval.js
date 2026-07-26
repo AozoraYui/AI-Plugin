@@ -20,7 +20,8 @@ const {
     parseGroupLeaveRequest,
     parseGroupSendRequest,
     parseExplicitLocalFileReadRequest,
-    parseNamedGroupChatContextRequest
+    parseNamedGroupChatContextRequest,
+    parseRecentGroupChatFollowupRequest
 } = await import('../utils/tool_intent.js')
 const { classifyAgentRisk, classifyToolCallRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } = await import('../utils/agent_policy.js')
 const { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
@@ -118,6 +119,14 @@ const routingCases = [
         assert: text => hasGroupChatContextQuestion(text) || parseNamedGroupChatContextRequest(text)?.query === '【】'
     },
     {
+        name: '指定群最近几个小时保留时间范围',
+        text: '#c你看看名字叫「【】」的群最近几个小时聊了些啥',
+        assert: text => {
+            const request = parseNamedGroupChatContextRequest(text)
+            return request?.query === '【】' && request.hours === 3 && request.limit === 120
+        }
+    },
+    {
         name: '讨论启动动画不会误触发生图',
         text: '#uc我以前自己做安卓的启动动画bootanimation.zip，这个使用压缩算法就没效果了',
         assert: text => !hasExplicitDrawIntent(text)
@@ -154,7 +163,8 @@ global.AIPluginConversationManager = {
 const namedGroupToolResult = await groupChatContextTool.execute({
     scope: 'specific_group',
     query: '【】',
-    limit: 40
+    limit: 120,
+    hours: 3
 }, {
     userId: 'master-user',
     groupId: '1039793252',
@@ -175,9 +185,20 @@ check('指定群名可解析为真实群号并读取该群流水', namedGroupToo
     && namedGroupToolResult.scope === 'specific_group'
     && namedGroupToolResult.groupId === '1061970295'
     && namedGroupQueryOptions?.groupId === '1061970295'
+    && namedGroupQueryOptions?.sinceHours === 3
     && !namedGroupQueryOptions?.query,
 JSON.stringify(namedGroupToolResult))
 global.AIPluginConversationManager = previousConversationManager
+
+const groupFollowupRequest = parseRecentGroupChatFollowupRequest(
+    '#c我在括号那个群还说了些啥',
+    { scope: 'specific_group', query: '【】', limit: 120, hours: 3 },
+    '956753394'
+)
+check('指代续问继承上次群目标并限定当前用户', groupFollowupRequest?.query === '【】'
+    && groupFollowupRequest?.user_id === '956753394'
+    && groupFollowupRequest?.hours === 3,
+JSON.stringify(groupFollowupRequest))
 
 const sendRequest = parseGroupSendRequest('帮我在测试群发一句：今晚维护')
 check('明确群代发可解析目标和正文', Boolean(sendRequest?.target && sendRequest?.message), JSON.stringify(sendRequest))

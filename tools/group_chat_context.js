@@ -12,6 +12,12 @@ function normalizeLimit(limit) {
     return Math.min(Math.max(Math.floor(n), 5), 120)
 }
 
+function normalizeHours(hours) {
+    const value = Number(hours)
+    if (!Number.isFinite(value) || value <= 0) return 0
+    return Math.min(Math.max(Math.floor(value), 1), 168)
+}
+
 function normalizeScope(scope) {
     const value = String(scope || '').trim().toLowerCase()
     if (['group_list', 'groups', 'joined_groups', 'joined_group_list', 'available_groups'].includes(value)) return 'group_list'
@@ -161,6 +167,10 @@ export const groupChatContextTool = {
                     exclude_current_group: {
                         type: 'boolean',
                         description: '可选，查询自己的跨群消息时是否排除当前群；用户说“别的群/其他群”时设为 true。'
+                    },
+                    hours: {
+                        type: 'number',
+                        description: '可选，只读取最近多少小时的消息，范围 1-168。用户明确说“最近几个小时/过去 N 小时”时填写。'
                     }
                 },
                 required: []
@@ -176,6 +186,7 @@ export const groupChatContextTool = {
         }
 
         const limit = normalizeLimit(args.limit)
+        const hours = normalizeHours(args.hours)
         const query = String(args.query || '').trim()
         let effectiveQuery = query
         const currentGroupId = event?.group_id ? String(event.group_id) : ''
@@ -265,7 +276,7 @@ export const groupChatContextTool = {
                 return { ok: false, error: '权限不足：非主人只能读取当前群流水，或查询自己在其他群的消息。' }
             }
             logs = db.getGroupMessageLogs
-                ? await db.getGroupMessageLogs({ groupId: effectiveGroupId, limit, query: effectiveQuery })
+                ? await db.getGroupMessageLogs({ groupId: effectiveGroupId, limit, query: effectiveQuery, sinceHours: hours })
                 : await db.getRecentGroupMessageLogs(effectiveGroupId, limit)
         } else if (scope === 'my_recent_messages' || scope === 'other_group_messages') {
             effectiveUserId = isMaster && requestedUserId ? requestedUserId : actorUserId
@@ -284,7 +295,8 @@ export const groupChatContextTool = {
                     groupIds: resolvedQueryGroupIds,
                     excludeGroupId: excludeCurrentGroup ? currentGroupId : '',
                     limit,
-                    query: effectiveQuery
+                    query: effectiveQuery,
+                    sinceHours: hours
                 })
             }
         } else if (scope === 'all_groups') {
@@ -297,7 +309,8 @@ export const groupChatContextTool = {
                 userId: effectiveUserId || '',
                 groupIds: resolvedQueryGroupIds,
                 limit,
-                query: effectiveQuery
+                query: effectiveQuery,
+                sinceHours: hours
             })
         } else if (scope === 'specific_group') {
             if (!isMaster) {
@@ -310,7 +323,8 @@ export const groupChatContextTool = {
                 groupId: effectiveGroupId,
                 userId: effectiveUserId || '',
                 limit,
-                query: effectiveQuery
+                query: effectiveQuery,
+                sinceHours: hours
             })
         }
 
@@ -330,6 +344,7 @@ export const groupChatContextTool = {
             resolvedQueryGroupIds,
             resolvedQueryGroupNote,
             limit,
+            hours,
             count: logs.length,
             groupCount,
             showGroupId,
@@ -353,6 +368,7 @@ export const groupChatContextTool = {
         }
         const scopeName = scopeNames[data.scope] || data.scope || '群聊上下文'
         const queryNote = data.query ? `，关键词「${data.query}」` : ''
+        const timeNote = data.hours ? `，最近 ${data.hours} 小时` : ''
         const privacyNote = data.privacyNote ? `\n提示：${data.privacyNote}` : ''
         const resolvedNote = data.resolvedQueryGroupNote ? `\n提示：${data.resolvedQueryGroupNote}` : ''
 
@@ -360,7 +376,7 @@ export const groupChatContextTool = {
             const groups = Array.isArray(data.groups) ? data.groups : []
             if (groups.length === 0) {
                 const errNote = data.liveError ? `实时群列表读取失败：${data.liveError}；` : ''
-                return `\n\n【群聊上下文】没有查到机器人可见或已捕获的群${queryNote}。${errNote}`
+                return `\n\n【群聊上下文】没有查到机器人可见或已捕获的群${queryNote}${timeNote}。${errNote}`
             }
             const errNote = data.liveError ? `\n提示：实时群列表读取失败（${data.liveError}），以下可能只有已捕获群。` : ''
             const lines = groups.map((group, index) => {
@@ -370,16 +386,16 @@ export const groupChatContextTool = {
                 const captured = group.messageCount ? `，已捕获 ${group.messageCount} 条，最近 ${formatDBTimestampToBeijing(group.lastMessageAt)}` : ''
                 return `${index + 1}. ${name}（${group.groupId}，${live}${member}${captured}）`
             })
-            return `\n\n【群聊上下文】机器人可见/已捕获群共 ${groups.length} 个${queryNote}：${errNote}\n${lines.join('\n')}`
+            return `\n\n【群聊上下文】机器人可见/已捕获群共 ${groups.length} 个${queryNote}${timeNote}：${errNote}\n${lines.join('\n')}`
         }
 
         if (!Array.isArray(data.logs) || data.logs.length === 0) {
-            return `\n\n【群聊上下文】${scopeName}最近没有可用记录${queryNote}。${privacyNote}${resolvedNote}`
+            return `\n\n【群聊上下文】${scopeName}最近没有可用记录${queryNote}${timeNote}。${privacyNote}${resolvedNote}`
         }
 
         const lines = data.logs.map(log => formatLogLine(log, { showGroupId: data.showGroupId }))
         const groupNote = data.groupCount > 1 ? `，覆盖 ${data.groupCount} 个群` : ''
-        return `\n\n【群聊上下文】${scopeName}最近命中 ${data.count} 条${groupNote}${queryNote}：${privacyNote}${resolvedNote}\n${lines.join('\n')}`
+        return `\n\n【群聊上下文】${scopeName}最近命中 ${data.count} 条${groupNote}${queryNote}${timeNote}：${privacyNote}${resolvedNote}\n${lines.join('\n')}`
     }
 }
 

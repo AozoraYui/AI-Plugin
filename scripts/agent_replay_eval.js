@@ -9,6 +9,7 @@ const {
     hasGroupChatContextQuestion,
     parseExplicitLocalFileReadRequest,
     parseNamedGroupChatContextRequest,
+    parseRecentGroupChatFollowupRequest,
     hasExplicitDrawIntent
 } = await import('../utils/tool_intent.js')
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
@@ -49,6 +50,19 @@ const incidents = [
         id: 'named-group-cross-context',
         input: '#c你看看名字叫「【】」的群最近聊了些啥',
         pass: text => parseNamedGroupChatContextRequest(text)?.query === '【】'
+    },
+    {
+        id: 'named-group-referential-followup',
+        input: '#c我在括号那个群还说了些啥',
+        pass: text => {
+            const request = parseRecentGroupChatFollowupRequest(text, {
+                scope: 'specific_group',
+                query: '【】',
+                limit: 120,
+                hours: 3
+            }, '956753394')
+            return request?.query === '【】' && request.user_id === '956753394' && request.hours === 3
+        }
     },
     {
         id: 'bootanimation-not-draw-intent',

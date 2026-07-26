@@ -565,6 +565,12 @@ export class AIDatabase {
                 params.push(String(options.userId))
             }
 
+            const sinceHours = Math.min(Math.max(Math.floor(Number(options.sinceHours) || 0), 0), 168)
+            if (sinceHours > 0) {
+                query += ' AND created_at >= datetime(\'now\', ?)'
+                params.push(`-${sinceHours} hours`)
+            }
+
             if (options.excludeCommands === true) {
                 query += ' AND is_command = 0'
             }
