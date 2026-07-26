@@ -304,7 +304,7 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
     logger.info(`[AI-Plugin] 待确认操作意图判断: ${judgement.decision}, reason=${judgement.reason || ''}`)
 
     if (judgement.decision === 'cancel') {
-        await clearPendingAction(e.user_id)
+        await clearPendingAction(e.user_id, pending.id)
         await updatePendingActionAgentTask(e, pending, { ok: false, error: '用户取消待确认操作。' }, 'cancel')
         const cancelledName = pending.type === 'group_leave' ? '退群' : (['shell_exec', 'shell_session'].includes(pending.type) ? '高风险 Shell 命令' : '群消息代发')
         await e.reply(`已取消待确认操作：${cancelledName}。`, true)
@@ -314,7 +314,7 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
     if (judgement.decision !== 'confirm') return false
 
     if (pending.type === 'shell_exec' || pending.type === 'shell_session') {
-        await clearPendingAction(e.user_id)
+        await clearPendingAction(e.user_id, pending.id)
         const result = pending.type === 'shell_exec'
             ? await executePendingShellExec(pending, e)
             : await executePendingShellSession(pending, e)
@@ -331,7 +331,7 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
         if (currentGroups.length > 0) {
             const otherGroups = groups.filter(group => String(group.groupId || group.group_id || '') !== currentGroupId)
             const executionResults = []
-            await clearPendingAction(e.user_id)
+            await clearPendingAction(e.user_id, pending.id)
             if (otherGroups.length > 0) {
                 const otherResult = await executePendingGroupLeave({ ...pending, groups: otherGroups }, e)
                 executionResults.push(otherResult)
@@ -360,7 +360,7 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
         result = { ok: false, error: `未知待确认操作类型：${pending.type}` }
     }
 
-    await clearPendingAction(e.user_id)
+    await clearPendingAction(e.user_id, pending.id)
     const formatted = toolRegistry.formatToolResult(pending.type, result).trim()
     await updatePendingActionAgentTask(e, pending, result, 'confirm')
     await e.reply(formatted || (result.ok ? '已执行待确认操作。' : `执行失败：${result.error || '未知错误'}`), true)

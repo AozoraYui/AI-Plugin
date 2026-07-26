@@ -48,6 +48,17 @@ const RISK_RANK = { low: 0, medium: 1, high: 2 }
 function classifyShellCommandRisk(command = '') {
     const value = String(command || '').trim()
     if (!value) return 'high'
+    const dynamicShellPatterns = [
+        /(?:^|[;&|]\s*)(?:(?:sudo|command|nohup)\s+)*(?:env\s+(?:\w+=\S+\s+)*)?(?:bash|sh|zsh|dash|fish|ksh)\s+(?:-[^\s]*c\b|[^;&|\s]+(?:\s|$))/i,
+        /(?:^|[;&|]\s*)(?:(?:sudo|command|nohup)\s+)*(?:env\s+(?:\w+=\S+\s+)*)?(?:python(?:\d+(?:\.\d+)*)?|node|ruby|perl|php)\s+-(?:c|e)\b/i,
+        /(?:^|[;&|]\s*)(?:(?:sudo|env)\s+)*(?:eval|source|\.)\s+/i,
+        /\|\s*(?:(?:sudo|env)\s+)*(?:bash|sh|zsh|dash|fish|ksh)(?:\s|$)/i,
+        /\|\s*(?:(?:sudo|env)\s+)*(?:python(?:\d+(?:\.\d+)*)?|node|ruby|perl|php)\s+-(?:c|e)\b/i,
+        /(?:^|[;&|]\s*)xargs\b[^;&|]*(?:bash|sh|zsh|dash|fish|ksh)\b/i,
+        /\$\(|`|<\(|>\(/,
+        /(?:^|[;&|]\s*)\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\b/
+    ]
+    if (dynamicShellPatterns.some(pattern => pattern.test(value))) return 'high'
     if (/(?:^|[;&|]\s*)(?:(?:sudo|env)\s+)*(?:rm|rmdir|shred|mkfs|fdisk|parted|dd|reboot|shutdown|poweroff|halt|kill|pkill|killall)\b/i.test(value)) return 'high'
     if (/(?:^|\s)(?:git\s+(?:reset\s+--hard|clean\s+-|push\s+--force)|chmod\s+-R|chown\s+-R)\b/i.test(value)) return 'high'
     if (/(?:>>?|\b(?:mv|cp|touch|mkdir|install|tee|truncate|sed\s+-i|perl\s+-i|git\s+(?:pull|merge|rebase|checkout|switch|commit|push)|npm\s+(?:install|update)|pnpm\s+(?:install|update)|yarn\s+(?:install|upgrade)|systemctl\s+(?:start|stop|restart|enable|disable))\b)/i.test(value)) return 'medium'

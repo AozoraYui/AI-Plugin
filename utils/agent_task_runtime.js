@@ -41,7 +41,10 @@ export async function createOrResumeAgentTask(db, options = {}) {
                 status: options.status || 'active',
                 riskLevel: options.riskLevel || 'low',
                 summary: truncateTaskText(options.summary || '', AGENT_TASK_SUMMARY_MAX_CHARS),
-                lastObservation: truncateTaskText(options.lastObservation || '', AGENT_TASK_OBSERVATION_MAX_CHARS)
+                lastObservation: truncateTaskText(options.lastObservation || '', AGENT_TASK_OBSERVATION_MAX_CHARS),
+                plan: options.plan || {},
+                currentStepId: options.currentStepId || '',
+                sceneId: options.sceneId || ''
             })
             if (task?.taskId) logger?.info?.(`${prefix}已创建: ${task.taskId}, risk=${task.riskLevel}`)
             return task || null

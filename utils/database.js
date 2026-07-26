@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import sqlite3 from 'sqlite3'
 import { getDBTimestamp, ensureDir } from './common.js'
+import { normalizeAgentTaskPlan } from './agent_plan.js'
 import { queueDeleteVectorWhere, queueGroupMessageVectorIndex, queueHistoryRowsVectorIndex, queueSummaryVectorIndex, queueUserProfileVectorIndex, replaceHistoryRowsVectorIndex } from './vector_memory.js'
 
 const _path = process.cwd()
@@ -200,6 +201,10 @@ export class AIDatabase {
                     risk_level TEXT DEFAULT 'low',
                     summary TEXT,
                     last_observation TEXT,
+                    plan_json TEXT,
+                    current_step_id TEXT,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    scene_id TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     completed_at DATETIME
@@ -261,8 +266,25 @@ export class AIDatabase {
                                 logger.debug('[AI-Plugin] base_checkpoint_date 字段迁移:', summaryAlterErr.message)
                             }
 
-                            // 检查表状态并处理
-                            this.checkAndCreateUserHistoriesTable(resolve, reject)
+                            const agentTaskMigrations = [
+                                `ALTER TABLE agent_tasks ADD COLUMN plan_json TEXT`,
+                                `ALTER TABLE agent_tasks ADD COLUMN current_step_id TEXT`,
+                                `ALTER TABLE agent_tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
+                                `ALTER TABLE agent_tasks ADD COLUMN scene_id TEXT`
+                            ]
+                            const runAgentTaskMigration = (index = 0) => {
+                                if (index >= agentTaskMigrations.length) {
+                                    this.checkAndCreateUserHistoriesTable(resolve, reject)
+                                    return
+                                }
+                                this.db.run(agentTaskMigrations[index], (agentAlterErr) => {
+                                    if (agentAlterErr && agentAlterErr.message && !agentAlterErr.message.includes('duplicate column')) {
+                                        logger.debug('[AI-Plugin] agent_tasks 字段迁移:', agentAlterErr.message)
+                                    }
+                                    runAgentTaskMigration(index + 1)
+                                })
+                            }
+                            runAgentTaskMigration()
                         })
                     })
                 })
@@ -966,6 +988,7 @@ export class AIDatabase {
         return new Promise((resolve, reject) => {
             const taskId = task.taskId || `agent_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
             const now = getDBTimestamp()
+            const plan = normalizeAgentTaskPlan(task.plan || task.planJson || {}, task.objective)
             const row = {
                 taskId,
                 userId: String(task.userId || ''),
@@ -975,6 +998,10 @@ export class AIDatabase {
                 riskLevel: task.riskLevel || 'low',
                 summary: task.summary || '',
                 lastObservation: task.lastObservation || '',
+                plan,
+                currentStepId: String(task.currentStepId || plan.currentStepId || ''),
+                version: Math.max(1, Math.floor(Number(task.version) || 1)),
+                sceneId: String(task.sceneId || ''),
                 createdAt: now,
                 updatedAt: now,
                 completedAt: task.completedAt || ''
@@ -984,8 +1011,8 @@ export class AIDatabase {
                 return
             }
             this.db.run(`
-                INSERT INTO agent_tasks (task_id, user_id, group_id, objective, status, risk_level, summary, last_observation, created_at, updated_at, completed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO agent_tasks (task_id, user_id, group_id, objective, status, risk_level, summary, last_observation, plan_json, current_step_id, version, scene_id, created_at, updated_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `, [
                 row.taskId,
                 row.userId,
@@ -995,6 +1022,10 @@ export class AIDatabase {
                 row.riskLevel,
                 row.summary,
                 row.lastObservation,
+                JSON.stringify(row.plan),
+                row.currentStepId,
+                row.version,
+                row.sceneId,
                 row.createdAt,
                 row.updatedAt,
                 row.completedAt || null
@@ -1005,7 +1036,7 @@ export class AIDatabase {
         })
     }
 
-    updateAgentTask(taskId, updates = {}) {
+    updateAgentTask(taskId, updates = {}, options = {}) {
         return new Promise((resolve, reject) => {
             const allowed = {
                 objective: 'objective',
@@ -1013,7 +1044,9 @@ export class AIDatabase {
                 riskLevel: 'risk_level',
                 summary: 'summary',
                 lastObservation: 'last_observation',
-                completedAt: 'completed_at'
+                completedAt: 'completed_at',
+                currentStepId: 'current_step_id',
+                sceneId: 'scene_id'
             }
             const sets = []
             const params = []
@@ -1022,10 +1055,25 @@ export class AIDatabase {
                 sets.push(`${column} = ?`)
                 params.push(updates[key] === '' ? null : String(updates[key]))
             }
+            if ('plan' in updates || 'planJson' in updates) {
+                const plan = normalizeAgentTaskPlan(updates.plan ?? updates.planJson, updates.objective)
+                sets.push('plan_json = ?')
+                params.push(JSON.stringify(plan))
+                if (!('currentStepId' in updates)) {
+                    sets.push('current_step_id = ?')
+                    params.push(plan.currentStepId || null)
+                }
+            }
             sets.push('updated_at = ?')
             params.push(getDBTimestamp())
+            sets.push('version = version + 1')
             params.push(String(taskId))
-            this.db.run(`UPDATE agent_tasks SET ${sets.join(', ')} WHERE task_id = ?`, params, function(err) {
+            let where = 'task_id = ?'
+            if (options.expectedVersion !== undefined && options.expectedVersion !== null) {
+                where += ' AND version = ?'
+                params.push(Math.max(1, Math.floor(Number(options.expectedVersion) || 1)))
+            }
+            this.db.run(`UPDATE agent_tasks SET ${sets.join(', ')} WHERE ${where}`, params, function(err) {
                 if (err) reject(err)
                 else resolve(this.changes > 0)
             })
@@ -1056,6 +1104,7 @@ export class AIDatabase {
 
     normalizeAgentTaskRow(row, steps = []) {
         if (!row) return null
+        const plan = normalizeAgentTaskPlan(row.plan_json || {}, row.objective)
         return {
             taskId: row.task_id,
             userId: row.user_id,
@@ -1065,6 +1114,10 @@ export class AIDatabase {
             riskLevel: row.risk_level || 'low',
             summary: row.summary || '',
             lastObservation: row.last_observation || '',
+            plan,
+            currentStepId: row.current_step_id || plan.currentStepId || '',
+            version: Math.max(1, Math.floor(Number(row.version) || 1)),
+            sceneId: row.scene_id || '',
             createdAt: row.created_at,
             updatedAt: row.updated_at,
             completedAt: row.completed_at || '',
