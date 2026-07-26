@@ -1263,12 +1263,15 @@ export class FastChatHandler extends plugin {
                     const toolAnalysisText = recentAgentTaskPlanningContext
                         ? `${toolRoutingText}\n\n${recentAgentTaskPlanningContext}`
                         : toolRoutingText
+                    const toolMemorySummary = userProfileText
+                        ? `【当前用户个人档案】\n${userProfileText}\n\n【长期记忆摘要】\n${personalMemory}`
+                        : personalMemory
                     const toolAnalysis = await toolRegistry.analyzeToolIntent(
                         toolAnalysisText,
                         this.client,
                         enabledTools,
                         [],
-                        personalMemory,
+                        toolMemorySummary,
                         candidateUrls,
                         {
                             hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0 || hasLocalImageInput,
@@ -1374,7 +1377,7 @@ export class FastChatHandler extends plugin {
 - 如果当前用户要求执行命令、更新插件、读写文件、下载/发送文件、画图或群管理，只有看到【本轮工具结果】时才能说已经执行；没有工具结果就必须明确说明本轮尚未执行或无法确认，绝不能编造成功。
 - “本群称呼记忆”只表示群里公开聊天中有人这样称呼过某个成员；带调侃的记录不要当作真实身份或事实断言。
 - “触发者个人记忆摘要”只用于理解当前触发者的偏好、称呼和长期上下文；具体隐私边界以当前聊天环境提示为准。
-- “触发者个人档案”来自历次全量/增量总结维护出的稳定画像，只能作为理解背景；公开群里不要主动透露档案内容。
+- “触发者个人档案”来自历次全量/增量总结维护出的稳定画像。不要主动展示完整档案；但触发者明确询问自己的某个档案字段、字段值，或要求按档案中的所在地查询天气时，应直接回答请求涉及的字段，不需要再次要求授权。城市级所在地可以直接回答；不要展开无关字段或高敏感信息。
 - “语义相关记忆”来自本地向量检索，只是和当前消息相关的旧线索，不等于当前群正在发生的事；命中不足时要说明不确定。
 - 不要编造没有出现在上下文里的事实。
 - 如果上下文不足，就坦诚说不太确定。

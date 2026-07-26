@@ -1454,6 +1454,7 @@ async function askMainModelForToolPlan(client, modelGroupKey, providerFilter, op
         userMessage = '',
         history = [],
         incrementalCheckpoint = '',
+        userProfileText = '',
         environmentHint = '',
         enabledTools = [],
         candidateUrls = [],
@@ -1474,6 +1475,9 @@ async function askMainModelForToolPlan(client, modelGroupKey, providerFilter, op
     const urls = Array.isArray(candidateUrls) ? [...new Set(candidateUrls)].slice(0, 10) : []
     const memoryBlock = incrementalCheckpoint
         ? `\n\n【长期记忆摘要】\n${truncateForPrompt(incrementalCheckpoint, 1800)}`
+        : ''
+    const profileBlock = userProfileText
+        ? `\n\n【当前用户个人档案】\n${truncateForPrompt(userProfileText, 5000)}`
         : ''
     const historyBlock = recentContext
         ? `\n\n【最近对话】\n${truncateForPrompt(recentContext, 5000)}`
@@ -1544,7 +1548,7 @@ ${toolSummary}
 - 入群审核的申请人还不是群成员；用户说“通过刚才那个/同意他进群/拒绝那个人”时，可以计划 group_request_handle 并省略 user_id，由工具在当前群只有一条待审申请时定位；用户说“让幸福的进来/拒绝昵称里有xxx的”时，把昵称、QQ、留言关键词或用户原话写入 target。
 - 全员禁言、处理入群申请等高影响操作必须从用户原话中明确得到开启/解除、通过/拒绝方向；不明确时不要计划操作工具。
 
-${environmentHint ? `【聊天环境】\n${environmentHint}` : ''}${memoryBlock}${historyBlock}${planningContextBlock}${urlBlock}${mentionBlock}
+${environmentHint ? `【聊天环境】\n${environmentHint}` : ''}${memoryBlock}${profileBlock}${historyBlock}${planningContextBlock}${urlBlock}${mentionBlock}
 
 【当前用户本条指令】
 ${currentInstruction || userMessage || '（无文字，仅媒体消息）'}
@@ -2166,6 +2170,7 @@ export class ChatHandler extends plugin {
                             userMessage,
                             history,
                             incrementalCheckpoint,
+                            userProfileText,
                             environmentHint,
                             enabledTools: planningCandidates.tools,
                             candidateUrls,
@@ -2872,7 +2877,7 @@ export class ChatHandler extends plugin {
             if (userProfileText) {
                 contents.push({
                     "role": "user",
-                    "parts": [{ "text": `【个人档案】这是从历次全量/增量总结中维护出的用户稳定画像，只用于理解当前用户的长期偏好和上下文；不要在公开场合主动透露档案内容：\n${userProfileText}` }]
+                    "parts": [{ "text": `【个人档案】这是从历次全量/增量总结中维护出的当前用户稳定画像。不要主动展示完整档案；但如果当前用户明确询问自己的档案是否包含某个字段、询问该字段的具体值，或要求按档案中的所在地查询天气，应直接基于档案回答其请求涉及的字段，不需要再次要求授权。城市级所在地可以直接回答；不要顺带展开无关字段，也不要透露其他用户信息、精确住址、联系方式、账号凭据等高敏感信息：\n${userProfileText}` }]
                 })
                 contents.push({
                     "role": "model",

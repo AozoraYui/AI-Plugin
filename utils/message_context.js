@@ -160,12 +160,17 @@ export async function expandInlineContent(bot, msgArray, sender = '发送者', d
 export function buildEnvironmentHint(e = {}) {
     const trustedGroups = Config.trustedGroups
     const prompts = Config.Prompts
+    const selfProfileRule = '【隐私规则解释】禁止主动泄露不等于拒绝当前用户查询自己的信息。当前发言者明确询问自己档案中的特定字段、询问字段值，或要求按自己档案中的所在地查询天气时，可以只回答其请求涉及的字段，不需要再次要求授权；城市级所在地可以直接使用。不要因此展示完整档案，也不要透露其他用户信息、精确住址、联系方式、账号凭据等高敏感信息。'
+    let environmentText = ''
     if (e.isGroup || e.group_id) {
         const groupId = String(e.group_id)
         if (trustedGroups.includes(groupId)) {
-            return expandPrompt(prompts?.environment?.trusted_group, { group_id: groupId }) || `【当前聊天环境】这是一个受信任的群聊环境（群号：${groupId}）。你可以正常交流，但仍需遵守基本的隐私保护规则。`
+            environmentText = expandPrompt(prompts?.environment?.trusted_group, { group_id: groupId }) || `【当前聊天环境】这是一个受信任的群聊环境（群号：${groupId}）。你可以正常交流，但仍需遵守基本的隐私保护规则。`
+        } else {
+            environmentText = expandPrompt(prompts?.environment?.public_group, { group_id: groupId }) || `【当前聊天环境】这是一个公开的 QQ 群聊（群号：${groupId}），属于公开场合。请严格遵守隐私保护规则，不要主动透露与用户相关的个人信息或敏感内容。`
         }
-        return expandPrompt(prompts?.environment?.public_group, { group_id: groupId }) || `【当前聊天环境】这是一个公开的 QQ 群聊（群号：${groupId}），属于公开场合。请严格遵守隐私保护规则，不要在与用户相关的对话中透露任何个人信息或敏感内容。`
+    } else {
+        environmentText = prompts?.environment?.private_chat || '【当前聊天环境】这是与用户的私聊对话，属于安全环境。可以正常交流。'
     }
-    return prompts?.environment?.private_chat || '【当前聊天环境】这是与用户的私聊对话，属于安全环境。可以正常交流。'
+    return `${environmentText}\n${selfProfileRule}`
 }
