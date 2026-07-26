@@ -243,9 +243,21 @@ export function hasExplicitFileDownloadIntent(text, options = {}) {
 export function hasExplicitFileSendIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
+    if (hasExplicitLocalFileMutationIntent(value)) return false
     const sendIntent = /(?:发给我|发我|发送|发出来|发到(?:群里|这里)?|传给我|上传(?:到(?:群里|这里)?)?|把.{0,80}上传|试(?:一下|下)?上传)/i.test(value)
     const targetHint = /\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\b|[\w.-]+\.(?:png|jpe?g|webp|gif|mp4|mov|avi|mkv|mp3|wav|ogg|flac|zip|7z|rar|gz|pdf|txt|log|md|json|ya?ml|js|ts|db|sqlite|bin)\b|(?:日志|配置|脚本|文件|目录|压缩包|这个|刚才|上面)/i.test(value)
     return sendIntent && targetHint
+}
+
+export function hasExplicitLocalFileMutationIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    const action = '(?:写入|写到|添加到?|加入到?|追加到?|放进|放到|插入|修改|改成|替换|删除|删掉|移除|清除)'
+    const target = '(?:\\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\\b|[\\w.-]+\\.(?:json|ya?ml|toml|ini|conf|cfg|js|ts|py|sh)|配置文件|群配置|配置(?:项|段|字段)?|disable|enable|白名单|黑名单|列表|字段)'
+    const delegated = new RegExp(`(?:帮我|给我|请|麻烦你?|你能不能|能不能|可以帮我|把|将).{0,160}${action}|^\\s*${action}`, 'i').test(value)
+    const targetsFile = new RegExp(`${action}.{0,120}${target}|${target}.{0,120}${action}`, 'i').test(value)
+    const asksHow = /(?:怎么|如何|怎样).{0,40}(?:写入|写到|添加|加入|追加|修改|替换|删除|移除)/i.test(value)
+    return delegated && targetsFile && !(asksHow && !/(?:帮我|给我|请|麻烦)/i.test(value))
 }
 
 export function hasExplicitGroupChatContextIntent(text) {
@@ -449,6 +461,7 @@ export function hasExplicitShellIntent(text, toolName = '') {
         && !new RegExp(`(?:帮我|给我|请|麻烦|执行|运行|调用|用|拿|通过).{0,20}(?:${shellKeywords})`, 'i').test(value)) {
         return false
     }
+    if (hasExplicitLocalFileMutationIntent(value)) return true
     if (toolName === 'shell_session' && new RegExp(sessionWords, 'i').test(value)) return true
     if (/\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\b/i.test(value)
         && /(?:看|看看|读|读取|打开|检查|分析|搜索|查找|统计|内容|日志|配置|脚本|文件|目录)/i.test(value)) return true

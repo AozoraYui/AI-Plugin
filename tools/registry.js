@@ -843,6 +843,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - 如果当前消息完整文本中提供了“近期工具任务语境”，且当前指令明显是在对上一轮只读任务做续接或改数量（如“再看几条/多查一点/换成 N 条/接着看”），可以按主模型计划编译对应只读工具；不要把这个语境例外用于 group_send_message、group_leave、draw_image、file_send、file_download 或群管理动作。
 - 文件/目录路径可以保留主模型解析出的绝对路径、相对路径、别名或文件名片段，不要凭空发明路径。
 - shell_exec 只能编译主模型明确计划的具体命令；不要为了补全信息自己设计危险命令。主人要求更新当前 AI-Plugin/插件时，可编译为 command="git pull" 并设置 cwd 为插件目录；如果主模型在 git pull 后继续计划查看更新内容，可编译 git log --oneline --decorate --stat ORIG_HEAD..HEAD 或 git diff --stat ORIG_HEAD..HEAD。
+- 主人明确要求修改服务器配置文件时，可以按主模型计划编译 shell_exec。优先先读取并确认目标配置段，再使用可重复执行且范围精确的 Python/Node/YAML 处理或安全的文本编辑命令完成最小修改，最后重新读取目标段或执行语法校验；不要把配置修改误编译成 file_send，也不要只返回建议命令。
 - “记录/历史/变更”要看对象：git、commit、插件、仓库、代码变更记录属于 shell_exec/shell_session 的代码仓库查询；群里、群聊、消息、大家/他们说了什么才属于 group_chat_context 或 group_chat_digest。
 - shell_session 只能在主模型明确计划操作 tmux/ai-shell/shell会话时编译；action=read/status/interrupt/clear/restart/close 不需要 input。action=send 的 input 必须来自用户明确要求输入或执行的内容，只填真实要发进终端的文本，不要把“命令/执行命令/输入命令”等中文引导词粘进 input。
 - nmap/局域网设备扫描：如果主模型计划是先探测本机网络，shell_exec 可编译为 "ip route get 1.1.1.1; ip -o -4 addr show scope global; ip route show default"；如果主模型计划用 shell_session 一步执行，input 必须用 ip route/ip addr 自动推断 iface/cidr 后再 nmap -sn "$cidr"，不要硬编码 192.168.0.0/24 或 192.168.1.0/24。

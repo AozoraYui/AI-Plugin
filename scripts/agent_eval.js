@@ -3,7 +3,9 @@ global.logger = global.logger || { info() {}, warn() {}, error() {}, debug() {} 
 const {
     filterToolCallsByIntent,
     hasExplicitMemorySearchIntent,
+    hasExplicitLocalFileMutationIntent,
     hasExplicitLocalFileReadIntent,
+    hasExplicitFileSendIntent,
     hasExplicitGroupChatContextIntent,
     hasExplicitShellIntent,
     hasExplicitUserProfileHistoryExtractionIntent,
@@ -82,6 +84,16 @@ const routingCases = [
         name: '明确询问机器人群列表仍正常命中',
         text: '#c你加入了哪些群？',
         assert: text => hasExplicitGroupChatContextIntent(text)
+    },
+    {
+        name: '配置写入请求命中Shell而非文件发送',
+        text: '#c你能不能帮我把“[无用插件]发送图片”写到710024443群配置的disable里面',
+        assert: text => hasExplicitLocalFileMutationIntent(text) && hasExplicitShellIntent(text) && !hasExplicitFileSendIntent(text)
+    },
+    {
+        name: '询问配置修改方法不会直接执行',
+        text: '#c这个配置应该怎么修改？',
+        assert: text => !hasExplicitLocalFileMutationIntent(text)
     }
 ]
 
@@ -99,6 +111,13 @@ const guarded = filterToolCallsByIntent(
     '你能帮我代发群消息吗？'
 )
 check('安全过滤拦截非执行式高风险调用', guarded.tools.length === 0 && guarded.blocked.length === 1)
+
+const configMutationText = '#c你能不能帮我把“[无用插件]发送图片”写到710024443群配置的disable里面'
+const allowedConfigMutation = filterToolCallsByIntent(
+    [{ name: 'shell_exec', args: { command: 'python3 update_group_config.py' } }],
+    configMutationText
+)
+check('安全过滤允许明确配置写入Shell调用', allowedConfigMutation.tools.length === 1 && allowedConfigMutation.blocked.length === 0)
 
 const multiPlan = normalizeAgentPlan({
     task_kind: 'multi_step',

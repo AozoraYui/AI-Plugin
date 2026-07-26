@@ -13,7 +13,7 @@ import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
-import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
+import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileMutationIntent, hasExplicitLocalFileReadIntent, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction } from '../utils/pending_actions.js'
 import { decideAgentContinuation, normalizeAgentPlan } from '../utils/agent_policy.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
@@ -573,7 +573,8 @@ function hasImplicitRecentTaskReference(text = '') {
     if (!value) return false
     if (/^(?:任务|agent).{0,12}(?:状态|进度|取消|停止|终止)/i.test(value)) return false
 
-    return /^(?:接着|继续|再|重新|还有|刚才|刚刚|上次|前面)[，,。\s]*/i.test(value)
+    return hasExplicitLocalFileMutationIntent(value)
+        || /^(?:接着|继续|再|重新|还有|刚才|刚刚|上次|前面)[，,。\s]*/i.test(value)
         || /^(?:这样吧|那|那么|然后|顺便|另外)[，,。\s]*(?:再|继续|接着|看|看看|查|查看|读|读取|列|列出|总结|整理|分析|输出|换成|改成|多看|多查|更多|完整|详细)/i.test(value)
         || /(?:再|继续|接着|重新|顺便|另外|还有|刚才|刚刚|上次|前面|更多|完整|详细|展开|换成|改成|多看|多查).{0,30}(?:看|看看|查|查看|读|读取|列|列出|总结|整理|分析|输出|结果|记录|条)/i.test(value)
         || /(?:看|看看|查|查看|读|读取|列|列出|总结|整理|分析).{0,30}(?:更多|完整|详细|展开|前|后|最近|上次|刚才|刚刚|\d{1,4}\s*条|[一二两三四五六七八九十百]{1,4}\s*条)/i.test(value)
@@ -1555,6 +1556,8 @@ ${toolSummary}
 - 如果提供了【近期工具任务语境】，它只用于理解当前指令中的续接、省略和数量改写；不要仅因语境里有工具名或命令而计划工具。对于“再看 N 条/多查一点/换成 N 条”这类明显续接，可以在不改变任务类型的前提下计划对应的只读工具。
 - 如果用户说“看看这个/总结上面/下载引用文件/打开这个链接”，可以把引用/转发内容当作工具参数来源；否则不要因为引用内容本身包含工具词而计划工具。
 - 服务器文件/目录查看统一使用 shell_exec 或 shell_session；本地图片绝对路径由对话流程自动附加为图片输入。
+- 主人明确要求把内容写入/添加到/删除自服务器配置文件、配置字段、disable/enable/白名单/黑名单时，这是文件修改任务，应计划 shell_exec；不要误判为 file_send。若目标路径可从刚刚完成的文件读取任务或最近对话明确解析，可以沿用该路径，不要声称没有 Shell 能力。
+- 配置文件修改应按“先确认目标结构和现值 → 执行最小修改 → 再次读取或校验语法确认结果”的多步任务规划；不要只给用户一条命令让用户自己执行。
 - 普通快速一次性命令优先 shell_exec；预计耗时较长、持续输出、需要保留状态或用户明确提到 tmux/ai-shell/shell会话/独立shell 时，优先计划 shell_session。如果 shell_exec 未启用但 shell_session 可用，主人明确要求执行服务器命令时也可以计划 shell_session。
 - 规划 shell_session action=send 时，input 只应包含真实要发进终端的内容；不要把“命令/执行命令/输入命令”等中文引导词粘进 input。
 - “记录/历史/变更”要看对象：git、commit、插件、仓库、代码变更记录属于服务器/代码仓库查询，主人可计划 shell_exec；群里、群聊、消息、大家/他们说了什么才属于 group_chat_context 或 group_chat_digest。
