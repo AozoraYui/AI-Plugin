@@ -15,6 +15,7 @@ import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
 import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction } from '../utils/pending_actions.js'
+import { decideAgentContinuation, normalizeAgentPlan } from '../utils/agent_policy.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { executePendingGroupSend } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
@@ -723,20 +724,25 @@ function isPendingConfirmationToolResult(callName, resultData) {
     return ['group_send_message', 'group_leave'].includes(callName) && /待确认/.test(JSON.stringify(resultData || {}))
 }
 
-async function summarizeAgentRound(client, modelGroupKey, providerFilter, task, round, observations = []) {
+async function summarizeAgentRound(client, modelGroupKey, providerFilter, task, round, observations = [], plan = {}) {
     if (!client?.makeRequest || observations.length === 0) return null
     const observationText = observations.map((item, index) => {
         const args = item.args ? `\n参数：${summarizeToolArgs(item.args)}` : ''
         return `${index + 1}. 工具：${item.tool}，状态：${item.status}${args}\n结果：${truncateForPrompt(item.text || '', 2400)}`
     }).join('\n\n')
-    const prompt = `你是 Agent 任务观察器。请根据本轮工具真实结果，更新任务进度摘要，只输出 JSON。
+    const planMetadata = normalizeAgentPlan(plan)
+    const successCriteriaText = planMetadata.successCriteria.length > 0
+        ? planMetadata.successCriteria.map((item, index) => `${index + 1}. ${item}`).join('\n')
+        : '未提供；请根据任务目标和工具结果谨慎判断。'
+    const prompt = `你是 Agent 任务观察器和结果验证器。请根据本轮工具真实结果，判断用户目标是否已经达到，并更新任务进度摘要，只输出 JSON。
 
 规则：
 - 工具结果是事实来源；不要编造没有出现的成功、失败或数据。
 - 如果工具结果显示待确认、权限不足、需要用户补充目标/范围/参数，completion_status 用 "waiting"。
 - 如果已经足够回答用户当前目标，completion_status 用 "ready"。
-- 如果还需要继续调用只读工具补充信息，completion_status 用 "continue" 并写 next_hint。
-- 如果失败且短期无法继续，completion_status 用 "blocked"。
+- 如果成功标准还没满足，或工具失败但可以通过修正参数、换只读工具、缩小范围继续恢复，completion_status 用 "continue" 并写出具体 next_hint。
+- 只有现有可用工具无法恢复、权限或必要信息缺失时，completion_status 才用 "blocked"。
+- 不要因为某个工具返回了内容就自动判定 ready；必须对照成功标准检查结果是否足以完成目标。
 - summary 控制在 ${AGENT_TASK_SUMMARY_MAX_CHARS} 字内，last_observation 控制在 ${AGENT_TASK_OBSERVATION_MAX_CHARS} 字内。
 
 任务目标：
@@ -744,6 +750,12 @@ ${task?.objective || '未知'}
 
 旧摘要：
 ${task?.summary || '暂无'}
+
+任务类型：${planMetadata.taskKind}
+是否要求执行后复核：${planMetadata.requiresFollowupCheck ? '是' : '否'}
+
+成功标准：
+${successCriteriaText}
 
 本轮：第 ${round} 轮
 
@@ -1511,6 +1523,8 @@ async function askMainModelForToolPlan(client, modelGroupKey, providerFilter, op
 - 决定是否需要工具、需要哪些工具、调用顺序和关键参数线索。
 - 如果普通聊天、看图问答、情绪回应、解释概念等不需要工具，返回 need_tools=false。
 - 如果目标不明确且无法从上下文解析，不要猜路径/对象，返回 need_tools=false，并在 reason 中说明需要追问什么。
+- 判断任务是一次取数即可完成，还是必须根据第一轮真实结果再决定下一步。多步诊断、搜索后打开来源、更新后检查变更、先解析对象再执行查询等任务，应标记为 multi_step。
+- success_criteria 应写成可以根据工具结果判断的完成条件，不要写空泛目标。
 
 可用工具：
 ${toolSummary}
@@ -1562,6 +1576,9 @@ ${agentRoundBlock}
   "need_tools": true,
   "reason": "为什么需要工具，以及如何从上下文解析了指代",
   "resolved_request": "把用户当前真实需求改写成明确、不含指代的一句话",
+  "task_kind": "multi_step",
+  "requires_followup_check": false,
+  "success_criteria": ["判断任务完成的可验证条件"],
   "tool_plan": [
     {
       "tool": "工具名",
@@ -1576,6 +1593,9 @@ ${agentRoundBlock}
   "need_tools": false,
   "reason": "为什么不需要工具，或还缺什么信息",
   "resolved_request": "当前理解到的用户需求",
+  "task_kind": "single_step",
+  "requires_followup_check": false,
+  "success_criteria": [],
   "tool_plan": []
 }`
 
@@ -1595,6 +1615,10 @@ ${agentRoundBlock}
     const plannedTools = Array.isArray(parsed.tool_plan) ? parsed.tool_plan : []
     parsed.need_tools = parsed.need_tools === true && plannedTools.length > 0
     parsed.tool_plan = plannedTools.slice(0, 5)
+    const planMetadata = normalizeAgentPlan(parsed)
+    parsed.task_kind = planMetadata.taskKind
+    parsed.requires_followup_check = planMetadata.requiresFollowupCheck
+    parsed.success_criteria = planMetadata.successCriteria
     const modelInfo = result.platform ? `, 模型=${result.platform}` : ''
     logger.info(`[AI-Plugin] 主模型工具规划完成${modelInfo}: need_tools=${parsed.need_tools}, tools=${parsed.tool_plan.map(t => t.tool).join(', ') || '无'}, reason=${String(parsed.reason || '').slice(0, 160)}`)
     return parsed
@@ -2195,6 +2219,7 @@ export class ChatHandler extends plugin {
                                 allowTaskContextContinuation: taskContextContinuation,
                                 continuationTools: continuationToolsForGuard
                             })
+                            toolAnalysis.plan = mainToolPlan
                         } else {
                             logger.info(`[AI-Plugin] 主模型判断本轮无需工具: ${String(mainToolPlan?.reason || '').slice(0, 180)}`)
                             toolAnalysis = {
@@ -2207,6 +2232,8 @@ export class ChatHandler extends plugin {
                     }
                 }
                 let currentToolIntent = toolAnalysis?.intent || ''
+                let currentAgentPlan = toolAnalysis?.plan || {}
+                let currentPlanMetadata = normalizeAgentPlan(currentAgentPlan)
                 let toolCalls = Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools : []
                 const guardedToolCalls = filterToolCallsByIntent(toolCalls, currentToolInstruction, {
                     hasImages: allImages.length > 0 || hasLocalImageInput,
@@ -2271,7 +2298,7 @@ export class ChatHandler extends plugin {
                         stepIndex: 1,
                         stepType: agentTaskContinuation ? 'resume_plan' : 'plan',
                         status: 'ok',
-                        content: `意图：${currentToolIntent || '无'}\n工具队列：${toolCalls.map(call => `${call.name}(${summarizeToolArgs(call.args)})`).join(' -> ')}`
+                        content: `意图：${currentToolIntent || '无'}\n任务类型：${currentPlanMetadata.taskKind}\n成功标准：${currentPlanMetadata.successCriteria.join('；') || '未提供'}\n工具队列：${toolCalls.map(call => `${call.name}(${summarizeToolArgs(call.args)})`).join(' -> ')}`
                     })
                 } else if (agentTaskContinuation && agentTask) {
                     await recordAgentStep(this.conversationManager.db, agentTask, {
@@ -2299,6 +2326,7 @@ export class ChatHandler extends plugin {
                     }
                     logger.info(`[AI-Plugin] Agent 第 ${agentRound} 轮工具执行队列: ${roundToolCalls.map(call => `${call.name}(${JSON.stringify(call.args || {}).slice(0, 120)})`).join(' -> ')}`)
                     let roundExecuted = 0
+                    let roundCompletionStatus = ''
                     let roundPendingConfirmation = false
                     const roundObservations = []
                     let roundCallIndex = 0
@@ -2483,8 +2511,9 @@ export class ChatHandler extends plugin {
                             ...agentTask,
                             summary: agentTaskLatestSummary,
                             lastObservation: agentTaskLatestObservation
-                        }, agentRound, roundObservations)
+                        }, agentRound, roundObservations, currentAgentPlan)
                         const completionStatus = roundPendingConfirmation ? 'waiting' : (roundSummary?.completionStatus || (roundExecuted > 0 ? 'ready' : 'blocked'))
+                        roundCompletionStatus = completionStatus
                         agentTaskLatestSummary = roundSummary?.summary || agentTaskLatestSummary
                         agentTaskLatestObservation = roundSummary?.lastObservation
                             || roundObservations.map(item => `${item.tool}: ${item.status}`).join('；')
@@ -2521,8 +2550,8 @@ export class ChatHandler extends plugin {
                         }
                     }
 
-                    if (roundExecuted === 0) {
-                        logger.info(`[AI-Plugin] Agent 第 ${agentRound} 轮没有成功工具结果，停止循环`)
+                    if (roundExecuted === 0 && roundCompletionStatus !== 'continue') {
+                        logger.info(`[AI-Plugin] Agent 第 ${agentRound} 轮没有成功工具结果，且观察器未给出可恢复方案，停止循环`)
                         break
                     }
                     if (agentRound >= AGENT_LOOP_MAX_ROUNDS) {
@@ -2533,11 +2562,19 @@ export class ChatHandler extends plugin {
                         logger.info(`[AI-Plugin] Agent 遇到终止型工具，停止继续规划: ${roundToolCalls.map(call => call.name).join(', ')}`)
                         break
                     }
-                    if (!shouldConsiderAgentContinuation(roundToolCalls, currentToolInstruction, userMessage)) {
+                    const continuationDecision = decideAgentContinuation({
+                        completionStatus: roundCompletionStatus,
+                        planRequiresFollowup: currentPlanMetadata.requiresFollowupCheck,
+                        heuristicRequestsContinuation: shouldConsiderAgentContinuation(roundToolCalls, currentToolInstruction, userMessage),
+                        executedCount: roundExecuted,
+                        observationCount: roundObservations.length
+                    })
+                    if (!continuationDecision.shouldContinue) {
                         if (roundToolCalls.some(call => call.name === 'shell_exec')) shellFollowupConsideredByAgent = true
-                        logger.info(`[AI-Plugin] Agent 第 ${agentRound} 轮结果已注入，当前指令不属于多步任务，停止后续规划`)
+                        logger.info(`[AI-Plugin] Agent 第 ${agentRound} 轮停止后续规划：${continuationDecision.reason}`)
                         break
                     }
+                    logger.info(`[AI-Plugin] Agent 第 ${agentRound} 轮继续规划：${continuationDecision.reason}`)
                     if (roundToolCalls.some(call => call.name === 'shell_exec')) shellFollowupConsideredByAgent = true
 
                     const nextCandidateUrls = extractUrlsFromText(userMessage, 10)
@@ -2559,6 +2596,7 @@ export class ChatHandler extends plugin {
                         userMessage,
                         history,
                         incrementalCheckpoint,
+                        userProfileText,
                         environmentHint,
                         enabledTools: nextEnabledTools,
                         candidateUrls: nextCandidateUrls,
@@ -2612,12 +2650,14 @@ export class ChatHandler extends plugin {
                     }
                     toolCalls = dedupedNext.tools
                     currentToolIntent = nextAnalysis?.intent || nextPlan.reason || ''
+                    currentAgentPlan = nextPlan
+                    currentPlanMetadata = normalizeAgentPlan(nextPlan)
                     if (toolCalls.length > 0) {
                         await recordAgentStep(this.conversationManager.db, agentTask, {
                             stepIndex: (agentRound + 1) * 100 - 10,
                             stepType: 'next_plan',
                             status: 'ok',
-                            content: `后续意图：${currentToolIntent || '无'}\n下一轮工具队列：${toolCalls.map(call => `${call.name}(${summarizeToolArgs(call.args)})`).join(' -> ')}`
+                            content: `后续意图：${currentToolIntent || '无'}\n任务类型：${currentPlanMetadata.taskKind}\n成功标准：${currentPlanMetadata.successCriteria.join('；') || '未提供'}\n下一轮工具队列：${toolCalls.map(call => `${call.name}(${summarizeToolArgs(call.args)})`).join(' -> ')}`
                         })
                     }
                 }
