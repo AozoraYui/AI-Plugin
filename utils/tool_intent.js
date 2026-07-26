@@ -262,6 +262,89 @@ export function hasExplicitGroupChatContextIntent(text) {
     return new RegExp(`${action}.{0,20}${object}|${object}.{0,20}${action}`, 'i').test(value)
 }
 
+function hasNonChatRecordDomain(value = '') {
+    const text = String(value || '')
+    const groupAnchor = /(?:群里|群内|群聊|群消息|聊天记录|消息记录|消息流水|畅聊记录|群上下文|大家|他们|她们|别人|群友|所有群|全部群|跨群|各群|别的群|其他群|其它群|本群|当前群|这个群|这群)/i.test(text)
+    if (groupAnchor) return false
+    return /(?:git|commit|提交|提交记录|变更记录|更新记录|改动记录|changelog|change\s*log|代码变更|仓库|repo|repository|分支|branch|diff|pull|插件|AI-Plugin)/i.test(text)
+        && /(?:看|查看|查|查询|列出|读取|读|总结|整理|回顾|分析|最近|前|最新|历史|记录|日志|log|变更|改动|提交)/i.test(text)
+}
+
+export function hasExplicitGroupChatDigestIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    const digestAction = '(?:总结|整理|回顾|概括|复盘|补课|看看|看一下|讲讲|说说)'
+    const groupObject = '(?:群里|群内|群聊|群消息|聊天记录|消息流水|大家|他们|她们|所有群|全部群|跨群|各群|别的群|其他群|其它群|别群|这个群|本群|当前群)'
+    const longRange = '(?:最近\\s*(?:\\d{1,2}|[一二两三四五六七八九十两几]{1,3})\\s*(?:天|日|小时|钟头|h)|这几天|近几天|过去几天|今天|昨天|昨日|前天|这两天|最近一阵|这段时间|我不在(?:的时候|这段时间)?|我没在(?:的时候|这段时间)?|没看群(?:的时候|这段时间)?|漏看(?:的时候|这段时间)?|睡觉(?:的时候|期间)?|睡醒|从我(?:上次|最后一次).{0,8}(?:发言|说话|冒泡|发消息)|上次(?:发言|说话|冒泡|发消息)后)'
+    return new RegExp(`${longRange}.{0,40}${groupObject}.{0,40}(?:聊|说|发|发生|什么情况|前情|${digestAction})`, 'i').test(value)
+        || new RegExp(`${digestAction}.{0,30}${longRange}.{0,30}${groupObject}`, 'i').test(value)
+        || new RegExp(`${digestAction}.{0,30}${groupObject}.{0,30}${longRange}`, 'i').test(value)
+        || new RegExp(`${groupObject}.{0,30}${longRange}.{0,30}(?:聊|说|发|发生|什么情况|前情|${digestAction})`, 'i').test(value)
+        || new RegExp(`${groupObject}.{0,30}${longRange}.{0,30}${digestAction}`, 'i').test(value)
+}
+
+export function parseGroupChatDigestRequest(text) {
+    const value = getPrimaryUserInstruction(text).trim()
+    if (!hasExplicitGroupChatDigestIntent(value)) return null
+    const args = {}
+    if (/(?:我不在|我没在|没看群|漏看|睡觉|睡醒|从我(?:上次|最后一次).{0,8}(?:发言|说话|冒泡|发消息)|上次(?:发言|说话|冒泡|发消息)后)/i.test(value)) {
+        args.range = 'since_last_message'
+    } else if (/昨天|昨日/i.test(value)) {
+        args.range = 'yesterday'
+    } else if (/今天|今日|从早上|从上午|从今天/i.test(value)) {
+        args.range = 'today'
+    } else {
+        const hourMatch = value.match(/(?:最近|近|过去|这|前)?\s*(\d{1,3}|[一二两三四五六七八九十两几]{1,3})\s*(?:个)?(?:小时|钟头|h)/i)
+        const dayMatch = value.match(/(?:最近|近|过去|这|前)?\s*(\d{1,2}|[一二两三四五六七八九十两几]{1,3})\s*(?:天|日)/i)
+        if (hourMatch?.[1]) {
+            args.range = 'recent_hours'
+            if (/^\d+$/.test(hourMatch[1])) args.hours = Number(hourMatch[1])
+        } else if (dayMatch?.[1] || /(?:最近几天|这几天|近几天|过去几天)/i.test(value)) {
+            args.range = 'recent_days'
+            if (dayMatch?.[1] && /^\d+$/.test(dayMatch[1])) args.days = Number(dayMatch[1])
+        }
+    }
+    if (!args.range) args.range = 'recent_hours'
+
+    if (/(?:所有群|全部群|跨群|各群|全局)/i.test(value)) {
+        args.scope = 'all_groups'
+    } else if (/(?:我|俺|咱).{0,30}(?:别的群|其他群|其它群|跨群).{0,30}(?:说|聊|发|消息|总结|回顾)|(?:别的群|其他群|其它群|跨群).{0,30}(?:我|俺|咱).{0,30}(?:说|聊|发|消息|总结|回顾)/i.test(value)) {
+        args.scope = 'my_recent_messages'
+        if (/(?:别的群|其他群|其它群|别群)/i.test(value)) args.exclude_current_group = true
+    } else {
+        args.scope = 'current_group'
+    }
+
+    const groupMatch = value.match(/(?:群号|群)\s*[：:=]?\s*(\d{5,15})/i)
+    if (groupMatch?.[1]) {
+        args.scope = 'specific_group'
+        args.group_id = groupMatch[1]
+    }
+    const queryMatch = value.match(/(?:关于|关键词|包含|提到)\s*[「"“]?([^」"”，,。！？\n]{2,40})[」"”]?/i)
+    if (queryMatch?.[1] && !/(群里|群聊|大家|他们|她们|最近|昨天|今天|我不在)/i.test(queryMatch[1])) {
+        args.query = queryMatch[1].trim()
+    }
+    return args
+}
+
+export function hasStrongGroupChatContextQuestion(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    if (hasNonChatRecordDomain(value)) return false
+
+    const groupActors = '(?:群里|群内|群聊|群消息|群友|大家|他们|她们|别人|本群|当前群|这个群|这群)'
+    const crossGroupWords = '(?:所有群|全部群|跨群|各群|别的群|其他群|其它群|别群|那边群|别处群)'
+    const shortTimeWords = '(?:刚才|刚刚|前面|之前|这会儿|刚才那会儿)'
+    const chatActions = '(?:聊(?:了|过)?(?:啥|什么|些啥|些什么)?|在聊(?:啥|什么)|说(?:了|过)?(?:啥|什么|些啥|些什么)?|在说(?:啥|什么)|发(?:了|过)?(?:啥|什么|些啥|些什么)?|发生(?:了)?(?:啥|什么|什么事)?|什么情况|啥情况|咋了|怎么了|在干嘛|在干什么|前情|前情提要)'
+    const recordActions = '(?:总结|概括|回顾|消息|记录|流水)'
+
+    return new RegExp(`${groupActors}.{0,28}(?:${chatActions}|${recordActions})|(?:${chatActions}|${recordActions}).{0,24}${groupActors}`, 'i').test(value)
+        || new RegExp(`${shortTimeWords}.{0,24}${chatActions}|${chatActions}.{0,20}${shortTimeWords}`, 'i').test(value)
+        || new RegExp(`${crossGroupWords}.{0,28}(?:${chatActions}|${recordActions})|(?:${chatActions}|${recordActions}).{0,20}${crossGroupWords}`, 'i').test(value)
+        || /(?:最近前情|前情提要|补一下前情|补补前情)/i.test(value)
+        || /(?:我不在|没看群|漏看).{0,24}(?:聊|说|发|发生|总结|前情)/i.test(value)
+}
+
 export function hasExplicitUserProfileUpdateIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
@@ -334,10 +417,12 @@ export function parseMemorySearchRequest(text) {
 export function hasGroupChatContextQuestion(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
+    if (hasNonChatRecordDomain(value)) return false
+    if (hasStrongGroupChatContextQuestion(value)) return true
 
-    const contextVerbs = '(?:聊(?:了|过)?(?:啥|什么|些啥|些什么)?|在聊(?:啥|什么)|说(?:了|过)?(?:啥|什么|些啥|些什么)?|在说(?:啥|什么)|发(?:了|过)?(?:啥|什么|些啥|些什么)?|发生(?:了)?(?:啥|什么|什么事)?|什么情况|啥情况|咋了|怎么了|在干嘛|在干什么|前情|前情提要|总结|概括|回顾|消息|记录|流水)'
+    const contextVerbs = '(?:聊(?:了|过)?(?:啥|什么|些啥|些什么)?|在聊(?:啥|什么)|说(?:了|过)?(?:啥|什么|些啥|些什么)?|在说(?:啥|什么)|发(?:了|过)?(?:啥|什么|些啥|些什么)?|发生(?:了)?(?:啥|什么|什么事)?|什么情况|啥情况|咋了|怎么了|在干嘛|在干什么|前情|前情提要|总结|概括|回顾|消息|流水)'
     const timeWords = '(?:刚才|刚刚|之前|前面|最近|这会儿|刚才那会儿|我不在的时候|我没看的时候)'
-    const currentGroupWords = '(?:他们|她们|大家|群里|群内|这群|这个群|这里|刚才|刚刚|之前|前面|最近)'
+    const currentGroupWords = '(?:他们|她们|大家|群里|群内|这群|这个群|这里|刚才|刚刚|之前|前面)'
     const crossGroupWords = '(?:所有群|全部群|跨群|各群|别的群|其他群|其它群|别群|那边群|别处群)'
 
     return new RegExp(`${currentGroupWords}.{0,28}${contextVerbs}|${contextVerbs}.{0,20}(?:${timeWords}|群里|大家|他们|她们)`, 'i').test(value)
@@ -377,6 +462,8 @@ export function hasExplicitShellIntent(text, toolName = '') {
     if (/\b(?:git\s+(?:pull|status|diff|log|show|fetch)|tmux\s+ls|nmap\s+-|ip\s+(?:route|addr)|pnpm\s+|npm\s+|node\s+|python3?\s+|docker\s+|systemctl\s+|sqlite3\s+|curl\s+|wget\s+|jq\s+)/i.test(value)) return true
     if (new RegExp(`(?:用|拿|通过).{0,12}(?:${commandKeywords}).{0,12}(?:命令|工具)`, 'i').test(value)) return true
     if (new RegExp(`(?:${commandKeywords}).{0,10}(?:命令).{0,16}(?:查|看|读取|查询|检查|列出)`, 'i').test(value)) return true
+    if (/(?:git|commit|提交|提交记录|变更记录|更新记录|改动记录|changelog|change\s*log).{0,40}(?:记录|历史|日志|log|提交|commit|变更|改动|更新|最近|最新|前\s*\d{1,4}\s*条)|(?:记录|历史|日志|log|提交|commit|变更|改动|更新|最近|最新|前\s*\d{1,4}\s*条).{0,40}(?:git|commit|提交|提交记录|变更记录|更新记录|改动记录|changelog|change\s*log)/i.test(value)) return true
+    if (/(?:插件|AI-Plugin|仓库|repo|repository|代码).{0,40}(?:git|commit|提交|提交记录|变更记录|更新记录|改动记录|changelog|change\s*log|历史|日志)|(?:git|commit|提交|提交记录|变更记录|更新记录|改动记录|changelog|change\s*log|历史|日志).{0,40}(?:插件|AI-Plugin|仓库|repo|repository|代码)/i.test(value)) return true
     if (/(?:更新|拉取|重启|启动|停止|检查|诊断|搜索|查|看).{0,16}(?:插件|仓库|代码|服务|进程|容器|日志|服务器|系统|主机)/i.test(value)) return true
     if (/(?:插件|仓库|代码|服务|进程|容器|日志|服务器|系统|主机).{0,16}(?:更新|拉取|重启|启动|停止|检查|诊断|搜索|查|看)/i.test(value)) return true
     return false
@@ -463,6 +550,8 @@ export function isExplicitToolIntent(toolName, text, options = {}) {
             return options.strictWebSearch === true ? hasExplicitWebSearchIntent(text) : true
         case 'group_chat_context':
             return hasExplicitGroupChatContextIntent(text)
+        case 'group_chat_digest':
+            return hasExplicitGroupChatDigestIntent(text)
         case 'memory_search':
             return hasExplicitMemorySearchIntent(text)
         case 'user_profile_update':
@@ -484,7 +573,8 @@ export function filterToolCallsByIntent(toolCalls = [], text = '', options = {})
     const filtered = []
     const blocked = []
     const instruction = getPrimaryUserInstruction(text)
-    const allowContinuation = options.allowContinuation === true && isContinuationToolInstruction(instruction)
+    const allowContinuation = options.allowContinuation === true
+        && (isContinuationToolInstruction(instruction) || options.allowTaskContextContinuation === true)
     const continuationTools = new Set(Array.isArray(options.continuationTools) ? options.continuationTools : [])
     for (const call of toolCalls || []) {
         if (!call?.name) continue

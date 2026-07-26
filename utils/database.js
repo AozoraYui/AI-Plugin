@@ -566,6 +566,179 @@ export class AIDatabase {
         })
     }
 
+    countGroupMessageLogs(options = {}) {
+        return new Promise((resolve, reject) => {
+            const params = []
+            let query = 'SELECT COUNT(*) AS count FROM group_message_logs WHERE 1 = 1'
+
+            const groupIds = Array.isArray(options.groupIds)
+                ? [...new Set(options.groupIds.map(id => String(id)).filter(Boolean))]
+                : []
+            if (options.groupId) {
+                query += ' AND group_id = ?'
+                params.push(String(options.groupId))
+            } else if (groupIds.length > 0) {
+                query += ` AND group_id IN (${groupIds.map(() => '?').join(',')})`
+                params.push(...groupIds)
+            }
+
+            if (options.excludeGroupId) {
+                query += ' AND group_id != ?'
+                params.push(String(options.excludeGroupId))
+            }
+            if (options.userId) {
+                query += ' AND user_id = ?'
+                params.push(String(options.userId))
+            }
+            if (options.startAt) {
+                query += ' AND created_at >= ?'
+                params.push(String(options.startAt))
+            }
+            if (options.endAt) {
+                query += ' AND created_at <= ?'
+                params.push(String(options.endAt))
+            }
+            if (options.startAfterId) {
+                query += ' AND id > ?'
+                params.push(Number(options.startAfterId) || 0)
+            }
+            if (options.excludeMessageId) {
+                query += ' AND (message_id IS NULL OR (message_id != ? AND message_id NOT LIKE ?))'
+                const messageId = String(options.excludeMessageId)
+                params.push(messageId, `${messageId}:part:%`)
+            }
+            if (options.excludeCommands === true) {
+                query += ' AND is_command = 0'
+            }
+
+            const q = String(options.query || '').trim()
+            if (q) {
+                const like = `%${q}%`
+                query += ' AND (normalized_text LIKE ? OR nickname LIKE ? OR user_id LIKE ? OR group_id LIKE ?)'
+                params.push(like, like, like, like)
+            }
+
+            this.db.get(query, params, (err, row) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(row?.count || 0)
+            })
+        })
+    }
+
+    getGroupMessageLogsByTimeRange(options = {}) {
+        return new Promise((resolve, reject) => {
+            const params = []
+            let query = `
+                SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at
+                FROM group_message_logs
+                WHERE 1 = 1
+            `
+
+            const groupIds = Array.isArray(options.groupIds)
+                ? [...new Set(options.groupIds.map(id => String(id)).filter(Boolean))]
+                : []
+            if (options.groupId) {
+                query += ' AND group_id = ?'
+                params.push(String(options.groupId))
+            } else if (groupIds.length > 0) {
+                query += ` AND group_id IN (${groupIds.map(() => '?').join(',')})`
+                params.push(...groupIds)
+            }
+
+            if (options.excludeGroupId) {
+                query += ' AND group_id != ?'
+                params.push(String(options.excludeGroupId))
+            }
+            if (options.userId) {
+                query += ' AND user_id = ?'
+                params.push(String(options.userId))
+            }
+            if (options.startAt) {
+                query += ' AND created_at >= ?'
+                params.push(String(options.startAt))
+            }
+            if (options.endAt) {
+                query += ' AND created_at <= ?'
+                params.push(String(options.endAt))
+            }
+            if (options.startAfterId) {
+                query += ' AND id > ?'
+                params.push(Number(options.startAfterId) || 0)
+            }
+            if (options.excludeMessageId) {
+                query += ' AND (message_id IS NULL OR (message_id != ? AND message_id NOT LIKE ?))'
+                const messageId = String(options.excludeMessageId)
+                params.push(messageId, `${messageId}:part:%`)
+            }
+            if (options.excludeCommands === true) {
+                query += ' AND is_command = 0'
+            }
+
+            const q = String(options.query || '').trim()
+            if (q) {
+                const like = `%${q}%`
+                query += ' AND (normalized_text LIKE ? OR nickname LIKE ? OR user_id LIKE ? OR group_id LIKE ?)'
+                params.push(like, like, like, like)
+            }
+
+            query += ' ORDER BY created_at ASC, id ASC'
+            query = appendLimitClause(query, params, options.limit, 300, 2000)
+            const offset = Math.max(0, Math.floor(Number(options.offset) || 0))
+            if (offset > 0) {
+                query += ' OFFSET ?'
+                params.push(offset)
+            }
+
+            this.db.all(query, params, (err, rows) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(rows.map(normalizeGroupMessageRow))
+            })
+        })
+    }
+
+    getLastGroupMessageByUser(groupId, userId, options = {}) {
+        return new Promise((resolve, reject) => {
+            const params = [String(groupId), String(userId)]
+            let query = `
+                SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at
+                FROM group_message_logs
+                WHERE group_id = ?
+                  AND user_id = ?
+            `
+            if (options.excludeMessageId) {
+                query += ' AND (message_id IS NULL OR (message_id != ? AND message_id NOT LIKE ?))'
+                const messageId = String(options.excludeMessageId)
+                params.push(messageId, `${messageId}:part:%`)
+            }
+            if (options.beforeId) {
+                query += ' AND id < ?'
+                params.push(Number(options.beforeId) || 0)
+            }
+            if (options.beforeCreatedAt) {
+                query += ' AND created_at <= ?'
+                params.push(String(options.beforeCreatedAt))
+            }
+            if (options.excludeCommands === true) {
+                query += ' AND is_command = 0'
+            }
+            query += ' ORDER BY id DESC LIMIT 1'
+
+            this.db.get(query, params, (err, row) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(row ? normalizeGroupMessageRow(row) : null)
+            })
+        })
+    }
+
     getGroupMessageLogGroups(options = {}) {
         return new Promise((resolve, reject) => {
             const params = []
