@@ -18,6 +18,7 @@ import { clearPendingAction, loadPendingAction, parseStrictPendingDecision } fro
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 import { executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound, stableAgentStringify } from '../utils/agent_runtime.js'
+import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK_SUMMARY_MAX_CHARS, mergeAgentRisk, recordAgentTaskStep } from '../utils/agent_task_runtime.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { executePendingGroupSend } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
@@ -93,10 +94,7 @@ const AGENT_LOOP_STOP_TOOLS = [
     'group_essence',
     'group_request_handle'
 ]
-const AGENT_TASK_STEP_MAX_CHARS = 6000
 const AGENT_TASK_CONTEXT_MAX_CHARS = 9000
-const AGENT_TASK_OBSERVATION_MAX_CHARS = 1600
-const AGENT_TASK_SUMMARY_MAX_CHARS = 3000
 const AGENT_RECENT_CONTEXT_MAX_AGE_MS = 20 * 60 * 1000
 const TASK_CONTEXT_CONTINUATION_TOOLS = [
     'weather',
@@ -572,11 +570,6 @@ function summarizeToolArgs(args = {}) {
     return truncateForPrompt(stableAgentStringify(args || {}), 1000)
 }
 
-function mergeAgentRisk(previous = 'low', next = 'low') {
-    const rank = { low: 0, medium: 1, high: 2 }
-    return (rank[next] || 0) > (rank[previous] || 0) ? next : previous
-}
-
 function buildAgentObjective(currentInstruction = '', userMessage = '', toolIntent = '') {
     const instruction = String(currentInstruction || '').trim()
     const base = instruction || getPrimaryUserInstruction(userMessage) || String(userMessage || '').trim()
@@ -667,15 +660,11 @@ async function loadRecentAgentTaskForPlanning(db, e, currentInstruction = '') {
 }
 
 async function recordAgentStep(db, task, step = {}) {
-    if (!db?.addAgentStep || !task?.taskId) return
-    try {
-        await db.addAgentStep(task.taskId, {
-            ...step,
-            content: truncateForPrompt(step.content || '', AGENT_TASK_STEP_MAX_CHARS)
-        })
-    } catch (err) {
-        logger.warn(`[AI-Plugin] Agent任务步骤记录失败: ${err.message}`)
-    }
+    return recordAgentTaskStep(db, task, step, {
+        maxChars: AGENT_TASK_STEP_MAX_CHARS,
+        logger,
+        logPrefix: '[AI-Plugin] Agent任务'
+    })
 }
 
 async function summarizeAgentRound(client, modelGroupKey, providerFilter, task, round, observations = [], plan = {}) {

@@ -30,6 +30,7 @@ const { shellSessionTool } = await import('../tools/shell_session.js')
 const { loadPendingAction, clearPendingAction, parseStrictPendingDecision } = await import('../utils/pending_actions.js')
 const { deterministicToolDecision, normalizeToolResult } = await import('../utils/tool_result.js')
 const { agentToolCallKey, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound } = await import('../utils/agent_runtime.js')
+const { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, updateAgentTaskProgress } = await import('../utils/agent_task_runtime.js')
 
 const failures = []
 let passed = 0
@@ -347,6 +348,55 @@ check('共享续跑策略允许可恢复失败调整方案', shouldContinueAgent
     instruction: '检查配置',
     accumulatedText: '路径不存在'
 }))
+
+const persistedTasks = new Map()
+const persistedSteps = []
+const fakeTaskDb = {
+    async createAgentTask(task) {
+        const row = { taskId: 'agent_shared_1', status: 'active', riskLevel: 'low', summary: '', lastObservation: '', ...task }
+        persistedTasks.set(row.taskId, row)
+        return row
+    },
+    async updateAgentTask(taskId, updates) {
+        persistedTasks.set(taskId, { ...persistedTasks.get(taskId), ...updates })
+        return true
+    },
+    async addAgentStep(taskId, step) {
+        persistedSteps.push({ taskId, ...step })
+        return persistedSteps.length
+    }
+}
+let sharedTask = await createOrResumeAgentTask(fakeTaskDb, {
+    userId: 'shared-user',
+    groupId: 'shared-group',
+    objective: '从畅聊执行诊断任务',
+    riskLevel: 'low'
+})
+sharedTask = await createOrResumeAgentTask(fakeTaskDb, {
+    task: sharedTask,
+    riskLevel: 'high'
+})
+check('共享任务运行时支持跨模式创建与风险升级', sharedTask?.taskId === 'agent_shared_1' && sharedTask.riskLevel === 'high')
+await recordAgentTaskStep(fakeTaskDb, sharedTask, {
+    stepIndex: 101,
+    stepType: 'tool',
+    toolName: 'shell_exec',
+    status: 'waiting',
+    content: '等待主人确认'
+})
+sharedTask = await updateAgentTaskProgress(fakeTaskDb, sharedTask, {
+    status: 'waiting',
+    summary: '高风险命令等待确认',
+    lastObservation: '尚未执行'
+})
+sharedTask = await finalizeAgentTask(fakeTaskDb, sharedTask, {
+    status: 'completed',
+    content: '请确认后继续',
+    summary: '高风险命令等待确认',
+    lastObservation: '尚未执行'
+})
+check('共享任务收尾不会把待确认任务误标完成', sharedTask.status === 'waiting' && !sharedTask.completedAt)
+check('共享任务步骤可被普通对话状态命令读取', persistedSteps.some(step => step.taskId === sharedTask.taskId && step.toolName === 'shell_exec'))
 
 console.log(`\nAgent eval: ${passed} passed, ${failures.length} failed`)
 if (failures.length > 0) process.exit(1)

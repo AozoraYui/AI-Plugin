@@ -14,6 +14,8 @@ import { filterToolCallsByIntent, hasExplicitFileSendIntent, hasExplicitGroupCha
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 import { executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound } from '../utils/agent_runtime.js'
+import { classifyAgentRisk } from '../utils/agent_policy.js'
+import { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, updateAgentTaskProgress } from '../utils/agent_task_runtime.js'
 
 const replyCooldown = new Map()
 const PERSONAL_MEMORY_MAX_CHARS = 2600
@@ -1248,6 +1250,11 @@ export class FastChatHandler extends plugin {
         logger.info(`[AI-Plugin] [畅聊] 环境提示: ${environmentHint}`)
 
         let toolContextText = ''
+        let fastAgentTask = null
+        let fastAgentTaskStatus = ''
+        let fastAgentLatestSummary = ''
+        let fastAgentLatestObservation = ''
+        let fastAgentPlanRecorded = false
         try {
             const enabledTools = await buildFastChatEnabledTools(e, this.client)
             const toolRoutingText = normalized.instructionText || ''
@@ -1340,6 +1347,25 @@ export class FastChatHandler extends plugin {
                     if (toolCalls.length === 0) break
                     logger.info(`[AI-Plugin] [畅聊] Agent 第 ${agentRound} 轮工具队列: ${toolCalls.map(call => `${call.name}(${JSON.stringify(call.args || {}).slice(0, 120)})`).join(' -> ')}`)
 
+                    fastAgentTask = await createOrResumeAgentTask(this.conversationManager.db, {
+                        task: fastAgentTask,
+                        userId: normalized.userId,
+                        groupId: normalized.groupId,
+                        objective: toolRoutingText || normalized.currentText || normalized.normalizedText || '畅聊工具任务',
+                        riskLevel: classifyAgentRisk(toolCalls),
+                        logger,
+                        logPrefix: '[AI-Plugin] [畅聊] Agent任务'
+                    })
+                    if (fastAgentTask?.taskId && !fastAgentPlanRecorded) {
+                        await recordAgentTaskStep(this.conversationManager.db, fastAgentTask, {
+                            stepIndex: 1,
+                            stepType: 'plan',
+                            status: 'ok',
+                            content: `执行模式：fast_chat\n原始请求：${toolRoutingText || normalized.currentText || ''}\n工具队列：${toolCalls.map(call => `${call.name}(${JSON.stringify(call.args || {})})`).join(' -> ')}`
+                        }, { logger, logPrefix: '[AI-Plugin] [畅聊] Agent任务' })
+                        fastAgentPlanRecorded = true
+                    }
+
                     const roundExecutions = []
                     for await (const execution of executeAgentToolCalls({
                         registry: toolRegistry,
@@ -1350,12 +1376,21 @@ export class FastChatHandler extends plugin {
                             groupId: normalized.groupId,
                             event: e,
                             userMessage: toolRoutingText,
-                            originalUserMessage: toolRoutingText
+                            originalUserMessage: toolRoutingText,
+                            agentTaskId: fastAgentTask?.taskId || ''
                         }
                     })) {
                         const { call, result, protocol } = execution
                         seenToolCalls.add(execution.key)
                         roundExecutions.push(execution)
+                        await recordAgentTaskStep(this.conversationManager.db, fastAgentTask, {
+                            stepIndex: agentRound * 100 + execution.index,
+                            stepType: 'tool',
+                            toolName: call.name,
+                            toolArgs: call.args,
+                            status: execution.pending ? 'waiting' : execution.status,
+                            content: execution.formattedResult
+                        }, { logger, logPrefix: '[AI-Plugin] [畅聊] Agent任务' })
                         if (result.success) {
                             let injection = formatFastChatToolInjection(call.name, result.data)
                             if (call.name === 'group_chat_context' && shouldReadGroupContextImages(toolRoutingText, result.data?.logs || [])) {
@@ -1374,6 +1409,35 @@ export class FastChatHandler extends plugin {
                         } else {
                             toolContextText = truncateMiddleText(toolContextText + `\n\n【畅聊工具失败：${call.name}】${result.error || '未知错误'}`, FAST_CHAT_TOOL_CONTEXT_MAX_CHARS)
                             logger.warn(`[AI-Plugin] [畅聊] ${call.name} 失败: ${result.error}`)
+                        }
+                    }
+
+                    if (roundExecutions.length > 0 && fastAgentTask?.taskId) {
+                        const pendingExecution = roundExecutions.find(item => item.pending)
+                        const failedExecutions = roundExecutions.filter(item => !item.result.success || !item.protocol.ok)
+                        const recoverableFailure = failedExecutions.some(item => item.protocol.recoverable)
+                        fastAgentTaskStatus = pendingExecution
+                            ? 'waiting'
+                            : (failedExecutions.length === roundExecutions.length && !recoverableFailure ? 'blocked' : 'active')
+                        fastAgentLatestObservation = roundExecutions.map(item => `${item.call.name}: ${item.pending ? 'waiting' : item.status}`).join('；')
+                        fastAgentLatestSummary = truncateMiddleText(
+                            roundExecutions.map(item => `${item.call.name}: ${item.formattedResult}`).join('\n\n'),
+                            3000
+                        )
+                        await recordAgentTaskStep(this.conversationManager.db, fastAgentTask, {
+                            stepIndex: agentRound * 100 + 90,
+                            stepType: 'observation',
+                            status: fastAgentTaskStatus,
+                            content: fastAgentLatestObservation
+                        }, { logger, logPrefix: '[AI-Plugin] [畅聊] Agent任务' })
+                        fastAgentTask = await updateAgentTaskProgress(this.conversationManager.db, fastAgentTask, {
+                            status: fastAgentTaskStatus,
+                            summary: fastAgentLatestSummary,
+                            lastObservation: fastAgentLatestObservation
+                        }, { logger, logPrefix: '[AI-Plugin] [畅聊] Agent任务' })
+                        if (['waiting', 'blocked'].includes(fastAgentTaskStatus)) {
+                            logger.info(`[AI-Plugin] [畅聊] Agent 第 ${agentRound} 轮进入 ${fastAgentTaskStatus} 状态，停止继续规划`)
+                            break
                         }
                     }
 
@@ -1422,12 +1486,36 @@ export class FastChatHandler extends plugin {
                             continuationTools: FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS
                         }
                     )
+                    if (toolCalls.length > 0 && fastAgentTask?.taskId) {
+                        fastAgentTask = await createOrResumeAgentTask(this.conversationManager.db, {
+                            task: fastAgentTask,
+                            riskLevel: classifyAgentRisk(toolCalls),
+                            logger,
+                            logPrefix: '[AI-Plugin] [畅聊] Agent任务'
+                        })
+                        await recordAgentTaskStep(this.conversationManager.db, fastAgentTask, {
+                            stepIndex: agentRound * 100 + 99,
+                            stepType: 'followup_plan',
+                            status: 'ok',
+                            content: `执行模式：fast_chat\n下一轮工具队列：${toolCalls.map(call => `${call.name}(${JSON.stringify(call.args || {})})`).join(' -> ')}`
+                        }, { logger, logPrefix: '[AI-Plugin] [畅聊] Agent任务' })
+                    }
                 }
             } else if (enabledTools.length > 0) {
                 logger.debug('[AI-Plugin] [畅聊] 未检测到明确工具倾向，跳过工具路由')
             }
         } catch (err) {
             logger.warn(`[AI-Plugin] [畅聊] 工具路由/执行失败: ${err.message}`)
+            if (fastAgentTask?.taskId) {
+                fastAgentTaskStatus = 'blocked'
+                fastAgentLatestObservation = `畅聊工具路由或执行异常：${err.message}`
+                fastAgentLatestSummary = fastAgentLatestSummary || fastAgentLatestObservation
+                fastAgentTask = await updateAgentTaskProgress(this.conversationManager.db, fastAgentTask, {
+                    status: 'blocked',
+                    summary: fastAgentLatestSummary,
+                    lastObservation: fastAgentLatestObservation
+                }, { logger, logPrefix: '[AI-Plugin] [畅聊] Agent任务' })
+            }
         }
 
         avatarImageInput = await buildAvatarImageInputContext(e, normalized.instructionText || normalized.currentText || normalized.normalizedText || '', {
@@ -1513,11 +1601,23 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
 
         let result = await this.client.makeRequest('chat', payload, 'flash', 4096)
         if (!result.success || !result.data) {
+            if (fastAgentTask?.taskId) {
+                const failText = `畅聊最终回复模型请求失败：${result.error || '模型无返回'}`
+                fastAgentTask = await finalizeAgentTask(this.conversationManager.db, fastAgentTask, {
+                    status: 'blocked',
+                    summary: fastAgentLatestSummary || failText,
+                    lastObservation: failText,
+                    content: failText,
+                    logger,
+                    logPrefix: '[AI-Plugin] [畅聊] Agent任务'
+                })
+            }
             await e.reply(`❌ 畅聊回复失败: ${result.error || '模型无返回'}`, true)
             return
         }
 
         let replyText = cleanModelText(result.data)
+        let usedSafeFallbackReply = false
         if (!replyText || isPlanOnlyResponse(replyText)) {
             logger.warn(`[AI-Plugin] [畅聊] 最终回复疑似仅含内部思考或工具规划，触发一次纠正重试: ${String(result.data).slice(0, 180)}`)
             const retryPayload = {
@@ -1542,8 +1642,25 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
         if (!replyText || isPlanOnlyResponse(replyText)) {
             logger.warn('[AI-Plugin] [畅聊] 最终回复纠正失败，使用安全提示替代内部思考/工具规划文本')
             replyText = '这次没有拿到可验证的最终结果，我不能把内部规划当成答案发出来。你可以再问一次，我会在拿到真实结果后直接回答。'
+            usedSafeFallbackReply = true
         }
         await e.reply(replyText, true)
+        if (fastAgentTask?.taskId) {
+            const finalStatus = usedSafeFallbackReply
+                ? 'blocked'
+                : (fastAgentTaskStatus === 'waiting'
+                ? 'waiting'
+                : (fastAgentTaskStatus === 'blocked' ? 'blocked' : 'completed'))
+            fastAgentTask = await finalizeAgentTask(this.conversationManager.db, fastAgentTask, {
+                status: finalStatus,
+                summary: fastAgentLatestSummary || replyText,
+                lastObservation: ['waiting', 'blocked'].includes(finalStatus) ? (fastAgentLatestObservation || replyText) : replyText,
+                content: replyText,
+                logger,
+                logPrefix: '[AI-Plugin] [畅聊] Agent任务'
+            })
+            logger.info(`[AI-Plugin] [畅聊] Agent任务已收尾: ${fastAgentTask.taskId}, status=${fastAgentTask.status}`)
+        }
         await this.saveFastChatToPersonalHistory(e, normalized, contextText, replyText, memoryContext?.history)
 
         try {
