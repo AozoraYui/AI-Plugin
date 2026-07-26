@@ -17,7 +17,7 @@ import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawInte
 import { clearPendingAction, loadPendingAction, parseStrictPendingDecision } from '../utils/pending_actions.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
-import { agentToolCallKey, executeAgentToolCalls, filterRepeatedAgentToolCalls, stableAgentStringify } from '../utils/agent_runtime.js'
+import { executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound, stableAgentStringify } from '../utils/agent_runtime.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { executePendingGroupSend } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
@@ -494,31 +494,6 @@ function hasTool(enabledTools, name) {
 
 function shouldStopAgentLoop(toolCalls = []) {
     return (toolCalls || []).some(call => AGENT_LOOP_STOP_TOOLS.includes(call?.name))
-}
-
-function shouldConsiderAgentContinuation(toolCalls = [], currentInstruction = '', accumulatedMessage = '') {
-    const names = new Set((toolCalls || []).map(call => call?.name).filter(Boolean))
-    if (names.size === 0 || [...names].some(name => AGENT_LOOP_STOP_TOOLS.includes(name))) return false
-
-    const instruction = String(currentInstruction || '').trim()
-    const contextTail = String(accumulatedMessage || '').slice(-10000)
-    if (/目录安全检查|已阻止执行|安全检查阻止|请先向主人确认下一步/i.test(contextTail)) return false
-    if (/输出未读完|offset_chars|仍未读完|分页: 已显示/i.test(contextTail)) return true
-
-    const hasShell = names.has('shell_exec') || names.has('shell_session')
-    if (hasShell) {
-        if (/(?:更新|拉取|git\s+pull).{0,50}(?:更新内容|变更|变化|改了啥|改了什么|提交|commit|diff|日志)|(?:更新内容|变更|变化|改了啥|改了什么|提交|commit|diff|日志).{0,50}(?:更新|拉取|插件|仓库|代码)/i.test(instruction)) return true
-        if (/(?:nmap|局域网|内网|LAN|网段|入网设备|在线设备|网关|路由器)/i.test(instruction)) return true
-        if (/(?:排查|诊断|定位|分析).{0,30}(?:原因|问题|故障|报错|异常|卡顿|性能|慢|失败)|(?:为什么|为啥|哪里|哪个).{0,30}(?:报错|失败|卡|慢|占用|异常)/i.test(instruction)) return true
-        if (/(?:先|首先|第一步).{0,100}(?:再|然后|接着|之后|最后)|(?:然后|接着|再|顺便|同时|并且|以及).{0,80}(?:看|查|分析|统计|确认|整理|总结|执行|跑)/i.test(instruction)) return true
-        return false
-    }
-
-    if (names.has('web_search')) {
-        return /(?:搜索|查询|联网|上网).{0,80}(?:打开|抓取|fetch|网页|原文|详情|来源|对比|汇总|总结)/i.test(instruction)
-    }
-
-    return false
 }
 
 function detectAgentTaskControl(text = '') {
@@ -2583,7 +2558,13 @@ export class ChatHandler extends plugin {
                     const continuationDecision = decideAgentContinuation({
                         completionStatus: roundCompletionStatus,
                         planRequiresFollowup: currentPlanMetadata.requiresFollowupCheck,
-                        heuristicRequestsContinuation: shouldConsiderAgentContinuation(roundToolCalls, currentToolInstruction, userMessage),
+                        heuristicRequestsContinuation: shouldContinueAgentRound({
+                            toolCalls: roundToolCalls,
+                            protocols: roundObservations.map(item => item.protocol),
+                            instruction: currentToolInstruction,
+                            accumulatedText: userMessage,
+                            stopTools: AGENT_LOOP_STOP_TOOLS
+                        }),
                         executedCount: roundExecuted,
                         observationCount: roundObservations.length
                     })

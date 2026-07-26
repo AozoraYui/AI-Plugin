@@ -29,7 +29,7 @@ const { executePendingShellExec, shellExecTool } = await import('../tools/shell_
 const { shellSessionTool } = await import('../tools/shell_session.js')
 const { loadPendingAction, clearPendingAction, parseStrictPendingDecision } = await import('../utils/pending_actions.js')
 const { deterministicToolDecision, normalizeToolResult } = await import('../utils/tool_result.js')
-const { agentToolCallKey, executeAgentToolCalls, filterRepeatedAgentToolCalls } = await import('../utils/agent_runtime.js')
+const { agentToolCallKey, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound } = await import('../utils/agent_runtime.js')
 
 const failures = []
 let passed = 0
@@ -323,6 +323,30 @@ for await (const execution of executeAgentToolCalls({
 })) runtimeExecutions.push(execution)
 check('共享执行内核统一生成执行状态和格式化结果', runtimeExecutions[0]?.status === 'ok' && runtimeExecutions[0]?.formattedResult === 'demo:demo完成')
 check('共享执行内核向工具传递调用上下文', runtimeExecutions[0]?.result.data.context?.toolName === 'demo' && runtimeExecutions[0]?.result.data.context?.toolCallIndex === 1)
+check('共享续跑策略识别Shell诊断任务', shouldContinueAgentRound({
+    toolCalls: [{ name: 'shell_exec', args: { command: 'ps aux' } }],
+    protocols: [normalizeToolResult('shell_exec', { ok: true })],
+    instruction: '帮我排查服务为什么启动失败',
+    accumulatedText: '获得了进程列表'
+}))
+check('共享续跑策略识别配置先读后改', shouldContinueAgentRound({
+    toolCalls: [{ name: 'config_manage', args: { action: 'get' } }],
+    protocols: [normalizeToolResult('config_manage', { ok: true, verified: true })],
+    instruction: '先看看配置，然后把插件加入 disable',
+    accumulatedText: '已读取字段'
+}))
+check('共享续跑策略遇到待确认立即停止', !shouldContinueAgentRound({
+    toolCalls: [{ name: 'shell_exec', args: { command: 'rm -rf /tmp/example' } }],
+    protocols: [normalizeToolResult('shell_exec', { ok: true, pending: true })],
+    instruction: '删除后再检查',
+    accumulatedText: '等待确认'
+}))
+check('共享续跑策略允许可恢复失败调整方案', shouldContinueAgentRound({
+    toolCalls: [{ name: 'config_manage', args: { action: 'get' } }],
+    protocols: [normalizeToolResult('config_manage', { ok: false, recoverable: true, error: '路径不存在' })],
+    instruction: '检查配置',
+    accumulatedText: '路径不存在'
+}))
 
 console.log(`\nAgent eval: ${passed} passed, ${failures.length} failed`)
 if (failures.length > 0) process.exit(1)

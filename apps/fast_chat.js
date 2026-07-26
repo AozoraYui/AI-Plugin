@@ -13,7 +13,7 @@ import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memo
 import { filterToolCallsByIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
-import { executeAgentToolCalls, filterRepeatedAgentToolCalls } from '../utils/agent_runtime.js'
+import { executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound } from '../utils/agent_runtime.js'
 
 const replyCooldown = new Map()
 const PERSONAL_MEMORY_MAX_CHARS = 2600
@@ -50,6 +50,24 @@ const FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS = [
     'group_member_list',
     'group_member_resolve',
     'group_file_list'
+]
+const FAST_CHAT_AGENT_MAX_ROUNDS = 2
+const FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS = [...FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS]
+const FAST_CHAT_AGENT_STOP_TOOLS = [
+    'draw_image',
+    'file_send',
+    'file_download',
+    'group_file_download',
+    'user_profile_update',
+    'group_send_message',
+    'group_leave',
+    'group_mute',
+    'group_whole_mute',
+    'group_kick',
+    'group_set_card',
+    'group_set_title',
+    'group_essence',
+    'group_request_handle'
 ]
 
 function stripLoneSurrogates(text) {
@@ -1256,6 +1274,9 @@ export class FastChatHandler extends plugin {
             if (enabledTools.length > 0 && (routeByKeyword || routeByMasterRequest || routeByRecentTask)) {
                 logger.info(`[AI-Plugin] [畅聊] 工具路由开始: 可用工具=${enabledTools.join(', ')}, 触发=${routeByKeyword ? '规则命中' : (routeByMasterRequest ? '主人请求兜底' : '近期任务续接')}`)
                 let toolCalls = []
+                const toolMemorySummary = userProfileText
+                    ? `【当前用户个人档案】\n${userProfileText}\n\n【长期记忆摘要】\n${personalMemory}`
+                    : personalMemory
                 const groupChatDigestArgs = enabledTools.includes('group_chat_digest')
                     ? parseGroupChatDigestRequest(toolRoutingText)
                     : null
@@ -1272,9 +1293,6 @@ export class FastChatHandler extends plugin {
                     const toolAnalysisText = recentAgentTaskPlanningContext
                         ? `${toolRoutingText}\n\n${recentAgentTaskPlanningContext}`
                         : toolRoutingText
-                    const toolMemorySummary = userProfileText
-                        ? `【当前用户个人档案】\n${userProfileText}\n\n【长期记忆摘要】\n${personalMemory}`
-                        : personalMemory
                     const toolAnalysis = await toolRegistry.analyzeToolIntent(
                         toolAnalysisText,
                         this.client,
@@ -1302,61 +1320,108 @@ export class FastChatHandler extends plugin {
                         }
                     )
                 }
-                if (hasLocalImageInput) {
-                    const attachedPaths = new Set(localImageInput.paths.flatMap(item => [item.requestedPath, item.realPath]).filter(Boolean))
-                    toolCalls = toolCalls.filter(call => {
-                        if (!['shell_exec', 'shell_session'].includes(call.name)) return true
-                        const argsText = JSON.stringify(call.args || {})
-                        const redundant = [...attachedPaths].some(filePath => argsText.includes(filePath))
-                        if (redundant) {
-                            logger.info(`[AI-Plugin] [畅聊] 已跳过冗余 ${call.name}: 本地图片已作为多模态输入附加`)
-                            return false
-                        }
-                        return true
-                    })
-                }
-                const dedupedToolCalls = filterRepeatedAgentToolCalls(toolCalls)
-                if (dedupedToolCalls.skipped.length > 0) {
-                    logger.info(`[AI-Plugin] [畅聊] 已跳过重复工具调用: ${dedupedToolCalls.skipped.map(call => call.name).join(', ')}`)
-                }
-                toolCalls = dedupedToolCalls.tools
-                if (toolCalls.length > 0) {
-                    logger.info(`[AI-Plugin] [畅聊] 工具执行队列: ${toolCalls.map(call => `${call.name}(${JSON.stringify(call.args || {}).slice(0, 120)})`).join(' -> ')}`)
-                }
-                for await (const execution of executeAgentToolCalls({
-                    registry: toolRegistry,
-                    toolCalls,
-                    isMaster: e.isMaster,
-                    context: {
-                        userId: normalized.userId,
-                        groupId: normalized.groupId,
-                        event: e,
-                        userMessage: toolRoutingText,
-                        originalUserMessage: toolRoutingText
+                const seenToolCalls = new Set()
+                for (let agentRound = 1; agentRound <= FAST_CHAT_AGENT_MAX_ROUNDS; agentRound++) {
+                    if (hasLocalImageInput) {
+                        const attachedPaths = new Set(localImageInput.paths.flatMap(item => [item.requestedPath, item.realPath]).filter(Boolean))
+                        toolCalls = toolCalls.filter(call => {
+                            if (!['shell_exec', 'shell_session'].includes(call.name)) return true
+                            const argsText = JSON.stringify(call.args || {})
+                            const redundant = [...attachedPaths].some(filePath => argsText.includes(filePath))
+                            if (redundant) logger.info(`[AI-Plugin] [畅聊] 已跳过冗余 ${call.name}: 本地图片已作为多模态输入附加`)
+                            return !redundant
+                        })
                     }
-                })) {
-                    const { call, result, protocol } = execution
-                    if (result.success) {
-                        let injection = formatFastChatToolInjection(call.name, result.data)
-                        if (call.name === 'group_chat_context' && shouldReadGroupContextImages(toolRoutingText, result.data?.logs || [])) {
-                            try {
-                                const imageSummary = await buildGroupContextImageSummary(this.client, result.data.logs, toolRoutingText)
-                                const imageSummaryBlock = formatGroupContextImageSummary(imageSummary)
-                                if (imageSummaryBlock) injection += imageSummaryBlock
-                                if (imageSummary.summaryText) {
-                                    logger.info(`[AI-Plugin] [畅聊] group_chat_context 图片预读完成: ${imageSummary.processedCount}/${imageSummary.requestedCount}`)
+                    const dedupedToolCalls = filterRepeatedAgentToolCalls(toolCalls, seenToolCalls)
+                    if (dedupedToolCalls.skipped.length > 0) {
+                        logger.info(`[AI-Plugin] [畅聊] 第 ${agentRound} 轮已跳过重复工具调用: ${dedupedToolCalls.skipped.map(call => call.name).join(', ')}`)
+                    }
+                    toolCalls = dedupedToolCalls.tools
+                    if (toolCalls.length === 0) break
+                    logger.info(`[AI-Plugin] [畅聊] Agent 第 ${agentRound} 轮工具队列: ${toolCalls.map(call => `${call.name}(${JSON.stringify(call.args || {}).slice(0, 120)})`).join(' -> ')}`)
+
+                    const roundExecutions = []
+                    for await (const execution of executeAgentToolCalls({
+                        registry: toolRegistry,
+                        toolCalls,
+                        isMaster: e.isMaster,
+                        context: {
+                            userId: normalized.userId,
+                            groupId: normalized.groupId,
+                            event: e,
+                            userMessage: toolRoutingText,
+                            originalUserMessage: toolRoutingText
+                        }
+                    })) {
+                        const { call, result, protocol } = execution
+                        seenToolCalls.add(execution.key)
+                        roundExecutions.push(execution)
+                        if (result.success) {
+                            let injection = formatFastChatToolInjection(call.name, result.data)
+                            if (call.name === 'group_chat_context' && shouldReadGroupContextImages(toolRoutingText, result.data?.logs || [])) {
+                                try {
+                                    const imageSummary = await buildGroupContextImageSummary(this.client, result.data.logs, toolRoutingText)
+                                    const imageSummaryBlock = formatGroupContextImageSummary(imageSummary)
+                                    if (imageSummaryBlock) injection += imageSummaryBlock
+                                    if (imageSummary.summaryText) logger.info(`[AI-Plugin] [畅聊] group_chat_context 图片预读完成: ${imageSummary.processedCount}/${imageSummary.requestedCount}`)
+                                } catch (err) {
+                                    injection += '\n\n【群聊上下文读图失败】尝试读取工具结果中的图片时失败；请不要描述未实际看到的图片内容。'
+                                    logger.warn(`[AI-Plugin] [畅聊] group_chat_context 图片预读失败: ${err.message}`)
                                 }
-                            } catch (err) {
-                                injection += '\n\n【群聊上下文读图失败】尝试读取工具结果中的图片时失败；请不要描述未实际看到的图片内容。'
-                                logger.warn(`[AI-Plugin] [畅聊] group_chat_context 图片预读失败: ${err.message}`)
                             }
+                            toolContextText = truncateMiddleText(toolContextText + injection, FAST_CHAT_TOOL_CONTEXT_MAX_CHARS)
+                            logger.info(`[AI-Plugin] [畅聊] ${call.name} ${protocol.ok ? '完成' : '业务失败'}，结果已注入${protocol.pending ? '（等待确认）' : ''}`)
+                        } else {
+                            toolContextText = truncateMiddleText(toolContextText + `\n\n【畅聊工具失败：${call.name}】${result.error || '未知错误'}`, FAST_CHAT_TOOL_CONTEXT_MAX_CHARS)
+                            logger.warn(`[AI-Plugin] [畅聊] ${call.name} 失败: ${result.error}`)
                         }
-                        toolContextText = truncateMiddleText(toolContextText + injection, FAST_CHAT_TOOL_CONTEXT_MAX_CHARS)
-                        logger.info(`[AI-Plugin] [畅聊] ${call.name} ${protocol.ok ? '完成' : '业务失败'}，结果已注入${protocol.pending ? '（等待确认）' : ''}`)
-                    } else {
-                        toolContextText = truncateMiddleText(toolContextText + `\n\n【畅聊工具失败：${call.name}】${result.error || '未知错误'}`, FAST_CHAT_TOOL_CONTEXT_MAX_CHARS)
-                        logger.warn(`[AI-Plugin] [畅聊] ${call.name} 失败: ${result.error}`)
                     }
+
+                    if (agentRound >= FAST_CHAT_AGENT_MAX_ROUNDS) break
+                    const shouldContinue = shouldContinueAgentRound({
+                        toolCalls,
+                        protocols: roundExecutions.map(item => item.protocol),
+                        instruction: toolRoutingText,
+                        accumulatedText: toolContextText,
+                        stopTools: FAST_CHAT_AGENT_STOP_TOOLS
+                    })
+                    if (!shouldContinue) break
+
+                    const followupEnabledTools = enabledTools.filter(name => FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS.includes(name))
+                    if (followupEnabledTools.length === 0) break
+                    const roundObservationText = roundExecutions.map(item => `${item.call.name}(${JSON.stringify(item.call.args || {})}) [${item.status}]\n${item.formattedResult}`).join('\n\n')
+                    const followupText = `${toolRoutingText}\n\n【Agent 第 ${agentRound} 轮真实工具结果】\n${truncateMiddleText(roundObservationText, 18000)}\n\n【继续规划要求】只有当前结果仍不足以完成原始请求时才调用工具；不要重复相同调用，不要追加无意义验证。`
+                    logger.info(`[AI-Plugin] [畅聊] Agent 第 ${agentRound} 轮触发后续规划: 候选=${followupEnabledTools.join(', ')}`)
+                    const nextAnalysis = await toolRegistry.analyzeToolIntent(
+                        followupText,
+                        this.client,
+                        followupEnabledTools,
+                        [],
+                        toolMemorySummary,
+                        extractUrlsFromText(followupText, 10),
+                        {
+                            hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0 || hasLocalImageInput,
+                            hasRecentImages: imageContext.processedCount > 0 || hasLocalImageInput,
+                            mentionedUserIds,
+                            currentInstruction: toolRoutingText,
+                            allowContinuation: true,
+                            allowTaskContextContinuation: true,
+                            continuationTools: FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS
+                        }
+                    )
+                    toolCalls = filterFastChatToolCalls(
+                        Array.isArray(nextAnalysis?.tools) ? nextAnalysis.tools.slice(0, 2) : [],
+                        toolRoutingText,
+                        {
+                            hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0 || hasLocalImageInput,
+                            hasRecentImages: imageContext.processedCount > 0 || hasLocalImageInput,
+                            candidateUrls: extractUrlsFromText(followupText, 10),
+                            strictWebSearch: false,
+                            allowContinuation: true,
+                            allowTaskContextContinuation: true,
+                            continuationTools: FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS
+                        }
+                    )
                 }
             } else if (enabledTools.length > 0) {
                 logger.debug('[AI-Plugin] [畅聊] 未检测到明确工具倾向，跳过工具路由')
