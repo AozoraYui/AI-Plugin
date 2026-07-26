@@ -9,8 +9,7 @@ import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedU
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
-import { loadUserProfileText } from '../utils/user_profile.js'
-import { buildSemanticMemoryContext } from '../utils/vector_memory.js'
+import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memory_context.js'
 import { filterToolCallsByIntent, hasExplicitFileSendIntent, hasExplicitMemorySearchIntent, parseMemorySearchRequest } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 
@@ -77,29 +76,6 @@ function normalizeNoaReplyContextLimit() {
     const configured = Number(Config.NOA_CHAT_CONTEXT_LIMIT)
     if (configured === Infinity) return NOA_REPLY_CONTEXT_MAX_LOGS
     return Math.min(NOA_REPLY_CONTEXT_MAX_LOGS, Math.max(10, Math.floor(configured) || 60))
-}
-
-function stripMediaPartsFromHistory(history = []) {
-    if (!Array.isArray(history) || history.length === 0) return { history: [], removed: 0 }
-    let removed = 0
-    const cleaned = []
-    for (const turn of history) {
-        const parts = Array.isArray(turn?.parts) ? turn.parts : []
-        const textParts = []
-        for (const part of parts) {
-            if (part?.text !== undefined) {
-                textParts.push({ text: String(part.text) })
-            } else if (part?.inline_data || part?.inlineData || part?.file_data || part?.fileData) {
-                removed++
-            }
-        }
-        if (textParts.length > 0) {
-            cleaned.push({ ...turn, parts: textParts })
-        } else if (parts.length > 0) {
-            cleaned.push({ ...turn, parts: [{ text: '[历史媒体内容已省略]' }] })
-        }
-    }
-    return { history: cleaned, removed }
 }
 
 function formatImageLimit(limit) {
@@ -1066,41 +1042,38 @@ export class NoaChatHandler extends plugin {
                 logger.warn(`[AI-Plugin] [畅聊][称呼记忆] 加载失败: ${err.message}`)
             }
         }
-        let memoryData = null
+        let memoryContext = null
         let personalMemory = ''
         let userProfileText = ''
         let semanticMemoryContext = ''
-        try {
-            memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(normalized.userId)
-            personalMemory = truncateText(memoryData?.incrementalCheckpoint || '', PERSONAL_MEMORY_MAX_CHARS)
-            userProfileText = truncateMiddleText(await loadUserProfileText(this.conversationManager.db, normalized.userId), NOA_PROFILE_CONTEXT_MAX_CHARS)
-            if (personalMemory) {
-                logger.info(`[AI-Plugin] [畅聊] 已加载触发者个人记忆摘要: 用户 ${normalized.userId}, 字符数=${personalMemory.length}`)
-            }
-            if (userProfileText) {
-                logger.info(`[AI-Plugin] [畅聊] 已加载触发者个人档案: 用户 ${normalized.userId}, 字符数=${userProfileText.length}`)
-            }
-        } catch (err) {
-            logger.warn(`[AI-Plugin] [畅聊] 加载触发者个人记忆/档案失败: ${err.message}`)
-        }
         const semanticQueryText = normalized.instructionText || normalized.currentText || normalized.normalizedText
-        if (this.client.enableVectorMemory && !hasExplicitMemorySearchIntent(semanticQueryText)) {
-            try {
-                semanticMemoryContext = await buildSemanticMemoryContext(
-                    this.conversationManager.db,
-                    semanticQueryText,
-                    {
-                        actorUserId: normalized.userId,
-                        currentGroupId: normalized.groupId,
-                        isMaster: e.isMaster === true,
-                        allowCrossGroup: false,
-                        maxChars: Config.VECTOR_AUTO_CONTEXT_MAX_CHARS
-                    }
-                )
-            } catch (err) {
-                logger.warn(`[AI-Plugin] [畅聊] 向量记忆自动检索失败: ${err.message}`)
-            }
-        }
+        memoryContext = await loadUserMemoryContext(this.conversationManager, normalized.userId, {
+            includeHistory: true,
+            includeCheckpoint: true,
+            includeProfile: true,
+            stripHistoryMedia: false,
+            maxHistoryTurns: Infinity,
+            checkpointMaxChars: PERSONAL_MEMORY_MAX_CHARS,
+            checkpointTruncateMode: 'head',
+            profileMaxChars: NOA_PROFILE_CONTEXT_MAX_CHARS,
+            profileTruncateMode: 'middle',
+            includeSemantic: this.client.enableVectorMemory && !hasExplicitMemorySearchIntent(semanticQueryText),
+            semanticQuery: semanticQueryText,
+            semanticOptions: {
+                actorUserId: normalized.userId,
+                currentGroupId: normalized.groupId,
+                isMaster: e.isMaster === true,
+                allowCrossGroup: false,
+                maxChars: Config.VECTOR_AUTO_CONTEXT_MAX_CHARS
+            },
+            vectorEnabled: this.client.enableVectorMemory,
+            logPrefix: '[AI-Plugin] [畅聊]',
+            logLabel: `触发者 ${normalized.userId}`,
+            logLevel: 'info'
+        })
+        personalMemory = memoryContext.personalMemory
+        userProfileText = memoryContext.userProfileText
+        semanticMemoryContext = memoryContext.semanticMemoryContext
         let localImageInput = { imageParts: [], noteText: '', paths: [], failures: [] }
         const localImageInstruction = normalized.instructionText || normalized.currentText || ''
         const skipLocalImageInput = e.isMaster && hasExplicitFileSendIntent(localImageInstruction)
@@ -1314,7 +1287,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
 
         const replyText = cleanModelText(result.data)
         await e.reply(replyText, true)
-        await this.saveNoaChatToPersonalHistory(e, normalized, contextText, replyText, memoryData?.history)
+        await this.saveNoaChatToPersonalHistory(e, normalized, contextText, replyText, memoryContext?.history)
 
         try {
             await this.conversationManager.db.saveGroupMessageLog({

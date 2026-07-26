@@ -11,8 +11,7 @@ import { buildGroupAliasMemoryText, captureGroupMemberAliases } from '../utils/g
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
-import { loadUserProfileText } from '../utils/user_profile.js'
-import { buildSemanticMemoryContext } from '../utils/vector_memory.js'
+import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
 import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction } from '../utils/pending_actions.js'
@@ -1227,29 +1226,6 @@ function truncateAutoNoaContextBlock(block) {
     return truncateForPrompt(value, AUTO_NOA_CONTEXT_MAX_CHARS)
 }
 
-function stripImagePartsFromHistory(history = []) {
-    if (!Array.isArray(history) || history.length === 0) return { history: [], removed: 0 }
-    let removed = 0
-    const cleaned = []
-    for (const turn of history) {
-        const parts = Array.isArray(turn?.parts) ? turn.parts : []
-        const textParts = []
-        for (const part of parts) {
-            if (part?.text !== undefined) {
-                textParts.push({ text: String(part.text) })
-            } else if (part?.inline_data || part?.inlineData || part?.file_data || part?.fileData) {
-                removed++
-            }
-        }
-        if (textParts.length > 0) {
-            cleaned.push({ ...turn, parts: textParts })
-        } else if (parts.length > 0) {
-            cleaned.push({ ...turn, parts: [{ text: '[历史媒体内容已省略]' }] })
-        }
-    }
-    return { history: cleaned, removed }
-}
-
 function formatAutoNoaContextLine(log, options = {}) {
     const name = log.isBot ? Config.AI_NAME : (log.nickname || `用户${log.userId}`)
     const groupHint = options.showGroupId ? `群${log.groupId} ` : ''
@@ -1785,28 +1761,19 @@ export class ChatHandler extends plugin {
             let userProfileText = ''
 
             if (!isSingleMode) {
-                const memoryData = await this.conversationManager.getUserHistoryWithCheckpoint(userId)
-                history = memoryData.history
-                const strippedHistory = stripImagePartsFromHistory(history)
-                history = strippedHistory.history
-                if (strippedHistory.removed > 0) {
-                    logger.info(`[AI-Plugin] 已从历史上下文移除 ${strippedHistory.removed} 个历史图片/媒体输入，避免重复消耗多模态 token`)
-                }
-                incrementalCheckpoint = memoryData.incrementalCheckpoint
-                userProfileText = await loadUserProfileText(this.conversationManager.db, userId)
-
-                if (incrementalCheckpoint) {
-                    logger.debug(`[AI-Plugin] 用户 ${userId} 加载增量总结记忆`)
-                }
-                if (userProfileText) {
-                    logger.debug(`[AI-Plugin] 用户 ${userId} 加载个人档案，字符数=${userProfileText.length}`)
-                }
-
-                const MAX_HISTORY_LENGTH = Config.MAX_HISTORY_LENGTH
-                if (history.length > MAX_HISTORY_LENGTH) {
-                    history = history.slice(-MAX_HISTORY_LENGTH)
-                    logger.debug(`[AI-Plugin] 用户 ${userId} 的历史过长，已截断至最近 ${MAX_HISTORY_LENGTH} 条`)
-                }
+                const memoryContext = await loadUserMemoryContext(this.conversationManager, userId, {
+                    includeHistory: true,
+                    includeCheckpoint: true,
+                    includeProfile: true,
+                    stripHistoryMedia: true,
+                    maxHistoryTurns: Config.MAX_HISTORY_LENGTH,
+                    logPrefix: '[AI-Plugin]',
+                    logLabel: `用户 ${userId}`,
+                    logLevel: 'debug'
+                })
+                history = memoryContext.history
+                incrementalCheckpoint = memoryContext.incrementalCheckpoint
+                userProfileText = memoryContext.userProfileText
             }
 
             const environmentHint = buildEnvironmentHint(e)
@@ -2563,21 +2530,19 @@ export class ChatHandler extends plugin {
                 }
 
                 if (this.client.enableVectorMemory && !memorySearchToolUsed && !suppressAutoNoaContext) {
-                    try {
-                        semanticMemoryContext = await buildSemanticMemoryContext(
-                            this.conversationManager.db,
-                            currentToolInstruction || originalUserMessage || userMessage,
-                            {
-                                actorUserId: userId,
-                                currentGroupId: e.group_id,
-                                isMaster: e.isMaster === true,
-                                allowCrossGroup: false,
-                                maxChars: Config.VECTOR_AUTO_CONTEXT_MAX_CHARS
-                            }
-                        )
-                    } catch (err) {
-                        logger.warn(`[AI-Plugin] 向量记忆自动检索失败: ${err.message}`)
-                    }
+                    semanticMemoryContext = await buildAutoSemanticMemoryContext(
+                        this.conversationManager.db,
+                        currentToolInstruction || originalUserMessage || userMessage,
+                        {
+                            actorUserId: userId,
+                            currentGroupId: e.group_id,
+                            isMaster: e.isMaster === true,
+                            allowCrossGroup: false,
+                            maxChars: Config.VECTOR_AUTO_CONTEXT_MAX_CHARS,
+                            vectorEnabled: this.client.enableVectorMemory,
+                            logPrefix: '[AI-Plugin]'
+                        }
+                    )
                 }
             }
 
