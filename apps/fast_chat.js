@@ -13,6 +13,7 @@ import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memo
 import { filterToolCallsByIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
+import { executeAgentToolCalls, filterRepeatedAgentToolCalls } from '../utils/agent_runtime.js'
 
 const replyCooldown = new Map()
 const PERSONAL_MEMORY_MAX_CHARS = 2600
@@ -1314,17 +1315,27 @@ export class FastChatHandler extends plugin {
                         return true
                     })
                 }
+                const dedupedToolCalls = filterRepeatedAgentToolCalls(toolCalls)
+                if (dedupedToolCalls.skipped.length > 0) {
+                    logger.info(`[AI-Plugin] [畅聊] 已跳过重复工具调用: ${dedupedToolCalls.skipped.map(call => call.name).join(', ')}`)
+                }
+                toolCalls = dedupedToolCalls.tools
                 if (toolCalls.length > 0) {
                     logger.info(`[AI-Plugin] [畅聊] 工具执行队列: ${toolCalls.map(call => `${call.name}(${JSON.stringify(call.args || {}).slice(0, 120)})`).join(' -> ')}`)
                 }
-                for (const call of toolCalls) {
-                    const result = await toolRegistry.execute(call.name, call.args || {}, e.isMaster, {
+                for await (const execution of executeAgentToolCalls({
+                    registry: toolRegistry,
+                    toolCalls,
+                    isMaster: e.isMaster,
+                    context: {
                         userId: normalized.userId,
                         groupId: normalized.groupId,
                         event: e,
                         userMessage: toolRoutingText,
                         originalUserMessage: toolRoutingText
-                    })
+                    }
+                })) {
+                    const { call, result, protocol } = execution
                     if (result.success) {
                         let injection = formatFastChatToolInjection(call.name, result.data)
                         if (call.name === 'group_chat_context' && shouldReadGroupContextImages(toolRoutingText, result.data?.logs || [])) {
@@ -1341,7 +1352,7 @@ export class FastChatHandler extends plugin {
                             }
                         }
                         toolContextText = truncateMiddleText(toolContextText + injection, FAST_CHAT_TOOL_CONTEXT_MAX_CHARS)
-                        logger.info(`[AI-Plugin] [畅聊] ${call.name} 完成，结果已注入`)
+                        logger.info(`[AI-Plugin] [畅聊] ${call.name} ${protocol.ok ? '完成' : '业务失败'}，结果已注入${protocol.pending ? '（等待确认）' : ''}`)
                     } else {
                         toolContextText = truncateMiddleText(toolContextText + `\n\n【畅聊工具失败：${call.name}】${result.error || '未知错误'}`, FAST_CHAT_TOOL_CONTEXT_MAX_CHARS)
                         logger.warn(`[AI-Plugin] [畅聊] ${call.name} 失败: ${result.error}`)

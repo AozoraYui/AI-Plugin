@@ -17,6 +17,7 @@ import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawInte
 import { clearPendingAction, loadPendingAction, parseStrictPendingDecision } from '../utils/pending_actions.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
+import { agentToolCallKey, executeAgentToolCalls, filterRepeatedAgentToolCalls, stableAgentStringify } from '../utils/agent_runtime.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { executePendingGroupSend } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
@@ -428,7 +429,7 @@ function formatPendingActionResultForAgent(toolName, result) {
     } catch (err) {
         logger.warn(`[AI-Plugin] 待确认操作 Agent 结果格式化失败: ${err.message}`)
     }
-    return stableStringify(result || {})
+    return stableAgentStringify(result || {})
 }
 
 async function updatePendingActionAgentTask(e, pending = {}, result = {}, decision = 'confirm') {
@@ -489,32 +490,6 @@ function extractAtMentionsFromMessage(message = []) {
 
 function hasTool(enabledTools, name) {
     return Array.isArray(enabledTools) && enabledTools.includes(name)
-}
-
-function stableStringify(value) {
-    if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
-    if (value && typeof value === 'object') {
-        return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`
-    }
-    return JSON.stringify(value)
-}
-
-function toolCallKey(call = {}) {
-    return `${call.name || ''}:${stableStringify(call.args || {})}`
-}
-
-function filterRepeatedToolCalls(toolCalls = [], seenToolCalls = new Set()) {
-    const filtered = []
-    const skipped = []
-    for (const call of toolCalls || []) {
-        const key = toolCallKey(call)
-        if (seenToolCalls.has(key)) {
-            skipped.push(call)
-            continue
-        }
-        filtered.push(call)
-    }
-    return { tools: filtered, skipped }
 }
 
 function shouldStopAgentLoop(toolCalls = []) {
@@ -619,7 +594,7 @@ function getRecentTaskToolCandidates(task, enabledTools = []) {
 }
 
 function summarizeToolArgs(args = {}) {
-    return truncateForPrompt(stableStringify(args || {}), 1000)
+    return truncateForPrompt(stableAgentStringify(args || {}), 1000)
 }
 
 function mergeAgentRisk(previous = 'low', next = 'low') {
@@ -726,11 +701,6 @@ async function recordAgentStep(db, task, step = {}) {
     } catch (err) {
         logger.warn(`[AI-Plugin] Agent任务步骤记录失败: ${err.message}`)
     }
-}
-
-function isPendingConfirmationToolResult(callName, resultData) {
-    if (resultData?.pending === true) return true
-    return ['group_send_message', 'group_leave'].includes(callName) && /待确认/.test(JSON.stringify(resultData || {}))
 }
 
 async function summarizeAgentRound(client, modelGroupKey, providerFilter, task, round, observations = [], plan = {}) {
@@ -2300,7 +2270,7 @@ export class ChatHandler extends plugin {
                     })
                 }
                 const seenToolCalls = new Set()
-                const repeatedFilter = filterRepeatedToolCalls(toolCalls, seenToolCalls)
+                const repeatedFilter = filterRepeatedAgentToolCalls(toolCalls, seenToolCalls)
                 if (repeatedFilter.skipped.length > 0) {
                     logger.info(`[AI-Plugin] Agent 去重跳过重复工具: ${repeatedFilter.skipped.map(call => call.name).join(', ')}`)
                 }
@@ -2369,18 +2339,20 @@ export class ChatHandler extends plugin {
                     let roundCompletionStatus = ''
                     let roundPendingConfirmation = false
                     const roundObservations = []
-                    let roundCallIndex = 0
-                    for (const call of roundToolCalls) {
-                        roundCallIndex++
-                        seenToolCalls.add(toolCallKey(call))
-                        const toolContext = { userId: e.user_id, groupId: e.group_id, event: e, userMessage: originalUserMessage, originalUserMessage, agentTaskId: agentTask?.taskId || '' }
-                        const result = await toolRegistry.execute(call.name, call.args, e.isMaster, toolContext)
+                    for await (const execution of executeAgentToolCalls({
+                        registry: toolRegistry,
+                        toolCalls: roundToolCalls,
+                        isMaster: e.isMaster,
+                        context: { userId: e.user_id, groupId: e.group_id, event: e, userMessage: originalUserMessage, originalUserMessage, agentTaskId: agentTask?.taskId || '' }
+                    })) {
+                        const { call, index: roundCallIndex, key, result, protocol, formattedResult: runtimeFormattedResult, status: runtimeStatus, pending } = execution
+                        seenToolCalls.add(key)
                         actualToolExecutionCount++
                         if (!result.success) {
                             logger.warn(`[AI-Plugin] ${call.name} 失败: ${result.error}`)
-                            const failureText = `工具 ${call.name} 执行失败：${result.error || '未知错误'}`
+                            const failureText = runtimeFormattedResult
                             userMessage = userMessage + `\n\n【工具执行失败：${call.name}】${result.error || '未知错误'}`
-                            roundObservations.push({ tool: call.name, args: call.args, status: 'failed', text: failureText, protocol: result.protocol })
+                            roundObservations.push({ tool: call.name, args: call.args, status: runtimeStatus, text: failureText, protocol })
                             await recordAgentStep(this.conversationManager.db, agentTask, {
                                 stepIndex: agentRound * 100 + roundCallIndex,
                                 stepType: 'tool',
@@ -2393,18 +2365,16 @@ export class ChatHandler extends plugin {
                         }
 
                         roundExecuted++
-                        const agentFormattedResult = toolRegistry.formatToolResult(call.name, result.data)
-                        const toolStatus = result.data?.ok === false ? 'tool_failed' : 'ok'
-                        if (isPendingConfirmationToolResult(call.name, result.data)) {
-                            roundPendingConfirmation = true
-                        }
+                        const agentFormattedResult = runtimeFormattedResult
+                        const toolStatus = runtimeStatus
+                        if (pending) roundPendingConfirmation = true
                         roundObservations.push({
                             tool: call.name,
                             args: call.args,
                             status: toolStatus,
                             text: agentFormattedResult,
                             data: result.data,
-                            protocol: result.protocol
+                            protocol
                         })
                         await recordAgentStep(this.conversationManager.db, agentTask, {
                             stepIndex: agentRound * 100 + roundCallIndex,
@@ -2692,7 +2662,7 @@ export class ChatHandler extends plugin {
                             return ![...attachedPaths].some(filePath => argsText.includes(filePath))
                         })
                     }
-                    const dedupedNext = filterRepeatedToolCalls(nextCalls, seenToolCalls)
+                    const dedupedNext = filterRepeatedAgentToolCalls(nextCalls, seenToolCalls)
                     if (dedupedNext.skipped.length > 0) {
                         logger.info(`[AI-Plugin] Agent 后续去重跳过重复工具: ${dedupedNext.skipped.map(call => call.name).join(', ')}`)
                     }

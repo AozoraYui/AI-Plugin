@@ -29,6 +29,7 @@ const { executePendingShellExec, shellExecTool } = await import('../tools/shell_
 const { shellSessionTool } = await import('../tools/shell_session.js')
 const { loadPendingAction, clearPendingAction, parseStrictPendingDecision } = await import('../utils/pending_actions.js')
 const { deterministicToolDecision, normalizeToolResult } = await import('../utils/tool_result.js')
+const { agentToolCallKey, executeAgentToolCalls, filterRepeatedAgentToolCalls } = await import('../utils/agent_runtime.js')
 
 const failures = []
 let passed = 0
@@ -292,6 +293,36 @@ check('持久Shell高风险输入也只创建待确认', sessionPendingResult.ok
 await clearPendingAction('agent-eval-user')
 delete global.AIPluginClient
 delete global.redis
+
+const duplicateCalls = [
+    { name: 'demo', args: { b: 2, a: 1 } },
+    { name: 'demo', args: { a: 1, b: 2 } }
+]
+const dedupedCalls = filterRepeatedAgentToolCalls(duplicateCalls)
+check('共享执行内核能稳定识别同批重复调用', dedupedCalls.tools.length === 1 && dedupedCalls.skipped.length === 1)
+check('工具调用键不受参数属性顺序影响', agentToolCallKey(duplicateCalls[0]) === agentToolCallKey(duplicateCalls[1]))
+
+const runtimeExecutions = []
+const fakeRegistry = {
+    async execute(name, args, isMaster, context) {
+        return {
+            success: true,
+            data: { ok: true, verified: true, summary: `${name}完成`, args, isMaster, context },
+            protocol: normalizeToolResult(name, { ok: true, verified: true, summary: `${name}完成` })
+        }
+    },
+    formatToolResult(name, data) {
+        return `${name}:${data.summary}`
+    }
+}
+for await (const execution of executeAgentToolCalls({
+    registry: fakeRegistry,
+    toolCalls: [{ name: 'demo', args: { value: 1 } }],
+    isMaster: true,
+    context: { userId: 'runtime-user' }
+})) runtimeExecutions.push(execution)
+check('共享执行内核统一生成执行状态和格式化结果', runtimeExecutions[0]?.status === 'ok' && runtimeExecutions[0]?.formattedResult === 'demo:demo完成')
+check('共享执行内核向工具传递调用上下文', runtimeExecutions[0]?.result.data.context?.toolName === 'demo' && runtimeExecutions[0]?.result.data.context?.toolCallIndex === 1)
 
 console.log(`\nAgent eval: ${passed} passed, ${failures.length} failed`)
 if (failures.length > 0) process.exit(1)
