@@ -41,6 +41,58 @@ export function normalizeForMatch(text = '') {
         .trim()
 }
 
+const SYMBOLIC_GROUP_NAME_PATTERNS = {
+    any: /^(?:【】|\[\]|［］|〔〕|〖〗|〘〙|〚〛|（）|\(\)|《》|〈〉|「」|『』)$/,
+    square: /^(?:【】|\[\]|［］|〔〕|〖〗|〘〙|〚〛)$/,
+    round: /^(?:（）|\(\))$/,
+    book: /^(?:《》|〈〉)$/,
+    quote: /^(?:「」|『』)$/
+}
+
+export function resolveSymbolicGroupAlias(groups = [], target = '') {
+    const value = cleanTargetText(target)
+    let pattern = null
+    if (/^(?:括号|两个括号|括号那个)$/.test(value)) pattern = SYMBOLIC_GROUP_NAME_PATTERNS.any
+    else if (/^(?:方括号|中括号|方头括号|方框括号|方括号那个|中括号那个)$/.test(value)) pattern = SYMBOLIC_GROUP_NAME_PATTERNS.square
+    else if (/^(?:小括号|圆括号|圆括号那个)$/.test(value)) pattern = SYMBOLIC_GROUP_NAME_PATTERNS.round
+    else if (/^(?:书名号|书名号那个)$/.test(value)) pattern = SYMBOLIC_GROUP_NAME_PATTERNS.book
+    else if (/^(?:引号|直角引号|引号那个)$/.test(value)) pattern = SYMBOLIC_GROUP_NAME_PATTERNS.quote
+    if (!pattern) return []
+    return groups.filter(group => pattern.test(String(group?.groupName || '').trim()))
+}
+
+export function parseGroupSendDisambiguationSelection(record = {}, instruction = '') {
+    if (record?.type !== 'group_send_disambiguation') return { action: 'none' }
+    const value = String(instruction || '').replace(/^\s*#(?:uc|c|pc|sc)\b\s*/i, '').trim()
+    if (!value) return { action: 'none' }
+    if (/^(?:取消|算了|不用了|不要发了|别发了|停止)$/.test(value)) return { action: 'cancel' }
+
+    const candidates = Array.isArray(record.candidates) ? record.candidates.map(compactGroup).filter(group => group.groupId) : []
+    const ordinalMatch = value.match(/^(?:第)?\s*([一二三四五六七八九十]|\d{1,2})\s*(?:个|条|项|号)?(?:就是|吧|那个|这个)?$/)
+    if (ordinalMatch?.[1]) {
+        const chinese = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 }
+        const index = /^\d+$/.test(ordinalMatch[1]) ? Number(ordinalMatch[1]) : chinese[ordinalMatch[1]]
+        if (index >= 1 && index <= candidates.length) return { action: 'select', group: candidates[index - 1] }
+    }
+
+    for (const group of candidates) {
+        const groupId = String(group.groupId || '')
+        const groupName = String(group.groupName || '').trim()
+        if (groupId && new RegExp(`(?:^|\\D)${groupId}(?:\\D|$)`).test(value)) return { action: 'select', group }
+        if (groupName && (value === groupName || value.includes(`「${groupName}」`) || value.includes(`“${groupName}”`) || value.includes(groupName))) {
+            return { action: 'select', group }
+        }
+    }
+
+    if (/^(?:对|对的|是|是的|没错|就是这个|就是它|就这个|确认这个|嗯|嗯嗯|好|好的)$/.test(value)) {
+        const suggested = compactGroup(record.suggestedGroup || {})
+        if (suggested.groupId) return { action: 'select', group: suggested }
+        return { action: 'needs_selection' }
+    }
+    if (/^(?:执行|确认执行|确认)$/.test(value)) return { action: 'needs_selection' }
+    return { action: 'none' }
+}
+
 export async function fetchLiveGroups(bot) {
     if (!bot?.sendApi) return { groups: [], error: '当前适配器不支持 get_group_list。' }
     try {
@@ -139,6 +191,20 @@ export async function resolveTargetGroup(args = {}, event = {}) {
         return { ok: false, error: '缺少明确目标群：请提供群号、群名关键词，或在群聊中明确说“本群/当前群”。', candidates: groups.slice(0, 8), liveError: liveResult.error }
     }
 
+    const symbolicMatches = resolveSymbolicGroupAlias(groups, target)
+    if (symbolicMatches.length === 1) {
+        return { ok: true, group: symbolicMatches[0], candidates: symbolicMatches, liveError: liveResult.error, aliasResolved: true }
+    }
+    if (symbolicMatches.length > 1) {
+        return {
+            ok: false,
+            error: `目标群「${target}」对应多个符号群名，请选择具体群。`,
+            candidates: symbolicMatches.slice(0, 8),
+            disambiguation: true,
+            liveError: liveResult.error
+        }
+    }
+
     const ranked = groups
         .map(group => ({ group, score: rankGroupMatch(group, target) }))
         .filter(item => item.score > 0)
@@ -158,6 +224,7 @@ export async function resolveTargetGroup(args = {}, event = {}) {
         ok: false,
         error: `目标群「${target}」匹配到多个候选，请改用群号或更精确的群名。`,
         candidates: ranked.slice(0, 8).map(item => item.group),
+        disambiguation: true,
         liveError: liveResult.error
     }
 }
@@ -219,6 +286,7 @@ export async function resolveTargetGroups(args = {}, event = {}, options = {}) {
                 ok: false,
                 error: `目标「${spec.label || spec.group_id || spec.target || '未知'}」解析失败：${result.error}`,
                 candidates: result.candidates || [],
+                disambiguation: result.disambiguation === true,
                 liveError: result.liveError || ''
             }
         }
@@ -303,6 +371,21 @@ export async function executePendingGroupSend(record = {}, event = {}) {
     }
 }
 
+export async function createPendingGroupSendAction(userId, payload = {}) {
+    const groups = Array.isArray(payload.groups) ? payload.groups.map(compactGroup).filter(group => group.groupId) : []
+    const messageResult = normalizeMessage(payload.message)
+    if (groups.length === 0) return { ok: false, error: '没有有效目标群，无法创建待确认操作。' }
+    if (!messageResult.ok) return messageResult
+    return savePendingAction(userId, {
+        type: 'group_send_message',
+        agentTaskId: payload.agentTaskId || '',
+        groups,
+        message: messageResult.message,
+        originalMessage: payload.originalMessage || '',
+        asIs: payload.asIs === true
+    })
+}
+
 export const groupSendMessageTool = {
     name: 'group_send_message',
     permission: 'master',
@@ -378,9 +461,38 @@ export const groupSendMessageTool = {
         const messageResult = normalizeMessage(safeArgs.message)
         if (!messageResult.ok) return messageResult
 
+        const finalMessage = safeArgs.as_is === true
+            ? messageResult.message
+            : `${DEFAULT_PREFIX}${messageResult.message}`
         const targetResult = await resolveTargetGroups(safeArgs, event, { maxTargets: MAX_BATCH_TARGETS })
         if (!targetResult.ok) {
             logger.warn(`[AI-Plugin] group_send_message 目标群解析失败: ${targetResult.error}`)
+            const candidates = (targetResult.candidates || []).map(compactGroup).filter(group => group.groupId).slice(0, 8)
+            if (targetResult.disambiguation === true && candidates.length > 0) {
+                const clarification = await savePendingAction(event.user_id || context.userId, {
+                    type: 'group_send_disambiguation',
+                    agentTaskId: context.agentTaskId || '',
+                    candidates,
+                    suggestedGroup: candidates.length === 1 ? candidates[0] : null,
+                    message: finalMessage,
+                    originalMessage: messageResult.message,
+                    asIs: safeArgs.as_is === true,
+                    originalTarget: safeArgs.target || safeArgs.group_id || ''
+                })
+                if (clarification.ok) {
+                    return {
+                        ok: true,
+                        pending: true,
+                        clarification: true,
+                        pendingId: clarification.record.id,
+                        expiresAt: clarification.record.expiresAt,
+                        error: targetResult.error,
+                        candidates,
+                        suggestedGroup: clarification.record.suggestedGroup,
+                        message: finalMessage
+                    }
+                }
+            }
             return {
                 ok: false,
                 error: targetResult.error,
@@ -389,12 +501,7 @@ export const groupSendMessageTool = {
             }
         }
 
-        const finalMessage = safeArgs.as_is === true
-            ? messageResult.message
-            : `${DEFAULT_PREFIX}${messageResult.message}`
-
-        const saveResult = await savePendingAction(event.user_id || context.userId, {
-            type: 'group_send_message',
+        const saveResult = await createPendingGroupSendAction(event.user_id || context.userId, {
             agentTaskId: context.agentTaskId || '',
             groups: targetResult.groups,
             message: finalMessage,
@@ -418,6 +525,13 @@ export const groupSendMessageTool = {
     },
 
     formatResult(data) {
+        if (data?.clarification && data.pending) {
+            const candidates = (data.candidates || []).map(formatGroupCandidate).join('\n')
+            const suggested = data.suggestedGroup
+                ? `\n当前唯一候选是「${data.suggestedGroup.groupName || '群名未知'}」（${data.suggestedGroup.groupId}），可回复“对的”或直接回复群号。`
+                : '\n请回复候选编号、群号或完整群名。'
+            return `\n\n【群消息目标待选择】尚未创建发送操作，也没有发送消息。${data.error ? `\n原因：${data.error}` : ''}\n候选群：\n${candidates}${suggested}`
+        }
         if (!data || data.ok === false) {
             const candidateText = Array.isArray(data?.candidates) && data.candidates.length > 0
                 ? `\n候选群：\n${data.candidates.map(formatGroupCandidate).join('\n')}`

@@ -24,6 +24,8 @@ const replayEnabledTools = [
 ]
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
+const { parseGroupSendDisambiguationSelection, resolveSymbolicGroupAlias } = await import('../tools/group_send.js')
+const { parseStandalonePendingCommand } = await import('../utils/pending_actions.js')
 
 const incidents = [
     {
@@ -129,6 +131,28 @@ const incidents = [
         id: 'casual-today-not-web-search',
         input: '#c今天心情不错',
         pass: text => selectToolCandidates(replayEnabledTools, text).tools.length === 0
+    },
+    {
+        id: 'symbolic-bracket-group-alias',
+        input: '#c帮我给括号那个群带个话，内容为"ciallo~"',
+        pass: () => resolveSymbolicGroupAlias([
+            { groupId: '1061970295', groupName: '【】' },
+            { groupId: '10002', groupName: '普通群' }
+        ], '括号')[0]?.groupId === '1061970295'
+    },
+    {
+        id: 'disambiguation-affirmative-selection',
+        input: '#c对的',
+        pass: text => parseGroupSendDisambiguationSelection({
+            type: 'group_send_disambiguation',
+            candidates: [{ groupId: '1061970295', groupName: '【】' }],
+            suggestedGroup: { groupId: '1061970295', groupName: '【】' }
+        }, text).group?.groupId === '1061970295'
+    },
+    {
+        id: 'orphan-execute-hard-guard',
+        input: '#c执行',
+        pass: text => parseStandalonePendingCommand(text) === 'confirm'
     }
 ]
 

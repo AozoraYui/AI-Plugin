@@ -36,8 +36,9 @@ const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
 const { executePendingShellExec, shellExecTool } = await import('../tools/shell_exec.js')
 const { shellSessionTool } = await import('../tools/shell_session.js')
+const { groupSendMessageTool, parseGroupSendDisambiguationSelection, resolveSymbolicGroupAlias, resolveTargetGroup } = await import('../tools/group_send.js')
 await import('../tools/group_admin.js')
-const { savePendingAction, loadPendingAction, listPendingActions, clearPendingAction, parseStrictPendingDecision } = await import('../utils/pending_actions.js')
+const { savePendingAction, loadPendingAction, listPendingActions, clearPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } = await import('../utils/pending_actions.js')
 const { deterministicToolDecision, normalizeToolResult } = await import('../utils/tool_result.js')
 const { agentToolCallKey, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound } = await import('../utils/agent_runtime.js')
 const { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, updateAgentTaskProgress } = await import('../utils/agent_task_runtime.js')
@@ -221,6 +222,34 @@ check('依赖真实结果的发送动作延后到下一轮', deferredSideEffects
     && deferredSideEffects.deferred[0]?.name === 'file_send')
 const independentSideEffect = deferDependentSideEffectCalls([{ name: 'file_send', args: { path: 'ready.txt' } }], ['file_send'])
 check('单独且参数完整的动作工具不会被延后', independentSideEffect.tools.length === 1 && independentSideEffect.deferred.length === 0)
+
+const symbolicGroups = [
+    { groupId: '1061970295', groupName: '【】' },
+    { groupId: '10002', groupName: '普通测试群' }
+]
+check('括号群自然别名唯一解析到符号群名', resolveSymbolicGroupAlias(symbolicGroups, '括号').length === 1
+    && resolveSymbolicGroupAlias(symbolicGroups, '括号')[0].groupId === '1061970295')
+const symbolicResolved = await resolveTargetGroup({ target: '括号' }, {
+    bot: {
+        async sendApi(name) {
+            if (name !== 'get_group_list') return []
+            return symbolicGroups.map(group => ({ group_id: group.groupId, group_name: group.groupName }))
+        }
+    }
+})
+check('群消息工具把括号指代解析为【】', symbolicResolved.ok
+    && symbolicResolved.group?.groupId === '1061970295'
+    && symbolicResolved.aliasResolved === true,
+JSON.stringify(symbolicResolved))
+const disambiguationRecord = {
+    type: 'group_send_disambiguation',
+    candidates: symbolicGroups,
+    suggestedGroup: symbolicGroups[0]
+}
+check('目标消歧支持回复候选编号', parseGroupSendDisambiguationSelection(disambiguationRecord, '#c第2个').group?.groupId === '10002')
+check('唯一建议候选支持回复对的', parseGroupSendDisambiguationSelection(disambiguationRecord, '#c对的').group?.groupId === '1061970295')
+check('目标未选定时执行不会被当成发送确认', parseGroupSendDisambiguationSelection({ ...disambiguationRecord, suggestedGroup: null }, '#c执行').action === 'needs_selection')
+check('无待确认执行指令可被硬拦截识别', parseStandalonePendingCommand('#c执行') === 'confirm')
 
 const compoundLocalPluginGuard = filterToolCallsByIntent([
     { name: 'shell_exec', args: { command: "find plugins/example -maxdepth 1 -type f -iname '*who*are*you*'" } },
@@ -490,6 +519,78 @@ global.redis = {
     async get(key) { return redisStore.get(key) || null },
     async del(key) { return redisStore.delete(key) ? 1 : 0 }
 }
+global.AIPluginClient = { enableGroupSend: true }
+const symbolicSendResult = await groupSendMessageTool.execute({}, {
+    isMaster: true,
+    userId: 'symbolic-group-user',
+    agentTaskId: 'symbolic-agent-task',
+    originalUserMessage: '#c帮我给括号那个群带个话，内容是"测试"',
+    event: {
+        user_id: 'symbolic-group-user',
+        isMaster: true,
+        bot: {
+            async sendApi(name) {
+                if (name !== 'get_group_list') return []
+                return symbolicGroups.map(group => ({ group_id: group.groupId, group_name: group.groupName }))
+            }
+        }
+    }
+})
+const symbolicPending = await loadPendingAction('symbolic-group-user')
+check('括号群代发直接创建真实待确认操作', symbolicSendResult.ok
+    && symbolicSendResult.pending
+    && symbolicPending?.type === 'group_send_message'
+    && symbolicPending.groups?.[0]?.groupName === '【】',
+JSON.stringify({ symbolicSendResult, symbolicPending }))
+await clearPendingAction('symbolic-group-user', symbolicPending?.id)
+
+const ambiguousSendResult = await groupSendMessageTool.execute({}, {
+    isMaster: true,
+    userId: 'ambiguous-group-user',
+    agentTaskId: 'ambiguous-agent-task',
+    originalUserMessage: '#c帮我给测试那个群带个话，内容是"测试"',
+    event: {
+        user_id: 'ambiguous-group-user',
+        isMaster: true,
+        bot: {
+            async sendApi(name) {
+                if (name !== 'get_group_list') return []
+                return [
+                    { group_id: '20001', group_name: '测试一群' },
+                    { group_id: '20002', group_name: '测试二群' }
+                ]
+            }
+        }
+    }
+})
+const ambiguousPending = await loadPendingAction('ambiguous-group-user')
+check('多候选代发进入结构化目标选择状态', ambiguousSendResult.pending
+    && ambiguousSendResult.clarification
+    && ambiguousPending?.type === 'group_send_disambiguation'
+    && ambiguousPending.candidates?.length === 2,
+JSON.stringify({ ambiguousSendResult, ambiguousPending }))
+await clearPendingAction('ambiguous-group-user', ambiguousPending?.id)
+
+const missingGroupResult = await groupSendMessageTool.execute({}, {
+    isMaster: true,
+    userId: 'missing-group-user',
+    originalUserMessage: '#c帮我给完全不存在的群带个话，内容是"测试"',
+    event: {
+        user_id: 'missing-group-user',
+        isMaster: true,
+        bot: {
+            async sendApi(name) {
+                if (name !== 'get_group_list') return []
+                return [{ group_id: '30001', group_name: '普通群' }]
+            }
+        }
+    }
+})
+check('无相似目标不会把全部群变成可选候选', missingGroupResult.ok === false
+    && missingGroupResult.pending !== true
+    && !(await loadPendingAction('missing-group-user')),
+JSON.stringify(missingGroupResult))
+
 const centralAdminPending = await toolRegistry.execute('group_kick', {
     user_id: '12345678',
     block: false

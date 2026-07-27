@@ -180,3 +180,10 @@ export function parseStrictPendingDecision(record = {}, instruction = '') {
     }
     return { decision: 'none', reason: '高风险操作只接受明确确认或取消短语' }
 }
+
+export function parseStandalonePendingCommand(instruction = '') {
+    const normalized = String(instruction || '').replace(/^\s*#(?:uc|c|pc|sc)\b\s*/i, '').trim()
+    if (/^(?:确认执行|确认|同意执行|继续执行|执行)$/.test(normalized)) return 'confirm'
+    if (/^(?:取消|取消执行|不要执行|别执行|停止)$/.test(normalized)) return 'cancel'
+    return ''
+}

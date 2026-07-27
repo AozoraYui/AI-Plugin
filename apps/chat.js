@@ -14,7 +14,7 @@ import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
 import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, selectToolCandidates } from '../utils/tool_intent.js'
-import { clearPendingAction, loadPendingAction, parseStrictPendingDecision } from '../utils/pending_actions.js'
+import { clearPendingAction, loadPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } from '../utils/pending_actions.js'
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
@@ -22,7 +22,7 @@ import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutp
 import { deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound, stableAgentStringify } from '../utils/agent_runtime.js'
 import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK_SUMMARY_MAX_CHARS, mergeAgentRisk, recordAgentTaskStep } from '../utils/agent_task_runtime.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
-import { executePendingGroupSend } from '../tools/group_send.js'
+import { createPendingGroupSendAction, executePendingGroupSend, parseGroupSendDisambiguationSelection } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
 import { executePendingShellExec } from '../tools/shell_exec.js'
 import { executePendingShellSession } from '../tools/shell_session.js'
@@ -266,7 +266,15 @@ function formatPendingActionForJudge(record = {}) {
 
 async function judgePendingActionDecision(client, modelGroupKey, providerFilter, pending, instruction = '') {
     const text = String(instruction || '').trim()
-    if (!text || !client?.makeRequest) return { decision: 'none', reason: 'empty' }
+    if (!text) return { decision: 'none', reason: 'empty' }
+    const standaloneCommand = parseStandalonePendingCommand(text)
+    if (standaloneCommand) {
+        return {
+            decision: standaloneCommand === 'confirm' ? 'confirm' : 'cancel',
+            reason: '用户使用明确的待确认操作指令'
+        }
+    }
+    if (!client?.makeRequest) return { decision: 'none', reason: 'classifier unavailable' }
     const strictDecision = parseStrictPendingDecision(pending, text)
     if (strictDecision) return strictDecision
 
@@ -310,7 +318,50 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
     if (!text) return false
 
     const pending = await loadPendingAction(e.user_id)
-    if (!pending) return false
+    if (!pending) {
+        const orphanCommand = parseStandalonePendingCommand(text)
+        if (!orphanCommand) return false
+        await e.reply(orphanCommand === 'confirm'
+            ? '当前没有等待确认的操作，未执行任何工具或群消息发送。'
+            : '当前没有等待取消的操作。', true)
+        return true
+    }
+
+    if (pending.type === 'group_send_disambiguation') {
+        const selection = parseGroupSendDisambiguationSelection(pending, text)
+        if (selection.action === 'cancel') {
+            await clearPendingAction(e.user_id, pending.id)
+            await updatePendingActionAgentTask(e, pending, { ok: false, error: '用户取消群消息目标选择。' }, 'cancel')
+            await e.reply('已取消这次群消息目标选择，没有发送任何消息。', true)
+            return true
+        }
+        if (selection.action === 'needs_selection') {
+            await e.reply('当前还没有确定目标群，不能执行发送。请回复候选编号、群号或完整群名。', true)
+            return true
+        }
+        if (selection.action === 'select') {
+            const saveResult = await createPendingGroupSendAction(e.user_id, {
+                agentTaskId: pending.agentTaskId || '',
+                groups: [selection.group],
+                message: pending.message,
+                originalMessage: pending.originalMessage || '',
+                asIs: pending.asIs === true
+            })
+            if (!saveResult.ok) {
+                await e.reply(`目标群已识别，但创建待确认操作失败：${saveResult.error || '未知错误'}`, true)
+                return true
+            }
+            await clearPendingAction(e.user_id, pending.id)
+            const groupName = selection.group.groupName ? `「${selection.group.groupName}」` : '群名未知'
+            await e.reply(`已确认目标群为 ${groupName}（${selection.group.groupId}）。消息仍未发送；请继续回复「#c执行」或「#c取消」。\n待发送内容：${pending.message}`, true)
+            return true
+        }
+        if (parseStandalonePendingCommand(text)) {
+            await e.reply('当前等待的是目标群选择，不是发送确认。请先回复候选编号、群号或完整群名。', true)
+            return true
+        }
+        return false
+    }
 
     const judgement = await judgePendingActionDecision(client, modelGroupKey, providerFilter, pending, text)
     logger.info(`[AI-Plugin] 待确认操作意图判断: ${judgement.decision}, reason=${judgement.reason || ''}`)
