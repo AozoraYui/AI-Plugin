@@ -4,7 +4,7 @@ import { Config } from '../utils/config.js'
 import { checkAccess, getAccessConfig } from '../utils/access.js'
 import { formatDBTimestampToBeijing, getBeijingTimeStr, getTodayDateStr, takeSourceMsg } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
-import { buildEnvironmentHint, expandForwardMsg, extractCardInfo } from '../utils/message_context.js'
+import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject } from '../utils/message_context.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedUserIds } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, isExpiredGroupContextImageUrl, isGroupContextImageQuestion, shouldReadGroupContextImages } from '../utils/group_context_images.js'
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
@@ -1166,6 +1166,20 @@ export class FastChatHandler extends plugin {
         const logs = await this.conversationManager.db.getRecentGroupMessageLogs(e.group_id, limit)
         const contextText = formatGroupContext(logs, { maxChars: FAST_CHAT_REPLY_CONTEXT_MAX_CHARS })
         const mentionedUserIds = extractMentionedUserIds(e.message || [], { botUserId: getBotUin(e) })
+        const identityQueryText = normalized.instructionText || normalized.currentText || normalized.normalizedText
+        const thirdPartyFocusedQuery = isThirdPartySubjectQuery(identityQueryText, normalized.userId, mentionedUserIds)
+        const privateMemorySubject = resolvePrivateMemorySubject(normalized.userId, mentionedUserIds, {
+            thirdPartyFocused: thirdPartyFocusedQuery,
+            isMaster: e.isMaster === true
+        })
+        const targetSubjectUserId = privateMemorySubject.targetUserId
+        const participantIdentityHint = buildParticipantIdentityHint(normalized.userId, mentionedUserIds, {
+            thirdPartyFocused: thirdPartyFocusedQuery,
+            targetPrivateContextAllowed: Boolean(targetSubjectUserId)
+        })
+        if (thirdPartyFocusedQuery) {
+            logger.info(`[AI-Plugin] [畅聊] 检测到第三方成员主题询问: targets=${mentionedUserIds.join(', ')}, loadTarget=${targetSubjectUserId || '否'}`)
+        }
         let groupAliasMemoryText = ''
         if (mentionedUserIds.length > 0) {
             try {
@@ -1182,30 +1196,36 @@ export class FastChatHandler extends plugin {
         let userProfileText = ''
         let semanticMemoryContext = ''
         const semanticQueryText = normalized.instructionText || normalized.currentText || normalized.normalizedText
-        memoryContext = await loadUserMemoryContext(this.conversationManager, normalized.userId, {
-            includeHistory: true,
-            includeCheckpoint: true,
-            includeProfile: true,
-            stripHistoryMedia: false,
-            maxHistoryTurns: Infinity,
-            checkpointMaxChars: PERSONAL_MEMORY_MAX_CHARS,
-            checkpointTruncateMode: 'head',
-            profileMaxChars: FAST_CHAT_PROFILE_CONTEXT_MAX_CHARS,
-            profileTruncateMode: 'middle',
-            includeSemantic: this.client.enableVectorMemory && !hasExplicitMemorySearchIntent(semanticQueryText),
-            semanticQuery: semanticQueryText,
-            semanticOptions: {
-                actorUserId: normalized.userId,
-                currentGroupId: normalized.groupId,
-                isMaster: e.isMaster === true,
-                allowCrossGroup: false,
-                maxChars: Config.VECTOR_AUTO_CONTEXT_MAX_CHARS
-            },
-            vectorEnabled: this.client.enableVectorMemory,
-            logPrefix: '[AI-Plugin] [畅聊]',
-            logLabel: `触发者 ${normalized.userId}`,
-            logLevel: 'info'
-        })
+        const memorySubjectUserId = privateMemorySubject.userId || normalized.userId
+        const memorySubjectLabel = targetSubjectUserId ? `被 @ 成员 QQ ${targetSubjectUserId}` : '触发者'
+        const allowPrivateMemoryContext = privateMemorySubject.allowed
+        memoryContext = allowPrivateMemoryContext
+            ? await loadUserMemoryContext(this.conversationManager, memorySubjectUserId, {
+                includeHistory: !thirdPartyFocusedQuery,
+                includeCheckpoint: true,
+                includeProfile: true,
+                stripHistoryMedia: false,
+                maxHistoryTurns: Infinity,
+                checkpointMaxChars: PERSONAL_MEMORY_MAX_CHARS,
+                checkpointTruncateMode: 'head',
+                profileMaxChars: FAST_CHAT_PROFILE_CONTEXT_MAX_CHARS,
+                profileTruncateMode: 'middle',
+                includeSemantic: this.client.enableVectorMemory && !hasExplicitMemorySearchIntent(semanticQueryText),
+                semanticQuery: semanticQueryText,
+                semanticOptions: {
+                    actorUserId: normalized.userId,
+                    userId: targetSubjectUserId || '',
+                    currentGroupId: normalized.groupId,
+                    isMaster: e.isMaster === true,
+                    allowCrossGroup: false,
+                    maxChars: Config.VECTOR_AUTO_CONTEXT_MAX_CHARS
+                },
+                vectorEnabled: this.client.enableVectorMemory,
+                logPrefix: '[AI-Plugin] [畅聊]',
+                logLabel: `${memorySubjectLabel} ${memorySubjectUserId}`,
+                logLevel: 'info'
+            })
+            : { personalMemory: '', userProfileText: '', semanticMemoryContext: '' }
         personalMemory = memoryContext.personalMemory
         userProfileText = memoryContext.userProfileText
         semanticMemoryContext = memoryContext.semanticMemoryContext
@@ -1280,7 +1300,7 @@ export class FastChatHandler extends plugin {
                 logger.info(`[AI-Plugin] [畅聊] 工具路由开始: 候选工具=${planningEnabledTools.join(', ')}, 语义族=${candidateSelection.families.join(', ') || '模型兜底'}, 触发=${routeByKeyword ? '规则命中' : (routeByMasterRequest ? '主人请求兜底' : '近期任务续接')}`)
                 let toolCalls = []
                 const toolMemorySummary = userProfileText
-                    ? `【当前用户个人档案】\n${userProfileText}\n\n【长期记忆摘要】\n${personalMemory}`
+                    ? `【${memorySubjectLabel}个人档案】\n${userProfileText}\n\n【${memorySubjectLabel}长期记忆摘要】\n${personalMemory}`
                     : personalMemory
                 const groupChatDigestArgs = planningEnabledTools.includes('group_chat_digest')
                     ? parseGroupChatDigestRequest(toolRoutingText)
@@ -1556,7 +1576,9 @@ export class FastChatHandler extends plugin {
             personalMemory,
             userProfileText,
             semanticMemoryContext,
-            toolContextText
+            toolContextText,
+            participantIdentityHint,
+            memorySubjectLabel
         }
 
         const buildFinalPrompt = (ctx, compactNote = '') => `你是 ${Config.AI_NAME}，正在一个 QQ 群里自然聊天。
@@ -1568,8 +1590,9 @@ export class FastChatHandler extends plugin {
 - 如果当前用户在问“之前聊了什么/发生了什么/前情提要”，请主要基于最近群聊文本概括；历史图片默认只作为“含图片”的元信息，只有本轮附带了图片输入或图片摘要时才能描述图片内容。
 - 如果当前用户要求执行命令、更新插件、读写文件、下载/发送文件、画图或群管理，只有看到【本轮工具结果】时才能说已经执行；没有工具结果就必须明确说明本轮尚未执行或无法确认，绝不能编造成功。
 - “本群称呼记忆”只表示群里公开聊天中有人这样称呼过某个成员；带调侃的记录不要当作真实身份或事实断言。
-- “触发者个人记忆摘要”只用于理解当前触发者的偏好、称呼和长期上下文；具体隐私边界以当前聊天环境提示为准。
-- “触发者个人档案”来自历次全量/增量总结维护出的稳定画像。不要主动展示完整档案；但触发者明确询问自己的某个档案字段、字段值，或要求按档案中的所在地查询天气时，应直接回答请求涉及的字段，不需要再次要求授权。城市级所在地可以直接回答；不要展开无关字段或高敏感信息。
+- 个人记忆摘要和个人档案标题会明确标注归属用户；只能用于理解标题所指用户，绝不能套用给其他成员。
+- 个人档案来自历次全量/增量总结维护出的稳定画像。可以回答请求涉及的非敏感印象和字段，但不要展示完整档案，不要展开无关字段或高敏感信息。
+- 如果存在“本轮参与者身份边界”，必须严格区分当前发言者和被 @ 的成员。只能把档案、摘要和检索结果用于其明确标注的归属用户；主人查询被 @ 成员时，可使用系统明确提供的目标资料回答非敏感印象，但不得泄露高敏感字段。
 - “语义相关记忆”来自本地向量检索，只是和当前消息相关的旧线索，不等于当前群正在发生的事；命中不足时要说明不确定。
 - 不要编造没有出现在上下文里的事实。
 - 如果上下文不足，就坦诚说不太确定。
@@ -1581,7 +1604,7 @@ ${compactNote ? `【上下文分段整理说明】\n以下部分资料因过长�
 【最近群聊上下文】
 ${ctx.contextText || '暂无'}
 
-${ctx.imageReadNotesText ? `【本轮读图策略】\n${ctx.imageReadNotesText}\n\n` : ''}${ctx.imageSummaryText ? `【本轮分批读图摘要】\n${ctx.imageSummaryText}\n\n` : ''}${ctx.localImageNoteText ? `${ctx.localImageNoteText}\n\n` : ''}${ctx.avatarImageNoteText ? `${ctx.avatarImageNoteText}\n\n` : ''}${ctx.groupAliasMemoryText ? `${ctx.groupAliasMemoryText}\n\n` : ''}${ctx.personalMemory ? `【触发者个人记忆摘要】\n${ctx.personalMemory}\n\n` : ''}${ctx.userProfileText ? `【触发者个人档案】\n${ctx.userProfileText}\n\n` : ''}${ctx.semanticMemoryContext ? `${ctx.semanticMemoryContext}\n\n` : ''}${ctx.toolContextText ? `【本轮工具结果】${ctx.toolContextText}\n\n` : ''}【当前触发消息】
+${ctx.participantIdentityHint ? `${ctx.participantIdentityHint}\n\n` : ''}${ctx.imageReadNotesText ? `【本轮读图策略】\n${ctx.imageReadNotesText}\n\n` : ''}${ctx.imageSummaryText ? `【本轮分批读图摘要】\n${ctx.imageSummaryText}\n\n` : ''}${ctx.localImageNoteText ? `${ctx.localImageNoteText}\n\n` : ''}${ctx.avatarImageNoteText ? `${ctx.avatarImageNoteText}\n\n` : ''}${ctx.groupAliasMemoryText ? `${ctx.groupAliasMemoryText}\n\n` : ''}${ctx.personalMemory ? `【${ctx.memorySubjectLabel}个人记忆摘要】\n${ctx.personalMemory}\n\n` : ''}${ctx.userProfileText ? `【${ctx.memorySubjectLabel}个人档案】\n${ctx.userProfileText}\n\n` : ''}${ctx.semanticMemoryContext ? `${ctx.semanticMemoryContext}\n\n` : ''}${ctx.toolContextText ? `【本轮工具结果】${ctx.toolContextText}\n\n` : ''}【当前触发消息】
 ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCaptureText ? `\n\n${truncateMiddleText(normalized.aliasCaptureText, 2000)}` : ''}`
 
         const buildContents = (promptText) => [

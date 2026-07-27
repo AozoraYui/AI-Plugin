@@ -1,5 +1,62 @@
 import { Config, expandPrompt } from './config.js'
 
+function normalizeParticipantIds(ids = [], actorUserId = '') {
+    const actor = String(actorUserId || '').trim()
+    return [...new Set((Array.isArray(ids) ? ids : [])
+        .map(id => String(id || '').trim())
+        .filter(id => id && id !== 'all' && id !== actor))]
+}
+
+export function isThirdPartySubjectQuery(text = '', actorUserId = '', mentionedUserIds = []) {
+    const mentions = normalizeParticipantIds(mentionedUserIds, actorUserId)
+    if (mentions.length === 0) return false
+    const value = String(text || '').replace(/\[@\d+\]/g, '@成员').trim()
+    if (!value) return false
+    return /(?:印象|看法|评价|怎么看|如何看|觉得.{0,8}(?:怎样|怎么样|如何)|是什么样(?:的)?人|性格|人品|了解多少|认识多久|熟悉吗|档案|画像|资料|个人信息|住哪|所在地|城市)/i.test(value)
+}
+
+export function resolvePrivateMemorySubject(actorUserId = '', mentionedUserIds = [], options = {}) {
+    const actor = String(actorUserId || '').trim()
+    const mentions = normalizeParticipantIds(mentionedUserIds, actor)
+    const thirdPartyFocused = options.thirdPartyFocused === true
+    if (!thirdPartyFocused) {
+        return { userId: actor, targetUserId: '', label: '触发者', allowed: Boolean(actor) }
+    }
+    if (options.isMaster === true && mentions.length === 1) {
+        return {
+            userId: mentions[0],
+            targetUserId: mentions[0],
+            label: `被 @ 成员 QQ ${mentions[0]}`,
+            allowed: true
+        }
+    }
+    return { userId: '', targetUserId: '', label: '第三方成员', allowed: false }
+}
+
+export function buildParticipantIdentityHint(actorUserId = '', mentionedUserIds = [], options = {}) {
+    const actor = String(actorUserId || '').trim()
+    const mentions = normalizeParticipantIds(mentionedUserIds, actor)
+    if (!actor && mentions.length === 0) return ''
+    const thirdPartyFocused = options.thirdPartyFocused === true
+    const targetPrivateContextAllowed = options.targetPrivateContextAllowed === true
+    const lines = [
+        '【本轮参与者身份边界 - 高优先级】',
+        actor ? `当前发言者是 QQ ${actor}。` : '',
+        mentions.length > 0 ? `当前消息明确 @ 的其他成员是：${mentions.map(id => `QQ ${id}`).join('、')}。` : '',
+        '任何标注为“触发者/当前用户”的个人历史、记忆摘要或个人档案，都只属于当前发言者，绝不能套用到被 @ 的成员身上。'
+    ].filter(Boolean)
+    if (thirdPartyFocused) {
+        lines.push('当前问题主要询问被 @ 的第三方。不要使用当前发言者的私有记忆来描述对方。')
+        if (targetPrivateContextAllowed && mentions.length === 1) {
+            lines.push(`系统已允许本轮读取并提供被 @ 成员 QQ ${mentions[0]} 的存储信息；只能使用明确标注归属于该 QQ 的档案、摘要和检索结果，不能混入当前发言者资料。`)
+            lines.push('可以据此回答非敏感的印象、偏好和长期特征，但仍不得公开精确住址、联系方式、账号凭据等高敏感字段。')
+        } else {
+            lines.push('本轮没有提供该成员的私有档案，只能依据可见的公开群聊上下文和明确标注属于该成员的公开记录回答；证据不足时应直接说明不够了解。')
+        }
+    }
+    return lines.join('\n')
+}
+
 export function extractCardInfo(data = {}) {
     const lines = []
     const meta = data.meta || data.detail || data.appmsg || data.app || {}

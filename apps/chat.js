@@ -7,12 +7,12 @@ import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, getDBTimestamp, hasExplicitModelGroup, resolveModelGroup, resolveModelDisplay, resolveProviderPriority, formatDBTimestampToBeijing } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
-import { buildGroupAliasMemoryText, captureGroupMemberAliases } from '../utils/group_alias.js'
+import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedUserIds } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/memory_context.js'
-import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
+import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject } from '../utils/message_context.js'
 import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } from '../utils/pending_actions.js'
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
@@ -567,17 +567,6 @@ async function updatePendingActionAgentTask(e, pending = {}, result = {}, decisi
     } catch (err) {
         logger.warn(`[AI-Plugin] 待确认操作回写 Agent 任务失败: ${err.message}`)
     }
-}
-
-function extractAtMentionsFromMessage(message = []) {
-    const ids = []
-    for (const seg of message || []) {
-        if (seg?.type !== 'at') continue
-        const qq = seg.qq || seg.user_id || seg.data?.qq || seg.data?.user_id
-        if (!qq || String(qq) === 'all') continue
-        ids.push(String(qq))
-    }
-    return [...new Set(ids)]
 }
 
 function hasTool(enabledTools, name) {
@@ -1458,6 +1447,7 @@ async function askMainModelForToolPlan(client, modelGroupKey, providerFilter, op
         enabledTools = [],
         candidateUrls = [],
         mentionedUserIds = [],
+        memorySubjectLabel = '当前用户',
         hasImages = false,
         hasRecentImages = false,
         isMaster = false,
@@ -1476,7 +1466,7 @@ async function askMainModelForToolPlan(client, modelGroupKey, providerFilter, op
         ? `\n\n【长期记忆摘要】\n${truncateForPrompt(incrementalCheckpoint, 1800)}`
         : ''
     const profileBlock = userProfileText
-        ? `\n\n【当前用户个人档案】\n${truncateForPrompt(userProfileText, 5000)}`
+        ? `\n\n【${memorySubjectLabel}个人档案】\n${truncateForPrompt(userProfileText, 5000)}`
         : ''
     const historyBlock = recentContext
         ? `\n\n【最近对话】\n${truncateForPrompt(recentContext, 5000)}`
@@ -1868,9 +1858,24 @@ export class ChatHandler extends plugin {
             if (allImages.length > 0) {
                 await cacheRecentImages(e, allImages)
             }
-            const mentionedUserIds = extractAtMentionsFromMessage(e.message)
+            const botUserId = String(e.self_id || e.bot?.uin || e.bot?.self_id || (typeof Bot !== 'undefined' ? Bot.uin : '') || '')
+            const mentionedUserIds = extractMentionedUserIds(e.message, { botUserId })
             if (mentionedUserIds.length > 0) {
                 logger.info(`[AI-Plugin] 当前消息检测到 @ 成员: ${mentionedUserIds.join(', ')}`)
+            }
+            const identityQueryText = originalUserMessage || userMessage
+            const thirdPartyFocusedQuery = isThirdPartySubjectQuery(identityQueryText, e.user_id, mentionedUserIds)
+            const privateMemorySubject = resolvePrivateMemorySubject(e.user_id, mentionedUserIds, {
+                thirdPartyFocused: thirdPartyFocusedQuery,
+                isMaster: e.isMaster === true
+            })
+            const targetSubjectUserId = privateMemorySubject.targetUserId
+            const participantIdentityHint = buildParticipantIdentityHint(e.user_id, mentionedUserIds, {
+                thirdPartyFocused: thirdPartyFocusedQuery,
+                targetPrivateContextAllowed: Boolean(targetSubjectUserId)
+            })
+            if (thirdPartyFocusedQuery) {
+                logger.info(`[AI-Plugin] 检测到第三方成员主题询问: targets=${mentionedUserIds.join(', ')}, loadTarget=${targetSubjectUserId || '否'}`)
             }
             let groupAliasMemoryText = ''
             let groupAliasCaptureText = ''
@@ -1914,19 +1919,22 @@ export class ChatHandler extends plugin {
 
             const isSingleMode = e._singleMode === true
             const userId = e.user_id
+            const memorySubjectUserId = privateMemorySubject.userId || userId
+            const memorySubjectLabel = targetSubjectUserId ? `被 @ 成员 QQ ${targetSubjectUserId} 的` : '当前用户'
+            const allowPrivateMemoryContext = privateMemorySubject.allowed
             let history = []
             let incrementalCheckpoint = null
             let userProfileText = ''
 
-            if (!isSingleMode) {
-                const memoryContext = await loadUserMemoryContext(this.conversationManager, userId, {
-                    includeHistory: true,
-                    includeCheckpoint: true,
-                    includeProfile: true,
+            if (!isSingleMode && allowPrivateMemoryContext) {
+                const memoryContext = await loadUserMemoryContext(this.conversationManager, memorySubjectUserId, {
+                    includeHistory: !thirdPartyFocusedQuery,
+                    includeCheckpoint: allowPrivateMemoryContext,
+                    includeProfile: allowPrivateMemoryContext,
                     stripHistoryMedia: true,
                     maxHistoryTurns: Config.MAX_HISTORY_LENGTH,
                     logPrefix: '[AI-Plugin]',
-                    logLabel: `用户 ${userId}`,
+                    logLabel: `${targetSubjectUserId ? '被@成员' : '用户'} ${memorySubjectUserId}`,
                     logLevel: 'debug'
                 })
                 history = memoryContext.history
@@ -2204,6 +2212,7 @@ export class ChatHandler extends plugin {
                             enabledTools: planningCandidates.tools,
                             candidateUrls,
                             mentionedUserIds,
+                            memorySubjectLabel,
                             hasImages: allImages.length > 0 || hasLocalImageInput,
                             hasRecentImages: recentImageInfo.available,
                             isMaster: e.isMaster === true,
@@ -2626,6 +2635,7 @@ export class ChatHandler extends plugin {
                         enabledTools: nextEnabledTools,
                         candidateUrls: nextCandidateUrls,
                         mentionedUserIds,
+                        memorySubjectLabel,
                         hasImages: allImages.length > 0 || hasLocalImageInput,
                         hasRecentImages: recentImageInfo.available,
                         isMaster: e.isMaster === true,
@@ -2777,12 +2787,13 @@ export class ChatHandler extends plugin {
                     logger.info('[AI-Plugin] Shell 补查已由 Agent 后续规划接管，本轮跳过旧补查器')
                 }
 
-                if (this.client.enableVectorMemory && !memorySearchToolUsed && !suppressAutoFastChatContext) {
+                if (this.client.enableVectorMemory && !memorySearchToolUsed && !suppressAutoFastChatContext && allowPrivateMemoryContext) {
                     semanticMemoryContext = await buildAutoSemanticMemoryContext(
                         this.conversationManager.db,
                         currentToolInstruction || originalUserMessage || userMessage,
                         {
                             actorUserId: userId,
+                            userId: targetSubjectUserId || '',
                             currentGroupId: e.group_id,
                             isMaster: e.isMaster === true,
                             allowCrossGroup: false,
@@ -2933,7 +2944,7 @@ export class ChatHandler extends plugin {
             if (incrementalCheckpoint) {
                 contents.push({
                     "role": "user",
-                    "parts": [{ "text": `【记忆总结】这是关于你与用户之前对话的记忆总结，包含了重要的上下文信息，请基于这些记忆继续对话：\n${incrementalCheckpoint}` }]
+                    "parts": [{ "text": `【${memorySubjectLabel}记忆总结】以下内容明确归属于 ${targetSubjectUserId ? `QQ ${targetSubjectUserId}` : `当前发言者 QQ ${userId}`}，不得套用到其他成员：\n${incrementalCheckpoint}` }]
                 })
                 contents.push({
                     "role": "model",
@@ -2943,7 +2954,7 @@ export class ChatHandler extends plugin {
             if (userProfileText) {
                 contents.push({
                     "role": "user",
-                    "parts": [{ "text": `【个人档案】这是从历次全量/增量总结中维护出的当前用户稳定画像。不要主动展示完整档案；但如果当前用户明确询问自己的档案是否包含某个字段、询问该字段的具体值，或要求按档案中的所在地查询天气，应直接基于档案回答其请求涉及的字段，不需要再次要求授权。城市级所在地可以直接回答；不要顺带展开无关字段，也不要透露其他用户信息、精确住址、联系方式、账号凭据等高敏感信息：\n${userProfileText}` }]
+                    "parts": [{ "text": `【${memorySubjectLabel}个人档案】这是从历次全量/增量总结中维护出的稳定画像，明确归属于 ${targetSubjectUserId ? `QQ ${targetSubjectUserId}` : `当前发言者 QQ ${userId}`}。可以回答请求涉及的非敏感印象和字段，但不要展示完整档案，不要顺带展开无关字段，也不要透露精确住址、联系方式、账号凭据等高敏感信息：\n${userProfileText}` }]
                 })
                 contents.push({
                     "role": "model",
@@ -2986,6 +2997,17 @@ export class ChatHandler extends plugin {
                 "role": "model",
                 "parts": [{ "text": "好的，我已经了解当前的聊天环境，会根据环境调整我的行为！" }]
             })
+
+            if (participantIdentityHint) {
+                contents.push({
+                    "role": "user",
+                    "parts": [{ "text": participantIdentityHint }]
+                })
+                contents.push({
+                    "role": "model",
+                    "parts": [{ "text": "好的，我会严格区分当前发言者与被 @ 的成员，不会混用或越权披露任何人的个人记忆。" }]
+                })
+            }
 
             contents.push({ "role": "user", "parts": currentUserTurnParts })
 
