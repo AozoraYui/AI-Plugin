@@ -8,11 +8,37 @@ export function getPrimaryUserInstruction(text) {
     const value = String(text || '').trim()
     if (!value) return ''
     const index = value.search(/\n===\s*引用/)
-    return (index >= 0 ? value.slice(0, index) : value).trim()
+    return stripChatCommandPrefix(index >= 0 ? value.slice(0, index) : value)
 }
 
 function stripChatCommandPrefix(text = '') {
-    return String(text || '').replace(/^\s*#(?:u?c)\s*/i, '').trim()
+    return String(text || '')
+        .replace(/^\s*#(?:uc|c|pc|sc)\b\s*/i, '')
+        .replace(/^\s*(?:诺亚|noa|喏亚|诺娅)[,，。!！~～\s]+/i, '')
+        .trim()
+}
+
+export function normalizeToolInstruction(text = '') {
+    const rawText = String(text || '').trim()
+    const commandMatch = rawText.match(/^\s*#(uc|c|pc|sc)\b/i)
+    const quoteIndex = rawText.search(/\n===\s*引用/)
+    const currentText = (quoteIndex >= 0 ? rawText.slice(0, quoteIndex) : rawText).trim()
+    return {
+        rawText,
+        command: commandMatch?.[1]?.toLowerCase() || '',
+        instruction: stripChatCommandPrefix(currentText),
+        quotedContext: quoteIndex >= 0 ? rawText.slice(quoteIndex).trim() : '',
+        urls: extractUrls(currentText)
+    }
+}
+
+function isCapabilityOrUsageQuestion(text = '', actionPattern = '') {
+    const value = getPrimaryUserInstruction(text)
+    if (!value || !actionPattern) return false
+    const capability = `(?:你|机器人|AI|插件|这个功能|该功能)?\\s*(?:会不会|能不能|能否|能|会|可以不可以|可不可以|可以吗|支持吗|有没有|是否支持)`
+    const usage = '(?:怎么用|如何用|怎样用|用法|教程|功能介绍|有什么用|是干嘛的|是什么意思)'
+    return new RegExp(`(?:${capability}).{0,36}(?:${actionPattern})|(?:${actionPattern}).{0,36}(?:${usage}|能不能|能否|是否可以|可以吗|支持吗|会吗)`, 'i').test(value)
+        && !new RegExp(`(?:帮我|替我|代我|给我|请你?|麻烦你?|现在|立刻|马上).{0,20}(?:${actionPattern})`, 'i').test(value)
 }
 
 function cleanTarget(target = '') {
@@ -168,6 +194,12 @@ export function parseGroupLeaveRequest(text) {
         return { target: '当前群' }
     }
 
+    const colloquialLeave = value.match(/(?:别|不要|不用).{0,8}(?:在|待在|留在)\s*(?<target>[^，,。；;：:\n]{1,60}?)(?:群聊|群里|群内|那边|里面|里|群)?(?:待|待着|留着|呆着)?(?:了|啦)?[，,。；;\s]*(?:退(?:掉|了|出)?|退出|离开|撤出)/i)
+    if (colloquialLeave?.groups?.target) {
+        const args = assignGroupTargets({}, colloquialLeave.groups.target)
+        if (!args.forbidden_set && (args.group_id || args.target || args.group_ids || args.targets)) return args
+    }
+
     const explicitListMatch = value.match(/(?:退(?:了|掉|出)?|退出|离开|撤出).{0,20}(?:这些群|這些群|那些群|这几个群|這几个群|那几个群|以下群|如下群|群号|目标群)?\s*[：:]\s*(?<target>[\s\S]{1,200})$/i)
     if (explicitListMatch?.groups?.target) {
         const args = assignGroupTargets({}, explicitListMatch.groups.target)
@@ -211,7 +243,7 @@ function isQuestionAboutTool(text = '', keywordPattern = '') {
 }
 
 export function hasExplicitDrawIntent(text, options = {}) {
-    const value = getPrimaryUserInstruction(text).replace(/^#[A-Za-z0-9_]+\s*/i, '').trim()
+    const value = getPrimaryUserInstruction(text)
     if (!value || hasNegatedDrawIntent(value)) return false
     if (/^(?:你|诺亚|noa)?\s*(?:会不会|会|能不能|可以|能).{0,16}(?:画|绘制).{0,40}(?:吗|嘛|么|？|\?)/i.test(value)
         && !/(?:帮我|给我|请|麻烦)/i.test(value)) {
@@ -223,7 +255,7 @@ export function hasExplicitDrawIntent(text, options = {}) {
 
     const hasImageContext = options.hasImages === true || options.hasRecentImages === true
     const drawCue = '(?:^|[，,。；;！？!?\\s]|帮我|给我|请|麻烦你?|想让你|让你|要你|你来|你能不能|能不能|可以帮我)'
-    const generationIntent = new RegExp(`${drawCue}\\s*(?:再|重新)?\\s*(?:画|绘制|生成|创作)(?:个|一张|一下|张)?[\\s\\S]{0,100}(?:图|图片|插画|头像|壁纸|表情包|设定图|立绘|你自己|你本人|AI本人|自画像|你长什么样|你的样子|诺亚|noa)`, 'i').test(value)
+    const generationIntent = new RegExp(`${drawCue}\\s*(?:再|重新)?\\s*(?:画|绘制|生成|创作|整|搞|做)(?:个|一张|一下|张)?[\\s\\S]{0,100}(?:图|图片|插画|头像|壁纸|表情包|设定图|立绘|你自己|你本人|AI本人|自画像|你长什么样|你的样子|诺亚|noa)`, 'i').test(value)
         || new RegExp(`${drawCue}\\s*(?:再|重新)?\\s*(?:画|绘制)(?:个|一张|一下|张)?\\s*[\\s\\S]{1,80}$`, 'i').test(value)
         || /(?:帮我|给我|请|麻烦你?|想让你|让你|要你|你来|你能不能|能不能|可以帮我).{0,12}做(?:个|一个|一张|一下)?[\s\S]{0,80}(?:图|图片|插画|头像|壁纸|表情包|设定图|立绘)/i.test(value)
         || /(?:^|[，,。；;！？!?\s])做(?:个|一个|一张)[\s\S]{0,80}(?:图|图片|插画|头像|壁纸|表情包|设定图|立绘)[。！!？?\s]*$/i.test(value)
@@ -237,8 +269,10 @@ export function hasExplicitDrawIntent(text, options = {}) {
 export function hasExplicitWebSearchIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
-    return /(?:搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|实时|今天|明天|现在).{0,80}/i.test(value)
+    if (isCapabilityOrUsageQuestion(value, '搜索|联网|上网|web[_ -]?search')) return false
+    return /(?:搜索|搜一下|查一下|查询|检索|联网查|上网查).{0,80}/i.test(value)
         || /(?:帮我|给我|请|麻烦).{0,12}(?:搜|查|检索)/i.test(value)
+        || /(?:最新|今天|明天|实时|当前|现在).{0,20}(?:新闻|价格|汇率|版本|政策|公告|比赛|赛程|航班|列车|数据|资料|信息|情况)/i.test(value)
 }
 
 export function hasExplicitWebFetchIntent(text, candidateUrls = []) {
@@ -247,7 +281,7 @@ export function hasExplicitWebFetchIntent(text, candidateUrls = []) {
     const hasUrl = extractUrls(value).length > 0 || (Array.isArray(candidateUrls) && candidateUrls.length > 0)
     return hasUrl && (/\bfetch\b|(?:抓一下|爬一下|扒一下)/i.test(value)
         || /(?:试试|再试试|重试|重新试|换(?:成|用)?这个|用这个|这个呢|这个可以吗|这个能行吗|能打开吗|能抓吗|能不能打开|能不能抓)/i.test(value)
-        || /(?:看|看看|打开|读取|抓取|总结|分析|解释|概括).{0,20}(?:链接|网页|网址|页面|内容|这个|这条|上面)/i.test(value)
+        || /(?:看|看看|打开|读|读取|抓取|总结|分析|解释|概括).{0,20}(?:链接|网页|网址|页面|内容|这个|这条|上面)/i.test(value)
         || /(?:这个|这条|上面).{0,8}(?:链接|网页|网址).{0,12}(?:讲|说|内容|总结|看看|分析)/i.test(value)
         || /^(?:帮我|给我|请|麻烦你?)?\s*(?:fetch|看|看看|看一下|打开|读取|抓取|抓一下|爬一下|扒一下|总结|总结一下|概括|分析|解释|试试|再试试|重试)(?:一下|下)?[。！!？?\s]*$/i.test(value))
 }
@@ -255,9 +289,11 @@ export function hasExplicitWebFetchIntent(text, candidateUrls = []) {
 export function hasExplicitFileDownloadIntent(text, options = {}) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
+    if (isCapabilityOrUsageQuestion(value, '文件下载|下载文件|保存文件|落盘')) return false
+    if (/(?:群文件|群文件区|群里的文件|群内文件)/i.test(value)) return false
     const hasImages = options.hasImages === true
     const mediaWords = '(?:图片|照片|图|视频|语音|文件|这些|这个|引用|消息|媒体)'
-    const actionWords = '(?:下载|保存|存储|存到|下载到|保存到|存起来)'
+    const actionWords = '(?:下载|保存|存储|存到|下载到|保存到|存起来|落盘|落到服务器|保存到服务器)'
     return new RegExp(`${actionWords}.{0,30}${mediaWords}|${mediaWords}.{0,30}${actionWords}`, 'i').test(value)
         || (hasImages && /(?:下载|保存|存储|存到|下载到|保存到|存起来)/i.test(value))
 }
@@ -265,8 +301,9 @@ export function hasExplicitFileDownloadIntent(text, options = {}) {
 export function hasExplicitFileSendIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
+    if (isCapabilityOrUsageQuestion(value, '文件发送|发送文件|上传文件|发文件')) return false
     if (hasExplicitLocalFileMutationIntent(value)) return false
-    const sendIntent = /(?:发给我|发我|发送|发出来|发到(?:群里|这里)?|传给我|上传(?:到(?:群里|这里)?)?|把.{0,80}上传|试(?:一下|下)?上传)/i.test(value)
+    const sendIntent = /(?:发给我|发我|发送|发出来|发到(?:群里|这里)?|丢到?(?:群里|这里)|扔到?(?:群里|这里)|传给我|上传(?:到(?:群里|这里)?)?|把.{0,80}(?:上传|发群里|丢群里|扔群里)|试(?:一下|下)?上传)/i.test(value)
     const targetHint = /\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\b|(?:\.{0,2}\/)?(?:[\w@+.-]+\/)+[\w@+.-]*|[\w.-]+\.(?:png|jpe?g|webp|gif|mp4|mov|avi|mkv|mp3|wav|ogg|flac|zip|7z|rar|gz|pdf|txt|log|md|json|ya?ml|js|ts|db|sqlite|bin)\b|(?:日志|配置|插件|源码|源文件|脚本|文件|目录|压缩包|这个|那个|刚才|上面)/i.test(value)
     return sendIntent && targetHint
 }
@@ -286,7 +323,7 @@ export function hasExplicitLocalFileDiscoveryIntent(text) {
 export function hasExplicitLocalFileMutationIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
-    const action = '(?:写入|写到|添加到?|加入到?|追加到?|放进|放到|插入|修改|改成|替换|删除|删掉|移除|清除)'
+    const action = '(?:写入|写到|添加到?|加入到?|追加到?|放进|放到|插入|修改|改成|设置成|设为|替换|删除|删掉|移除|清除)'
     const target = '(?:\\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\\b|[\\w.-]+\\.(?:json|ya?ml|toml|ini|conf|cfg|js|ts|py|sh)|配置文件|群配置|配置(?:项|段|字段)?|disable|enable|白名单|黑名单|列表|字段)'
     const delegated = new RegExp(`(?:帮我|给我|请|麻烦你?|你能不能|能不能|可以帮我|把|将).{0,160}${action}|^\\s*${action}`, 'i').test(value)
     const targetsFile = new RegExp(`${action}.{0,120}${target}|${target}.{0,120}${action}`, 'i').test(value)
@@ -458,12 +495,12 @@ export function hasExplicitUserProfileUpdateIntent(text) {
         && !/(?:帮我|给我|请|麻烦|现在|直接).{0,16}(?:写|更新|维护|记|提炼|抽取|整理|总结)/i.test(value)) {
         return false
     }
-    const object = '(?:个人档案|用户档案|用户画像|个人画像|我的档案|我的画像|长期档案|长期记忆|稳定画像)'
+    const object = '(?:个人档案|用户档案|用户画像|个人画像|我的档案|我的画像|我的资料|个人资料|长期档案|长期记忆|稳定画像)'
     const action = '(?:记到|记进|写到|写进|存到|存进|加入|更新|维护|整理|提炼|抽取|总结)'
     const memoryAction = '(?:记住|记一下|记下来|帮我记|给我记|以后记得|长期记住|别忘了)'
     const personalSignal = '(?:我|我的|叫我|称呼|名字|昵称|喜欢|不喜欢|偏好|习惯|常用|住在|来自|职业|身份|项目|性格|雷点|忌口)'
     return new RegExp(`${action}.{0,24}${object}|${object}.{0,24}${action}`, 'i').test(value)
-        || /(?:把|将).{1,120}(?:记到|记进|写到|写进|存到|存进).{0,16}(?:档案|画像|长期记忆)/i.test(value)
+        || /(?:把|将).{1,120}(?:记到|记进|写到|写进|存到|存进).{0,16}(?:档案|画像|资料|长期记忆)/i.test(value)
         || hasExplicitUserProfileHistoryExtractionIntent(value)
         || new RegExp(`${memoryAction}.{0,100}${personalSignal}|${personalSignal}.{0,100}${memoryAction}`, 'i').test(value)
 }
@@ -489,7 +526,7 @@ export function hasExplicitMemorySearchIntent(text) {
     if (recentGroupQuestion && !semanticHint) return false
 
     return /(?:历史|记忆|旧对话|过往|对话记录|聊天记录|记录里).{0,40}(?:搜索|检索|查|查询|找|翻|回忆|有没有|是否|说过|提过|聊过|讨论过|相关)/i.test(value)
-        || /(?:搜索|检索|查|查询|找|翻).{0,32}(?:历史|记忆|旧对话|过往|对话记录|聊天记录|记录)/i.test(value)
+        || /(?:搜索|检索|查|查询|找|翻|翻翻|回想).{0,32}(?:历史|记忆|旧对话|过往|对话记录|聊天记录|记录|以前|之前)/i.test(value)
         || /(?:相关记忆|相关历史|语义检索|语义搜索|交叉检索|跨源检索|跨群检索)/i.test(value)
         || /(?:我|我们|咱们|你).{0,24}(?:以前|之前|曾经).{0,36}(?:说过|提过|聊过|讨论过|提到过|讲过|记得|记不记得)/i.test(value)
         || /(?:你还记得|还记不记得|有没有印象).{0,80}(?:我|我们|之前|以前|说过|提过|聊过|讨论过)/i.test(value)
@@ -526,7 +563,7 @@ export function hasGroupChatContextQuestion(text) {
     if (hasNonChatRecordDomain(value)) return false
     if (hasStrongGroupChatContextQuestion(value)) return true
 
-    const contextVerbs = '(?:聊(?:了|过)?(?:啥|什么|些啥|些什么)?|在聊(?:啥|什么)|说(?:了|过)?(?:啥|什么|些啥|些什么)?|在说(?:啥|什么)|发(?:了|过)?(?:啥|什么|些啥|些什么)?|发生(?:了)?(?:啥|什么|什么事)?|什么情况|啥情况|咋了|怎么了|在干嘛|在干什么|前情|前情提要|总结|概括|回顾|消息|流水)'
+    const contextVerbs = '(?:聊(?:了|过)?(?:啥|什么|些啥|些什么)?|在聊(?:啥|什么)|水(?:了|过)?(?:啥|什么|些啥|些什么)?|在水(?:啥|什么)|说(?:了|过)?(?:啥|什么|些啥|些什么)?|在说(?:啥|什么)|发(?:了|过)?(?:啥|什么|些啥|些什么)?|发生(?:了)?(?:啥|什么|什么事)?|什么情况|啥情况|咋了|怎么了|在干嘛|在干什么|前情|前情提要|总结|概括|回顾|消息|流水)'
     const timeWords = '(?:刚才|刚刚|之前|前面|最近|这会儿|刚才那会儿|我不在的时候|我没看的时候)'
     const currentGroupWords = '(?:他们|她们|大家|群里|群内|这群|这个群|这里|刚才|刚刚|之前|前面)'
     const crossGroupWords = '(?:所有群|全部群|跨群|各群|别的群|其他群|其它群|别群|那边群|别处群)'
@@ -580,9 +617,9 @@ export function hasExplicitShellIntent(text, toolName = '') {
 
 export function hasExplicitLocalFileReadIntent(text) {
     const value = getPrimaryUserInstruction(text)
-    if (!value || hasExplicitFileSendIntent(value)) return false
+    if (!value) return false
     const fileName = '(?:\\.{0,2}\\/)?(?:[\\w@+.-]+\\/)*[\\w@+.-]+\\.(?:js|mjs|cjs|ts|tsx|jsx|json|ya?ml|md|txt|log|py|sh|zsh|bash|toml|ini|conf|cfg|xml|html|css|vue|svelte|go|rs|java|kt|c|cc|cpp|h|hpp|sql)'
-    const readAction = '(?:看|看看|看下|看一下|读|读取|打开|检查|分析|搜索|查找|确认|告诉我|查)'
+    const readAction = '(?:看|看看|看下|看一下|瞅|瞅瞅|瞅一眼|读|读取|打开|检查|分析|搜索|查找|确认|告诉我|查)'
     const contentTarget = '(?:内容|代码|配置|脚本|文件|名称|名字|name|tag|字段|导出|定义|实现|是什么|叫什[么麼])'
     const fieldQuestion = '(?:(?:name|tag|字段|导出|定义|名称|名字).{0,18}(?:是什么|叫什[么麼]|是哪(?:个|些)?|有没[有无]|多少)|(?:是什么|叫什[么麼]|是哪(?:个|些)?|有没[有无]|多少).{0,18}(?:name|tag|字段|导出|定义|名称|名字))'
     return new RegExp(`${readAction}.{0,24}${fileName}(?:.{0,36}${contentTarget})?`, 'i').test(value)
@@ -620,6 +657,8 @@ export function isContinuationToolInstruction(text) {
 
 export function hasExplicitGroupAdminIntent(toolName, text) {
     const value = getPrimaryUserInstruction(text)
+    if (isCapabilityOrUsageQuestion(value, '禁言|解禁|踢人|踢出|移出群|全员禁言|群名片|群昵称|头衔|精华|入群申请|加群申请|进群申请|群管理')) return false
+    if (/(?:谁|哪个人|什么人|有没有人).{0,20}(?:通过|同意|拒绝|处理).{0,20}(?:申请|入群|进群|加群)/i.test(value)) return false
     const patterns = {
         group_mute: /(禁言|解禁|闭嘴|解除.{0,8}禁言)/i,
         group_whole_mute: /(全员禁言|全体禁言|全群禁言|解除.{0,8}全员禁言|关闭.{0,8}全员禁言)/i,
@@ -631,6 +670,114 @@ export function hasExplicitGroupAdminIntent(toolName, text) {
     }
     const pattern = patterns[toolName]
     return pattern ? pattern.test(value) : true
+}
+
+export function hasExplicitGroupFileListIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value || isCapabilityOrUsageQuestion(value, '群文件|群文件列表')) return false
+    const groupFile = /(?:群文件|群文件区|群里的文件|群内文件)/i.test(value)
+    const listAction = /(?:看看|查看|列出|有哪些|有什么|找找|搜索|查找|列表|目录)/i.test(value)
+    return groupFile && listAction
+}
+
+export function hasExplicitGroupFileDownloadIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value || isCapabilityOrUsageQuestion(value, '群文件下载|下载群文件')) return false
+    return /(?:下载|保存|取下来|拿下来).{0,36}(?:群文件|群文件区|群里的文件|群内文件|这个文件|那个文件)|(?:群文件|群文件区|群里的文件|群内文件).{0,36}(?:下载|保存|取下来|拿下来)/i.test(value)
+}
+
+export function hasExplicitGroupRequestListIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value || isCapabilityOrUsageQuestion(value, '入群申请|加群申请|进群申请')) return false
+    if (/(?:谁|哪个人|什么人).{0,20}(?:通过|同意|拒绝|处理).{0,20}(?:入群|加群|进群).{0,8}申请/i.test(value)) return false
+    return /(?:看看|查看|列出|有哪些|有什么|谁|待处理|最近).{0,30}(?:入群|加群|进群).{0,8}申请|(?:入群|加群|进群).{0,8}申请.{0,30}(?:列表|有哪些|有什么|谁|待处理)/i.test(value)
+}
+
+export function hasExplicitWeatherIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value || isCapabilityOrUsageQuestion(value, '天气查询|查天气|天气工具')) return false
+    return /(?:查|查询|看看|看下|告诉我|预报).{0,20}(?:天气|气温|温度|降雨|台风|空气质量)/i.test(value)
+        || /(?:天气|气温|温度|降雨|台风|空气质量|穿衣).{0,24}(?:怎么样|如何|多少|几度|会不会|有没有|吗|嘛|么|预报|情况)/i.test(value)
+        || /(?:今天|明天|后天|周末|未来.{0,4}天|[\u4e00-\u9fa5]{2,12}).{0,12}(?:天气|气温|温度|降雨|下雨|台风|空气质量|穿衣)(?:[。！!？?\s]*$)/i.test(value)
+}
+
+export function detectToolIntentFamilies(text, options = {}) {
+    const value = getPrimaryUserInstruction(text)
+    const urls = Array.isArray(options.urls) ? options.urls : extractUrls(value)
+    const families = new Set()
+    if (!value) return families
+
+    const add = (condition, family) => {
+        if (condition) families.add(family)
+    }
+    const hasImages = options.hasImages === true
+    const hasRecentImages = options.hasRecentImages === true
+    const localFileHint = !/https?:\/\//i.test(value)
+        && /(?:\/|\.\.?\/|[\w@+.-]+\.(?:js|mjs|cjs|ts|tsx|jsx|json|ya?ml|md|txt|log|py|sh|toml|ini|conf|cfg|xml|html|css|vue|svelte|go|rs|java|kt|c|cc|cpp|h|hpp|sql|db|sqlite|bin)\b|源码|代码|脚本|插件|目录)/i.test(value)
+
+    add(hasExplicitWebFetchIntent(value, urls), 'web_fetch')
+    add(hasExplicitWebSearchIntent(value), 'web_search')
+    add(hasExplicitFileSendIntent(value), 'file_send')
+    add(hasExplicitFileDownloadIntent(value, { hasImages }), 'file_download')
+    add(hasExplicitGroupFileListIntent(value), 'group_file_list')
+    add(hasExplicitGroupFileDownloadIntent(value), 'group_file_download')
+    add(hasExplicitLocalFileMutationIntent(value), 'local_file_mutation')
+    add(urls.length === 0 && (hasExplicitShellIntent(value) || hasExplicitLocalFileReadIntent(value) || hasExplicitLocalFileDiscoveryIntent(value)
+        || (localFileHint && /(?:瞅|读|看|找|列|检查|分析|打开)/i.test(value))), 'local_file')
+    add(hasExplicitDrawIntent(value, { hasImages, hasRecentImages }), 'draw')
+    add(hasExplicitUserProfileUpdateIntent(value), 'profile_update')
+    add(hasExplicitMemorySearchIntent(value), 'memory')
+    add(hasExplicitGroupChatDigestIntent(value), 'group_digest')
+    add(!hasExplicitFileSendIntent(value) && (hasExplicitGroupChatContextIntent(value) || hasGroupChatContextQuestion(value)), 'group_context')
+    add(Boolean(parseGroupSendRequest(value)), 'group_send')
+    add(Boolean(parseGroupLeaveRequest(value)), 'group_leave')
+    add(hasExplicitWeatherIntent(value), 'weather')
+    add(/(?:系统信息|服务器信息|主机信息|运行状态|磁盘|内存|CPU|负载|进程|服务状态|系统时间|当前时间|现在几点|几点了)/i.test(value), 'system')
+    add(/(?:这个人是谁|这人是谁|他是谁|她是谁|@.{0,12}是谁|外号|绰号|群里.{0,12}叫|谁(?:被)?叫|称呼记录|群内称呼)/i.test(value), 'member_alias')
+    add(hasExplicitGroupRequestListIntent(value), 'group_request_list')
+    add(['group_mute', 'group_whole_mute', 'group_kick', 'group_set_card', 'group_set_title', 'group_essence', 'group_request_handle']
+        .some(name => hasExplicitGroupAdminIntent(name, value)), 'group_admin')
+    return families
+}
+
+export function selectToolCandidates(enabledTools = [], text = '', options = {}) {
+    const enabled = new Set(Array.isArray(enabledTools) ? enabledTools : [])
+    const families = detectToolIntentFamilies(text, options)
+    const selected = new Set()
+    const add = names => names.forEach(name => enabled.has(name) && selected.add(name))
+
+    if (options.allowContinuation === true && isContinuationToolInstruction(text)) {
+        add(Array.isArray(options.continuationTools) ? options.continuationTools : [])
+    }
+    if (families.has('weather')) add(['weather'])
+    if (families.has('web_search')) add(['web_search', 'web_fetch'])
+    if (families.has('web_fetch')) add(['web_fetch'])
+    if (families.has('system')) add(['system_info', 'shell_exec', 'shell_session'])
+    if (families.has('local_file')) add(['shell_exec'])
+    if (families.has('local_file_mutation')) add(['config_manage', 'shell_exec'])
+    if (families.has('file_send')) add(['file_send', 'shell_exec'])
+    if (families.has('file_download')) add(['file_download'])
+    if (families.has('group_file_list')) add(['group_file_list'])
+    if (families.has('group_file_download')) add(['group_file_list', 'group_file_download'])
+    if (families.has('draw')) add(['draw_image'])
+    if (families.has('profile_update')) add(['user_profile_update'])
+    if (families.has('memory')) add(['memory_search'])
+    if (families.has('group_digest')) add(['group_chat_digest'])
+    if (families.has('group_context')) add(['group_chat_context'])
+    if (families.has('group_send')) add(['group_send_message'])
+    if (families.has('group_leave')) add(['group_leave'])
+    if (families.has('member_alias')) add(['group_member_aliases', 'group_member_resolve', 'group_member_list'])
+    if (families.has('group_request_list')) add(['group_request_list'])
+    if (families.has('group_admin')) add([
+        'group_mute', 'group_whole_mute', 'group_kick', 'group_set_card', 'group_set_title',
+        'group_essence', 'group_member_list', 'group_member_resolve', 'group_request_list', 'group_request_handle'
+    ])
+    return {
+        tools: [...selected],
+        families: [...families],
+        compound: families.size > 1,
+        reason: selected.size > 0 ? `候选工具=${[...selected].join(', ')}` : '当前指令没有明显工具需求'
+    }
 }
 
 function extractUrls(text) {
@@ -679,10 +826,18 @@ export function isExplicitToolIntent(toolName, text, options = {}) {
             return hasExplicitFileDownloadIntent(text, options)
         case 'file_send':
             return hasExplicitFileSendIntent(text)
+        case 'group_file_list':
+            return hasExplicitGroupFileListIntent(text) || hasExplicitGroupFileDownloadIntent(text)
+        case 'group_file_download':
+            return hasExplicitGroupFileDownloadIntent(text)
         case 'web_fetch':
             return hasExplicitWebFetchIntent(text, options.candidateUrls || [])
         case 'web_search':
-            return options.strictWebSearch === true ? hasExplicitWebSearchIntent(text) : true
+            return hasExplicitWebSearchIntent(text)
+        case 'weather':
+            return hasExplicitWeatherIntent(text)
+        case 'system_info':
+            return /(?:系统信息|服务器信息|主机信息|运行状态|磁盘|内存|CPU|负载|进程|服务状态|系统时间|当前时间|现在几点|几点了)/i.test(getPrimaryUserInstruction(text))
         case 'group_chat_context':
             return hasExplicitGroupChatContextIntent(text)
         case 'group_chat_digest':
@@ -699,6 +854,8 @@ export function isExplicitToolIntent(toolName, text, options = {}) {
         case 'group_essence':
         case 'group_request_handle':
             return hasExplicitGroupAdminIntent(toolName, text)
+        case 'group_request_list':
+            return hasExplicitGroupRequestListIntent(text)
         default:
             return true
     }
@@ -711,10 +868,15 @@ export function filterToolCallsByIntent(toolCalls = [], text = '', options = {})
     const allowContinuation = options.allowContinuation === true
         && (isContinuationToolInstruction(instruction) || options.allowTaskContextContinuation === true)
     const continuationTools = new Set(Array.isArray(options.continuationTools) ? options.continuationTools : [])
+    const sideEffectTools = new Set([
+        'file_send', 'file_download', 'group_file_download', 'user_profile_update', 'group_send_message',
+        'group_leave', 'group_mute', 'group_whole_mute', 'group_kick', 'group_set_card', 'group_set_title',
+        'group_essence', 'group_request_handle'
+    ])
     for (const call of toolCalls || []) {
         if (!call?.name) continue
         if (!isExplicitToolIntent(call.name, instruction, { ...options, toolArgs: call.args || call.params || {} })) {
-            if (allowContinuation && continuationTools.has(call.name)) {
+            if (allowContinuation && continuationTools.has(call.name) && !sideEffectTools.has(call.name)) {
                 filtered.push(call)
                 continue
             }

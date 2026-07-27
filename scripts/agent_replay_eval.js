@@ -12,8 +12,16 @@ const {
     parseGroupSendRequest,
     parseNamedGroupChatContextRequest,
     parseRecentGroupChatFollowupRequest,
-    hasExplicitDrawIntent
+    hasExplicitDrawIntent,
+    selectToolCandidates
 } = await import('../utils/tool_intent.js')
+
+const replayEnabledTools = [
+    'web_search', 'web_fetch', 'shell_exec', 'config_manage', 'file_send', 'file_download',
+    'group_file_list', 'group_file_download', 'draw_image', 'user_profile_update', 'memory_search',
+    'group_chat_context', 'group_send_message', 'group_leave', 'group_mute', 'group_kick',
+    'group_request_list', 'group_request_handle'
+]
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
 
@@ -90,6 +98,37 @@ const incidents = [
         id: 'bootanimation-not-draw-intent',
         input: '#uc我以前自己做安卓的启动动画bootanimation.zip，这个使用压缩算法就没效果了',
         pass: text => !hasExplicitDrawIntent(text)
+    },
+    {
+        id: 'read-url-colloquial',
+        input: '#c读一下这个网址 https://example.com',
+        pass: text => selectToolCandidates(replayEnabledTools, text).tools.includes('web_fetch')
+    },
+    {
+        id: 'group-file-list-not-download',
+        input: '#c看看群文件里有什么',
+        pass: text => {
+            const tools = selectToolCandidates(replayEnabledTools, text).tools
+            return tools.includes('group_file_list') && !tools.includes('group_file_download')
+        }
+    },
+    {
+        id: 'compound-read-then-send',
+        input: '#c帮我看看 who_are_you.js 的代码，然后发到群里',
+        pass: text => {
+            const tools = selectToolCandidates(replayEnabledTools, text).tools
+            return tools.includes('shell_exec') && tools.includes('file_send')
+        }
+    },
+    {
+        id: 'capability-question-not-kick',
+        input: '#c你能踢人吗？',
+        pass: text => selectToolCandidates(replayEnabledTools, text).tools.length === 0
+    },
+    {
+        id: 'casual-today-not-web-search',
+        input: '#c今天心情不错',
+        pass: text => selectToolCandidates(replayEnabledTools, text).tools.length === 0
     }
 ]
 

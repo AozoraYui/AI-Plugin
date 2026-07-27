@@ -28,6 +28,17 @@ export function filterRepeatedAgentToolCalls(toolCalls = [], seenToolCalls = new
     return { tools, skipped }
 }
 
+export function deferDependentSideEffectCalls(toolCalls = [], stopTools = []) {
+    const calls = Array.isArray(toolCalls) ? toolCalls : []
+    const stopSet = new Set(Array.isArray(stopTools) ? stopTools : [])
+    const readCalls = calls.filter(call => call?.name && !stopSet.has(call.name))
+    const sideEffectCalls = calls.filter(call => call?.name && stopSet.has(call.name))
+    if (readCalls.length === 0 || sideEffectCalls.length === 0) {
+        return { tools: calls, deferred: [] }
+    }
+    return { tools: readCalls, deferred: sideEffectCalls }
+}
+
 export function createAgentToolContext(baseContext = {}, call = {}, index = 0) {
     return {
         ...baseContext,

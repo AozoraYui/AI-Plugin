@@ -10,10 +10,10 @@ import { buildGroupContextImageSummary, formatGroupContextImageSummary, isExpire
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memory_context.js'
-import { filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest } from '../utils/tool_intent.js'
+import { detectToolIntentFamilies, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
-import { executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound } from '../utils/agent_runtime.js'
+import { deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound } from '../utils/agent_runtime.js'
 import { classifyAgentRisk } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
 import { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, updateAgentTaskProgress } from '../utils/agent_task_runtime.js'
@@ -55,7 +55,6 @@ const FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS = [
     'group_file_list'
 ]
 const FAST_CHAT_AGENT_MAX_ROUNDS = 2
-const FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS = [...FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS]
 const FAST_CHAT_AGENT_STOP_TOOLS = [
     'draw_image',
     'file_send',
@@ -72,6 +71,7 @@ const FAST_CHAT_AGENT_STOP_TOOLS = [
     'group_essence',
     'group_request_handle'
 ]
+const FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS = [...FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS, ...FAST_CHAT_AGENT_STOP_TOOLS]
 
 function stripLoneSurrogates(text) {
     const value = String(text || '')
@@ -952,12 +952,7 @@ function extractUrlsFromText(text, limit = 10) {
 }
 
 function shouldRouteFastChatTools(text, urls = []) {
-    const value = String(text || '')
-    if (urls.length > 0 && /(看|看看|打开|总结|分析|解释|读|抓取|链接|网页|网站)/i.test(value)) return true
-    if (hasExplicitDrawIntent(value)) return true
-    if (hasExplicitGroupChatDigestIntent(value)) return true
-    if (hasExplicitMemorySearchIntent(value)) return true
-    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|代发|转达|带话|捎话|传话|帮我.{0,20}(群|发|说|告诉|带话|捎话|传话)|个人档案|用户档案|用户画像|个人画像|长期记忆|tmux|ai-shell|shell会话|shell窗口|独立shell|执行|运行|调用|命令|shell|终端|命令行|脚本|插件.{0,8}更新|更新.{0,8}插件|\b(?:ssh|scp|rsync|git|pull|push|status|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head)\b|(?:读取|查看|查询|总结|整理).{0,12}(群聊|群消息|聊天记录|消息流水|畅聊记录|群上下文)|别的群|其他群|其它群|跨群|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
+    return detectToolIntentFamilies(text, { urls }).size > 0
 }
 
 function shouldLetFastChatToolModelJudge(text, isMaster = false) {
@@ -1267,41 +1262,53 @@ export class FastChatHandler extends plugin {
                 recentAgentTaskToolCandidates = getRecentTaskToolCandidates(recentAgentTaskForPlanning, enabledTools)
                 logger.info(`[AI-Plugin] [畅聊] 已注入近期 Agent 任务语境供工具路由参考: ${recentAgentTaskForPlanning.taskId}, 候选=${recentAgentTaskToolCandidates.join(', ') || '无'}`)
             }
-            const routeByKeyword = shouldRouteFastChatTools(toolRoutingText, candidateUrls)
+            const candidateSelection = selectToolCandidates(enabledTools, toolRoutingText, {
+                urls: candidateUrls,
+                hasImages: normalized.imageMeta.length > 0 || hasLocalImageInput,
+                hasRecentImages: imageContext.processedCount > 0 || hasLocalImageInput,
+                allowContinuation: recentAgentTaskPlanningContext.length > 0,
+                continuationTools: FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS
+            })
+            const selectedToolSet = new Set([...candidateSelection.tools, ...recentAgentTaskToolCandidates])
+            const routeByKeyword = candidateSelection.tools.length > 0 || shouldRouteFastChatTools(toolRoutingText, candidateUrls)
             const routeByMasterRequest = shouldLetFastChatToolModelJudge(toolRoutingText, e.isMaster)
             const routeByRecentTask = recentAgentTaskToolCandidates.length > 0
+            const planningEnabledTools = selectedToolSet.size > 0
+                ? enabledTools.filter(name => selectedToolSet.has(name))
+                : (routeByMasterRequest ? enabledTools : [])
             if (enabledTools.length > 0 && (routeByKeyword || routeByMasterRequest || routeByRecentTask)) {
-                logger.info(`[AI-Plugin] [畅聊] 工具路由开始: 可用工具=${enabledTools.join(', ')}, 触发=${routeByKeyword ? '规则命中' : (routeByMasterRequest ? '主人请求兜底' : '近期任务续接')}`)
+                logger.info(`[AI-Plugin] [畅聊] 工具路由开始: 候选工具=${planningEnabledTools.join(', ')}, 语义族=${candidateSelection.families.join(', ') || '模型兜底'}, 触发=${routeByKeyword ? '规则命中' : (routeByMasterRequest ? '主人请求兜底' : '近期任务续接')}`)
                 let toolCalls = []
                 const toolMemorySummary = userProfileText
                     ? `【当前用户个人档案】\n${userProfileText}\n\n【长期记忆摘要】\n${personalMemory}`
                     : personalMemory
-                const groupChatDigestArgs = enabledTools.includes('group_chat_digest')
+                const groupChatDigestArgs = planningEnabledTools.includes('group_chat_digest')
                     ? parseGroupChatDigestRequest(toolRoutingText)
                     : null
-                const memorySearchArgs = enabledTools.includes('memory_search')
+                const memorySearchArgs = planningEnabledTools.includes('memory_search')
                     ? parseMemorySearchRequest(toolRoutingText)
                     : null
-                const namedGroupContextArgs = e.isMaster && enabledTools.includes('group_chat_context')
+                const namedGroupContextArgs = e.isMaster && planningEnabledTools.includes('group_chat_context')
                     ? parseNamedGroupChatContextRequest(toolRoutingText)
                     : null
-                const recentGroupFollowupArgs = recentAgentTaskForPlanning && enabledTools.includes('group_chat_context')
+                const recentGroupFollowupArgs = recentAgentTaskForPlanning && planningEnabledTools.includes('group_chat_context')
                     ? parseRecentGroupChatFollowupRequest(
                         toolRoutingText,
                         getRecentTaskToolArgs(recentAgentTaskForPlanning, 'group_chat_context') || {},
                         normalized.userId
                     )
                     : null
-                if (recentGroupFollowupArgs) {
+                const allowSingleToolPreRoute = !candidateSelection.compound || routeByRecentTask
+                if (allowSingleToolPreRoute && recentGroupFollowupArgs) {
                     toolCalls = [{ name: 'group_chat_context', args: recentGroupFollowupArgs }]
                     logger.info('[AI-Plugin] [畅聊] 规则预路由命中: group_chat_context - 继承刚才查询的群目标并继续读取当前用户发言')
-                } else if (namedGroupContextArgs) {
+                } else if (allowSingleToolPreRoute && namedGroupContextArgs) {
                     toolCalls = [{ name: 'group_chat_context', args: namedGroupContextArgs }]
                     logger.info(`[AI-Plugin] [畅聊] 规则预路由命中: group_chat_context - 主人明确查询指定群「${namedGroupContextArgs.query}」`)
-                } else if (groupChatDigestArgs) {
+                } else if (allowSingleToolPreRoute && groupChatDigestArgs) {
                     toolCalls = [{ name: 'group_chat_digest', args: groupChatDigestArgs }]
                     logger.info('[AI-Plugin] [畅聊] 规则预路由命中: group_chat_digest - 用户明确要求时间范围群聊总结')
-                } else if (memorySearchArgs) {
+                } else if (allowSingleToolPreRoute && memorySearchArgs) {
                     toolCalls = [{ name: 'memory_search', args: memorySearchArgs }]
                     logger.info('[AI-Plugin] [畅聊] 规则预路由命中: memory_search - 用户明确要求检索本地语义记忆')
                 } else {
@@ -1311,7 +1318,7 @@ export class FastChatHandler extends plugin {
                     const toolAnalysis = await toolRegistry.analyzeToolIntent(
                         toolAnalysisText,
                         this.client,
-                        enabledTools,
+                        planningEnabledTools,
                         [],
                         toolMemorySummary,
                         candidateUrls,
@@ -1353,6 +1360,11 @@ export class FastChatHandler extends plugin {
                     }
                     toolCalls = dedupedToolCalls.tools
                     if (toolCalls.length === 0) break
+                    const deferredBatch = deferDependentSideEffectCalls(toolCalls, FAST_CHAT_AGENT_STOP_TOOLS)
+                    toolCalls = deferredBatch.tools
+                    if (deferredBatch.deferred.length > 0) {
+                        logger.info(`[AI-Plugin] [畅聊] Agent 第 ${agentRound} 轮延后依赖真实结果的动作工具: ${deferredBatch.deferred.map(call => call.name).join(', ')}`)
+                    }
                     logger.info(`[AI-Plugin] [畅聊] Agent 第 ${agentRound} 轮工具队列: ${toolCalls.map(call => `${call.name}(${JSON.stringify(call.args || {}).slice(0, 120)})`).join(' -> ')}`)
 
                     fastAgentTask = await createOrResumeAgentTask(this.conversationManager.db, {
@@ -1450,7 +1462,7 @@ export class FastChatHandler extends plugin {
                     }
 
                     if (agentRound >= FAST_CHAT_AGENT_MAX_ROUNDS) break
-                    const shouldContinue = shouldContinueAgentRound({
+                    const shouldContinue = deferredBatch.deferred.length > 0 || shouldContinueAgentRound({
                         toolCalls,
                         protocols: roundExecutions.map(item => item.protocol),
                         instruction: toolRoutingText,
@@ -1459,7 +1471,7 @@ export class FastChatHandler extends plugin {
                     })
                     if (!shouldContinue) break
 
-                    const followupEnabledTools = enabledTools.filter(name => FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS.includes(name))
+                    const followupEnabledTools = planningEnabledTools.filter(name => FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS.includes(name))
                     if (followupEnabledTools.length === 0) break
                     const roundObservationText = roundExecutions.map(item => `${item.call.name}(${JSON.stringify(item.call.args || {})}) [${item.status}]\n${item.formattedResult}`).join('\n\n')
                     const followupText = `${toolRoutingText}\n\n【Agent 第 ${agentRound} 轮真实工具结果】\n${truncateMiddleText(roundObservationText, 18000)}\n\n【继续规划要求】只有当前结果仍不足以完成原始请求时才调用工具；不要重复相同调用，不要追加无意义验证。`

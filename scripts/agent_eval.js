@@ -6,6 +6,8 @@ import path from 'node:path'
 
 const {
     filterToolCallsByIntent,
+    hasExplicitGroupFileDownloadIntent,
+    hasExplicitGroupFileListIntent,
     hasExplicitDrawIntent,
     hasExplicitMemorySearchIntent,
     hasExplicitLocalFileMutationIntent,
@@ -22,7 +24,8 @@ const {
     parseGroupSendRequest,
     parseExplicitLocalFileReadRequest,
     parseNamedGroupChatContextRequest,
-    parseRecentGroupChatFollowupRequest
+    parseRecentGroupChatFollowupRequest,
+    selectToolCandidates
 } = await import('../utils/tool_intent.js')
 const { classifyAgentRisk, classifyToolCallRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } = await import('../utils/agent_policy.js')
 const { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
@@ -36,7 +39,7 @@ const { shellSessionTool } = await import('../tools/shell_session.js')
 await import('../tools/group_admin.js')
 const { savePendingAction, loadPendingAction, listPendingActions, clearPendingAction, parseStrictPendingDecision } = await import('../utils/pending_actions.js')
 const { deterministicToolDecision, normalizeToolResult } = await import('../utils/tool_result.js')
-const { agentToolCallKey, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound } = await import('../utils/agent_runtime.js')
+const { agentToolCallKey, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound } = await import('../utils/agent_runtime.js')
 const { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, updateAgentTaskProgress } = await import('../utils/agent_task_runtime.js')
 const { normalizeAgentTaskPlan, selectNextAgentPlanStep } = await import('../utils/agent_plan.js')
 const { getRecentTaskToolArgs, hasImplicitRecentTaskReference } = await import('../utils/agent_reference.js')
@@ -158,6 +161,66 @@ const routingCases = [
 ]
 
 for (const item of routingCases) check(item.name, item.assert(item.text), item.text)
+
+const naturalLanguageEnabledTools = [
+    'weather', 'web_search', 'web_fetch', 'system_info', 'shell_exec', 'config_manage', 'shell_session',
+    'file_send', 'file_download', 'group_file_list', 'group_file_download', 'draw_image',
+    'user_profile_update', 'memory_search', 'group_chat_context', 'group_chat_digest',
+    'group_send_message', 'group_leave', 'group_member_aliases', 'group_member_list',
+    'group_member_resolve', 'group_mute', 'group_whole_mute', 'group_kick', 'group_set_card',
+    'group_set_title', 'group_essence', 'group_request_list', 'group_request_handle'
+]
+const candidateCases = [
+    ['网址口语读取命中网页抓取', '#c读一下这个网址 https://example.com', ['web_fetch']],
+    ['指代文件发送命中文件工具', '#c把刚才那个发群里吧', ['file_send']],
+    ['文件名口语发送命中文件工具', '#c把 who_are_you.js 丢群里', ['file_send']],
+    ['图片落盘命中文件下载', '#c把这张图落盘到服务器', ['file_download'], { hasImages: true }],
+    ['口语瞅源码命中Shell', '#c瞅一眼 plugins/example/test.js 写了啥', ['shell_exec']],
+    ['自然语言配置修改命中结构化配置', '#c把 config.yaml 里的 enable 设置成 true', ['config_manage', 'shell_exec']],
+    ['群聊水群说法命中群上下文', '#c那个群刚才都在水什么', ['group_chat_context']],
+    ['翻翻以前命中记忆检索', '#c翻翻以前我有没有提过中山', ['memory_search']],
+    ['写进我的资料命中档案更新', '#c把我住中山写进我的资料', ['user_profile_update']],
+    ['整张角色图命中绘图', '#c给我整张诺亚在海边的图', ['draw_image']],
+    ['口语离开指定群命中退群', '#c别在测试群待了，退掉吧', ['group_leave']],
+    ['群文件查看只命中列表', '#c看看群文件里有什么', ['group_file_list']],
+    ['群文件下载同时允许先列表后下载', '#c把群文件 foo.zip 下载下来', ['group_file_list', 'group_file_download']],
+    ['读取后发送保留复合候选', '#c帮我看看 who_are_you.js 的代码，然后发到群里', ['shell_exec', 'file_send']]
+]
+for (const [name, text, expected, options = {}] of candidateCases) {
+    const selected = selectToolCandidates(naturalLanguageEnabledTools, text, options)
+    check(name, expected.every(tool => selected.tools.includes(tool)), JSON.stringify(selected))
+}
+
+const noToolCases = [
+    ['普通困倦闲聊不联网', '#c我现在很困'],
+    ['普通今日心情不联网', '#c今天心情不错'],
+    ['文件发送用法不执行', '#c文件发送功能怎么用？'],
+    ['文件下载用法不执行', '#c文件下载功能怎么用？'],
+    ['禁言用法不执行', '#c禁言功能怎么用？'],
+    ['踢人能力询问不执行', '#c你能踢人吗？'],
+    ['入群申请历史询问不处理申请', '#c谁通过了刚才的入群申请？'],
+    ['Shell能力询问不执行命令', '#c你能执行shell命令吗？'],
+    ['档案能力询问不更新档案', '#c你能更新个人档案吗？'],
+    ['天气感叹不自动查询', '#c今天天气真好']
+]
+for (const [name, text] of noToolCases) {
+    const selected = selectToolCandidates(naturalLanguageEnabledTools, text)
+    check(name, selected.tools.length === 0, JSON.stringify(selected))
+}
+
+check('群文件列表意图与下载意图区分', hasExplicitGroupFileListIntent('看看群文件里有什么')
+    && !hasExplicitGroupFileDownloadIntent('看看群文件里有什么')
+    && hasExplicitGroupFileDownloadIntent('把群文件 foo.zip 下载下来'))
+
+const deferredSideEffects = deferDependentSideEffectCalls([
+    { name: 'shell_exec', args: { command: 'find . -name who_are_you.js' } },
+    { name: 'file_send', args: { path: '待发现' } }
+], ['file_send'])
+check('依赖真实结果的发送动作延后到下一轮', deferredSideEffects.tools.length === 1
+    && deferredSideEffects.tools[0].name === 'shell_exec'
+    && deferredSideEffects.deferred[0]?.name === 'file_send')
+const independentSideEffect = deferDependentSideEffectCalls([{ name: 'file_send', args: { path: 'ready.txt' } }], ['file_send'])
+check('单独且参数完整的动作工具不会被延后', independentSideEffect.tools.length === 1 && independentSideEffect.deferred.length === 0)
 
 const compoundLocalPluginGuard = filterToolCallsByIntent([
     { name: 'shell_exec', args: { command: "find plugins/example -maxdepth 1 -type f -iname '*who*are*you*'" } },

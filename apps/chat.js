@@ -13,13 +13,13 @@ import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, expandForwardMsg, expandInlineContent, extractCardInfo } from '../utils/message_context.js'
-import { filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileDownloadIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasExplicitGroupChatDigestIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileMutationIntent, hasExplicitLocalFileReadIntent, hasExplicitMemorySearchIntent, hasExplicitShellIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasExplicitWebSearchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest } from '../utils/tool_intent.js'
+import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction, parseStrictPendingDecision } from '../utils/pending_actions.js'
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
-import { executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound, stableAgentStringify } from '../utils/agent_runtime.js'
+import { deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound, stableAgentStringify } from '../utils/agent_runtime.js'
 import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK_SUMMARY_MAX_CHARS, mergeAgentRisk, recordAgentTaskStep } from '../utils/agent_task_runtime.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { executePendingGroupSend } from '../tools/group_send.js'
@@ -64,22 +64,6 @@ const CONTINUATION_ALLOWED_TOOLS = [
     'group_member_resolve',
     'group_file_list'
 ]
-const AGENT_LOOP_ALLOWED_TOOLS = [
-    'weather',
-    'web_search',
-    'web_fetch',
-    'system_info',
-    'shell_exec',
-    'config_manage',
-    'shell_session',
-    'memory_search',
-    'group_chat_context',
-    'group_chat_digest',
-    'group_member_aliases',
-    'group_member_list',
-    'group_member_resolve',
-    'group_file_list'
-]
 const AGENT_LOOP_STOP_TOOLS = [
     'draw_image',
     'file_send',
@@ -95,6 +79,23 @@ const AGENT_LOOP_STOP_TOOLS = [
     'group_set_title',
     'group_essence',
     'group_request_handle'
+]
+const AGENT_LOOP_ALLOWED_TOOLS = [
+    'weather',
+    'web_search',
+    'web_fetch',
+    'system_info',
+    'shell_exec',
+    'config_manage',
+    'shell_session',
+    'memory_search',
+    'group_chat_context',
+    'group_chat_digest',
+    'group_member_aliases',
+    'group_member_list',
+    'group_member_resolve',
+    'group_file_list',
+    ...AGENT_LOOP_STOP_TOOLS
 ]
 const AGENT_TASK_CONTEXT_MAX_CHARS = 9000
 const AGENT_RECENT_CONTEXT_MAX_AGE_MS = 20 * 60 * 1000
@@ -987,6 +988,15 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
     const hasImageContext = hasImages || hasRecentImages
     const isMaster = options.isMaster === true
     const hasGroup = options.hasGroup === true
+    const routeFamilies = detectToolIntentFamilies(routeText, {
+        urls,
+        hasImages,
+        hasRecentImages
+    })
+    if (routeFamilies.size > 1) {
+        logger.info(`[AI-Plugin] 检测到复合工具意图，跳过单工具预路由: ${[...routeFamilies].join(', ')}`)
+        return null
+    }
 
     // -1) 明确要求维护个人档案：直接走 user_profile_update，避免普通偏好闲聊被误写。
     if (hasTool(enabledTools, 'user_profile_update')) {
@@ -1243,97 +1253,21 @@ function pickEnabledTools(enabledTools, names = []) {
     return names.filter(name => enabled.has(name))
 }
 
-function hasWeatherToolIntent(text) {
-    const value = getPrimaryUserInstruction(text)
-    if (!value) return false
-    return /(?:天气|气温|温度|降雨|下雨|台风|空气质量|穿衣|预报)/i.test(value)
-}
-
-function hasSystemInfoToolIntent(text) {
-    const value = getPrimaryUserInstruction(text)
-    if (!value) return false
-    return /(?:系统信息|服务器信息|主机信息|运行状态|磁盘|内存|CPU|负载|进程|服务状态|系统时间|当前时间|现在几点|几点了)/i.test(value)
-}
-
-function hasGroupFileToolIntent(text) {
-    const value = getPrimaryUserInstruction(text)
-    if (!value) return false
-    return /(?:群文件|群文件区|群里的文件|群内文件|文件列表|列出.{0,12}文件|下载.{0,12}群文件|保存.{0,12}群文件)/i.test(value)
-}
-
-function hasGroupMemberAliasToolIntent(text) {
-    const value = getPrimaryUserInstruction(text)
-    if (!value) return false
-    return /(?:这个人是谁|这人是谁|他是谁|她是谁|@.{0,12}是谁|外号|绰号|群里.{0,12}叫|谁(?:被)?叫|称呼记录|群内称呼)/i.test(value)
-}
-
-function hasGroupAdminToolIntent(text) {
-    const value = getPrimaryUserInstruction(text)
-    if (!value) return false
-    return /(?:群管理|群管|群成员|成员列表|禁言|解禁|踢人|踢了|移出群|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请|通过申请|拒绝申请)/i.test(value)
-}
-
-function hasLocalPathReadIntent(text) {
-    return hasExplicitLocalFileReadIntent(text)
-}
-
 function narrowToolCandidatesForPlanning(enabledTools, userMessage, options = {}) {
-    const allEnabled = Array.isArray(enabledTools) ? enabledTools : []
     const routeText = getPrimaryUserInstruction(userMessage) || String(userMessage || '').trim()
-    const hasImages = options.hasImages === true
-    const hasRecentImages = options.hasRecentImages === true
     const urls = Array.isArray(options.urls) ? options.urls : extractUrlsFromText(routeText, 10)
-    const candidates = new Set()
-    const add = names => {
-        for (const name of pickEnabledTools(allEnabled, names)) candidates.add(name)
-    }
-
-    if (options.allowContinuation === true && isContinuationToolInstruction(routeText)) {
-        add(CONTINUATION_ALLOWED_TOOLS)
-    }
-    const explicitShellSession = /(?:tmux|ai-shell|shell\s*session|shell会话|shell窗口|独立shell|终端会话)/i.test(routeText)
-        && hasExplicitShellIntent(routeText, 'shell_session')
-    const explicitShell = explicitShellSession || hasExplicitShellIntent(routeText) || hasLocalPathReadIntent(routeText)
-    const explicitConfig = hasExplicitLocalFileMutationIntent(routeText)
-        || (hasExplicitLocalFileReadIntent(routeText) && /(?:\.ya?ml|\.json)\b/i.test(routeText))
-
-    if (hasExplicitFileSendIntent(routeText)) add(['file_send'])
-    if (hasExplicitFileDownloadIntent(routeText, { hasImages })) add(['file_download'])
-    if (hasGroupFileToolIntent(routeText)) add(['group_file_list', 'group_file_download'])
-    if (hasExplicitWebFetchIntent(routeText, urls) || (options.webFetchFlag === true && urls.length > 0)) add(['web_fetch'])
-    if ((hasExplicitWebSearchIntent(routeText) && !explicitShell) || options.webSearchFlag === true) add(['web_search', 'web_fetch'])
-    if (explicitConfig) add(['config_manage', 'shell_exec'])
-    if (explicitShellSession) add(['shell_session', 'shell_exec', 'system_info'])
-    else if (explicitShell) add(['shell_exec', 'shell_session', 'system_info'])
-    if (hasExplicitDrawIntent(routeText, { hasImages, hasRecentImages })) add(['draw_image'])
-    if (hasExplicitUserProfileUpdateIntent(routeText)) add(['user_profile_update'])
-    if (hasExplicitMemorySearchIntent(routeText)) add(['memory_search'])
-    if (hasExplicitGroupChatDigestIntent(routeText)) add(['group_chat_digest'])
-    if (hasExplicitGroupChatContextIntent(routeText) || hasGroupChatContextQuestion(routeText)) add(['group_chat_context'])
-    if (parseGroupSendRequest(routeText)) add(['group_send_message'])
-    if (parseGroupLeaveRequest(routeText)) add(['group_leave'])
-    if (hasWeatherToolIntent(routeText)) add(['weather'])
-    if (hasSystemInfoToolIntent(routeText)) add(['system_info', 'shell_exec', 'shell_session'])
-    if (hasGroupMemberAliasToolIntent(routeText)) add(['group_member_aliases'])
-    if (hasGroupAdminToolIntent(routeText)) {
-        add([
-            'group_mute',
-            'group_whole_mute',
-            'group_kick',
-            'group_set_card',
-            'group_set_title',
-            'group_essence',
-            'group_member_list',
-            'group_member_resolve',
-            'group_request_list',
-            'group_request_handle'
-        ])
-    }
-
-    const tools = allEnabled.filter(name => candidates.has(name))
+    const selected = selectToolCandidates(enabledTools, routeText, {
+        ...options,
+        urls,
+        continuationTools: CONTINUATION_ALLOWED_TOOLS
+    })
+    const tools = new Set(selected.tools)
+    if (options.webFetchFlag === true && urls.length > 0) pickEnabledTools(enabledTools, ['web_fetch']).forEach(name => tools.add(name))
+    if (options.webSearchFlag === true) pickEnabledTools(enabledTools, ['web_search', 'web_fetch']).forEach(name => tools.add(name))
     return {
-        tools,
-        reason: tools.length > 0 ? `候选工具=${tools.join(', ')}` : '当前指令没有明显工具需求'
+        ...selected,
+        tools: [...tools],
+        reason: tools.size > 0 ? `候选工具=${[...tools].join(', ')}` : selected.reason
     }
 }
 
@@ -2340,7 +2274,11 @@ export class ChatHandler extends plugin {
                         logger.info(agentRound === 1 ? '[AI-Plugin] 工具执行队列为空，本轮直接进入最终回复' : `[AI-Plugin] Agent 第 ${agentRound} 轮无后续工具，停止循环`)
                         break
                     }
-                    const roundToolCalls = toolCalls
+                    const deferredBatch = deferDependentSideEffectCalls(toolCalls, AGENT_LOOP_STOP_TOOLS)
+                    const roundToolCalls = deferredBatch.tools
+                    if (deferredBatch.deferred.length > 0) {
+                        logger.info(`[AI-Plugin] Agent 第 ${agentRound} 轮延后依赖真实结果的动作工具: ${deferredBatch.deferred.map(call => call.name).join(', ')}`)
+                    }
                     // 工具规划注入：只在实际调用工具时告诉最终回复模型本轮执行依据。
                     if (currentToolIntent) {
                         userMessage = userMessage + `\n\n【工具规划${agentRound > 1 ? ` 第${agentRound}轮` : ''}】${currentToolIntent}`
@@ -2594,7 +2532,7 @@ export class ChatHandler extends plugin {
                     }
                     const continuationDecision = decideAgentContinuation({
                         completionStatus: roundCompletionStatus,
-                        planRequiresFollowup: currentPlanMetadata.requiresFollowupCheck,
+                        planRequiresFollowup: currentPlanMetadata.requiresFollowupCheck || deferredBatch.deferred.length > 0,
                         heuristicRequestsContinuation: shouldContinueAgentRound({
                             toolCalls: roundToolCalls,
                             protocols: roundObservations.map(item => item.protocol),
