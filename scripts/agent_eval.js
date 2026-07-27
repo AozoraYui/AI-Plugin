@@ -36,7 +36,7 @@ const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
 const { executePendingShellExec, shellExecTool } = await import('../tools/shell_exec.js')
 const { shellSessionTool } = await import('../tools/shell_session.js')
-const { groupSendMessageTool, parseGroupSendDisambiguationSelection, resolveSymbolicGroupAlias, resolveTargetGroup } = await import('../tools/group_send.js')
+const { groupSendMessageTool, parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically, resolveTargetGroup } = await import('../tools/group_send.js')
 await import('../tools/group_admin.js')
 const { savePendingAction, loadPendingAction, listPendingActions, clearPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } = await import('../utils/pending_actions.js')
 const { deterministicToolDecision, normalizeToolResult } = await import('../utils/tool_result.js')
@@ -227,8 +227,23 @@ const symbolicGroups = [
     { groupId: '1061970295', groupName: '【】' },
     { groupId: '10002', groupName: '普通测试群' }
 ]
-check('括号群自然别名唯一解析到符号群名', resolveSymbolicGroupAlias(symbolicGroups, '括号').length === 1
-    && resolveSymbolicGroupAlias(symbolicGroups, '括号')[0].groupId === '1061970295')
+const semanticGroupClient = {
+    async quickIntentRequest() {
+        return {
+            success: true,
+            data: JSON.stringify({
+                status: 'matched',
+                group_ids: ['1061970295'],
+                confidence: 0.96,
+                reason: '用户用视觉形状描述群名【】'
+            })
+        }
+    }
+}
+const semanticGroupResult = await resolveGroupTargetSemantically(symbolicGroups, '括号', semanticGroupClient)
+check('模型语义解析能把视觉描述映射到真实群名', semanticGroupResult.status === 'matched'
+    && semanticGroupResult.groups.length === 1
+    && semanticGroupResult.groups[0].groupId === '1061970295')
 const symbolicResolved = await resolveTargetGroup({ target: '括号' }, {
     bot: {
         async sendApi(name) {
@@ -236,11 +251,40 @@ const symbolicResolved = await resolveTargetGroup({ target: '括号' }, {
             return symbolicGroups.map(group => ({ group_id: group.groupId, group_name: group.groupName }))
         }
     }
-})
+}, { semanticClient: semanticGroupClient })
 check('群消息工具把括号指代解析为【】', symbolicResolved.ok
     && symbolicResolved.group?.groupId === '1061970295'
-    && symbolicResolved.aliasResolved === true,
+    && symbolicResolved.semanticResolved === true,
 JSON.stringify(symbolicResolved))
+const hallucinatedSemantic = await resolveGroupTargetSemantically(symbolicGroups, '括号', {
+    async quickIntentRequest() {
+        return {
+            success: true,
+            data: JSON.stringify({ status: 'matched', group_ids: ['999999999'], confidence: 1, reason: '编造结果' })
+        }
+    }
+})
+check('模型编造的群号会被真实群清单校验拒绝', hallucinatedSemantic.groups.length === 0)
+const lowConfidenceResolved = await resolveTargetGroup({ target: '技术交流群' }, {
+    bot: {
+        async sendApi(name) {
+            if (name !== 'get_group_list') return []
+            return symbolicGroups.map(group => ({ group_id: group.groupId, group_name: group.groupName }))
+        }
+    }
+}, {
+    semanticClient: {
+        async quickIntentRequest() {
+            return {
+                success: true,
+                data: JSON.stringify({ status: 'matched', group_ids: ['10002'], confidence: 0.62, reason: '可能是普通测试群' })
+            }
+        }
+    }
+})
+check('低置信度语义结果进入候选确认而不直接执行', !lowConfidenceResolved.ok
+    && lowConfidenceResolved.disambiguation
+    && lowConfidenceResolved.suggestedGroup?.groupId === '10002')
 const disambiguationRecord = {
     type: 'group_send_disambiguation',
     candidates: symbolicGroups,
@@ -519,7 +563,7 @@ global.redis = {
     async get(key) { return redisStore.get(key) || null },
     async del(key) { return redisStore.delete(key) ? 1 : 0 }
 }
-global.AIPluginClient = { enableGroupSend: true }
+global.AIPluginClient = { enableGroupSend: true, ...semanticGroupClient }
 const symbolicSendResult = await groupSendMessageTool.execute({}, {
     isMaster: true,
     userId: 'symbolic-group-user',

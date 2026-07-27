@@ -24,7 +24,7 @@ const replayEnabledTools = [
 ]
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
-const { parseGroupSendDisambiguationSelection, resolveSymbolicGroupAlias } = await import('../tools/group_send.js')
+const { parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically } = await import('../tools/group_send.js')
 const { parseStandalonePendingCommand } = await import('../utils/pending_actions.js')
 
 const incidents = [
@@ -133,12 +133,27 @@ const incidents = [
         pass: text => selectToolCandidates(replayEnabledTools, text).tools.length === 0
     },
     {
-        id: 'symbolic-bracket-group-alias',
+        id: 'semantic-bracket-group-resolution',
         input: '#c帮我给括号那个群带个话，内容为"ciallo~"',
-        pass: () => resolveSymbolicGroupAlias([
-            { groupId: '1061970295', groupName: '【】' },
-            { groupId: '10002', groupName: '普通群' }
-        ], '括号')[0]?.groupId === '1061970295'
+        pass: async () => {
+            const result = await resolveGroupTargetSemantically([
+                { groupId: '1061970295', groupName: '【】' },
+                { groupId: '10002', groupName: '普通群' }
+            ], '括号', {
+                async quickIntentRequest() {
+                    return {
+                        success: true,
+                        data: JSON.stringify({
+                            status: 'matched',
+                            group_ids: ['1061970295'],
+                            confidence: 0.95,
+                            reason: '视觉符号描述匹配'
+                        })
+                    }
+                }
+            })
+            return result.groups[0]?.groupId === '1061970295'
+        }
     },
     {
         id: 'disambiguation-affirmative-selection',
@@ -159,7 +174,7 @@ const incidents = [
 let passed = 0
 const failures = []
 for (const incident of incidents) {
-    if (incident.pass(incident.input)) {
+    if (await incident.pass(incident.input)) {
         passed++
         console.log(`✓ replay ${incident.id}`)
     } else {
