@@ -9,6 +9,7 @@ const {
     hasExplicitUserProfileUpdateIntent,
     hasGroupChatContextQuestion,
     parseExplicitLocalFileReadRequest,
+    parseGroupSendRequest,
     parseNamedGroupChatContextRequest,
     parseRecentGroupChatFollowupRequest,
     hasExplicitDrawIntent
@@ -21,6 +22,14 @@ const incidents = [
         id: 'read-relative-source-file',
         input: '#c读一下sendImage.js里 constructor 的 name',
         pass: text => hasExplicitLocalFileReadIntent(text)
+    },
+    {
+        id: 'relay-message-to-named-group',
+        input: '#c帮我给龟龟教那个群带个话，内容是"测试"',
+        pass: text => {
+            const request = parseGroupSendRequest(text)
+            return request?.target === '龟龟教' && request?.message === '测试'
+        }
     },
     {
         id: 'discover-and-send-local-plugin',

@@ -1,6 +1,6 @@
 const DELEGATE_WORDS = '(?:帮我|替我|代我|帮忙|麻烦你?|拜托你?|请你?|劳烦你?)'
-const SEND_VERBS = '(?:发送|群发|代发|转达|说(?:一下|一声|一句)?|发(?:一下|一条|一句|个消息|消息)?)'
-const TARGET_SUFFIX = '(?:群聊|群里|群内|群|那边|里面|里)?'
+const SEND_VERBS = '(?:发送|群发|代发|转达|带(?:个|句)?话|捎(?:个|句)?话|传(?:个|句)?话|告诉(?:一下|一声)?|说(?:一下|一声|一句)?|发(?:一下|一条|一句|个消息|消息)?)'
+const TARGET_SUFFIX = '(?:(?:那个|这个|该|目标)群|群聊|群里|群内|群|那边|里面|里)?'
 const BOT_CALL_PREFIX = '(?:(?:诺亚|noa|喏亚|诺娅)[,，。!！~～\\s]*)?'
 const FORBIDDEN_GROUP_SET_PATTERN = /(?:所有|全部|全体|每个|各个|不友好(?:的)?(?:那些|这些)?|有问题(?:的)?(?:那些|这些)?)/i
 
@@ -11,14 +11,33 @@ export function getPrimaryUserInstruction(text) {
     return (index >= 0 ? value.slice(0, index) : value).trim()
 }
 
+function stripChatCommandPrefix(text = '') {
+    return String(text || '').replace(/^\s*#(?:u?c)\s*/i, '').trim()
+}
+
 function cleanTarget(target = '') {
     return String(target || '')
         .trim()
         .replace(/^["'“”‘’\s]+|["'“”‘’\s]+$/g, '')
         .replace(/^(?:在|去|到|往|给|从)\s*/i, '')
         .replace(/(?:吧|呀|啊|呢|嘛|么|啦|了|哈|哦|噢|喵|捏)$/i, '')
-        .replace(/(?:群聊|群里|群内|那边|里面|里|群)$/i, '')
+        .replace(/(?:(?:那个|这个|该|目标)群|群聊|群里|群内|那边|里面|里|群)$/i, '')
         .trim()
+}
+
+function cleanDelegatedMessage(message = '') {
+    let value = String(message || '').trim()
+    value = value.replace(/^(?:内容|消息|正文)\s*(?:是|为)?\s*[：:，,=]?\s*/i, '').trim()
+    const pairedQuotes = [
+        ['"', '"'], ["'", "'"], ['“', '”'], ['‘', '’'], ['「', '」'], ['『', '』']
+    ]
+    for (const [open, close] of pairedQuotes) {
+        if (value.startsWith(open) && value.endsWith(close) && value.length >= open.length + close.length) {
+            value = value.slice(open.length, value.length - close.length).trim()
+            break
+        }
+    }
+    return value
 }
 
 function isTargetSafe(target = '') {
@@ -37,7 +56,7 @@ function isMessageSafe(message = '') {
 }
 
 function hasExplicitDelegation(fullText = '', verb = '') {
-    return new RegExp(DELEGATE_WORDS, 'i').test(fullText) || /(?:代发|转达|群发)/i.test(verb)
+    return new RegExp(DELEGATE_WORDS, 'i').test(fullText) || /(?:代发|转达|群发|带(?:个|句)?话|捎(?:个|句)?话|传(?:个|句)?话)/i.test(verb)
 }
 
 function splitGroupTargets(raw = '') {
@@ -87,7 +106,7 @@ function assignGroupTargets(args, rawTarget = '') {
 }
 
 export function parseGroupSendRequest(text) {
-    const value = getPrimaryUserInstruction(text)
+    const value = stripChatCommandPrefix(getPrimaryUserInstruction(text))
     if (!value) return null
 
     const explicitListPatterns = [
@@ -97,7 +116,7 @@ export function parseGroupSendRequest(text) {
     for (const pattern of explicitListPatterns) {
         const match = value.match(pattern)
         const target = match?.groups?.target?.trim()
-        const message = match?.groups?.message?.trim()
+        const message = cleanDelegatedMessage(match?.groups?.message)
         const verb = match?.groups?.verb || ''
         if (!target || !message) continue
         if (!hasExplicitDelegation(value, verb) && !/(?:群发|代发|转达)/i.test(value)) continue
@@ -109,17 +128,17 @@ export function parseGroupSendRequest(text) {
     }
 
     const patterns = [
-        new RegExp(`^\\s*${BOT_CALL_PREFIX}(?<delegate>${DELEGATE_WORDS})?\\s*(?:在|去|到|往)\\s*(?<target>[^，,。；;：:\\n]{1,60}?)${TARGET_SUFFIX}\\s*(?<verb>${SEND_VERBS})\\s*[：:，,\\s]*(?<message>[\\s\\S]{1,1000})$`, 'i'),
+        new RegExp(`^\\s*${BOT_CALL_PREFIX}(?<delegate>${DELEGATE_WORDS})?\\s*(?:在|去|到|往|给)\\s*(?<target>[^，,。；;：:\\n]{1,60}?)${TARGET_SUFFIX}\\s*(?<verb>${SEND_VERBS})\\s*[：:，,\\s]*(?<message>[\\s\\S]{1,1000})$`, 'i'),
         new RegExp(`^\\s*${BOT_CALL_PREFIX}(?<delegate>${DELEGATE_WORDS})?\\s*(?<verb>${SEND_VERBS})\\s*[：:，,\\s]*(?<message>[\\s\\S]{1,1000}?)\\s*(?:到|去|在|给)\\s*(?<target>[^，,。；;：:\\n]{1,60}?)${TARGET_SUFFIX}$`, 'i')
     ]
 
     for (const pattern of patterns) {
         const match = value.match(pattern)
         const target = match?.groups?.target?.trim()
-        const message = match?.groups?.message?.trim()
+        const message = cleanDelegatedMessage(match?.groups?.message)
         const verb = match?.groups?.verb || ''
         if (!target || !message) continue
-        const hasDirectionalSend = /(?:^|[，,。；;\s])(?:在|去|到|往)\s*[^，,。；;：:\n]{1,60}/i.test(value)
+        const hasDirectionalSend = /(?:^|[，,。；;\s])(?:在|去|到|往|给)\s*[^，,。；;：:\n]{1,60}/i.test(value)
             || new RegExp(`${SEND_VERBS}[\\s\\S]{1,1000}?(?:到|去|在|给)\\s*[^，,。；;：:\\n]{1,60}`, 'i').test(value)
         if (!hasExplicitDelegation(value, verb) && !hasDirectionalSend) continue
         if (!isMessageSafe(message)) continue

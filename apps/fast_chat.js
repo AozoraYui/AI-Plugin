@@ -957,7 +957,7 @@ function shouldRouteFastChatTools(text, urls = []) {
     if (hasExplicitDrawIntent(value)) return true
     if (hasExplicitGroupChatDigestIntent(value)) return true
     if (hasExplicitMemorySearchIntent(value)) return true
-    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|代发|转达|帮我.{0,20}(群|发|说|告诉)|个人档案|用户档案|用户画像|个人画像|长期记忆|tmux|ai-shell|shell会话|shell窗口|独立shell|执行|运行|调用|命令|shell|终端|命令行|脚本|插件.{0,8}更新|更新.{0,8}插件|\b(?:ssh|scp|rsync|git|pull|push|status|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head)\b|(?:读取|查看|查询|总结|整理).{0,12}(群聊|群消息|聊天记录|消息流水|畅聊记录|群上下文)|别的群|其他群|其它群|跨群|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
+    return /(天气|气温|下雨|搜索|搜一下|查一下|查询|联网|上网|最新|新闻|官网|资料|百科|价格|汇率|服务器|状态|系统信息|日志|文件|目录|群文件|下载|保存|发给我|代发|转达|带话|捎话|传话|帮我.{0,20}(群|发|说|告诉|带话|捎话|传话)|个人档案|用户档案|用户画像|个人画像|长期记忆|tmux|ai-shell|shell会话|shell窗口|独立shell|执行|运行|调用|命令|shell|终端|命令行|脚本|插件.{0,8}更新|更新.{0,8}插件|\b(?:ssh|scp|rsync|git|pull|push|status|npm|pnpm|node|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head)\b|(?:读取|查看|查询|总结|整理).{0,12}(群聊|群消息|聊天记录|消息流水|畅聊记录|群上下文)|别的群|其他群|其它群|跨群|群成员|成员列表|外号|绰号|称呼|昵称|谁是|是谁|被叫|叫过|禁言|解禁|踢人|踢了|全员禁言|群名片|群昵称|头衔|精华|入群|加群申请|进群申请)/i.test(value)
 }
 
 function shouldLetFastChatToolModelJudge(text, isMaster = false) {

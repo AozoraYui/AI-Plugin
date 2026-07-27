@@ -306,7 +306,7 @@ export async function executePendingGroupSend(record = {}, event = {}) {
 export const groupSendMessageTool = {
     name: 'group_send_message',
     permission: 'master',
-    description: '代主人向指定 QQ 群发送纯文本消息。仅限主人。适合“帮我在xx群说一下xxx”“去A群和B群发xxx”。支持最多 5 个明确目标；执行前会创建待确认操作，主人确认后才发送。',
+    description: '代主人向指定 QQ 群发送纯文本消息。仅限主人。适合“帮我在xx群说一下xxx”“给xx群带个话，内容是xxx”“去A群和B群发xxx”。支持最多 5 个明确目标；执行前会创建待确认操作，主人确认后才发送。',
 
     functionSchema: {
         type: 'function',

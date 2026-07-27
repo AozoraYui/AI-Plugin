@@ -227,6 +227,8 @@ JSON.stringify(groupFollowupRequest))
 
 const sendRequest = parseGroupSendRequest('帮我在测试群发一句：今晚维护')
 check('明确群代发可解析目标和正文', Boolean(sendRequest?.target && sendRequest?.message), JSON.stringify(sendRequest))
+const relayRequest = parseGroupSendRequest('#c帮我给龟龟教那个群带个话，内容是"测试"')
+check('自然语言带话可解析目标和纯正文', relayRequest?.target === '龟龟教' && relayRequest?.message === '测试', JSON.stringify(relayRequest))
 check('讨论代发能力不会解析成执行', !parseGroupSendRequest('你能帮我代发群消息吗？'))
 
 const forbiddenLeave = parseGroupLeaveRequest('退出所有群')
@@ -237,6 +239,12 @@ const guarded = filterToolCallsByIntent(
     '你能帮我代发群消息吗？'
 )
 check('安全过滤拦截非执行式高风险调用', guarded.tools.length === 0 && guarded.blocked.length === 1)
+
+const allowedRelay = filterToolCallsByIntent(
+    [{ name: 'group_send_message', args: { target: '龟龟教', message: '测试' } }],
+    '#c帮我给龟龟教那个群带个话，内容是"测试"'
+)
+check('安全过滤允许明确自然语言带话请求', allowedRelay.tools.length === 1 && allowedRelay.blocked.length === 0)
 
 const configMutationText = '#c你能不能帮我把“[无用插件]发送图片”写到710024443群配置的disable里面'
 const allowedConfigMutation = filterToolCallsByIntent(

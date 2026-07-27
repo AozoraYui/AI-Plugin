@@ -2048,7 +2048,7 @@ export class ChatHandler extends plugin {
                 enabledTools.push('system_info')
                 if (this.client.enableGroupSend) {
                     enabledTools.push('group_send_message')
-                } else if (/(帮我|替我|代我|转达).{0,30}(群|说|发|发送|告诉)/i.test(currentToolInstruction)) {
+                } else if (/(帮我|替我|代我|转达).{0,30}(群|说|发|发送|告诉|带话|捎话|传话)/i.test(currentToolInstruction)) {
                     logger.info('[AI-Plugin] 群消息代发工具未加入：enable_group_send=false，可在配置中开启或使用「#ai开启代发」')
                 }
                 if (this.client.enableGroupLeave) {
