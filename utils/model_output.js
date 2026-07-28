@@ -45,6 +45,23 @@ export function sanitizeModelOutput(text, options = {}) {
     return result.trim()
 }
 
+export function sanitizePlainTextOutput(text, options = {}) {
+    return sanitizeModelOutput(text, options)
+        .replace(/```[^\n]*\n?/g, '')
+        .replace(/^\s{0,3}#{1,6}\s*/gm, '')
+        .replace(/^\s*>\s?/gm, '')
+        .replace(/^\s*[-+*]\s+/gm, '• ')
+        .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+        .replace(/__([^_\n]+)__/g, '$1')
+        .replace(/\*([^*\n]+)\*/g, '$1')
+        .replace(/_([^_\n]+)_/g, '$1')
+        .replace(/`([^`\n]+)`/g, '$1')
+        .replace(/\[([^\]\n]+)\]\(([^)\n]+)\)/g, '$1（$2）')
+        .replace(/[ \t]+$/gm, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+}
+
 export function isPlanOnlyResponse(text) {
     const value = String(text || '').trim()
     if (!value) return false

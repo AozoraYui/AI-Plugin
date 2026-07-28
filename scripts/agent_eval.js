@@ -28,7 +28,7 @@ const {
     selectToolCandidates
 } = await import('../utils/tool_intent.js')
 const { classifyAgentRisk, classifyToolCallRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } = await import('../utils/agent_policy.js')
-const { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
+const { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } = await import('../utils/model_output.js')
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMemorySubject } = await import('../utils/message_context.js')
 const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
@@ -129,6 +129,9 @@ check('Shell结果阅读提示明确禁止粘贴终端原文', buildShellResultS
     ok: true,
     output: 'demo'
 }).includes('不要逐字粘贴终端原文'))
+check('QQ纯文本清洗会移除Markdown样式', sanitizePlainTextOutput(
+    '* **操作系统**：Gentoo Linux\n* **桌面环境**：`KDE Plasma`\n# 结果'
+) === '• 操作系统：Gentoo Linux\n• 桌面环境：KDE Plasma\n结果')
 
 const routingCases = [
     {

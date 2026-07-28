@@ -1,4 +1,4 @@
-import { sanitizeModelOutput, isPlanOnlyResponse } from './model_output.js'
+import { isPlanOnlyResponse, sanitizePlainTextOutput } from './model_output.js'
 import { sanitizeTerminalOutput } from './shell_session.js'
 
 const MAX_SUMMARY_CHARS = 4000
@@ -35,6 +35,7 @@ ${JSON.stringify(data, null, 2)}
 - 直接说明执行成功或失败，并回答用户真正关心的结果。
 - 提炼关键内容；像 fastfetch、系统信息、日志、列表等输出，要概括最重要的字段或异常。
 - 不要逐字粘贴终端原文，不要输出大段代码块，不要复述 ASCII 图案或控制字符。
+- 只输出适合 QQ 消息的纯文本，严禁使用 Markdown：不要使用 **粗体**、反引号、# 标题、Markdown 列表或表格。
 - 如果输出被截断，要简短说明只能基于已读取部分总结。
 - 不要输出思维过程、工具规划或下一步调用计划。
 - 控制在 800 字以内。`
@@ -53,7 +54,7 @@ export async function summarizeShellResultForReply(client, modelGroupKey, provid
         const response = await client.makeRequest('chat', {
             contents: [{ role: 'user', parts: [{ text: prompt }] }]
         }, modelGroupKey, 1200, providerFilter)
-        const summary = sanitizeModelOutput(response?.data || '')
+        const summary = sanitizePlainTextOutput(response?.data || '')
         if (response?.success && summary && !isPlanOnlyResponse(summary)) {
             return summary.slice(0, MAX_SUMMARY_CHARS)
         }

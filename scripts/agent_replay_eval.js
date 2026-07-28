@@ -198,7 +198,7 @@ const incidents = [
             const rawOutput = `FASTFETCH_RAW_OUTPUT\n${'x'.repeat(26000)}`
             const reply = await summarizeShellResultForReply({
                 async makeRequest() {
-                    return { success: true, data: 'fastfetch 已执行，系统信息读取正常。' }
+                    return { success: true, data: '* **操作系统**：Gentoo Linux\n* **桌面环境**：`KDE Plasma`' }
                 }
             }, 'flash', null, 'shell_session', {
                 userMessage: '在tmux执行fastfetch'
@@ -206,8 +206,9 @@ const incidents = [
                 ok: true,
                 output: rawOutput
             })
-            return reply === 'fastfetch 已执行，系统信息读取正常。'
+            return reply === '• 操作系统：Gentoo Linux\n• 桌面环境：KDE Plasma'
                 && !reply.includes('FASTFETCH_RAW_OUTPUT')
+                && !/[`*]/.test(reply)
         }
     }
 ]
