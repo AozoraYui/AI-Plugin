@@ -5,6 +5,21 @@ import { validateShellDirectorySafety } from './shell_safety.js'
 
 const TMUX_TIMEOUT_MS = 5000
 
+export function sanitizeTerminalOutput(text = '') {
+    return String(text || '')
+        .replace(/\u001B\][\s\S]*?(?:\u0007|\u001B\\)/g, '')
+        .replace(/\u001B[P^_][\s\S]*?\u001B\\/g, '')
+        .replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+        .replace(/\u001B[@-_]/g, '')
+        .replace(/\r/g, '')
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+        .split('\n')
+        .map(line => line.replace(/[ \t]+$/g, ''))
+        .join('\n')
+        .replace(/\n{4,}/g, '\n\n\n')
+        .trim()
+}
+
 function execTmux(args = [], options = {}) {
     return new Promise((resolve, reject) => {
         execFile('tmux', args, {
@@ -167,16 +182,18 @@ export async function captureShellSession(options = {}) {
         const { stdout } = await execTmux(['capture-pane', '-t', sessionName, '-p', '-S', `-${lines}`], {
             maxBuffer: Math.max(Config.SHELL_SESSION_MAX_OUTPUT_CHARS * 2, 1024 * 1024)
         })
+        const cleanedOutput = sanitizeTerminalOutput(stdout)
         const maxChars = Math.max(Number(options.maxOutputChars) || Config.SHELL_SESSION_MAX_OUTPUT_CHARS, 1000)
-        const output = stdout.length > maxChars ? stdout.slice(-maxChars) : stdout
+        const output = cleanedOutput.length > maxChars ? cleanedOutput.slice(-maxChars) : cleanedOutput
         return {
             ok: true,
             sessionName,
             currentDirectory: ensured.currentDirectory || await readPaneCurrentPath(sessionName, ensured.cwd),
             lines,
             output,
-            truncated: stdout.length > maxChars,
-            totalChars: stdout.length
+            truncated: cleanedOutput.length > maxChars,
+            totalChars: cleanedOutput.length,
+            rawTotalChars: stdout.length
         }
     } catch (err) {
         return { ok: false, sessionName, error: err.stderr || err.message || String(err) }

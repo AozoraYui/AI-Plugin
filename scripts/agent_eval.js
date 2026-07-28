@@ -37,6 +37,8 @@ const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
 const { executePendingShellExec, shellExecTool } = await import('../tools/shell_exec.js')
 const { shellSessionTool } = await import('../tools/shell_session.js')
+const { sanitizeTerminalOutput } = await import('../utils/shell_session.js')
+const { buildShellResultSummaryPrompt, summarizeShellResultForReply } = await import('../utils/shell_result_summary.js')
 const { groupSendMessageTool, parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically, resolveTargetGroup } = await import('../tools/group_send.js')
 await import('../tools/group_admin.js')
 const { savePendingAction, loadPendingAction, listPendingActions, clearPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } = await import('../utils/pending_actions.js')
@@ -96,6 +98,37 @@ check('询问自己的档案不会误判为第三方主题', !isThirdPartySubjec
     '956753394',
     []
 ))
+const dirtyTerminalOutput = '\u001b[31m红色\u001b[0m\r\n下一行   \u0007'
+check('tmux输出会清除ANSI和控制字符', sanitizeTerminalOutput(dirtyTerminalOutput) === '红色\n下一行')
+let shellSummaryPrompt = ''
+const summarizedShellReply = await summarizeShellResultForReply({
+    async makeRequest(type, payload) {
+        shellSummaryPrompt = payload.contents[0].parts[0].text
+        return { success: true, data: 'fastfetch 执行成功。系统使用 KDE Plasma，Shell 为 zsh。' }
+    }
+}, 'flash', null, 'shell_session', {
+    userMessage: '在tmux执行fastfetch'
+}, {
+    ok: true,
+    action: 'send',
+    sessionName: 'ai-shell',
+    output: `FASTFETCH_MARKER\n${'x'.repeat(12000)}`
+})
+check('确认后的Shell输出只供模型阅读并返回摘要', shellSummaryPrompt.includes('FASTFETCH_MARKER')
+    && summarizedShellReply === 'fastfetch 执行成功。系统使用 KDE Plasma，Shell 为 zsh。'
+    && !summarizedShellReply.includes('FASTFETCH_MARKER'))
+const shellSummaryFallback = await summarizeShellResultForReply({
+    async makeRequest() { return { success: false, error: '上游不可用' } }
+}, 'flash', null, 'shell_session', {}, {
+    ok: true,
+    output: 'RAW_OUTPUT_MUST_NOT_LEAK'
+})
+check('Shell摘要失败时不会降级泄露终端原文', !shellSummaryFallback.includes('RAW_OUTPUT_MUST_NOT_LEAK')
+    && shellSummaryFallback.includes('已执行成功'))
+check('Shell结果阅读提示明确禁止粘贴终端原文', buildShellResultSummaryPrompt('shell_session', {}, {
+    ok: true,
+    output: 'demo'
+}).includes('不要逐字粘贴终端原文'))
 
 const routingCases = [
     {

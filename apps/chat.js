@@ -26,6 +26,7 @@ import { createPendingGroupSendAction, executePendingGroupSend, parseGroupSendDi
 import { executePendingGroupLeave } from '../tools/group_leave.js'
 import { executePendingShellExec } from '../tools/shell_exec.js'
 import { executePendingShellSession } from '../tools/shell_session.js'
+import { summarizeShellResultForReply } from '../utils/shell_result_summary.js'
 import yaml from 'yaml'
 
 function saveMainConfigSwitch(key, value) {
@@ -392,9 +393,9 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
         const result = pending.type === 'shell_exec'
             ? await executePendingShellExec(pending, e)
             : await executePendingShellSession(pending, e)
-        const formatted = toolRegistry.formatToolResult(pending.type, result).trim()
         await updatePendingActionAgentTask(e, pending, result, 'confirm')
-        await e.reply(formatted || (result.ok ? '高风险 Shell 命令已执行。' : `执行失败：${result.error || '未知错误'}`), true)
+        const summary = await summarizeShellResultForReply(client, modelGroupKey, providerFilter, pending.type, pending, result)
+        await e.reply(summary, true)
         return true
     }
 

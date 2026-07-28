@@ -25,6 +25,7 @@ const replayEnabledTools = [
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
 const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMemorySubject } = await import('../utils/message_context.js')
+const { summarizeShellResultForReply } = await import('../utils/shell_result_summary.js')
 const { parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically } = await import('../tools/group_send.js')
 const { parseStandalonePendingCommand } = await import('../utils/pending_actions.js')
 
@@ -188,6 +189,25 @@ const incidents = [
                 && hint.includes('当前发言者是 QQ 956753394')
                 && hint.includes('QQ 2830995401')
                 && hint.includes('系统已允许本轮读取')
+        }
+    },
+    {
+        id: 'confirmed-shell-output-model-summary-only',
+        input: '#c在tmux执行fastfetch，然后确认执行',
+        pass: async () => {
+            const rawOutput = `FASTFETCH_RAW_OUTPUT\n${'x'.repeat(26000)}`
+            const reply = await summarizeShellResultForReply({
+                async makeRequest() {
+                    return { success: true, data: 'fastfetch 已执行，系统信息读取正常。' }
+                }
+            }, 'flash', null, 'shell_session', {
+                userMessage: '在tmux执行fastfetch'
+            }, {
+                ok: true,
+                output: rawOutput
+            })
+            return reply === 'fastfetch 已执行，系统信息读取正常。'
+                && !reply.includes('FASTFETCH_RAW_OUTPUT')
         }
     }
 ]
