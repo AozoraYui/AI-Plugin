@@ -1,4 +1,5 @@
 import { Config, expandPrompt } from './config.js'
+import { describeQQFaceSegment } from './qq_face.js'
 
 function normalizeParticipantIds(ids = [], actorUserId = '') {
     const actor = String(actorUserId || '').trim()
@@ -135,6 +136,7 @@ export async function expandInlineContent(bot, msgArray, sender = '发送者', d
 
     let subText = ''
     for (const seg of msgArray) {
+        const face = describeQQFaceSegment(seg)
         if (seg.type === 'text') {
             subText += seg.data?.text || seg.text || ''
         } else if (seg.type === 'image') {
@@ -143,6 +145,9 @@ export async function expandInlineContent(bot, msgArray, sender = '发送者', d
                 images.push(imgUrl)
                 subText += ' [图片] '
             }
+        } else if (face) {
+            subText += ` ${face.text} `
+            images.push(...face.imageUrls)
         } else if (seg.type === 'forward') {
             const nestedId = seg.id || seg.data?.id
             const nestedContent = seg.data?.content || seg.content

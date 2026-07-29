@@ -8,7 +8,8 @@
   "scripts": {
     "test": "node scripts/agent_eval.js && node scripts/agent_replay_eval.js",
     "eval:agent": "node scripts/agent_eval.js && node scripts/agent_replay_eval.js",
-    "eval:agent:replay": "node scripts/agent_replay_eval.js"
+    "eval:agent:replay": "node scripts/agent_replay_eval.js",
+    "update:qq-face-map": "node scripts/update_qq_face_map.js"
   },
   "dependencies": {
     "yaml": "^2.3.4",

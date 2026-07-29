@@ -5,6 +5,7 @@ import { checkAccess, getAccessConfig } from '../utils/access.js'
 import { formatDBTimestampToBeijing, getBeijingTimeStr, getTodayDateStr, takeSourceMsg } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject } from '../utils/message_context.js'
+import { describeQQFaceSegment } from '../utils/qq_face.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedUserIds } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, isExpiredGroupContextImageUrl, isGroupContextImageQuestion, shouldReadGroupContextImages } from '../utils/group_context_images.js'
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
@@ -279,6 +280,13 @@ async function normalizeSegments(e, segments = [], source = 'message') {
             const url = getImageUrl(seg)
             textParts.push('[图片]')
             if (url) imageMeta.push(imageMetaFromUrl(url, source))
+            continue
+        }
+
+        const face = describeQQFaceSegment(seg)
+        if (face) {
+            textParts.push(face.text)
+            for (const url of face.imageUrls) imageMeta.push(imageMetaFromUrl(url, source))
             continue
         }
 

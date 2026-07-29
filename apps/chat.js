@@ -13,6 +13,7 @@ import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject } from '../utils/message_context.js'
+import { collectQQFaceImageUrls, describeQQFaceSegment, formatQQFaceSegments } from '../utils/qq_face.js'
 import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } from '../utils/pending_actions.js'
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
@@ -1745,6 +1746,10 @@ export class ChatHandler extends plugin {
         const prefix = match[1].toLowerCase()
         const flags = match[2].toLowerCase()
         let userMessage = match[3].trim()
+        const currentFaceText = formatQQFaceSegments(e.message || [])
+        if (currentFaceText) {
+            userMessage = `${userMessage}${userMessage ? '\n' : ''}${currentFaceText}`
+        }
         const originalUserMessage = userMessage
 
         // 从 prefix 和 flags 中提取 v/n/w flag（handleSingleChat 可能已设置）。
@@ -1775,6 +1780,7 @@ export class ChatHandler extends plugin {
                     let forwardImages = []
 
                     for (const m of sourceMsg.message) {
+                        const face = describeQQFaceSegment(m)
                         let resid = null
                         if (m.type === 'forward' && m.id) {
                             const forwardContentArr = m.content || m.data?.content
@@ -1834,6 +1840,9 @@ export class ChatHandler extends plugin {
                             if (imgUrl) {
                                 allImages.push(imgUrl)
                             }
+                        } else if (face) {
+                            replyText += ` ${face.text} `
+                            allImages.push(...face.imageUrls)
                         } else if (m.type === 'file') {
                             // 引用的是群文件：把文件名写入上下文，并缓存到 redis，供后续"刚才那个文件/这个文件"下载
                             const fileName = m.name || m.file_name || m.fileName || m.data?.name || m.data?.file_name || m.file || m.data?.file || ''
@@ -1877,6 +1886,7 @@ export class ChatHandler extends plugin {
 
             const currentImages = (e.message || []).filter(m => m.type === "image").map(m => m.data?.url || m.url).filter(url => url)
             if (currentImages.length > 0) allImages = allImages.concat(currentImages)
+            allImages = allImages.concat(collectQQFaceImageUrls(e.message || []))
             if (allImages.length > 0) {
                 await cacheRecentImages(e, allImages)
             }

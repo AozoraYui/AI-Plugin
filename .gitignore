@@ -2,6 +2,7 @@ node_modules/
 *.log
 .DS_Store
 data/*
+!data/qq_face_map.json
 !data/characters_template/
 data/characters_template/*
 !data/characters_template/profile.yaml
