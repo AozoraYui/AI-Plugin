@@ -198,11 +198,14 @@ export const fileSendTool = {
             await event.reply(segment.image(`base64://${imageBase64}`), true)
             return {
                 ok: true,
+                verified: true,
                 fileName: path.basename(realPath),
                 sourcePath: realPath,
                 sizeBytes: stats.size,
                 isArchive: false,
-                asImage: true
+                asImage: true,
+                facts: { sourcePath: realPath, fileName: path.basename(realPath), sizeBytes: stats.size, sent: true, asImage: true },
+                artifacts: [{ type: 'file', path: realPath, sent: true }]
             }
         }
 
@@ -233,10 +236,13 @@ export const fileSendTool = {
 
             return {
                 ok: true,
+                verified: true,
                 fileName,
                 sourcePath: realPath,
                 sizeBytes: sendStats.size,
-                isArchive
+                isArchive,
+                facts: { sourcePath: realPath, fileName, sizeBytes: sendStats.size, sent: true, isArchive },
+                artifacts: [{ type: stats.isDirectory() ? 'directory' : 'file', path: realPath, sent: true }]
             }
         } catch (err) {
             // sendFile 抛错且特征疑似 docker napcat 路径不可见 → 附带排查与解决方案

@@ -41,11 +41,14 @@ const { sanitizeTerminalOutput } = await import('../utils/shell_session.js')
 const { buildShellResultSummaryPrompt, summarizeShellResultForReply } = await import('../utils/shell_result_summary.js')
 const { groupSendMessageTool, parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically, resolveTargetGroup } = await import('../tools/group_send.js')
 await import('../tools/group_admin.js')
+await import('../tools/file_send.js')
+await import('../tools/workspace.js')
 const { savePendingAction, loadPendingAction, listPendingActions, clearPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } = await import('../utils/pending_actions.js')
 const { deterministicToolDecision, normalizeToolResult } = await import('../utils/tool_result.js')
 const { agentToolCallKey, buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound, updateAgentStagnationState } = await import('../utils/agent_runtime.js')
 const { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, updateAgentTaskProgress } = await import('../utils/agent_task_runtime.js')
 const { buildAgentTaskPlan, normalizeAgentTaskPlan, selectNextAgentPlanStep, updateAgentTaskPlanFromObservations } = await import('../utils/agent_plan.js')
+const { verifyAgentRound } = await import('../utils/agent_verifier.js')
 const { getRecentTaskToolArgs, hasImplicitRecentTaskReference } = await import('../utils/agent_reference.js')
 const { executeConfirmedPendingToolCall, validatePendingToolCallScene } = await import('../utils/tool_execution_policy.js')
 const { AIDatabase } = await import('../utils/database.js')
@@ -944,6 +947,77 @@ const structuredProtocol = normalizeToolResult('demo', {
     next_hints: ['可以发送文件']
 })
 check('统一工具协议保留事实、产物和下一步提示', structuredProtocol.facts.path === '/tmp/example.log' && structuredProtocol.artifacts.length === 1 && structuredProtocol.nextHints[0] === '可以发送文件')
+
+check('结构化工作区工具已完整注册', ['workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch'].every(name => toolRegistry.get(name)))
+const workspaceCandidates = selectToolCandidates(
+    ['workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch', 'shell_exec'],
+    '#c帮我在项目里找一下handleChat的定义并读一下相关代码'
+)
+check('代码查找请求优先召回结构化工作区工具', workspaceCandidates.tools.includes('workspace_search') && workspaceCandidates.tools.includes('workspace_read'), JSON.stringify(workspaceCandidates))
+check('工作区读取属于低风险而补丁属于中风险', classifyToolCallRisk({ name: 'workspace_read', args: { path: '/tmp/a.js' } }) === 'low' && classifyToolCallRisk({ name: 'workspace_patch', args: { path: '/tmp/a.js' } }) === 'medium')
+const guardedWorkspacePatch = filterToolCallsByIntent([{
+    name: 'workspace_patch',
+    args: { path: '/tmp/a.js', old_text: 'a', new_text: 'b' }
+}], '#c把/tmp/a.js里的a改成b')
+check('明确代码修改允许结构化补丁通过安全意图过滤', guardedWorkspacePatch.tools.length === 1 && guardedWorkspacePatch.blocked.length === 0)
+
+const adjudicatedIntent = await toolRegistry.resolveAmbiguousToolIntent(
+    '把刚才那个弄过来',
+    {
+        async makeRequest() {
+            return {
+                success: true,
+                platform: 'fake-adjudicator',
+                data: JSON.stringify({
+                    interpretations: [
+                        { intent: '发送上轮文件', confidence: 0.86, evidence: ['近期任务产物是文件'] },
+                        { intent: '重新读取文件', confidence: 0.31, evidence: [] }
+                    ],
+                    resolved_intent: '发送上轮定位的文件',
+                    mode: 'task',
+                    tools: ['file_send'],
+                    confidence: 0.86,
+                    should_ask_user: false,
+                    reason: '近期任务已有唯一文件产物'
+                })
+            }
+        }
+    },
+    ['file_send', 'workspace_read'],
+    { planningContext: '上一轮产物：/tmp/report.log' }
+)
+check('低置信度意图可经独立批判裁决绑定到近期产物动作', adjudicatedIntent?.tools[0] === 'file_send' && adjudicatedIntent.shouldAskUser === false, JSON.stringify(adjudicatedIntent))
+
+const verifierResult = await verifyAgentRound({
+    client: {
+        async makeRequest() {
+            return {
+                success: true,
+                data: JSON.stringify({
+                    verdict: 'passed',
+                    completion_status: 'ready',
+                    summary: '文件已修改',
+                    last_observation: '补丁写入成功但尚未测试',
+                    satisfied_criteria: ['代码已修改'],
+                    unsatisfied_criteria: ['相关测试通过'],
+                    contradictions: [],
+                    evidence: ['workspace_patch changed=true'],
+                    next_hint: '运行测试'
+                })
+            }
+        }
+    },
+    task: { objective: '修改代码并确认测试通过' },
+    plan: { task_kind: 'multi_step', success_criteria: ['代码已修改', '相关测试通过'] },
+    observations: [{
+        tool: 'workspace_patch',
+        args: { path: '/tmp/a.js' },
+        status: 'ok',
+        protocol: normalizeToolResult('workspace_patch', { ok: true, verified: false, changed: true, summary: '已写入' }),
+        text: '已写入文件'
+    }]
+})
+check('独立验证器不会在仍有未满足标准时接受ready结论', verifierResult?.completionStatus === 'continue' && verifierResult.unsatisfiedCriteria.includes('相关测试通过'), JSON.stringify(verifierResult))
 
 const persistedTasks = new Map()
 const persistedSteps = []

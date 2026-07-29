@@ -85,6 +85,8 @@ export function classifyToolCallRisk(call = {}) {
         return ['restart', 'close', 'interrupt'].includes(action) ? 'medium' : 'low'
     }
     if (name === 'config_manage') return args.action === 'update' ? 'medium' : 'low'
+    if (name === 'workspace_patch') return 'medium'
+    if (['workspace_list', 'workspace_search', 'workspace_read'].includes(name)) return 'low'
     if (['group_leave', 'group_kick', 'group_whole_mute', 'group_mute', 'group_request_handle'].includes(name)) return 'high'
     if (['group_send_message', 'group_set_card', 'group_set_title', 'group_essence', 'file_send', 'file_download', 'group_file_download', 'user_profile_update'].includes(name)) return 'medium'
     return 'low'

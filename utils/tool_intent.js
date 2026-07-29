@@ -753,9 +753,9 @@ export function selectToolCandidates(enabledTools = [], text = '', options = {})
     if (families.has('web_search')) add(['web_search', 'web_fetch'])
     if (families.has('web_fetch')) add(['web_fetch'])
     if (families.has('system')) add(['system_info', 'shell_exec', 'shell_session'])
-    if (families.has('local_file')) add(['shell_exec'])
-    if (families.has('local_file_mutation')) add(['config_manage', 'shell_exec'])
-    if (families.has('file_send')) add(['file_send', 'shell_exec'])
+    if (families.has('local_file')) add(['workspace_list', 'workspace_search', 'workspace_read', 'shell_exec'])
+    if (families.has('local_file_mutation')) add(['workspace_read', 'workspace_patch', 'config_manage', 'shell_exec'])
+    if (families.has('file_send')) add(['file_send', 'workspace_list', 'workspace_search', 'shell_exec'])
     if (families.has('file_download')) add(['file_download'])
     if (families.has('group_file_list')) add(['group_file_list'])
     if (families.has('group_file_download')) add(['group_file_list', 'group_file_download'])
@@ -822,6 +822,12 @@ export function isExplicitToolIntent(toolName, text, options = {}) {
             if (action === 'update') return hasExplicitLocalFileMutationIntent(text)
             return hasExplicitLocalFileReadIntent(text) || hasExplicitLocalFileMutationIntent(text)
         }
+        case 'workspace_list':
+        case 'workspace_search':
+        case 'workspace_read':
+            return hasExplicitLocalFileReadIntent(text) || hasExplicitLocalFileDiscoveryIntent(text)
+        case 'workspace_patch':
+            return hasExplicitLocalFileMutationIntent(text)
         case 'file_download':
             return hasExplicitFileDownloadIntent(text, options)
         case 'file_send':
@@ -871,7 +877,7 @@ export function filterToolCallsByIntent(toolCalls = [], text = '', options = {})
     const sideEffectTools = new Set([
         'file_send', 'file_download', 'group_file_download', 'user_profile_update', 'group_send_message',
         'group_leave', 'group_mute', 'group_whole_mute', 'group_kick', 'group_set_card', 'group_set_title',
-        'group_essence', 'group_request_handle'
+        'group_essence', 'group_request_handle', 'workspace_patch'
     ])
     for (const call of toolCalls || []) {
         if (!call?.name) continue

@@ -56,6 +56,10 @@ const CONTINUATION_ALLOWED_TOOLS = [
     'system_info',
     'shell_exec',
     'config_manage',
+    'workspace_list',
+    'workspace_search',
+    'workspace_read',
+    'workspace_patch',
     'shell_session',
     'memory_search',
     'user_profile_update',
@@ -82,6 +86,7 @@ const AGENT_LOOP_STOP_TOOLS = [
     'group_essence',
     'group_request_handle'
 ]
+const AGENT_SIDE_EFFECT_TOOLS = [...AGENT_LOOP_STOP_TOOLS, 'workspace_patch']
 const AGENT_LOOP_ALLOWED_TOOLS = [
     'weather',
     'web_search',
@@ -89,6 +94,10 @@ const AGENT_LOOP_ALLOWED_TOOLS = [
     'system_info',
     'shell_exec',
     'config_manage',
+    'workspace_list',
+    'workspace_search',
+    'workspace_read',
+    'workspace_patch',
     'shell_session',
     'memory_search',
     'group_chat_context',
@@ -108,6 +117,10 @@ const TASK_CONTEXT_CONTINUATION_TOOLS = [
     'system_info',
     'shell_exec',
     'config_manage',
+    'workspace_list',
+    'workspace_search',
+    'workspace_read',
+    'workspace_patch',
     'shell_session',
     'memory_search',
     'group_chat_context',
@@ -1178,10 +1191,17 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         }
     }
 
-    // 5.5) 明确读取指定绝对路径文件时，文件目标优先于内容中的“群/群号”等业务关键词。
-    if (isMaster && hasTool(enabledTools, 'shell_exec')) {
+    // 5.5) 明确读取指定绝对路径文件时，优先使用结构化工作区读取。
+    if (isMaster && (hasTool(enabledTools, 'workspace_read') || hasTool(enabledTools, 'shell_exec'))) {
         const fileRead = parseExplicitLocalFileReadRequest(routeText)
         if (fileRead?.path) {
+            if (hasTool(enabledTools, 'workspace_read')) {
+                return {
+                    intent: '规则预路由：主人明确要求读取指定服务器文件；使用结构化读取保留行号和分页信息。',
+                    tools: [{ name: 'workspace_read', args: { path: fileRead.path, start_line: 1, line_count: 400 } }],
+                    routedBy: 'rule'
+                }
+            }
             return {
                 intent: '规则预路由：主人明确要求读取指定服务器文件；应以该文件实际内容回答，不改用群列表或其他业务工具。',
                 tools: [{
@@ -2057,6 +2077,7 @@ export class ChatHandler extends plugin {
             const shellEnabled = e.isMaster && this.client.enableShellExec
             if (shellEnabled) {
                 enabledTools.push('config_manage')
+                enabledTools.push('workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch')
                 enabledTools.push('shell_exec')
             }
             if (e.isMaster && this.client.enableShellSession) {
@@ -2208,16 +2229,36 @@ export class ChatHandler extends plugin {
                                 maxTools: 8
                             }
                         )
-                        if (discovery.tools.length > 0) {
-                            planningCandidates.tools = enabledTools.filter(name => discovery.tools.includes(name))
-                            planningCandidates.reason = `语义工具发现(${discovery.mode}, confidence=${discovery.confidence.toFixed(2)}): ${discovery.reason || discovery.tools.join(', ')}`
-                            logger.info(`[AI-Plugin] 语义工具发现召回候选: ${planningCandidates.tools.join(', ')}, mode=${discovery.mode}, confidence=${discovery.confidence.toFixed(2)}${discovery.model ? `, 模型=${discovery.model}` : ''}`)
-                        } else if (discovery.mode === 'task' && discovery.confidence >= 0.65) {
+                        let resolvedDiscovery = discovery
+                        if (discovery.mode === 'ambiguous' || discovery.confidence < 0.6) {
+                            const adjudication = await toolRegistry.resolveAmbiguousToolIntent(
+                                currentToolInstruction || userMessage,
+                                this.client,
+                                enabledTools,
+                                discovery,
+                                {
+                                    currentInstruction: currentToolInstruction,
+                                    planningContext: recentAgentTaskPlanningContext
+                                }
+                            )
+                            if (adjudication) {
+                                resolvedDiscovery = adjudication
+                                logger.info(`[AI-Plugin] 意图批判裁决完成: mode=${adjudication.mode}, confidence=${adjudication.confidence.toFixed(2)}, tools=${adjudication.tools.join(', ') || '无'}${adjudication.model ? `, 模型=${adjudication.model}` : ''}`)
+                                if (adjudication.shouldAskUser && adjudication.clarificationQuestion) {
+                                    userMessage += `\n\n【系统内部意图裁决】当前请求存在会导致不同操作结果的真实歧义。若现有信息仍不足，请只询问用户：${adjudication.clarificationQuestion}`
+                                }
+                            }
+                        }
+                        if (resolvedDiscovery.tools.length > 0) {
+                            planningCandidates.tools = enabledTools.filter(name => resolvedDiscovery.tools.includes(name))
+                            planningCandidates.reason = `语义工具发现与裁决(${resolvedDiscovery.mode}, confidence=${resolvedDiscovery.confidence.toFixed(2)}): ${resolvedDiscovery.reason || resolvedDiscovery.resolvedIntent || resolvedDiscovery.tools.join(', ')}`
+                            logger.info(`[AI-Plugin] 语义工具发现召回候选: ${planningCandidates.tools.join(', ')}, mode=${resolvedDiscovery.mode}, confidence=${resolvedDiscovery.confidence.toFixed(2)}${resolvedDiscovery.model ? `, 模型=${resolvedDiscovery.model}` : ''}`)
+                        } else if (resolvedDiscovery.mode === 'task' && resolvedDiscovery.confidence >= 0.65) {
                             planningCandidates.tools = [...enabledTools]
-                            planningCandidates.reason = `语义工具发现确认是任务但未能缩小能力范围，交给主模型从完整工具目录判断：${discovery.reason}`
-                            logger.info(`[AI-Plugin] 语义工具发现确认任务，使用完整工具目录进入主模型规划: confidence=${discovery.confidence.toFixed(2)}`)
+                            planningCandidates.reason = `语义工具发现确认是任务但未能缩小能力范围，交给主模型从完整工具目录判断：${resolvedDiscovery.reason}`
+                            logger.info(`[AI-Plugin] 语义工具发现确认任务，使用完整工具目录进入主模型规划: confidence=${resolvedDiscovery.confidence.toFixed(2)}`)
                         } else {
-                            planningCandidates.reason = `${planningCandidates.reason}; 语义发现=${discovery.mode}/${discovery.confidence.toFixed(2)} ${discovery.reason || ''}`.trim()
+                            planningCandidates.reason = `${planningCandidates.reason}; 语义发现=${resolvedDiscovery.mode}/${resolvedDiscovery.confidence.toFixed(2)} ${resolvedDiscovery.reason || ''}`.trim()
                         }
                     }
                     if (planningCandidates.tools.length === 0) {
@@ -2374,7 +2415,7 @@ export class ChatHandler extends plugin {
                         logger.info(agentRound === 1 ? '[AI-Plugin] 工具执行队列为空，本轮直接进入最终回复' : `[AI-Plugin] Agent 第 ${agentRound} 轮无后续工具，停止循环`)
                         break
                     }
-                    const deferredBatch = deferDependentSideEffectCalls(toolCalls, AGENT_LOOP_STOP_TOOLS)
+                    const deferredBatch = deferDependentSideEffectCalls(toolCalls, AGENT_SIDE_EFFECT_TOOLS)
                     const roundToolCalls = deferredBatch.tools
                     if (deferredBatch.deferred.length > 0) {
                         logger.info(`[AI-Plugin] Agent 第 ${agentRound} 轮延后依赖真实结果的动作工具: ${deferredBatch.deferred.map(call => call.name).join(', ')}`)

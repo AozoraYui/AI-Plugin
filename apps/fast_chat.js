@@ -18,6 +18,7 @@ import { classifyAgentRisk } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
 import { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, updateAgentTaskProgress } from '../utils/agent_task_runtime.js'
 import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../utils/agent_plan.js'
+import { verifyAgentRound } from '../utils/agent_verifier.js'
 
 const replyCooldown = new Map()
 const PERSONAL_MEMORY_MAX_CHARS = 2600
@@ -46,6 +47,10 @@ const FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS = [
     'system_info',
     'shell_exec',
     'config_manage',
+    'workspace_list',
+    'workspace_search',
+    'workspace_read',
+    'workspace_patch',
     'shell_session',
     'memory_search',
     'group_chat_context',
@@ -72,6 +77,7 @@ const FAST_CHAT_AGENT_STOP_TOOLS = [
     'group_essence',
     'group_request_handle'
 ]
+const FAST_CHAT_AGENT_SIDE_EFFECT_TOOLS = [...FAST_CHAT_AGENT_STOP_TOOLS, 'workspace_patch']
 const FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS = [...FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS, ...FAST_CHAT_AGENT_STOP_TOOLS]
 
 function stripLoneSurrogates(text) {
@@ -993,6 +999,7 @@ async function buildFastChatEnabledTools(e, client) {
     const shellEnabled = e.isMaster && client.enableShellExec
     if (shellEnabled) {
         enabledTools.push('config_manage')
+        enabledTools.push('workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch')
         enabledTools.push('shell_exec')
     }
     if (e.isMaster && client.enableShellSession) {
@@ -1302,6 +1309,22 @@ export class FastChatHandler extends plugin {
                         maxTools: 8
                     }
                 )
+                if (semanticDiscovery.mode === 'ambiguous' || semanticDiscovery.confidence < 0.6) {
+                    const adjudication = await toolRegistry.resolveAmbiguousToolIntent(
+                        toolRoutingText,
+                        this.client,
+                        enabledTools,
+                        semanticDiscovery,
+                        {
+                            currentInstruction: toolRoutingText,
+                            planningContext: recentAgentTaskPlanningContext
+                        }
+                    )
+                    if (adjudication) {
+                        semanticDiscovery = adjudication
+                        logger.info(`[AI-Plugin] [畅聊] 意图批判裁决完成: mode=${adjudication.mode}, confidence=${adjudication.confidence.toFixed(2)}, tools=${adjudication.tools.join(', ') || '无'}${adjudication.model ? `, 模型=${adjudication.model}` : ''}`)
+                    }
+                }
                 if (semanticDiscovery.tools.length > 0) {
                     candidateSelection.tools = enabledTools.filter(name => semanticDiscovery.tools.includes(name))
                     candidateSelection.compound = candidateSelection.compound || candidateSelection.tools.length > 1
@@ -1408,7 +1431,7 @@ export class FastChatHandler extends plugin {
                     }
                     toolCalls = dedupedToolCalls.tools
                     if (toolCalls.length === 0) break
-                    const deferredBatch = deferDependentSideEffectCalls(toolCalls, FAST_CHAT_AGENT_STOP_TOOLS)
+                    const deferredBatch = deferDependentSideEffectCalls(toolCalls, FAST_CHAT_AGENT_SIDE_EFFECT_TOOLS)
                     toolCalls = deferredBatch.tools
                     if (deferredBatch.deferred.length > 0) {
                         logger.info(`[AI-Plugin] [畅聊] Agent 第 ${agentRound} 轮延后依赖真实结果的动作工具: ${deferredBatch.deferred.map(call => call.name).join(', ')}`)
@@ -1489,14 +1512,39 @@ export class FastChatHandler extends plugin {
                         const pendingExecution = roundExecutions.find(item => item.pending)
                         const failedExecutions = roundExecutions.filter(item => !item.result.success || !item.protocol.ok)
                         const recoverableFailure = failedExecutions.some(item => item.protocol.recoverable)
+                        const verification = pendingExecution ? null : await verifyAgentRound({
+                            client: this.client,
+                            modelGroupKey: 'flash',
+                            task: fastAgentTask,
+                            plan: {
+                                task_kind: fastAgentTask.plan?.steps?.length > 1 ? 'multi_step' : 'single_step',
+                                success_criteria: fastAgentTask.plan?.constraints || []
+                            },
+                            observations: roundExecutions.map(item => ({
+                                tool: item.call.name,
+                                args: item.call.args,
+                                status: item.status,
+                                protocol: item.protocol,
+                                text: item.formattedResult
+                            }))
+                        })
                         fastAgentTaskStatus = pendingExecution
                             ? 'waiting'
-                            : (failedExecutions.length === roundExecutions.length && !recoverableFailure ? 'blocked' : 'active')
-                        fastAgentLatestObservation = roundExecutions.map(item => `${item.call.name}: ${item.pending ? 'waiting' : item.status}`).join('；')
-                        fastAgentLatestSummary = truncateMiddleText(
+                            : (verification?.completionStatus === 'blocked'
+                                ? 'blocked'
+                                : (failedExecutions.length === roundExecutions.length && !recoverableFailure ? 'blocked' : 'active'))
+                        fastAgentLatestObservation = verification?.lastObservation
+                            || roundExecutions.map(item => `${item.call.name}: ${item.pending ? 'waiting' : item.status}`).join('；')
+                        fastAgentLatestSummary = verification?.summary || truncateMiddleText(
                             roundExecutions.map(item => `${item.call.name}: ${item.formattedResult}`).join('\n\n'),
                             3000
                         )
+                        if (verification?.unsatisfiedCriteria?.length > 0) {
+                            fastAgentLatestObservation += `\n未满足：${verification.unsatisfiedCriteria.join('；')}`
+                        }
+                        if (verification?.contradictions?.length > 0) {
+                            fastAgentLatestObservation += `\n冲突：${verification.contradictions.join('；')}`
+                        }
                         await recordAgentTaskStep(this.conversationManager.db, fastAgentTask, {
                             stepIndex: agentRound * 100 + 90,
                             stepType: 'observation',

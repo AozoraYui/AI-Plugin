@@ -195,7 +195,7 @@ async function downloadOne(item, index, targetDir, forceExt = '') {
             const buf = Buffer.from(await res.arrayBuffer())
             const filePath = path.join(targetDir, fileName)
             fs.writeFileSync(filePath, buf)
-            return { ok: true, fileName, size: buf.length, type: item.type }
+            return { ok: true, fileName, filePath, size: buf.length, type: item.type }
         } catch (err) {
             clearTimeout(timer)
             if (attempt < DL_MAX_RETRIES) {
@@ -278,10 +278,13 @@ export const fileDownloadTool = {
 
         return {
             ok: true,
+            verified: true,
             dir: targetDir,
             total: media.length,
             saved: results.length,
-            files: results.map(r => ({ name: r.fileName, type: r.type, size: r.size }))
+            files: results.map(r => ({ name: r.fileName, path: r.filePath, type: r.type, size: r.size })),
+            facts: { directory: targetDir, discovered: media.length, saved: results.length },
+            artifacts: results.map(r => ({ type: 'file', path: r.filePath, mediaType: r.type }))
         }
     },
 

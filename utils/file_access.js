@@ -191,6 +191,43 @@ export function checkPathAllowed(filePath) {
     return { allowed: false, reason: `路径不在白名单内: ${realPath}` }
 }
 
+export function checkPathAllowedForWrite(filePath) {
+    const roots = Config.FILE_ROOTS
+    if (!Array.isArray(roots) || roots.length === 0) {
+        return { allowed: false, reason: '未配置文件白名单(FILE_ROOTS)' }
+    }
+
+    const targetPath = path.resolve(String(filePath || ''))
+    let existingParent = targetPath
+    while (!fs.existsSync(existingParent)) {
+        const parent = path.dirname(existingParent)
+        if (parent === existingParent) break
+        existingParent = parent
+    }
+
+    let realParent
+    try {
+        realParent = fs.realpathSync(existingParent)
+    } catch (err) {
+        return { allowed: false, reason: `无法解析目标父目录: ${err.message}` }
+    }
+
+    for (const root of roots) {
+        let realRoot
+        try {
+            realRoot = fs.realpathSync(root)
+        } catch {
+            continue
+        }
+        if (realParent === realRoot || realParent.startsWith(realRoot + path.sep)) {
+            const relativeTail = path.relative(existingParent, targetPath)
+            return { allowed: true, realPath: path.resolve(realParent, relativeTail), realRoot }
+        }
+    }
+
+    return { allowed: false, reason: `目标路径不在白名单内: ${targetPath}` }
+}
+
 export function rememberResolvedPath(context = {}, filePath) {
     setLastResolvedPath(context, filePath)
 }
