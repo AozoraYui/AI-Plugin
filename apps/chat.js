@@ -18,7 +18,7 @@ import { clearPendingAction, loadPendingAction, parseStandalonePendingCommand, p
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
-import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
+import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } from '../utils/model_output.js'
 import { deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound, stableAgentStringify } from '../utils/agent_runtime.js'
 import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK_SUMMARY_MAX_CHARS, mergeAgentRisk, recordAgentTaskStep } from '../utils/agent_task_runtime.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
@@ -2133,6 +2133,7 @@ export class ChatHandler extends plugin {
             let agentTaskLatestSummary = agentTask?.summary || ''
             let agentTaskLatestObservation = agentTask?.lastObservation || ''
             let actualToolExecutionCount = 0
+            let shellToolExecutionCount = 0
             if (enabledTools.length > 0) {
                 const candidateUrls = extractUrlsFromText(userMessage, 10)
                 let recentAgentTaskForPlanning = null
@@ -2359,6 +2360,7 @@ export class ChatHandler extends plugin {
                         const { call, index: roundCallIndex, key, result, protocol, formattedResult: runtimeFormattedResult, status: runtimeStatus, pending } = execution
                         seenToolCalls.add(key)
                         actualToolExecutionCount++
+                        if (call.name === 'shell_exec' || call.name === 'shell_session') shellToolExecutionCount++
                         if (!result.success) {
                             logger.warn(`[AI-Plugin] ${call.name} 失败: ${result.error}`)
                             const failureText = runtimeFormattedResult
@@ -2756,6 +2758,7 @@ export class ChatHandler extends plugin {
                         logger.warn(`[AI-Plugin] Shell 补查第 ${round} 轮: ${command}${isPaging ? ` (offset=${offsetChars})` : ''}`)
                         const result = await toolRegistry.execute('shell_exec', args, e.isMaster, toolContext)
                         actualToolExecutionCount++
+                        shellToolExecutionCount++
                         if (!result.success) {
                             logger.warn(`[AI-Plugin] Shell 补查失败: ${result.error}`)
                             userMessage += `\n\n【Shell补查失败】命令: ${command}\n错误: ${result.error}\n`
@@ -3067,6 +3070,9 @@ export class ChatHandler extends plugin {
                 if (!finalResponseText || isPlanOnlyResponse(finalResponseText)) {
                     logger.warn('[AI-Plugin] 最终回复纠正失败，使用安全提示替代内部思考/工具规划文本')
                     finalResponseText = '这次没有拿到可验证的最终结果，我不能把内部规划当成答案发给你。请再试一次；如果需要读取文件或执行命令，我会先实际调用工具再回答。'
+                }
+                if (shellToolExecutionCount > 0) {
+                    finalResponseText = sanitizePlainTextOutput(finalResponseText, { showThinking: Config.show_thinking })
                 }
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
 

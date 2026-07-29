@@ -531,6 +531,7 @@ check('破坏性Shell被识别为高风险', classifyToolCallRisk({ name: 'shell
 check('sudo破坏性Shell仍被识别为高风险', classifyToolCallRisk({ name: 'shell_exec', args: { command: 'sudo rm -rf /tmp/example' } }) === 'high')
 check('持久Shell发送破坏性命令也被识别为高风险', classifyToolCallRisk({ name: 'shell_session', args: { action: 'send', input: 'rm -rf /tmp/example', enter: true } }) === 'high')
 check('持久Shell只读窗口保持低风险', classifyToolCallRisk({ name: 'shell_session', args: { action: 'read' } }) === 'low')
+check('tmux执行fastfetch属于低风险无需二次确认', classifyToolCallRisk({ name: 'shell_session', args: { action: 'send', input: 'fastfetch', enter: true } }) === 'low')
 check('混合工具风险取最高级', classifyAgentRisk([
     { name: 'config_manage', args: { action: 'get' } },
     { name: 'group_kick', args: { user_id: '1' } }
@@ -627,7 +628,7 @@ for (const command of ['cat package.json', 'rg -n "agent" utils', 'git status'])
 }
 check('系统绝对路径只读命令保持低风险', classifyToolCallRisk({ name: 'shell_exec', args: { command: '/bin/cat /etc/os-release' } }) === 'low')
 check('系统绝对路径破坏命令仍判定高风险', classifyToolCallRisk({ name: 'shell_exec', args: { command: '/bin/rm -rf /tmp/example' } }) === 'high')
-check('无法静态理解的Shell默认判定高风险', classifyToolCallRisk({ name: 'shell_exec', args: { command: 'custom-deploy-tool --run' } }) === 'high')
+check('未命中破坏特征的未知Shell命令按中风险直接执行', classifyToolCallRisk({ name: 'shell_exec', args: { command: 'custom-deploy-tool --run' } }) === 'medium')
 
 const redisStore = new Map()
 global.redis = {

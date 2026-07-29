@@ -48,6 +48,10 @@ const RISK_RANK = { low: 0, medium: 1, high: 2 }
 function classifyShellCommandRisk(command = '') {
     const value = String(command || '').trim()
     if (!value) return 'high'
+    const riskValue = value.replace(
+        /(^|[;&|]\s*)((?:(?:sudo|command|nohup)\s+)*(?:env\s+(?:\w+=\S+\s+)*)?)(?:\/[A-Za-z0-9._+-]+)+\/(?=[A-Za-z0-9._+-]+(?:\s|$))/g,
+        '$1$2'
+    )
     const dynamicShellPatterns = [
         /(?:^|[;&|]\s*)(?:(?:sudo|command|nohup)\s+)*(?:env\s+(?:\w+=\S+\s+)*)?(?:bash|sh|zsh|dash|fish|ksh)\s+(?:-[^\s]*c\b|[^;&|\s]+(?:\s|$))/i,
         /(?:^|[;&|]\s*)(?:(?:sudo|command|nohup)\s+)*(?:env\s+(?:\w+=\S+\s+)*)?(?:python(?:\d+(?:\.\d+)*)?|node|ruby|perl|php)\s+-(?:c|e)\b/i,
@@ -58,17 +62,17 @@ function classifyShellCommandRisk(command = '') {
         /\$\(|`|<\(|>\(/,
         /(?:^|[;&|]\s*)\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\b/
     ]
-    if (dynamicShellPatterns.some(pattern => pattern.test(value))) return 'high'
-    if (/(?:^|[;&|]\s*)(?:(?:sudo|env)\s+)*(?:rm|rmdir|shred|mkfs|fdisk|parted|dd|reboot|shutdown|poweroff|halt|kill|pkill|killall)\b/i.test(value)) return 'high'
-    if (/(?:^|\s)(?:git\s+(?:reset\s+--hard|clean\s+-|push\s+--force)|chmod\s+-R|chown\s+-R)\b/i.test(value)) return 'high'
-    if (/(?:>>?|\b(?:mv|cp|touch|mkdir|install|tee|truncate|sed\s+-i|perl\s+-i|git\s+(?:pull|merge|rebase|checkout|switch|commit|push)|npm\s+(?:install|update)|pnpm\s+(?:install|update)|yarn\s+(?:install|upgrade)|systemctl\s+(?:start|stop|restart|enable|disable))\b)/i.test(value)) return 'medium'
+    if (dynamicShellPatterns.some(pattern => pattern.test(riskValue))) return 'high'
+    if (/(?:^|[;&|]\s*)(?:(?:sudo|env)\s+)*(?:rm|rmdir|shred|mkfs|fdisk|parted|dd|reboot|shutdown|poweroff|halt|kill|pkill|killall)\b/i.test(riskValue)) return 'high'
+    if (/(?:^|\s)(?:git\s+(?:reset\s+--hard|clean\s+-|push\s+--force)|chmod\s+-R|chown\s+-R)\b/i.test(riskValue)) return 'high'
+    if (/(?:>>?|\b(?:mv|cp|touch|mkdir|install|tee|truncate|sed\s+-i|perl\s+-i|git\s+(?:pull|merge|rebase|checkout|switch|commit|push)|npm\s+(?:install|update)|pnpm\s+(?:install|update)|yarn\s+(?:install|upgrade)|systemctl\s+(?:start|stop|restart|enable|disable))\b)/i.test(riskValue)) return 'medium'
 
-    const segments = value
+    const segments = riskValue
         .split(/(?:&&|\|\||[;|])/)
         .map(item => item.trim())
         .filter(Boolean)
-    const readOnly = /^(?:(?:sudo|env)\s+)*(?:(?:\/usr)?\/bin\/)?(?:pwd|ls|find|rg|grep|cat|head|tail|less|more|stat|file|wc|du|df|free|uname|hostname|whoami|id|echo|printf|which|whereis|type|realpath|readlink|date|uptime|ps|pgrep|ip|ss|netstat|lsof|jq|yq|awk|sed\b(?!.*\s-i)|git\s+(?:status|log|diff|show|branch|rev-parse|remote|ls-files|grep)|npm\s+(?:list|view)|pnpm\s+list|yarn\s+list)\b/i
-    return segments.length > 0 && segments.every(segment => readOnly.test(segment)) ? 'low' : 'high'
+    const readOnly = /^(?:(?:sudo|env)\s+)*(?:(?:\/usr)?\/bin\/)?(?:pwd|ls|find|rg|grep|cat|head|tail|less|more|stat|file|wc|du|df|free|uname|hostname|hostnamectl|whoami|id|echo|printf|which|whereis|type|realpath|readlink|date|uptime|fastfetch|neofetch|inxi|lscpu|lspci|lsusb|lsblk|blkid|loginctl|timedatectl|locale|localectl|ps|pgrep|ip|ss|netstat|lsof|jq|yq|awk|sed\b(?!.*\s-i)|git\s+(?:status|log|diff|show|branch|rev-parse|remote|ls-files|grep)|npm\s+(?:list|view)|pnpm\s+list|yarn\s+list)\b/i
+    return segments.length > 0 && segments.every(segment => readOnly.test(segment)) ? 'low' : 'medium'
 }
 
 export function classifyToolCallRisk(call = {}) {

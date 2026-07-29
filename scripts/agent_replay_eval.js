@@ -28,6 +28,7 @@ const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMe
 const { summarizeShellResultForReply } = await import('../utils/shell_result_summary.js')
 const { parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically } = await import('../tools/group_send.js')
 const { parseStandalonePendingCommand } = await import('../utils/pending_actions.js')
+const { classifyToolCallRisk } = await import('../utils/agent_policy.js')
 
 const incidents = [
     {
@@ -210,6 +211,14 @@ const incidents = [
                 && !reply.includes('FASTFETCH_RAW_OUTPUT')
                 && !/[`*]/.test(reply)
         }
+    },
+    {
+        id: 'fastfetch-does-not-require-second-confirmation',
+        input: '#c在tmux执行fastfetch',
+        pass: () => classifyToolCallRisk({
+            name: 'shell_session',
+            args: { action: 'send', input: 'fastfetch', enter: true }
+        }) === 'low'
     }
 ]
 
