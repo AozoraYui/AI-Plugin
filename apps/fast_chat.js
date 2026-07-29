@@ -11,7 +11,7 @@ import { buildGroupContextImageSummary, formatGroupContextImageSummary, isExpire
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memory_context.js'
-import { detectToolIntentFamilies, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, selectToolCandidates } from '../utils/tool_intent.js'
+import { detectToolIntentFamilies, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound, updateAgentStagnationState } from '../utils/agent_runtime.js'
@@ -1376,8 +1376,14 @@ export class FastChatHandler extends plugin {
                         normalized.userId
                     )
                     : null
+                const webSearchArgs = planningEnabledTools.includes('web_search')
+                    ? parseWebSearchRequest(toolRoutingText)
+                    : null
                 const allowSingleToolPreRoute = !candidateSelection.compound || routeByRecentTask
-                if (allowSingleToolPreRoute && recentGroupFollowupArgs) {
+                if (allowSingleToolPreRoute && webSearchArgs?.image_count > 0) {
+                    toolCalls = [{ name: 'web_search', args: webSearchArgs }]
+                    logger.info(`[AI-Plugin] [畅聊] 规则预路由命中: web_search - 用户明确要求搜索并发送 ${webSearchArgs.image_count} 张图片`)
+                } else if (allowSingleToolPreRoute && recentGroupFollowupArgs) {
                     toolCalls = [{ name: 'group_chat_context', args: recentGroupFollowupArgs }]
                     logger.info('[AI-Plugin] [畅聊] 规则预路由命中: group_chat_context - 继承刚才查询的群目标并继续读取当前用户发言')
                 } else if (allowSingleToolPreRoute && namedGroupContextArgs) {

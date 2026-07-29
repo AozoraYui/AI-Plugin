@@ -271,8 +271,55 @@ export function hasExplicitWebSearchIntent(text) {
     if (!value) return false
     if (isCapabilityOrUsageQuestion(value, '搜索|联网|上网|web[_ -]?search')) return false
     return /(?:搜索|搜一下|查一下|查询|检索|联网查|上网查).{0,80}/i.test(value)
+        || /(?:搜|找)(?:一|二|两|三|几|[1-3])张.{1,80}(?:图片|照片|配图)/i.test(value)
         || /(?:帮我|给我|请|麻烦).{0,12}(?:搜|查|检索)/i.test(value)
         || /(?:最新|今天|明天|实时|当前|现在).{0,20}(?:新闻|价格|汇率|版本|政策|公告|比赛|赛程|航班|列车|数据|资料|信息|情况)/i.test(value)
+}
+
+export function hasExplicitImageSearchIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    if (isCapabilityOrUsageQuestion(value, '搜图|图片搜索|搜索图片|搜索照片')) return false
+    const explicitImageLookup = /(?:搜图|图片搜索)/i.test(value)
+        || /(?:搜|找)(?:一下|下)?(?:一张|两张|三张|几张|[1-3]张).{1,60}(?:图|图片|照片)/i.test(value)
+        || /(?:搜|找)(?:一下|下)?[^，。；;]{1,60}(?:图|图片|照片)(?:给我看|发给我|发我|看看|看一下|看下)?[。！!？?\s]*$/i.test(value)
+    if (!hasExplicitWebSearchIntent(value) && !explicitImageLookup) return false
+    return explicitImageLookup
+        || /(?:图|图片|照片|配图).{0,24}(?:发给我|发我|给我看|让我看|带一张|带张|附一张|配一张)/i.test(value)
+        || /(?:有|如果有|要是有|最好有).{0,12}(?:图|图片|照片|配图).{0,24}(?:发|给我看|带|附|配)/i.test(value)
+        || /(?:带|附|配|发|给我看).{0,12}(?:一张|两张|三张|几张|张)?(?:相关)?(?:图|图片|照片|配图)/i.test(value)
+}
+
+function parseRequestedImageCount(value = '') {
+    const match = String(value).match(/([1-3一二两三])\s*张/i)
+    if (!match) return 1
+    return ({ 一: 1, 二: 2, 两: 2, 三: 3 }[match[1]] || Number(match[1]) || 1)
+}
+
+export function parseWebSearchRequest(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value || !hasExplicitWebSearchIntent(value)) return null
+    const imageRequested = hasExplicitImageSearchIntent(value)
+    let query = value
+        .replace(/^(?:帮我|给我|请你?|麻烦你?|拜托你?)\s*/i, '')
+        .replace(/^(?:联网|上网)?\s*(?:搜索|搜一下|搜下|搜搜|搜|查一下|查下|查询一下|查询|检索一下|检索)\s*(?:一?下)?\s*/i, '')
+        .trim()
+
+    if (imageRequested) {
+        query = query
+            .replace(/[，,。；;]?\s*(?:有|如果有|要是有|最好有).{0,12}(?:图|图片|照片|配图).{0,40}$/i, '')
+            .replace(/[，,。；;]?\s*(?:顺便|另外|然后)?\s*(?:给我|发给我|发我|让我|帮我)?\s*(?:带|附|配|发|给我看|看看).{0,16}(?:图片|照片|配图)?.*$/i, '')
+            .replace(/(?:的)?(?:图|图片|照片|配图)\s*(?:发给我|发我|给我看|让我看|看看|看一下|看下)?\s*[。！!？?]*$/i, '')
+            .replace(/^(?:几张|一张|两张|三张|[1-3]张)\s*/i, '')
+            .trim()
+    }
+    query = query.replace(/^[：:，,\s]+|[：:，,。；;\s]+$/g, '').trim()
+    if (!query) return null
+    return {
+        query,
+        count: 5,
+        image_count: imageRequested ? parseRequestedImageCount(value) : 0
+    }
 }
 
 export function hasExplicitWebFetchIntent(text, candidateUrls = []) {
@@ -840,6 +887,7 @@ export function isExplicitToolIntent(toolName, text, options = {}) {
             return hasExplicitWebFetchIntent(text, options.candidateUrls || [])
         case 'web_search':
             return hasExplicitWebSearchIntent(text)
+                && (Number(options.toolArgs?.image_count || 0) <= 0 || hasExplicitImageSearchIntent(text))
         case 'weather':
             return hasExplicitWeatherIntent(text)
         case 'system_info':

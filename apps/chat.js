@@ -14,7 +14,7 @@ import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject } from '../utils/message_context.js'
 import { collectQQFaceImageUrls, describeQQFaceSegment, formatQQFaceSegments } from '../utils/qq_face.js'
-import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, selectToolCandidates } from '../utils/tool_intent.js'
+import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } from '../utils/pending_actions.js'
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
@@ -1052,6 +1052,18 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
     if (routeFamilies.size > 1) {
         logger.info(`[AI-Plugin] 检测到复合工具意图，跳过单工具预路由: ${[...routeFamilies].join(', ')}`)
         return null
+    }
+
+    // 用户明确要求搜索并附图时直接固化图片数量，避免模型只搜资料却漏掉发图。
+    if (hasTool(enabledTools, 'web_search')) {
+        const webSearchArgs = parseWebSearchRequest(routeText)
+        if (webSearchArgs?.image_count > 0) {
+            return {
+                intent: `规则预路由：用户明确要求联网搜索并发送 ${webSearchArgs.image_count} 张相关图片。`,
+                tools: [{ name: 'web_search', args: webSearchArgs }],
+                routedBy: 'rule'
+            }
+        }
     }
 
     // -1) 明确要求维护个人档案：直接走 user_profile_update，避免普通偏好闲聊被误写。
@@ -2515,7 +2527,8 @@ export class ChatHandler extends plugin {
                             }
                         } else if (call.name === 'web_search') {
                             // 搜索：将结果注入提示词
-                            const results = result.data || []
+                            const searchData = result.data || []
+                            const results = Array.isArray(searchData) ? searchData : (searchData.results || [])
                             if (results.length > 0) {
                                 const seenUrls = new Set()
                                 const uniqueResults = results.filter(item => {
@@ -2523,8 +2536,16 @@ export class ChatHandler extends plugin {
                                     seenUrls.add(item.url)
                                     return true
                                 }).slice(0, 10)
-                                const formattedResult = toolRegistry.formatToolResult('web_search', uniqueResults)
-                                userMessage = userMessage + formattedResult
+                                const formattedData = Array.isArray(searchData)
+                                    ? uniqueResults
+                                    : { ...searchData, results: uniqueResults }
+                                const formattedResult = toolRegistry.formatToolResult('web_search', formattedData)
+                                const imageInstruction = !Array.isArray(searchData) && Number(searchData.requestedImages || 0) > 0
+                                    ? (searchData.sentImages?.length > 0
+                                        ? '\n图片搜索工具已把图片直接发送到当前会话；请简短说明已附图，并基于搜索资料回答。'
+                                        : '\n用户要求图片，但图片没有成功发送；请如实说明，不能声称已经发图。')
+                                    : ''
+                                userMessage = userMessage + formattedResult + imageInstruction
                                 logger.info(`[AI-Plugin] 搜索完成，${uniqueResults.length} 条结果已注入`)
 
                                 // 主人自动抓取搜索结果中第一名网页
@@ -2540,6 +2561,9 @@ export class ChatHandler extends plugin {
                                         logger.warn(`[AI-Plugin] 自动抓取失败: ${err.message}`)
                                     }
                                 }
+                            } else {
+                                const formattedResult = toolRegistry.formatToolResult('web_search', searchData)
+                                userMessage = userMessage + formattedResult + '\n请如实告诉用户没有找到足够的网页资料或可发送图片。'
                             }
                         } else if (call.name === 'shell_exec') {
                             suppressAutoFastChatContext = true

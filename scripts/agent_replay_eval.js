@@ -12,6 +12,7 @@ const {
     parseGroupSendRequest,
     parseNamedGroupChatContextRequest,
     parseRecentGroupChatFollowupRequest,
+    parseWebSearchRequest,
     hasExplicitDrawIntent,
     selectToolCandidates
 } = await import('../utils/tool_intent.js')
@@ -31,6 +32,14 @@ const { parseStandalonePendingCommand } = await import('../utils/pending_actions
 const { classifyToolCallRisk } = await import('../utils/agent_policy.js')
 
 const incidents = [
+    {
+        id: 'web-search-with-explicit-image-delivery',
+        input: '#c帮我搜一下英伟达最新显卡，有图片的话带一张图发给我',
+        pass: text => {
+            const request = parseWebSearchRequest(text)
+            return request?.query === '英伟达最新显卡' && request.image_count === 1
+        }
+    },
     {
         id: 'read-relative-source-file',
         input: '#c读一下sendImage.js里 constructor 的 name',
