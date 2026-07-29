@@ -20,7 +20,7 @@ import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToo
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } from '../utils/model_output.js'
-import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound, stableAgentStringify, updateAgentStagnationState } from '../utils/agent_runtime.js'
+import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, shouldContinueAgentRound, shouldStopRepeatedImageSearch, stableAgentStringify, updateAgentStagnationState } from '../utils/agent_runtime.js'
 import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK_SUMMARY_MAX_CHARS, mergeAgentRisk, recordAgentTaskStep } from '../utils/agent_task_runtime.js'
 import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../utils/agent_plan.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
@@ -2178,6 +2178,7 @@ export class ChatHandler extends plugin {
             let agentTaskLatestObservation = agentTask?.lastObservation || ''
             let actualToolExecutionCount = 0
             let shellToolExecutionCount = 0
+            let failedImageSearchAttempts = 0
             if (enabledTools.length > 0) {
                 const candidateUrls = extractUrlsFromText(userMessage, 10)
                 let recentAgentTaskForPlanning = null
@@ -2451,6 +2452,7 @@ export class ChatHandler extends plugin {
                     let roundExecuted = 0
                     let roundCompletionStatus = ''
                     let roundPendingConfirmation = false
+                    let roundHadUnfulfilledImageSearch = false
                     const roundObservations = []
                     for await (const execution of executeAgentToolCalls({
                         registry: toolRegistry,
@@ -2528,6 +2530,12 @@ export class ChatHandler extends plugin {
                         } else if (call.name === 'web_search') {
                             // 搜索：将结果注入提示词
                             const searchData = result.data || []
+                            if (isUnfulfilledImageSearch(call, searchData)) {
+                                failedImageSearchAttempts++
+                                roundHadUnfulfilledImageSearch = true
+                            } else if (!Array.isArray(searchData) && Number(searchData.requestedImages || 0) > 0 && searchData.sentImages?.length > 0) {
+                                failedImageSearchAttempts = 0
+                            }
                             const results = Array.isArray(searchData) ? searchData : (searchData.results || [])
                             if (results.length > 0) {
                                 const seenUrls = new Set()
@@ -2718,6 +2726,11 @@ export class ChatHandler extends plugin {
 
                     if (roundExecuted === 0 && roundCompletionStatus !== 'continue') {
                         logger.info(`[AI-Plugin] Agent 第 ${agentRound} 轮没有成功工具结果，且观察器未给出可恢复方案，停止循环`)
+                        break
+                    }
+                    if (roundHadUnfulfilledImageSearch && shouldStopRepeatedImageSearch(failedImageSearchAttempts)) {
+                        userMessage += '\n\n【Agent搜图停止条件】已经使用不同关键词尝试了两次，但仍没有图片通过下载与视觉复核。请停止继续调用 web_search，直接如实说明本轮没有找到可确认的图片。'
+                        logger.info(`[AI-Plugin] Agent 搜图连续 ${failedImageSearchAttempts} 次未发送图片，停止重复搜索`)
                         break
                     }
                     if (agentRound >= AGENT_LOOP_MAX_ROUNDS) {

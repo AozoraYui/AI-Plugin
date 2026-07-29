@@ -14,7 +14,7 @@ import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memo
 import { detectToolIntentFamilies, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
-import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound, updateAgentStagnationState } from '../utils/agent_runtime.js'
+import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } from '../utils/agent_runtime.js'
 import { classifyAgentRisk } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
 import { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, updateAgentTaskProgress } from '../utils/agent_task_runtime.js'
@@ -1428,6 +1428,7 @@ export class FastChatHandler extends plugin {
                 }
                 const seenToolCalls = new Set()
                 let fastAgentStagnationState = { fingerprint: '', repeatCount: 0, shouldStop: false }
+                let failedImageSearchAttempts = 0
                 for (let agentRound = 1; agentRound <= FAST_CHAT_AGENT_MAX_ROUNDS; agentRound++) {
                     if (hasLocalImageInput) {
                         const attachedPaths = new Set(localImageInput.paths.flatMap(item => [item.requestedPath, item.realPath]).filter(Boolean))
@@ -1494,6 +1495,11 @@ export class FastChatHandler extends plugin {
                         const { call, result, protocol } = execution
                         seenToolCalls.add(execution.key)
                         roundExecutions.push(execution)
+                        if (result.success && isUnfulfilledImageSearch(call, result.data)) {
+                            failedImageSearchAttempts++
+                        } else if (result.success && call.name === 'web_search' && Number(result.data?.requestedImages || 0) > 0 && result.data?.sentImages?.length > 0) {
+                            failedImageSearchAttempts = 0
+                        }
                         await recordAgentTaskStep(this.conversationManager.db, fastAgentTask, {
                             stepIndex: agentRound * 100 + execution.index,
                             stepType: 'tool',
@@ -1611,6 +1617,11 @@ export class FastChatHandler extends plugin {
                         }
                     }
 
+                    if (roundExecutions.some(item => isUnfulfilledImageSearch(item.call, item.result?.data)) && shouldStopRepeatedImageSearch(failedImageSearchAttempts)) {
+                        toolContextText = truncateMiddleText(toolContextText + '\n\n【Agent搜图停止条件】已尝试两次但没有图片通过下载与视觉复核，本轮停止重复搜索。', FAST_CHAT_TOOL_CONTEXT_MAX_CHARS)
+                        logger.info(`[AI-Plugin] [畅聊] Agent 搜图连续 ${failedImageSearchAttempts} 次未发送图片，停止重复搜索`)
+                        break
+                    }
                     if (agentRound >= FAST_CHAT_AGENT_MAX_ROUNDS) break
                     const shouldContinue = deferredBatch.deferred.length > 0 || shouldContinueAgentRound({
                         toolCalls,

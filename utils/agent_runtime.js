@@ -48,6 +48,17 @@ export function createAgentToolContext(baseContext = {}, call = {}, index = 0) {
     }
 }
 
+export function isUnfulfilledImageSearch(call = {}, resultData = {}) {
+    return call?.name === 'web_search'
+        && Number(call?.args?.image_count || 0) > 0
+        && Number(resultData?.requestedImages || 0) > 0
+        && (!Array.isArray(resultData?.sentImages) || resultData.sentImages.length === 0)
+}
+
+export function shouldStopRepeatedImageSearch(failedAttempts = 0, maxAttempts = 2) {
+    return Math.max(0, Number(failedAttempts) || 0) >= Math.max(1, Number(maxAttempts) || 2)
+}
+
 export function shouldContinueAgentRound(options = {}) {
     const toolCalls = Array.isArray(options.toolCalls) ? options.toolCalls : []
     const protocols = Array.isArray(options.protocols) ? options.protocols.filter(Boolean) : []

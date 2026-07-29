@@ -5,9 +5,11 @@
 
 import { toolRegistry } from './registry.js'
 import dns from 'node:dns/promises'
+import { setDefaultResultOrder } from 'node:dns'
 import net from 'node:net'
 import sharp from 'sharp'
 import { hasExplicitImageSearchIntent } from '../utils/tool_intent.js'
+import { fetchWithProxy } from '../utils/common.js'
 
 const SEARCH_TIMEOUT_MS = 15000
 const IMAGE_DOWNLOAD_TIMEOUT_MS = 18000
@@ -106,7 +108,7 @@ function extractQueryRelevanceProfile(query = '') {
         modelAnchors,
         numberAnchors,
         semanticAnchors,
-        strict: modelAnchors.length > 0
+        strict: modelAnchors.length > 0 || (numberAnchors.length > 0 && semanticAnchors.length > 0)
     }
 }
 
@@ -155,16 +157,34 @@ export function filterRelevantSearchResults(query, results = []) {
 }
 
 async function fetchSearchHtml(url, engineName) {
-    const res = await fetch(url, {
-        method: 'GET',
-        headers: {
-            'User-Agent': USER_AGENT,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.7',
-        },
-        signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-        redirect: 'follow'
-    })
+    const headers = {
+        'User-Agent': USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.7'
+    }
+    let res
+    try {
+        res = await fetch(url, {
+            method: 'GET',
+            headers,
+            signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+            redirect: 'follow'
+        })
+    } catch (err) {
+        logger.warn(`[AI-Plugin] ${engineName} 原生 fetch 失败，强制 IPv4 重试: ${err.message}`)
+        setDefaultResultOrder('ipv4first')
+        try {
+            res = await fetch(url, {
+                method: 'GET',
+                headers,
+                signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+                redirect: 'follow'
+            })
+        } catch (retryErr) {
+            logger.warn(`[AI-Plugin] ${engineName} IPv4 fetch 仍失败，切换 Node HTTP/代理通道: ${retryErr.message}`)
+            res = await fetchWithProxy(url, { headers, timeout: SEARCH_TIMEOUT_MS })
+        }
+    }
 
     if (!res.ok) {
         const body = await res.text().catch(() => '')
@@ -231,24 +251,34 @@ export function parseBingImageResults(html = '', count = 10) {
     return results
 }
 
-function buildHighPrecisionImageQuery(query = '') {
-    const profile = extractQueryRelevanceProfile(query)
-    if (!profile.strict) return query
-    const anchors = [
-        ...profile.modelAnchors.map(anchor => `"${anchor}"`),
-        ...profile.semanticAnchors.slice(0, 1).map(anchor => `"${anchor}"`)
-    ]
-    return anchors.length > 0 ? anchors.join(' ') : query
+export function buildBingImageSearchUrl(query = '') {
+    return `https://cn.bing.com/images/search?q=${encodeURIComponent(String(query || '').trim())}&form=HDRSC2&first=1`
 }
 
 async function searchBingImages(query, count = 10) {
-    const preciseQuery = buildHighPrecisionImageQuery(query)
-    const url = `https://www.bing.com/images/search?q=${encodeURIComponent(preciseQuery)}&first=1&safeSearch=Strict&mkt=zh-CN&setlang=zh-hans`
+    const url = buildBingImageSearchUrl(query)
     const html = await fetchSearchHtml(url, 'Bing 图片')
     const parsed = parseBingImageResults(html, Math.max(count * 3, 20))
     const results = filterRelevantSearchResults(query, parsed).slice(0, count)
     logger.info(`[AI-Plugin] Bing 图片搜索返回 ${parsed.length} 条候选，相关性过滤后 ${results.length} 条`)
     return results
+}
+
+function mergeImageCandidateGroups(groups = [], limit = MAX_IMAGE_VERIFY_CANDIDATES * 2) {
+    const merged = []
+    const seen = new Set()
+    const maxLength = Math.max(...groups.map(group => group.length), 0)
+    for (let index = 0; index < maxLength && merged.length < limit; index++) {
+        for (const group of groups) {
+            const item = group[index]
+            const key = item?.imageUrl || item?.thumbnailUrl
+            if (!key || seen.has(key)) continue
+            seen.add(key)
+            merged.push(item)
+            if (merged.length >= limit) break
+        }
+    }
+    return merged
 }
 
 function extractDuckDuckGoVqd(html = '') {
@@ -263,16 +293,33 @@ async function searchDuckDuckGoImages(query, count = 10) {
     const html = await fetchSearchHtml(landingUrl, 'DuckDuckGo 图片令牌')
     const vqd = extractDuckDuckGoVqd(html)
     if (!vqd) throw new Error('DuckDuckGo 图片搜索令牌提取失败')
-    const response = await fetch(`https://duckduckgo.com/i.js?l=wt-wt&o=json&q=${encodeURIComponent(query)}&vqd=${encodeURIComponent(vqd)}&f=,,,`, {
-        headers: {
-            'User-Agent': USER_AGENT,
-            'Accept': 'application/json,text/javascript,*/*;q=0.8',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.7',
-            'Referer': 'https://duckduckgo.com/',
-            'X-Requested-With': 'XMLHttpRequest'
-        },
-        signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS)
-    })
+    const imageApiUrl = `https://duckduckgo.com/i.js?l=wt-wt&o=json&q=${encodeURIComponent(query)}&vqd=${encodeURIComponent(vqd)}&f=,,,`
+    const headers = {
+        'User-Agent': USER_AGENT,
+        'Accept': 'application/json,text/javascript,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.7',
+        'Referer': 'https://duckduckgo.com/',
+        'X-Requested-With': 'XMLHttpRequest'
+    }
+    let response
+    try {
+        response = await fetch(imageApiUrl, {
+            headers,
+            signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS)
+        })
+    } catch (err) {
+        logger.warn(`[AI-Plugin] DuckDuckGo 图片 API 原生 fetch 失败，强制 IPv4 重试: ${err.message}`)
+        setDefaultResultOrder('ipv4first')
+        try {
+            response = await fetch(imageApiUrl, {
+                headers,
+                signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS)
+            })
+        } catch (retryErr) {
+            logger.warn(`[AI-Plugin] DuckDuckGo 图片 API IPv4 fetch 仍失败，切换 Node HTTP/代理通道: ${retryErr.message}`)
+            response = await fetchWithProxy(imageApiUrl, { headers, timeout: SEARCH_TIMEOUT_MS })
+        }
+    }
     if (!response.ok) throw new Error(`DuckDuckGo 图片 HTTP ${response.status}`)
     const data = await response.json()
     const parsed = Array.isArray(data?.results) ? data.results.map(item => ({
@@ -284,6 +331,40 @@ async function searchDuckDuckGoImages(query, count = 10) {
     })).filter(item => /^https?:\/\//i.test(item.imageUrl || item.thumbnailUrl)) : []
     const results = filterRelevantSearchResults(query, parsed).slice(0, count)
     logger.info(`[AI-Plugin] DuckDuckGo 图片搜索返回 ${parsed.length} 条候选，相关性过滤后 ${results.length} 条`)
+    return results
+}
+
+export function parseSo360ImageResults(data = {}, query = '', count = 10) {
+    const parsed = Array.isArray(data?.list) ? data.list.map(item => ({
+        title: cleanText(item.title || item.litetitle || '搜索图片'),
+        imageUrl: normalizeUrl(item.img || item.downurl_true || ''),
+        thumbnailUrl: normalizeUrl(item.thumb || item.thumb_bak || ''),
+        pageUrl: normalizeUrl(item.link || ''),
+        source: '360 图片'
+    })).filter(item => /^https?:\/\//i.test(item.imageUrl || item.thumbnailUrl)) : []
+    return filterRelevantSearchResults(query, parsed).slice(0, count)
+}
+
+async function searchSo360Images(query, count = 10) {
+    const url = `https://image.so.com/j?q=${encodeURIComponent(query)}&pn=${Math.max(20, count * 3)}&sn=0&kn=50&cn=0`
+    const headers = {
+        'User-Agent': USER_AGENT,
+        'Accept': 'application/json,text/javascript,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.7',
+        'Referer': 'https://image.so.com/'
+    }
+    let response
+    try {
+        response = await fetch(url, { headers, signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS) })
+    } catch (err) {
+        logger.warn(`[AI-Plugin] 360 图片 API 原生 fetch 失败，切换 Node HTTP/代理通道: ${err.message}`)
+        response = await fetchWithProxy(url, { headers, timeout: SEARCH_TIMEOUT_MS })
+    }
+    if (!response.ok) throw new Error(`360 图片 HTTP ${response.status}`)
+    const data = await response.json()
+    const parsedCount = Array.isArray(data?.list) ? data.list.length : 0
+    const results = parseSo360ImageResults(data, query, count)
+    logger.info(`[AI-Plugin] 360 图片搜索返回 ${parsedCount} 条候选，相关性过滤后 ${results.length} 条`)
     return results
 }
 
@@ -791,33 +872,25 @@ export const webSearchTool = {
 
         const expandedWebResults = await searchWeb(query, Math.max(count, 8))
         const webResults = expandedWebResults.slice(0, count)
-        const pageImageResults = await searchResultPageImages(expandedWebResults, Math.max(8, imageCount * 4))
-        let imageSearchResult = pageImageResults
-        if (imageSearchResult.length < imageCount) {
+        const directImageResults = await Promise.allSettled([
+            searchBingImages(query, Math.max(8, imageCount * 4)),
+            searchSo360Images(query, Math.max(8, imageCount * 4))
+        ])
+        const bingResults = directImageResults[0].status === 'fulfilled' ? directImageResults[0].value : []
+        const so360Results = directImageResults[1].status === 'fulfilled' ? directImageResults[1].value : []
+        if (directImageResults[0].status === 'rejected') logger.warn(`[AI-Plugin] Bing 图片搜索失败: ${directImageResults[0].reason?.message || directImageResults[0].reason}`)
+        if (directImageResults[1].status === 'rejected') logger.warn(`[AI-Plugin] 360 图片搜索失败: ${directImageResults[1].reason?.message || directImageResults[1].reason}`)
+        let imageSearchResult = mergeImageCandidateGroups([bingResults, so360Results])
+        if (imageSearchResult.length < MAX_IMAGE_VERIFY_CANDIDATES) {
+            const pageImageResults = await searchResultPageImages(expandedWebResults, Math.max(8, imageCount * 4))
+            imageSearchResult = mergeImageCandidateGroups([imageSearchResult, pageImageResults])
+        }
+        if (imageSearchResult.length < MAX_IMAGE_VERIFY_CANDIDATES) {
             const duckDuckGoResults = await searchDuckDuckGoImages(query, Math.max(8, imageCount * 4)).catch(err => {
                 logger.warn(`[AI-Plugin] DuckDuckGo 图片搜索失败: ${err.message}`)
                 return []
             })
-            const seen = new Set(imageSearchResult.map(item => item.imageUrl || item.thumbnailUrl))
-            imageSearchResult = imageSearchResult.concat(duckDuckGoResults.filter(item => {
-                const key = item.imageUrl || item.thumbnailUrl
-                if (!key || seen.has(key)) return false
-                seen.add(key)
-                return true
-            }))
-        }
-        if (imageSearchResult.length < imageCount) {
-            const bingResults = await searchBingImages(query, Math.max(8, imageCount * 4)).catch(err => {
-                logger.warn(`[AI-Plugin] Bing 图片搜索失败: ${err.message}`)
-                return []
-            })
-            const seen = new Set(imageSearchResult.map(item => item.imageUrl || item.thumbnailUrl))
-            imageSearchResult = imageSearchResult.concat(bingResults.filter(item => {
-                const key = item.imageUrl || item.thumbnailUrl
-                if (!key || seen.has(key)) return false
-                seen.add(key)
-                return true
-            }))
+            imageSearchResult = mergeImageCandidateGroups([imageSearchResult, duckDuckGoResults])
         }
         imageSearchResult = filterRelevantSearchResults(query, imageSearchResult)
         const preparedResult = await prepareImageCandidates(imageSearchResult, imageCount)
