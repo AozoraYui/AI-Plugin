@@ -35,7 +35,7 @@ const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMe
 const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq_face.js')
 const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
-const { extractPageImageUrls } = await import('../tools/search.js')
+const { extractPageImageUrls, filterRelevantSearchResults, scoreSearchResultRelevance } = await import('../tools/search.js')
 const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
 const { executePendingShellExec, shellExecTool } = await import('../tools/shell_exec.js')
@@ -100,6 +100,26 @@ check('明确搜两张照片会解析图片数量', (() => {
 check('“搜两张目标”省略图片二字仍按图片搜索处理', (() => {
     const request = parseWebSearchRequest('#c诺亚帮我去搜两张qlu-11')
     return request?.query === 'qlu-11' && request.image_count === 2
+})())
+check('搜图目标中的“发射器”不会被截断或误判为群代发', (() => {
+    const text = '#c诺亚帮我去搜两张qlu-11式榴弹发射器的图'
+    const request = parseWebSearchRequest(text)
+    return request?.query === 'qlu-11式榴弹发射器'
+        && request.image_count === 2
+        && parseGroupSendRequest(text) === null
+})())
+check('型号搜索会过滤学校、Windows 与泛中国页面', (() => {
+    const query = 'QLU-11式榴弹发射器'
+    const results = filterRelevantSearchResults(query, [
+        { title: '齐鲁工业大学', url: 'https://www.qlu.edu.cn/', snippet: '学校官网' },
+        { title: '下载 Windows 11', url: 'https://microsoft.com/windows-11', snippet: 'Windows' },
+        { title: '中华人民共和国', url: 'https://example.com/china', snippet: '中国地图' },
+        { title: 'QLU-11式狙击榴弹发射器', url: 'https://example.com/qlu-11', snippet: '11式狙击榴弹发射器' },
+        { title: 'NORINCO LG5 / QLU-11', url: 'https://modernfirearms.net/qlu-11', snippet: 'sniper grenade launcher' }
+    ])
+    return results.length === 2
+        && results.every(result => /QLU-11/i.test(result.title))
+        && scoreSearchResultRelevance(query, results[0]).verified
 })())
 check('网页预览图提取会优先保留具体内容图并过滤站点通用图', (() => {
     const html = '<meta property="og:image" content="https://example.com/og-card.png"><meta property="og:image" content="/images/qlu-11.jpg">'

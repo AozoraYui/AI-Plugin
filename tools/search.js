@@ -6,6 +6,7 @@
 import { toolRegistry } from './registry.js'
 import dns from 'node:dns/promises'
 import net from 'node:net'
+import sharp from 'sharp'
 import { hasExplicitImageSearchIntent } from '../utils/tool_intent.js'
 
 const SEARCH_TIMEOUT_MS = 15000
@@ -13,6 +14,7 @@ const IMAGE_DOWNLOAD_TIMEOUT_MS = 18000
 const MAX_IMAGE_DOWNLOAD_BYTES = 10 * 1024 * 1024
 const MAX_PREVIEW_PAGE_BYTES = 3 * 1024 * 1024
 const MAX_IMAGE_SEND_COUNT = 3
+const MAX_IMAGE_VERIFY_CANDIDATES = 6
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
 
@@ -81,6 +83,75 @@ async function assertPublicImageUrl(rawUrl) {
 
 function isValidResult(title, url) {
     return title && url && /^https?:\/\//i.test(url) && !url.startsWith('javascript:')
+}
+
+function normalizeSearchText(text = '') {
+    return decodeHtmlEntities(String(text || ''))
+        .toLowerCase()
+        .replace(/[^a-z0-9\u3400-\u9fff]+/g, '')
+}
+
+function extractQueryRelevanceProfile(query = '') {
+    const value = decodeHtmlEntities(String(query || '')).toLowerCase()
+    const modelAnchors = [...new Set((value.match(/[a-z]{1,12}[\s_-]*\d[a-z0-9\s_-]*/gi) || [])
+        .map(normalizeSearchText)
+        .filter(anchor => anchor.length >= 3))]
+    const numberAnchors = [...new Set((value.match(/\d{2,}/g) || []).map(normalizeSearchText))]
+    const chineseRuns = value.match(/[\u3400-\u9fff]{2,}/g) || []
+    const semanticAnchors = [...new Set(chineseRuns
+        .map(run => run.replace(/^(?:帮我|给我|请|搜索|搜|查|找|关于|有关|式|型)+/g, ''))
+        .map(run => run.replace(/(?:的|图片|照片|资料|信息|介绍)$/g, ''))
+        .filter(run => run.length >= 3))]
+    return {
+        modelAnchors,
+        numberAnchors,
+        semanticAnchors,
+        strict: modelAnchors.length > 0
+    }
+}
+
+export function scoreSearchResultRelevance(query, result = {}) {
+    const profile = extractQueryRelevanceProfile(query)
+    const title = normalizeSearchText(result.title)
+    const snippet = normalizeSearchText(result.snippet)
+    const url = normalizeSearchText(result.url || result.pageUrl)
+    const imageUrl = normalizeSearchText(result.imageUrl || result.thumbnailUrl)
+    const haystack = `${title} ${snippet} ${url} ${imageUrl}`
+    let score = 0
+    const matchedModels = profile.modelAnchors.filter(anchor => haystack.includes(anchor))
+    const matchedNumbers = profile.numberAnchors.filter(anchor => haystack.includes(anchor))
+    const matchedSemantics = profile.semanticAnchors.filter(anchor => haystack.includes(anchor))
+    score += matchedModels.length * 12
+    score += matchedNumbers.length * 2
+    score += matchedSemantics.length * 6
+    if (profile.semanticAnchors.some(anchor => title.includes(anchor))) score += 3
+    const verified = !profile.strict
+        || matchedModels.length > 0
+        || (matchedSemantics.length > 0
+            && profile.numberAnchors.length > 0
+            && matchedNumbers.length === profile.numberAnchors.length)
+    return {
+        score,
+        verified,
+        strict: profile.strict,
+        matchedModels,
+        matchedNumbers,
+        matchedSemantics
+    }
+}
+
+export function filterRelevantSearchResults(query, results = []) {
+    return results
+        .map(result => {
+            const relevance = scoreSearchResultRelevance(query, result)
+            return {
+                ...result,
+                relevanceScore: relevance.score,
+                relevanceVerified: relevance.verified
+            }
+        })
+        .filter(result => result.relevanceVerified)
+        .sort((left, right) => right.relevanceScore - left.relevanceScore)
 }
 
 async function fetchSearchHtml(url, engineName) {
@@ -160,11 +231,59 @@ export function parseBingImageResults(html = '', count = 10) {
     return results
 }
 
+function buildHighPrecisionImageQuery(query = '') {
+    const profile = extractQueryRelevanceProfile(query)
+    if (!profile.strict) return query
+    const anchors = [
+        ...profile.modelAnchors.map(anchor => `"${anchor}"`),
+        ...profile.semanticAnchors.slice(0, 1).map(anchor => `"${anchor}"`)
+    ]
+    return anchors.length > 0 ? anchors.join(' ') : query
+}
+
 async function searchBingImages(query, count = 10) {
-    const url = `https://www.bing.com/images/search?q=${encodeURIComponent(query)}&first=1&safeSearch=Strict&mkt=zh-CN&setlang=zh-hans`
+    const preciseQuery = buildHighPrecisionImageQuery(query)
+    const url = `https://www.bing.com/images/search?q=${encodeURIComponent(preciseQuery)}&first=1&safeSearch=Strict&mkt=zh-CN&setlang=zh-hans`
     const html = await fetchSearchHtml(url, 'Bing 图片')
-    const results = parseBingImageResults(html, count)
-    logger.info(`[AI-Plugin] Bing 图片搜索返回 ${results.length} 条结果`)
+    const parsed = parseBingImageResults(html, Math.max(count * 3, 20))
+    const results = filterRelevantSearchResults(query, parsed).slice(0, count)
+    logger.info(`[AI-Plugin] Bing 图片搜索返回 ${parsed.length} 条候选，相关性过滤后 ${results.length} 条`)
+    return results
+}
+
+function extractDuckDuckGoVqd(html = '') {
+    return html.match(/vqd=['"]([^'"]+)/i)?.[1]
+        || html.match(/vqd=([\d-]+)/i)?.[1]
+        || html.match(/"vqd":"([^"]+)/i)?.[1]
+        || ''
+}
+
+async function searchDuckDuckGoImages(query, count = 10) {
+    const landingUrl = `https://duckduckgo.com/?q=${encodeURIComponent(query)}`
+    const html = await fetchSearchHtml(landingUrl, 'DuckDuckGo 图片令牌')
+    const vqd = extractDuckDuckGoVqd(html)
+    if (!vqd) throw new Error('DuckDuckGo 图片搜索令牌提取失败')
+    const response = await fetch(`https://duckduckgo.com/i.js?l=wt-wt&o=json&q=${encodeURIComponent(query)}&vqd=${encodeURIComponent(vqd)}&f=,,,`, {
+        headers: {
+            'User-Agent': USER_AGENT,
+            'Accept': 'application/json,text/javascript,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.7',
+            'Referer': 'https://duckduckgo.com/',
+            'X-Requested-With': 'XMLHttpRequest'
+        },
+        signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS)
+    })
+    if (!response.ok) throw new Error(`DuckDuckGo 图片 HTTP ${response.status}`)
+    const data = await response.json()
+    const parsed = Array.isArray(data?.results) ? data.results.map(item => ({
+        title: cleanText(item.title || '搜索图片'),
+        imageUrl: normalizeUrl(item.image || ''),
+        thumbnailUrl: normalizeUrl(item.thumbnail || ''),
+        pageUrl: normalizeUrl(item.url || ''),
+        source: 'DuckDuckGo 图片'
+    })).filter(item => /^https?:\/\//i.test(item.imageUrl || item.thumbnailUrl)) : []
+    const results = filterRelevantSearchResults(query, parsed).slice(0, count)
+    logger.info(`[AI-Plugin] DuckDuckGo 图片搜索返回 ${parsed.length} 条候选，相关性过滤后 ${results.length} 条`)
     return results
 }
 
@@ -240,7 +359,9 @@ async function fetchPagePreviewCandidates(result) {
             imageUrl,
             thumbnailUrl: '',
             pageUrl: currentUrl,
-            source: `${result.source || '网页'}页面图片`
+            source: `${result.source || '网页'}页面图片`,
+            relevanceScore: result.relevanceScore,
+            relevanceVerified: result.relevanceVerified
         }))
     }
     return []
@@ -318,21 +439,20 @@ function createImageSegment(buffer) {
     return { type: 'image', data: { file } }
 }
 
-async function sendSearchedImages(event, imageResults = [], requestedCount = 1) {
+async function prepareImageCandidates(imageResults = [], requestedCount = 1) {
     const count = Math.max(0, Math.min(MAX_IMAGE_SEND_COUNT, Number(requestedCount) || 0))
-    if (!event || count === 0) return { sent: [], failures: [] }
-
-    const sent = []
+    if (count === 0) return { prepared: [], failures: [] }
+    const prepared = []
     const failures = []
     for (const item of imageResults) {
-        if (sent.length >= count) break
+        if (prepared.length >= Math.min(MAX_IMAGE_VERIFY_CANDIDATES, Math.max(count * 3, count))) break
         let lastError = ''
         const candidates = [item.imageUrl, item.thumbnailUrl].filter(Boolean)
         for (const url of candidates) {
             try {
                 const downloaded = await downloadImage(url, item.pageUrl || 'https://www.bing.com/images/')
-                await event.reply(createImageSegment(downloaded.buffer), true)
-                sent.push({
+                prepared.push({
+                    buffer: downloaded.buffer,
                     title: item.title,
                     pageUrl: item.pageUrl,
                     imageUrl: downloaded.finalUrl,
@@ -348,7 +468,73 @@ async function sendSearchedImages(event, imageResults = [], requestedCount = 1) 
         }
         if (lastError) failures.push({ title: item.title, error: lastError })
     }
-    return { sent, failures }
+    return { prepared, failures }
+}
+
+function parseVisionSelection(text = '', candidateCount = 0) {
+    const raw = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
+    const objectMatch = raw.match(/\{[\s\S]*\}/)
+    if (!objectMatch) return null
+    try {
+        const parsed = JSON.parse(objectMatch[0])
+        if (!Array.isArray(parsed.relevant)) return null
+        return [...new Set(parsed.relevant
+            .map(Number)
+            .filter(index => Number.isInteger(index) && index >= 1 && index <= candidateCount))]
+    } catch {
+        return null
+    }
+}
+
+async function buildVisionPart(item) {
+    try {
+        const data = await sharp(item.buffer)
+            .rotate()
+            .resize({ width: 960, height: 960, fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 78 })
+            .toBuffer()
+        return { inline_data: { mime_type: 'image/jpeg', data: data.toString('base64') } }
+    } catch {
+        return { inline_data: { mime_type: item.contentType, data: item.buffer.toString('base64') } }
+    }
+}
+
+async function verifyImagesWithVision(client, query, prepared = []) {
+    if (prepared.length === 0) return { selected: [], used: false, reason: 'no_candidates' }
+    if (!client?.makeRequest) return { selected: [], used: false, reason: 'vision_unavailable' }
+    try {
+        const parts = []
+        for (let index = 0; index < prepared.length; index++) {
+            parts.push({ text: `候选图片 #${index + 1}；搜索标题：${prepared[index].title || '无'}；来源页：${prepared[index].pageUrl || '无'}` })
+            parts.push(await buildVisionPart(prepared[index]))
+        }
+        parts.push({
+            text: `用户要找的是「${query}」。请逐张查看图片实际画面，而不是只相信搜索标题。只选择画面主体明确与该对象相符的候选；地图、学校、软件页面、宣传海报、包装袋、Logo、无关武器或无法确认的图片一律拒绝。内容重复或近似重复的图片只保留一张。只输出严格 JSON：{"relevant":[1,2],"rejected":[{"index":3,"reason":"简短原因"}]}。`
+        })
+        const response = await client.makeRequest('chat', {
+            contents: [{ role: 'user', parts }]
+        }, 'flash', 1200)
+        if (!response?.success) throw new Error(response?.error || '视觉模型调用失败')
+        const selectedIndexes = parseVisionSelection(response.data, prepared.length)
+        if (!selectedIndexes) throw new Error('视觉模型返回格式无法解析')
+        logger.info(`[AI-Plugin] 搜图视觉复核完成: 候选=${prepared.length}, 通过=${selectedIndexes.length}`)
+        return {
+            selected: selectedIndexes.map(index => prepared[index - 1]),
+            used: true,
+            reason: selectedIndexes.length > 0 ? 'verified' : 'no_relevant_images'
+        }
+    } catch (err) {
+        logger.warn(`[AI-Plugin] 搜图视觉复核失败，为避免错图本轮不发送: ${err.message}`)
+        return { selected: [], used: false, reason: err.message }
+    }
+}
+
+async function sendPreparedImages(event, prepared = [], requestedCount = 1) {
+    const selected = prepared.slice(0, Math.max(0, Math.min(MAX_IMAGE_SEND_COUNT, Number(requestedCount) || 0)))
+    if (!event || selected.length === 0) return []
+    const segments = selected.map(item => createImageSegment(item.buffer))
+    await event.reply(segments.length === 1 ? segments[0] : segments, true)
+    return selected.map(({ buffer, ...item }) => item)
 }
 
 async function searchBaidu(query, count) {
@@ -501,10 +687,12 @@ function mergeSearchResults(resultGroups, limit) {
  */
 async function searchWeb(query, count = 5) {
     logger.info(`[AI-Plugin] 搜索关键词: "${query}"`)
+    const strictRelevance = extractQueryRelevanceProfile(query).strict
+    const candidateCount = strictRelevance ? Math.min(20, Math.max(count * 3, 10)) : count
 
     const mainResults = await Promise.allSettled([
-        searchBing(query, count),
-        searchBaidu(query, count)
+        searchBing(query, candidateCount),
+        searchBaidu(query, candidateCount)
     ])
 
     const mainGroups = mainResults.map((result, index) => {
@@ -514,15 +702,16 @@ async function searchWeb(query, count = 5) {
         return []
     })
 
-    let merged = mergeSearchResults(mainGroups, count)
+    let mergedCandidates = mergeSearchResults(mainGroups, candidateCount)
+    let merged = filterRelevantSearchResults(query, mergedCandidates).slice(0, count)
     let fallbackGroups = []
 
     if (merged.length < count) {
         logger.info(`[AI-Plugin] 主搜索结果不足 (${merged.length}/${count})，启用冗余搜索源补位`)
         const fallbackResults = await Promise.allSettled([
-            searchDuckDuckGo(query, count),
-            searchYahoo(query, count),
-            searchSo360(query, count)
+            searchDuckDuckGo(query, candidateCount),
+            searchYahoo(query, candidateCount),
+            searchSo360(query, candidateCount)
         ])
 
         fallbackGroups = fallbackResults.map((result, index) => {
@@ -532,20 +721,22 @@ async function searchWeb(query, count = 5) {
             return []
         })
 
-        merged = mergeSearchResults([...mainGroups, ...fallbackGroups], count)
+        mergedCandidates = mergeSearchResults([...mainGroups, ...fallbackGroups], candidateCount)
+        merged = filterRelevantSearchResults(query, mergedCandidates).slice(0, count)
     }
 
     if (merged.length < count) {
         logger.info(`[AI-Plugin] 搜索结果仍不足 (${merged.length}/${count})，使用搜狗兜底补位`)
         try {
-            const sogouResults = await searchSogou(query, count)
-            merged = mergeSearchResults([...mainGroups, ...fallbackGroups, sogouResults], count)
+            const sogouResults = await searchSogou(query, candidateCount)
+            mergedCandidates = mergeSearchResults([...mainGroups, ...fallbackGroups, sogouResults], candidateCount)
+            merged = filterRelevantSearchResults(query, mergedCandidates).slice(0, count)
         } catch (err) {
             logger.warn(`[AI-Plugin] 搜狗兜底搜索失败: ${err.message}`)
         }
     }
 
-    logger.info(`[AI-Plugin] 搜索最终返回 ${merged.length} 条结果`)
+    logger.info(`[AI-Plugin] 搜索相关性过滤: 候选=${mergedCandidates.length}, 通过=${merged.length}, 严格模式=${strictRelevance}`)
     return merged
 }
 
@@ -603,8 +794,21 @@ export const webSearchTool = {
         const pageImageResults = await searchResultPageImages(expandedWebResults, Math.max(8, imageCount * 4))
         let imageSearchResult = pageImageResults
         if (imageSearchResult.length < imageCount) {
+            const duckDuckGoResults = await searchDuckDuckGoImages(query, Math.max(8, imageCount * 4)).catch(err => {
+                logger.warn(`[AI-Plugin] DuckDuckGo 图片搜索失败: ${err.message}`)
+                return []
+            })
+            const seen = new Set(imageSearchResult.map(item => item.imageUrl || item.thumbnailUrl))
+            imageSearchResult = imageSearchResult.concat(duckDuckGoResults.filter(item => {
+                const key = item.imageUrl || item.thumbnailUrl
+                if (!key || seen.has(key)) return false
+                seen.add(key)
+                return true
+            }))
+        }
+        if (imageSearchResult.length < imageCount) {
             const bingResults = await searchBingImages(query, Math.max(8, imageCount * 4)).catch(err => {
-                logger.warn(`[AI-Plugin] 图片搜索失败: ${err.message}`)
+                logger.warn(`[AI-Plugin] Bing 图片搜索失败: ${err.message}`)
                 return []
             })
             const seen = new Set(imageSearchResult.map(item => item.imageUrl || item.thumbnailUrl))
@@ -615,15 +819,21 @@ export const webSearchTool = {
                 return true
             }))
         }
-        const delivery = await sendSearchedImages(context.event, imageSearchResult, imageCount)
+        imageSearchResult = filterRelevantSearchResults(query, imageSearchResult)
+        const preparedResult = await prepareImageCandidates(imageSearchResult, imageCount)
+        const visionResult = await verifyImagesWithVision(context.client, query, preparedResult.prepared)
+        const sentImages = await sendPreparedImages(context.event, visionResult.selected, imageCount)
         return {
             query,
             results: webResults,
             imageResults: imageSearchResult.slice(0, 10),
             requestedImages: imageCount,
-            sentImages: delivery.sent,
-            imageFailures: delivery.failures,
-            ok: webResults.length > 0 || delivery.sent.length > 0
+            sentImages,
+            imageFailures: preparedResult.failures,
+            relevanceVerified: imageSearchResult.length > 0,
+            visionVerificationUsed: visionResult.used,
+            visionVerificationReason: visionResult.reason,
+            ok: webResults.length > 0 || sentImages.length > 0
         }
     },
 
@@ -644,7 +854,14 @@ export const webSearchTool = {
             sentImages.forEach((item, index) => {
                 text += `${index + 1}. ${item.title || '相关图片'}${item.pageUrl ? `；来源页面: ${item.pageUrl}` : ''}\n`
             })
-            if (sentImages.length === 0) text += '没有成功下载并发送可用图片，请如实说明图片发送失败。\n'
+            if (sentImages.length === 0) {
+                const reason = data?.visionVerificationReason
+                text += reason === 'no_relevant_images'
+                    ? '视觉模型检查后没有确认任何候选与目标相符，因此没有发送，不能拿无关图片凑数。\n'
+                    : '没有通过完整的相关性与视觉复核，因此没有发送图片；请如实说明，不能声称已经发图。\n'
+            } else if (data?.visionVerificationUsed) {
+                text += '以上图片均已由多模态模型检查实际画面并确认相关。\n'
+            }
         }
         return text
     }

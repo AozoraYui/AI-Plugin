@@ -1485,6 +1485,7 @@ export class FastChatHandler extends plugin {
                             userId: normalized.userId,
                             groupId: normalized.groupId,
                             event: e,
+                            client: this.client,
                             userMessage: toolRoutingText,
                             originalUserMessage: toolRoutingText,
                             agentTaskId: fastAgentTask?.taskId || ''

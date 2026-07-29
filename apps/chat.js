@@ -2456,7 +2456,7 @@ export class ChatHandler extends plugin {
                         registry: toolRegistry,
                         toolCalls: roundToolCalls,
                         isMaster: e.isMaster,
-                        context: { userId: e.user_id, groupId: e.group_id, event: e, userMessage: originalUserMessage, originalUserMessage, agentTaskId: agentTask?.taskId || '' }
+                        context: { userId: e.user_id, groupId: e.group_id, event: e, client: this.client, userMessage: originalUserMessage, originalUserMessage, agentTaskId: agentTask?.taskId || '' }
                     })) {
                         const { call, index: roundCallIndex, key, result, protocol, formattedResult: runtimeFormattedResult, status: runtimeStatus, pending } = execution
                         seenToolCalls.add(key)
@@ -2548,8 +2548,9 @@ export class ChatHandler extends plugin {
                                 userMessage = userMessage + formattedResult + imageInstruction
                                 logger.info(`[AI-Plugin] 搜索完成，${uniqueResults.length} 条结果已注入`)
 
-                                // 主人自动抓取搜索结果中第一名网页
-                                if (e.isMaster) {
+                                // 图片搜索已经经过候选页与视觉复核，不再自动抓取首条网页污染后续判断。
+                                const isImageSearch = !Array.isArray(searchData) && Number(searchData.requestedImages || 0) > 0
+                                if (e.isMaster && !isImageSearch && uniqueResults[0]?.url) {
                                     try {
                                         const topUrl = uniqueResults[0].url
                                         logger.info(`[AI-Plugin] 自动抓取搜索结果首条: ${topUrl}`)
