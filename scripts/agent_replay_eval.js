@@ -41,6 +41,14 @@ const incidents = [
         }
     },
     {
+        id: 'web-image-search-with-zhang-counter',
+        input: '#c诺亚帮我去搜两张qlu-11',
+        pass: text => {
+            const request = parseWebSearchRequest(text)
+            return request?.query === 'qlu-11' && request.image_count === 2
+        }
+    },
+    {
         id: 'read-relative-source-file',
         input: '#c读一下sendImage.js里 constructor 的 name',
         pass: text => hasExplicitLocalFileReadIntent(text)

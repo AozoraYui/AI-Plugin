@@ -11,6 +11,7 @@ import { hasExplicitImageSearchIntent } from '../utils/tool_intent.js'
 const SEARCH_TIMEOUT_MS = 15000
 const IMAGE_DOWNLOAD_TIMEOUT_MS = 18000
 const MAX_IMAGE_DOWNLOAD_BYTES = 10 * 1024 * 1024
+const MAX_PREVIEW_PAGE_BYTES = 3 * 1024 * 1024
 const MAX_IMAGE_SEND_COUNT = 3
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
@@ -165,6 +166,100 @@ async function searchBingImages(query, count = 10) {
     const results = parseBingImageResults(html, count)
     logger.info(`[AI-Plugin] Bing 图片搜索返回 ${results.length} 条结果`)
     return results
+}
+
+function isLikelyGenericPreview(url = '') {
+    return /(?:logo|favicon|avatar|default|placeholder|og[-_]?card|share[-_]?image|site[-_]?icon)/i.test(String(url || ''))
+}
+
+export function extractPageImageUrls(html = '', pageUrl = '') {
+    const urls = []
+    const patterns = [
+        /<meta[^>]+(?:property|name)=["'](?:og:image(?::url)?|twitter:image(?::src)?)["'][^>]+content=["']([^"']+)["'][^>]*>/gi,
+        /<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image(?::url)?|twitter:image(?::src)?)["'][^>]*>/gi,
+        /<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["'][^>]*>/gi
+    ]
+    for (const pattern of patterns) {
+        let match
+        while ((match = pattern.exec(html)) !== null) {
+            try {
+                const url = new URL(decodeHtmlEntities(match[1]), pageUrl).toString()
+                if (/^https?:\/\//i.test(url) && !urls.includes(url)) urls.push(url)
+            } catch {
+                // 忽略无效或无法解析的页面图片地址。
+            }
+        }
+    }
+    const specific = urls.filter(url => !isLikelyGenericPreview(url))
+    return specific
+}
+
+async function fetchPagePreviewCandidates(result) {
+    let currentUrl = String(result?.url || '').trim()
+    if (!currentUrl) return []
+    for (let redirectCount = 0; redirectCount <= 3; redirectCount++) {
+        const parsed = await assertPublicImageUrl(currentUrl)
+        const response = await fetch(parsed, {
+            headers: {
+                'User-Agent': USER_AGENT,
+                'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.7',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.7'
+            },
+            signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+            redirect: 'manual'
+        })
+        if (response.status >= 300 && response.status < 400) {
+            const location = response.headers.get('location')
+            if (!location) return []
+            currentUrl = new URL(location, parsed).toString()
+            continue
+        }
+        if (!response.ok) return []
+        const contentType = String(response.headers.get('content-type') || '').toLowerCase()
+        if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) return []
+        const declaredSize = Number(response.headers.get('content-length') || 0)
+        if (declaredSize > MAX_PREVIEW_PAGE_BYTES) return []
+        if (!response.body) return []
+
+        const chunks = []
+        let total = 0
+        const reader = response.body.getReader()
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            total += value.byteLength
+            if (total > MAX_PREVIEW_PAGE_BYTES) {
+                await reader.cancel().catch(() => {})
+                return []
+            }
+            chunks.push(Buffer.from(value))
+        }
+        const html = Buffer.concat(chunks, total).toString('utf8')
+        return extractPageImageUrls(html, currentUrl).slice(0, 4).map(imageUrl => ({
+            title: result.title,
+            imageUrl,
+            thumbnailUrl: '',
+            pageUrl: currentUrl,
+            source: `${result.source || '网页'}页面图片`
+        }))
+    }
+    return []
+}
+
+async function searchResultPageImages(results = [], count = 12) {
+    const settled = await Promise.allSettled(results.slice(0, 8).map(fetchPagePreviewCandidates))
+    const merged = []
+    const seen = new Set()
+    for (const item of settled) {
+        if (item.status !== 'fulfilled') continue
+        for (const candidate of item.value) {
+            if (!candidate.imageUrl || seen.has(candidate.imageUrl)) continue
+            seen.add(candidate.imageUrl)
+            merged.push(candidate)
+            if (merged.length >= count) return merged
+        }
+    }
+    return merged
 }
 
 async function readImageBuffer(response) {
@@ -503,13 +598,23 @@ export const webSearchTool = {
         }
         if (imageCount === 0) return await searchWeb(query, count)
 
-        const [webResults, imageSearchResult] = await Promise.all([
-            searchWeb(query, count),
-            searchBingImages(query, Math.max(8, imageCount * 4)).catch(err => {
+        const expandedWebResults = await searchWeb(query, Math.max(count, 8))
+        const webResults = expandedWebResults.slice(0, count)
+        const pageImageResults = await searchResultPageImages(expandedWebResults, Math.max(8, imageCount * 4))
+        let imageSearchResult = pageImageResults
+        if (imageSearchResult.length < imageCount) {
+            const bingResults = await searchBingImages(query, Math.max(8, imageCount * 4)).catch(err => {
                 logger.warn(`[AI-Plugin] 图片搜索失败: ${err.message}`)
                 return []
             })
-        ])
+            const seen = new Set(imageSearchResult.map(item => item.imageUrl || item.thumbnailUrl))
+            imageSearchResult = imageSearchResult.concat(bingResults.filter(item => {
+                const key = item.imageUrl || item.thumbnailUrl
+                if (!key || seen.has(key)) return false
+                seen.add(key)
+                return true
+            }))
+        }
         const delivery = await sendSearchedImages(context.event, imageSearchResult, imageCount)
         return {
             query,

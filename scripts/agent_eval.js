@@ -35,6 +35,7 @@ const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMe
 const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq_face.js')
 const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
+const { extractPageImageUrls } = await import('../tools/search.js')
 const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
 const { executePendingShellExec, shellExecTool } = await import('../tools/shell_exec.js')
@@ -95,6 +96,15 @@ check('自然语言资料搜索附图请求会保留查询词并要求一张图'
 check('明确搜两张照片会解析图片数量', (() => {
     const request = parseWebSearchRequest('#c搜两张三花猫照片给我看')
     return request?.query === '三花猫' && request.image_count === 2
+})())
+check('“搜两张目标”省略图片二字仍按图片搜索处理', (() => {
+    const request = parseWebSearchRequest('#c诺亚帮我去搜两张qlu-11')
+    return request?.query === 'qlu-11' && request.image_count === 2
+})())
+check('网页预览图提取会优先保留具体内容图并过滤站点通用图', (() => {
+    const html = '<meta property="og:image" content="https://example.com/og-card.png"><meta property="og:image" content="/images/qlu-11.jpg">'
+    const urls = extractPageImageUrls(html, 'https://example.com/article')
+    return urls.length === 1 && urls[0] === 'https://example.com/images/qlu-11.jpg'
 })())
 check('普通联网搜索不会擅自要求发送图片', (() => {
     const request = parseWebSearchRequest('#c查一下今天的 Linux 新闻')

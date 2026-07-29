@@ -271,7 +271,7 @@ export function hasExplicitWebSearchIntent(text) {
     if (!value) return false
     if (isCapabilityOrUsageQuestion(value, '搜索|联网|上网|web[_ -]?search')) return false
     return /(?:搜索|搜一下|查一下|查询|检索|联网查|上网查).{0,80}/i.test(value)
-        || /(?:搜|找)(?:一|二|两|三|几|[1-3])张.{1,80}(?:图片|照片|配图)/i.test(value)
+        || /(?:搜|找)(?:一|二|两|三|几|[1-3])张\s*[^，。；;!?！？]{1,80}/i.test(value)
         || /(?:帮我|给我|请|麻烦).{0,12}(?:搜|查|检索)/i.test(value)
         || /(?:最新|今天|明天|实时|当前|现在).{0,20}(?:新闻|价格|汇率|版本|政策|公告|比赛|赛程|航班|列车|数据|资料|信息|情况)/i.test(value)
 }
@@ -282,6 +282,7 @@ export function hasExplicitImageSearchIntent(text) {
     if (isCapabilityOrUsageQuestion(value, '搜图|图片搜索|搜索图片|搜索照片')) return false
     const explicitImageLookup = /(?:搜图|图片搜索)/i.test(value)
         || /(?:搜|找)(?:一下|下)?(?:一张|两张|三张|几张|[1-3]张).{1,60}(?:图|图片|照片)/i.test(value)
+        || /(?:搜|找)(?:一下|下)?(?:一|二|两|三|几|[1-3])张\s*[^，。；;!?！？]{1,80}/i.test(value)
         || /(?:搜|找)(?:一下|下)?[^，。；;]{1,60}(?:图|图片|照片)(?:给我看|发给我|发我|看看|看一下|看下)?[。！!？?\s]*$/i.test(value)
     if (!hasExplicitWebSearchIntent(value) && !explicitImageLookup) return false
     return explicitImageLookup
@@ -301,8 +302,9 @@ export function parseWebSearchRequest(text) {
     if (!value || !hasExplicitWebSearchIntent(value)) return null
     const imageRequested = hasExplicitImageSearchIntent(value)
     let query = value
-        .replace(/^(?:帮我|给我|请你?|麻烦你?|拜托你?)\s*/i, '')
-        .replace(/^(?:联网|上网)?\s*(?:搜索|搜一下|搜下|搜搜|搜|查一下|查下|查询一下|查询|检索一下|检索)\s*(?:一?下)?\s*/i, '')
+        .replace(/^(?:诺亚|noa|喏亚|诺娅)\s*/i, '')
+        .replace(/^(?:帮我|给我|请你?|麻烦你?|拜托你?)\s*(?:去|来)?\s*/i, '')
+        .replace(/^(?:去|来)?\s*(?:联网|上网)?\s*(?:搜索|搜一下|搜下|搜搜|搜|查一下|查下|查询一下|查询|检索一下|检索)\s*(?:一?下)?\s*(?:一张|二张|两张|三张|几张|[1-3]张)?\s*/i, '')
         .trim()
 
     if (imageRequested) {
