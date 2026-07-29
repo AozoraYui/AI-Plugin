@@ -75,3 +75,65 @@ export function normalizeAgentTaskPlan(plan = {}, fallbackObjective = '') {
     normalized.currentStepId = selectNextAgentPlanStep(normalized)?.id || ''
     return normalized
 }
+
+export function buildAgentTaskPlan(modelPlan = {}, fallbackObjective = '') {
+    const calls = Array.isArray(modelPlan.tool_plan) ? modelPlan.tool_plan.slice(0, 20) : []
+    const isMultiStep = String(modelPlan.task_kind || '').toLowerCase().includes('multi') || calls.length > 1
+    return normalizeAgentTaskPlan({
+        objective: modelPlan.resolved_request || fallbackObjective,
+        constraints: Array.isArray(modelPlan.success_criteria) ? modelPlan.success_criteria : [],
+        steps: calls.map((call, index) => ({
+            id: `round_1_step_${index + 1}`,
+            title: call.purpose || `调用 ${call.tool || call.name || '工具'}`,
+            tool: call.tool || call.name || '',
+            args: call.params || call.args || {},
+            dependsOn: isMultiStep && index > 0 ? [`round_1_step_${index}`] : [],
+            successPredicate: call.purpose || '',
+            status: index === 0 ? 'in_progress' : 'pending',
+            attempts: 0
+        }))
+    }, fallbackObjective)
+}
+
+export function updateAgentTaskPlanFromObservations(plan = {}, observations = []) {
+    const normalized = normalizeAgentTaskPlan(plan)
+    if (normalized.steps.length === 0 || !Array.isArray(observations) || observations.length === 0) return normalized
+
+    const claimed = new Set()
+    for (const observation of observations) {
+        const tool = String(observation?.tool || '')
+        let index = normalized.steps.findIndex((step, stepIndex) => {
+            if (claimed.has(stepIndex) || step.tool !== tool) return false
+            return ['pending', 'in_progress', 'failed'].includes(step.status)
+        })
+        if (index < 0 && tool) {
+            const usedIds = new Set(normalized.steps.map(step => step.id))
+            let suffix = normalized.steps.length + 1
+            let id = `observed_step_${suffix}`
+            while (usedIds.has(id)) id = `observed_step_${++suffix}`
+            normalized.steps.push({
+                id,
+                title: `执行 ${tool}`,
+                tool,
+                args: observation?.args && typeof observation.args === 'object' ? observation.args : {},
+                dependsOn: [],
+                successPredicate: '',
+                status: 'pending',
+                attempts: 0
+            })
+            index = normalized.steps.length - 1
+        }
+        if (index < 0) continue
+        claimed.add(index)
+        const step = normalized.steps[index]
+        step.attempts += 1
+        if (observation.status === 'ok' && observation.protocol?.ok !== false) step.status = 'completed'
+        else if (observation.protocol?.recoverable === true) step.status = 'pending'
+        else step.status = observation.protocol?.pending ? 'blocked' : 'failed'
+    }
+
+    const next = selectNextAgentPlanStep(normalized)
+    if (next && next.status === 'pending') next.status = 'in_progress'
+    normalized.currentStepId = next?.id || ''
+    return normalized
+}

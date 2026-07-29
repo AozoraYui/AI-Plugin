@@ -19,6 +19,14 @@ export function normalizeToolResult(toolName, rawResult, options = {}) {
     const verified = objectResult?.verified === true
     const changed = typeof objectResult?.changed === 'boolean' ? objectResult.changed : undefined
     const recoverable = objectResult?.recoverable === true
+    const facts = objectResult?.facts && typeof objectResult.facts === 'object' && !Array.isArray(objectResult.facts)
+        ? objectResult.facts
+        : {}
+    const artifacts = Array.isArray(objectResult?.artifacts) ? objectResult.artifacts.slice(0, 50) : []
+    const nextHints = (Array.isArray(objectResult?.next_hints) ? objectResult.next_hints : (Array.isArray(objectResult?.nextHints) ? objectResult.nextHints : []))
+        .map(item => String(item || '').trim())
+        .filter(Boolean)
+        .slice(0, 10)
     const error = ok ? '' : firstText(objectResult?.error, objectResult?.reason, stringResult)
     const summary = firstText(
         objectResult?.summary,
@@ -38,6 +46,9 @@ export function normalizeToolResult(toolName, rawResult, options = {}) {
         recoverable,
         summary,
         error,
+        facts,
+        artifacts,
+        nextHints,
         data: raw,
         metrics: {
             elapsedMs: Math.max(0, Number(options.elapsedMs) || 0)

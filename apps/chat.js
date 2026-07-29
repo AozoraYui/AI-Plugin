@@ -19,8 +19,9 @@ import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToo
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } from '../utils/model_output.js'
-import { deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound, stableAgentStringify } from '../utils/agent_runtime.js'
+import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound, stableAgentStringify, updateAgentStagnationState } from '../utils/agent_runtime.js'
 import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK_SUMMARY_MAX_CHARS, mergeAgentRisk, recordAgentTaskStep } from '../utils/agent_task_runtime.js'
+import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../utils/agent_plan.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { createPendingGroupSendAction, executePendingGroupSend, parseGroupSendDisambiguationSelection } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
@@ -47,7 +48,7 @@ const RECENT_IMAGE_CACHE_LIMIT = 6
 const AUTO_FAST_CHAT_CONTEXT_GROUP_MAX_LOGS = 120
 const AUTO_FAST_CHAT_CONTEXT_PRIVATE_MAX_LOGS = 160
 const AUTO_FAST_CHAT_CONTEXT_MAX_CHARS = 36000
-const AGENT_LOOP_MAX_ROUNDS = 4
+const AGENT_LOOP_MAX_ROUNDS = Config.AGENT_LOOP_MAX_ROUNDS
 const CONTINUATION_ALLOWED_TOOLS = [
     'weather',
     'web_search',
@@ -2197,7 +2198,30 @@ export class ChatHandler extends plugin {
                         }
                     }
                     if (planningCandidates.tools.length === 0) {
-                        logger.info(`[AI-Plugin] 工具预路由未命中，跳过主模型工具规划：${planningCandidates.reason}`)
+                        const discovery = await toolRegistry.discoverToolCandidates(
+                            currentToolInstruction || userMessage,
+                            this.client,
+                            enabledTools,
+                            {
+                                currentInstruction: currentToolInstruction,
+                                planningContext: recentAgentTaskPlanningContext,
+                                maxTools: 8
+                            }
+                        )
+                        if (discovery.tools.length > 0) {
+                            planningCandidates.tools = enabledTools.filter(name => discovery.tools.includes(name))
+                            planningCandidates.reason = `语义工具发现(${discovery.mode}, confidence=${discovery.confidence.toFixed(2)}): ${discovery.reason || discovery.tools.join(', ')}`
+                            logger.info(`[AI-Plugin] 语义工具发现召回候选: ${planningCandidates.tools.join(', ')}, mode=${discovery.mode}, confidence=${discovery.confidence.toFixed(2)}${discovery.model ? `, 模型=${discovery.model}` : ''}`)
+                        } else if (discovery.mode === 'task' && discovery.confidence >= 0.65) {
+                            planningCandidates.tools = [...enabledTools]
+                            planningCandidates.reason = `语义工具发现确认是任务但未能缩小能力范围，交给主模型从完整工具目录判断：${discovery.reason}`
+                            logger.info(`[AI-Plugin] 语义工具发现确认任务，使用完整工具目录进入主模型规划: confidence=${discovery.confidence.toFixed(2)}`)
+                        } else {
+                            planningCandidates.reason = `${planningCandidates.reason}; 语义发现=${discovery.mode}/${discovery.confidence.toFixed(2)} ${discovery.reason || ''}`.trim()
+                        }
+                    }
+                    if (planningCandidates.tools.length === 0) {
+                        logger.info(`[AI-Plugin] 工具预路由与语义发现均未命中，跳过主模型工具规划：${planningCandidates.reason}`)
                         toolAnalysis = {
                             intent: planningCandidates.reason,
                             tools: [],
@@ -2279,6 +2303,7 @@ export class ChatHandler extends plugin {
                     })
                 }
                 const seenToolCalls = new Set()
+                let agentStagnationState = { fingerprint: '', repeatCount: 0, shouldStop: false }
                 const repeatedFilter = filterRepeatedAgentToolCalls(toolCalls, seenToolCalls)
                 if (repeatedFilter.skipped.length > 0) {
                     logger.info(`[AI-Plugin] Agent 去重跳过重复工具: ${repeatedFilter.skipped.map(call => call.name).join(', ')}`)
@@ -2287,11 +2312,24 @@ export class ChatHandler extends plugin {
                 if (toolCalls.length > 0) {
                     if (!agentTask) {
                         try {
+                            const objective = buildAgentObjective(currentToolInstruction, userMessage, currentToolIntent)
+                            const persistedPlanSource = Array.isArray(currentAgentPlan?.tool_plan) && currentAgentPlan.tool_plan.length > 0
+                                ? currentAgentPlan
+                                : {
+                                    resolved_request: objective,
+                                    task_kind: toolCalls.length > 1 ? 'multi_step' : 'single_step',
+                                    tool_plan: toolCalls.map(call => ({
+                                        tool: call.name,
+                                        params: call.args,
+                                        purpose: `执行 ${call.name}`
+                                    }))
+                                }
                             agentTask = await this.conversationManager.db.createAgentTask?.({
                                 userId: e.user_id,
                                 groupId: e.group_id || '',
-                                objective: buildAgentObjective(currentToolInstruction, userMessage, currentToolIntent),
-                                riskLevel: classifyAgentRisk(toolCalls)
+                                objective,
+                                riskLevel: classifyAgentRisk(toolCalls),
+                                plan: buildAgentTaskPlan(persistedPlanSource, objective)
                             })
                             if (agentTask?.taskId) {
                                 logger.info(`[AI-Plugin] Agent 创建任务: ${agentTask.taskId}, risk=${agentTask.riskLevel}, objective=${agentTask.objective.slice(0, 120)}`)
@@ -2560,16 +2598,19 @@ export class ChatHandler extends plugin {
                             content: `${agentTaskLatestObservation}${roundSummary?.nextHint ? `\n下一步建议：${roundSummary.nextHint}` : ''}`
                         })
                         try {
+                            const updatedPlan = updateAgentTaskPlanFromObservations(agentTask.plan || {}, roundObservations)
                             await this.conversationManager.db.updateAgentTask?.(agentTask.taskId, {
                                 status: ['waiting', 'blocked'].includes(completionStatus) ? completionStatus : 'active',
                                 summary: agentTaskLatestSummary,
-                                lastObservation: agentTaskLatestObservation
+                                lastObservation: agentTaskLatestObservation,
+                                plan: updatedPlan
                             })
                             agentTask = {
                                 ...agentTask,
                                 status: ['waiting', 'blocked'].includes(completionStatus) ? completionStatus : 'active',
                                 summary: agentTaskLatestSummary,
-                                lastObservation: agentTaskLatestObservation
+                                lastObservation: agentTaskLatestObservation,
+                                plan: updatedPlan
                             }
                             agentTaskFinalStatus = completionStatus
                         } catch (err) {
@@ -2577,6 +2618,24 @@ export class ChatHandler extends plugin {
                         }
                         if (completionStatus === 'waiting' || completionStatus === 'blocked') {
                             logger.info(`[AI-Plugin] Agent 第 ${agentRound} 轮进入 ${completionStatus} 状态，停止继续规划`)
+                            break
+                        }
+
+                        const roundFingerprint = buildAgentRoundFingerprint(roundObservations, {
+                            completionStatus,
+                            lastObservation: agentTaskLatestObservation,
+                            nextHint: roundSummary?.nextHint || ''
+                        })
+                        agentStagnationState = updateAgentStagnationState(agentStagnationState, roundFingerprint)
+                        if (agentStagnationState.shouldStop) {
+                            agentTaskLatestObservation = `${agentTaskLatestObservation}\n连续多轮没有产生新信息，Agent 已自动停止，避免无效循环。`.trim()
+                            agentTaskFinalStatus = 'blocked'
+                            await this.conversationManager.db.updateAgentTask?.(agentTask.taskId, {
+                                status: 'blocked',
+                                summary: agentTaskLatestSummary,
+                                lastObservation: agentTaskLatestObservation
+                            })
+                            logger.warn(`[AI-Plugin] Agent 连续 ${agentStagnationState.repeatCount + 1} 轮观察无变化，提前停止`)
                             break
                         }
                     }

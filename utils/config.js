@@ -103,6 +103,8 @@ const defaultConfig = {
     SHELL_EXEC_MAX_OUTPUT_CHARS: 24000,
     // Shell 补查最大轮数（含翻页续读，留足空间给大数据分页读取）
     SHELL_EXEC_FOLLOWUP_MAX_ROUNDS: 5,
+    // 通用 Agent 工具循环最大轮数；硬上限 8，防止失控循环
+    AGENT_LOOP_MAX_ROUNDS: 8,
     // Shell 补查决策上下文最大字符数
     SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS: 24000,
     // child_process exec 最大缓冲区
@@ -447,6 +449,12 @@ export const Config = {
     set SHELL_EXEC_MAX_OUTPUT_CHARS(val) { config.SHELL_EXEC_MAX_OUTPUT_CHARS = Number(val) || defaultConfig.SHELL_EXEC_MAX_OUTPUT_CHARS },
     get SHELL_EXEC_FOLLOWUP_MAX_ROUNDS() { return config.SHELL_EXEC_FOLLOWUP_MAX_ROUNDS ?? defaultConfig.SHELL_EXEC_FOLLOWUP_MAX_ROUNDS },
     set SHELL_EXEC_FOLLOWUP_MAX_ROUNDS(val) { config.SHELL_EXEC_FOLLOWUP_MAX_ROUNDS = Number(val) || defaultConfig.SHELL_EXEC_FOLLOWUP_MAX_ROUNDS },
+    get AGENT_LOOP_MAX_ROUNDS() {
+        return Math.max(1, Math.min(8, Math.floor(Number(config.AGENT_LOOP_MAX_ROUNDS ?? defaultConfig.AGENT_LOOP_MAX_ROUNDS) || defaultConfig.AGENT_LOOP_MAX_ROUNDS)))
+    },
+    set AGENT_LOOP_MAX_ROUNDS(val) {
+        config.AGENT_LOOP_MAX_ROUNDS = Math.max(1, Math.min(8, Math.floor(Number(val) || defaultConfig.AGENT_LOOP_MAX_ROUNDS)))
+    },
     get SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS() { return config.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS ?? defaultConfig.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS },
     set SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS(val) { config.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS = Number(val) || defaultConfig.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS },
     get SHELL_EXEC_MAX_BUFFER() { return config.SHELL_EXEC_MAX_BUFFER ?? defaultConfig.SHELL_EXEC_MAX_BUFFER },

@@ -13,10 +13,11 @@ import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memo
 import { detectToolIntentFamilies, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
-import { deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound } from '../utils/agent_runtime.js'
+import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound, updateAgentStagnationState } from '../utils/agent_runtime.js'
 import { classifyAgentRisk } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
 import { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, updateAgentTaskProgress } from '../utils/agent_task_runtime.js'
+import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../utils/agent_plan.js'
 
 const replyCooldown = new Map()
 const PERSONAL_MEMORY_MAX_CHARS = 2600
@@ -54,7 +55,7 @@ const FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS = [
     'group_member_resolve',
     'group_file_list'
 ]
-const FAST_CHAT_AGENT_MAX_ROUNDS = 2
+const FAST_CHAT_AGENT_MAX_ROUNDS = Config.AGENT_LOOP_MAX_ROUNDS
 const FAST_CHAT_AGENT_STOP_TOOLS = [
     'draw_image',
     'file_send',
@@ -1289,6 +1290,29 @@ export class FastChatHandler extends plugin {
                 allowContinuation: recentAgentTaskPlanningContext.length > 0,
                 continuationTools: FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS
             })
+            let semanticDiscovery = null
+            if (candidateSelection.tools.length === 0 && enabledTools.length > 0 && toolRoutingText.trim().length >= 4) {
+                semanticDiscovery = await toolRegistry.discoverToolCandidates(
+                    toolRoutingText,
+                    this.client,
+                    enabledTools,
+                    {
+                        currentInstruction: toolRoutingText,
+                        planningContext: recentAgentTaskPlanningContext,
+                        maxTools: 8
+                    }
+                )
+                if (semanticDiscovery.tools.length > 0) {
+                    candidateSelection.tools = enabledTools.filter(name => semanticDiscovery.tools.includes(name))
+                    candidateSelection.compound = candidateSelection.compound || candidateSelection.tools.length > 1
+                    candidateSelection.reason = `语义工具发现(${semanticDiscovery.mode}, confidence=${semanticDiscovery.confidence.toFixed(2)}): ${semanticDiscovery.reason || semanticDiscovery.tools.join(', ')}`
+                    logger.info(`[AI-Plugin] [畅聊] 语义工具发现召回候选: ${candidateSelection.tools.join(', ')}, mode=${semanticDiscovery.mode}, confidence=${semanticDiscovery.confidence.toFixed(2)}${semanticDiscovery.model ? `, 模型=${semanticDiscovery.model}` : ''}`)
+                } else if (semanticDiscovery.mode === 'task' && semanticDiscovery.confidence >= 0.65) {
+                    candidateSelection.tools = [...enabledTools]
+                    candidateSelection.reason = `语义工具发现确认任务但未缩小工具范围：${semanticDiscovery.reason}`
+                    logger.info(`[AI-Plugin] [畅聊] 语义工具发现确认任务，使用完整工具目录: confidence=${semanticDiscovery.confidence.toFixed(2)}`)
+                }
+            }
             const selectedToolSet = new Set([...candidateSelection.tools, ...recentAgentTaskToolCandidates])
             const routeByKeyword = candidateSelection.tools.length > 0 || shouldRouteFastChatTools(toolRoutingText, candidateUrls)
             const routeByMasterRequest = shouldLetFastChatToolModelJudge(toolRoutingText, e.isMaster)
@@ -1297,7 +1321,10 @@ export class FastChatHandler extends plugin {
                 ? enabledTools.filter(name => selectedToolSet.has(name))
                 : (routeByMasterRequest ? enabledTools : [])
             if (enabledTools.length > 0 && (routeByKeyword || routeByMasterRequest || routeByRecentTask)) {
-                logger.info(`[AI-Plugin] [畅聊] 工具路由开始: 候选工具=${planningEnabledTools.join(', ')}, 语义族=${candidateSelection.families.join(', ') || '模型兜底'}, 触发=${routeByKeyword ? '规则命中' : (routeByMasterRequest ? '主人请求兜底' : '近期任务续接')}`)
+                const routeTrigger = semanticDiscovery?.tools?.length > 0
+                    ? '语义工具发现'
+                    : (routeByKeyword ? '规则命中' : (routeByMasterRequest ? '主人请求兜底' : '近期任务续接'))
+                logger.info(`[AI-Plugin] [畅聊] 工具路由开始: 候选工具=${planningEnabledTools.join(', ')}, 语义族=${candidateSelection.families.join(', ') || '模型兜底'}, 触发=${routeTrigger}`)
                 let toolCalls = []
                 const toolMemorySummary = userProfileText
                     ? `【${memorySubjectLabel}个人档案】\n${userProfileText}\n\n【${memorySubjectLabel}长期记忆摘要】\n${personalMemory}`
@@ -1363,6 +1390,7 @@ export class FastChatHandler extends plugin {
                     )
                 }
                 const seenToolCalls = new Set()
+                let fastAgentStagnationState = { fingerprint: '', repeatCount: 0, shouldStop: false }
                 for (let agentRound = 1; agentRound <= FAST_CHAT_AGENT_MAX_ROUNDS; agentRound++) {
                     if (hasLocalImageInput) {
                         const attachedPaths = new Set(localImageInput.paths.flatMap(item => [item.requestedPath, item.realPath]).filter(Boolean))
@@ -1393,6 +1421,11 @@ export class FastChatHandler extends plugin {
                         groupId: normalized.groupId,
                         objective: toolRoutingText || normalized.currentText || normalized.normalizedText || '畅聊工具任务',
                         riskLevel: classifyAgentRisk(toolCalls),
+                        plan: buildAgentTaskPlan({
+                            resolved_request: toolRoutingText || normalized.currentText || normalized.normalizedText || '畅聊工具任务',
+                            task_kind: toolCalls.length > 1 ? 'multi_step' : 'single_step',
+                            tool_plan: toolCalls.map(call => ({ tool: call.name, params: call.args, purpose: `执行 ${call.name}` }))
+                        }),
                         logger,
                         logPrefix: '[AI-Plugin] [畅聊] Agent任务'
                     })
@@ -1473,10 +1506,44 @@ export class FastChatHandler extends plugin {
                         fastAgentTask = await updateAgentTaskProgress(this.conversationManager.db, fastAgentTask, {
                             status: fastAgentTaskStatus,
                             summary: fastAgentLatestSummary,
-                            lastObservation: fastAgentLatestObservation
+                            lastObservation: fastAgentLatestObservation,
+                            plan: updateAgentTaskPlanFromObservations(
+                                fastAgentTask.plan || {},
+                                roundExecutions.map(item => ({
+                                    tool: item.call.name,
+                                    args: item.call.args,
+                                    status: item.status,
+                                    protocol: item.protocol
+                                }))
+                            )
                         }, { logger, logPrefix: '[AI-Plugin] [畅聊] Agent任务' })
                         if (['waiting', 'blocked'].includes(fastAgentTaskStatus)) {
                             logger.info(`[AI-Plugin] [畅聊] Agent 第 ${agentRound} 轮进入 ${fastAgentTaskStatus} 状态，停止继续规划`)
+                            break
+                        }
+
+                        const roundFingerprint = buildAgentRoundFingerprint(
+                            roundExecutions.map(item => ({
+                                tool: item.call.name,
+                                args: item.call.args,
+                                status: item.status,
+                                protocol: item.protocol,
+                                text: item.formattedResult
+                            })),
+                            {
+                                completionStatus: fastAgentTaskStatus,
+                                lastObservation: fastAgentLatestObservation
+                            }
+                        )
+                        fastAgentStagnationState = updateAgentStagnationState(fastAgentStagnationState, roundFingerprint)
+                        if (fastAgentStagnationState.shouldStop) {
+                            fastAgentTaskStatus = 'blocked'
+                            fastAgentLatestObservation = `${fastAgentLatestObservation}；连续多轮没有产生新信息，已自动停止避免无效循环。`
+                            fastAgentTask = await updateAgentTaskProgress(this.conversationManager.db, fastAgentTask, {
+                                status: 'blocked',
+                                lastObservation: fastAgentLatestObservation
+                            }, { logger, logPrefix: '[AI-Plugin] [畅聊] Agent任务' })
+                            logger.warn(`[AI-Plugin] [畅聊] Agent 连续 ${fastAgentStagnationState.repeatCount + 1} 轮观察无变化，提前停止`)
                             break
                         }
                     }
@@ -1491,7 +1558,7 @@ export class FastChatHandler extends plugin {
                     })
                     if (!shouldContinue) break
 
-                    const followupEnabledTools = planningEnabledTools.filter(name => FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS.includes(name))
+                    const followupEnabledTools = enabledTools.filter(name => FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS.includes(name))
                     if (followupEnabledTools.length === 0) break
                     const roundObservationText = roundExecutions.map(item => `${item.call.name}(${JSON.stringify(item.call.args || {})}) [${item.status}]\n${item.formattedResult}`).join('\n\n')
                     const followupText = `${toolRoutingText}\n\n【Agent 第 ${agentRound} 轮真实工具结果】\n${truncateMiddleText(roundObservationText, 18000)}\n\n【继续规划要求】只有当前结果仍不足以完成原始请求时才调用工具；不要重复相同调用，不要追加无意义验证。`

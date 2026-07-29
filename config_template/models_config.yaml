@@ -174,6 +174,7 @@ enable_web_fetch: false
 #   SHELL_EXEC_MAX_OUTPUT_CHARS      单页输出截断字符数（默认 24000，超长按游标分页不丢数据）
 #   SHELL_EXEC_FOLLOWUP_MAX_ROUNDS   多轮补查最大轮数（默认 5，含大数据翻页续读）
 #   SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS 补查时回传给模型的上下文字符数（默认 24000）
+#   AGENT_LOOP_MAX_ROUNDS            通用 Agent 工具循环最大轮数（默认 8，硬上限 8）
 #
 # enable_file_transfer: 是否启用文件收发（默认 false）
 #   仅主人可用；开启后 AI 可按意图：
@@ -265,6 +266,7 @@ enable_web_fetch: false
 # SHELL_EXEC_MAX_OUTPUT_CHARS: 24000
 # SHELL_EXEC_FOLLOWUP_MAX_ROUNDS: 5
 # SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS: 24000
+# AGENT_LOOP_MAX_ROUNDS: 8
 # MODEL_CHAT_REQUEST_TIMEOUT_MS: 90000       # 普通对话/工具规划/最终回复的单模型超时
 # MODEL_IMAGE_REQUEST_TIMEOUT_MS: 180000     # 绘图请求的单模型超时
 # MODEL_LONG_REQUEST_TIMEOUT_MS: 240000      # 长摘要/大输出请求的单模型超时

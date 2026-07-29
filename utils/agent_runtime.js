@@ -79,6 +79,36 @@ export function shouldContinueAgentRound(options = {}) {
     return false
 }
 
+export function buildAgentRoundFingerprint(observations = [], decision = {}) {
+    const compact = (Array.isArray(observations) ? observations : []).map(item => ({
+        tool: item?.tool || '',
+        status: item?.status || '',
+        args: item?.args || {},
+        ok: item?.protocol?.ok,
+        pending: item?.protocol?.pending,
+        recoverable: item?.protocol?.recoverable,
+        summary: String(item?.protocol?.summary || '').slice(0, 600),
+        error: String(item?.protocol?.error || '').slice(0, 600),
+        result: String(item?.text || '').slice(-1200)
+    }))
+    return stableAgentStringify({
+        observations: compact,
+        completionStatus: decision?.completionStatus || '',
+        lastObservation: String(decision?.lastObservation || '').slice(0, 1000),
+        nextHint: String(decision?.nextHint || '').slice(0, 600)
+    })
+}
+
+export function updateAgentStagnationState(state = {}, fingerprint = '') {
+    if (!fingerprint) return { fingerprint: '', repeatCount: 0, shouldStop: false }
+    const repeatCount = state.fingerprint === fingerprint ? Math.max(0, Number(state.repeatCount) || 0) + 1 : 0
+    return {
+        fingerprint,
+        repeatCount,
+        shouldStop: repeatCount >= 2
+    }
+}
+
 export async function* executeAgentToolCalls(options = {}) {
     const registry = options.registry
     const toolCalls = Array.isArray(options.toolCalls) ? options.toolCalls : []

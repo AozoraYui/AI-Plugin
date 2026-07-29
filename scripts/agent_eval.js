@@ -43,9 +43,9 @@ const { groupSendMessageTool, parseGroupSendDisambiguationSelection, resolveGrou
 await import('../tools/group_admin.js')
 const { savePendingAction, loadPendingAction, listPendingActions, clearPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } = await import('../utils/pending_actions.js')
 const { deterministicToolDecision, normalizeToolResult } = await import('../utils/tool_result.js')
-const { agentToolCallKey, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound } = await import('../utils/agent_runtime.js')
+const { agentToolCallKey, buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, shouldContinueAgentRound, updateAgentStagnationState } = await import('../utils/agent_runtime.js')
 const { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, updateAgentTaskProgress } = await import('../utils/agent_task_runtime.js')
-const { normalizeAgentTaskPlan, selectNextAgentPlanStep } = await import('../utils/agent_plan.js')
+const { buildAgentTaskPlan, normalizeAgentTaskPlan, selectNextAgentPlanStep, updateAgentTaskPlanFromObservations } = await import('../utils/agent_plan.js')
 const { getRecentTaskToolArgs, hasImplicitRecentTaskReference } = await import('../utils/agent_reference.js')
 const { executeConfirmedPendingToolCall, validatePendingToolCallScene } = await import('../utils/tool_execution_policy.js')
 const { AIDatabase } = await import('../utils/database.js')
@@ -881,6 +881,69 @@ check('共享续跑策略允许可恢复失败调整方案', shouldContinueAgent
     instruction: '检查配置',
     accumulatedText: '路径不存在'
 }))
+
+const discoveredRelay = await toolRegistry.discoverToolCandidates(
+    '你去龟龟教那边跟他们讲一声测试，不用把话带回来',
+    {
+        webSearchIntentModels: ['fake'],
+        async quickIntentRequest() {
+            return {
+                success: true,
+                platform: 'fake-semantic-router',
+                data: JSON.stringify({
+                    mode: 'task',
+                    tools: ['group_send_message', 'not_a_real_tool'],
+                    confidence: 0.94,
+                    reason: '用户要求向另一个群转达消息'
+                })
+            }
+        }
+    },
+    ['group_send_message', 'group_chat_context'],
+    { currentInstruction: '你去龟龟教那边跟他们讲一声测试，不用把话带回来' }
+)
+check('语义工具发现能召回自然跨群转达能力', discoveredRelay.mode === 'task' && discoveredRelay.tools.length === 1 && discoveredRelay.tools[0] === 'group_send_message', JSON.stringify(discoveredRelay))
+
+const plannedTask = buildAgentTaskPlan({
+    resolved_request: '查找并发送日志文件',
+    task_kind: 'multi_step',
+    success_criteria: ['找到日志', '发送成功'],
+    tool_plan: [
+        { tool: 'shell_exec', purpose: '查找日志', params: { command: 'find /tmp -name "*.log"' } },
+        { tool: 'file_send', purpose: '发送日志', params: { path: '/tmp/example.log' } }
+    ]
+})
+const progressedTask = updateAgentTaskPlanFromObservations(plannedTask, [{
+    tool: 'shell_exec',
+    status: 'ok',
+    protocol: normalizeToolResult('shell_exec', { ok: true })
+}])
+check('Agent结构化计划会在真实观察后推进下一步骤', progressedTask.steps[0].status === 'completed' && progressedTask.steps[1].status === 'in_progress' && progressedTask.currentStepId === progressedTask.steps[1].id, JSON.stringify(progressedTask))
+
+const repeatedObservation = [{
+    tool: 'shell_exec',
+    args: { command: 'cat /tmp/missing' },
+    status: 'tool_failed',
+    protocol: normalizeToolResult('shell_exec', { ok: false, recoverable: true, error: '文件不存在' }),
+    text: '文件不存在'
+}]
+const stagnationFingerprint = buildAgentRoundFingerprint(repeatedObservation, {
+    completionStatus: 'continue',
+    lastObservation: '文件不存在',
+    nextHint: '换路径重试'
+})
+let stagnationState = updateAgentStagnationState({}, stagnationFingerprint)
+stagnationState = updateAgentStagnationState(stagnationState, stagnationFingerprint)
+stagnationState = updateAgentStagnationState(stagnationState, stagnationFingerprint)
+check('Agent连续三轮观察无变化时触发停滞保护', stagnationState.shouldStop && stagnationState.repeatCount === 2, JSON.stringify(stagnationState))
+
+const structuredProtocol = normalizeToolResult('demo', {
+    ok: true,
+    facts: { path: '/tmp/example.log' },
+    artifacts: [{ type: 'file', path: '/tmp/example.log' }],
+    next_hints: ['可以发送文件']
+})
+check('统一工具协议保留事实、产物和下一步提示', structuredProtocol.facts.path === '/tmp/example.log' && structuredProtocol.artifacts.length === 1 && structuredProtocol.nextHints[0] === '可以发送文件')
 
 const persistedTasks = new Map()
 const persistedSteps = []
