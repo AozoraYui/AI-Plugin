@@ -11,7 +11,7 @@ import { buildGroupContextImageSummary, formatGroupContextImageSummary, isExpire
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memory_context.js'
-import { detectToolIntentFamilies, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, selectToolCandidates } from '../utils/tool_intent.js'
+import { detectToolIntentFamilies, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } from '../utils/agent_runtime.js'
@@ -20,6 +20,7 @@ import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/
 import { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, updateAgentTaskProgress } from '../utils/agent_task_runtime.js'
 import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../utils/agent_plan.js'
 import { verifyAgentRound } from '../utils/agent_verifier.js'
+import { selectWorkspaceSurveyFiles } from '../utils/workspace_survey.js'
 
 const replyCooldown = new Map()
 const PERSONAL_MEMORY_MAX_CHARS = 2600
@@ -1379,8 +1380,14 @@ export class FastChatHandler extends plugin {
                 const webSearchArgs = planningEnabledTools.includes('web_search')
                     ? parseWebSearchRequest(toolRoutingText)
                     : null
+                const workspaceSurveyArgs = e.isMaster && planningEnabledTools.includes('workspace_list')
+                    ? parseWorkspaceSurveyRequest(toolRoutingText)
+                    : null
                 const allowSingleToolPreRoute = !candidateSelection.compound || routeByRecentTask
-                if (allowSingleToolPreRoute && webSearchArgs?.image_count > 0) {
+                if (allowSingleToolPreRoute && workspaceSurveyArgs) {
+                    toolCalls = [{ name: 'workspace_list', args: workspaceSurveyArgs }]
+                    logger.info('[AI-Plugin] [畅聊] 规则预路由命中: workspace_list - 先递归获取项目结构，再读取关键文件')
+                } else if (allowSingleToolPreRoute && webSearchArgs?.image_count > 0) {
                     toolCalls = [{ name: 'web_search', args: webSearchArgs }]
                     logger.info(`[AI-Plugin] [畅聊] 规则预路由命中: web_search - 用户明确要求搜索并发送 ${webSearchArgs.image_count} 张图片`)
                 } else if (allowSingleToolPreRoute && recentGroupFollowupArgs) {
@@ -1429,6 +1436,9 @@ export class FastChatHandler extends plugin {
                 const seenToolCalls = new Set()
                 let fastAgentStagnationState = { fingerprint: '', repeatCount: 0, shouldStop: false }
                 let failedImageSearchAttempts = 0
+                let workspaceSurveyEntries = []
+                const workspaceSurveyAttemptedPaths = new Set()
+                const workspaceSurveyReadPaths = new Set()
                 for (let agentRound = 1; agentRound <= FAST_CHAT_AGENT_MAX_ROUNDS; agentRound++) {
                     if (hasLocalImageInput) {
                         const attachedPaths = new Set(localImageInput.paths.flatMap(item => [item.requestedPath, item.realPath]).filter(Boolean))
@@ -1499,6 +1509,12 @@ export class FastChatHandler extends plugin {
                             failedImageSearchAttempts++
                         } else if (result.success && call.name === 'web_search' && Number(result.data?.requestedImages || 0) > 0 && result.data?.sentImages?.length > 0) {
                             failedImageSearchAttempts = 0
+                        }
+                        if (workspaceSurveyArgs && result.success && call.name === 'workspace_list' && Array.isArray(result.data?.entries)) {
+                            workspaceSurveyEntries = result.data.entries
+                        }
+                        if (workspaceSurveyArgs && result.success && call.name === 'workspace_read' && result.data?.facts?.path) {
+                            workspaceSurveyReadPaths.add(String(result.data.facts.path))
                         }
                         await recordAgentTaskStep(this.conversationManager.db, fastAgentTask, {
                             stepIndex: agentRound * 100 + execution.index,
@@ -1621,6 +1637,18 @@ export class FastChatHandler extends plugin {
                         toolContextText = truncateMiddleText(toolContextText + '\n\n【Agent搜图停止条件】已尝试两次但没有图片通过下载与视觉复核，本轮停止重复搜索。', FAST_CHAT_TOOL_CONTEXT_MAX_CHARS)
                         logger.info(`[AI-Plugin] [畅聊] Agent 搜图连续 ${failedImageSearchAttempts} 次未发送图片，停止重复搜索`)
                         break
+                    }
+                    if (workspaceSurveyArgs && workspaceSurveyEntries.length > 0 && workspaceSurveyReadPaths.size < 4) {
+                        const selectedFiles = selectWorkspaceSurveyFiles(workspaceSurveyEntries, workspaceSurveyAttemptedPaths, 2)
+                        if (selectedFiles.length > 0) {
+                            toolCalls = selectedFiles.map(item => ({
+                                name: 'workspace_read',
+                                args: { path: item.path, start_line: 1, line_count: 240 }
+                            }))
+                            selectedFiles.forEach(item => workspaceSurveyAttemptedPaths.add(item.path))
+                            logger.info(`[AI-Plugin] [畅聊] Agent 项目过目强制深读: ${selectedFiles.map(item => item.relativePath || item.path).join(', ')}`)
+                            continue
+                        }
                     }
                     if (agentRound >= FAST_CHAT_AGENT_MAX_ROUNDS) break
                     const shouldContinue = deferredBatch.deferred.length > 0 || shouldContinueAgentRound({

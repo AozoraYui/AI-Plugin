@@ -26,6 +26,7 @@ const {
     parseNamedGroupChatContextRequest,
     parseRecentGroupChatFollowupRequest,
     parseWebSearchRequest,
+    parseWorkspaceSurveyRequest,
     selectToolCandidates
 } = await import('../utils/tool_intent.js')
 const { classifyAgentRisk, classifyToolCallRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } = await import('../utils/agent_policy.js')
@@ -56,6 +57,7 @@ const { getRecentTaskToolArgs, hasImplicitRecentTaskReference } = await import('
 const { executeConfirmedPendingToolCall, validatePendingToolCallScene } = await import('../utils/tool_execution_policy.js')
 const { AIDatabase } = await import('../utils/database.js')
 const { default: sqlite3 } = await import('sqlite3')
+const { selectWorkspaceSurveyFiles } = await import('../utils/workspace_survey.js')
 
 const failures = []
 let passed = 0
@@ -139,6 +141,28 @@ check('Bing图片搜索使用中国区原生 images 入口并保留原查询', (
         && url.searchParams.get('form') === 'HDRSC2'
         && url.searchParams.get('first') === '1'
         && !url.searchParams.has('safeSearch')
+})())
+check('过目整个目录会解析为递归工作区调查', (() => {
+    const request = parseWorkspaceSurveyRequest('#c测试时间到啦，诺亚你把/root/Yunzai目录下的文件先过目一遍吧')
+    return request?.path === '/root/Yunzai'
+        && request.depth === 3
+        && request.limit >= 300
+        && request.include_hidden === true
+})())
+check('项目调查会选择关键文件并覆盖不同目录', (() => {
+    const selected = selectWorkspaceSurveyFiles([
+        { type: 'file', path: '/root/Yunzai/README.md', relativePath: 'README.md', size: 1000 },
+        { type: 'file', path: '/root/Yunzai/package.json', relativePath: 'package.json', size: 1000 },
+        { type: 'file', path: '/root/Yunzai/index.js', relativePath: 'index.js', size: 1000 },
+        { type: 'file', path: '/root/Yunzai/lib/plugins/loader.js', relativePath: 'lib/plugins/loader.js', size: 1000 },
+        { type: 'file', path: '/root/Yunzai/apps/main.js', relativePath: 'apps/main.js', size: 1000 },
+        { type: 'file', path: '/root/Yunzai/package-lock.json', relativePath: 'package-lock.json', size: 1000 }
+    ], new Set(), 4)
+    const roots = new Set(selected.map(item => item.relativePath.includes('/') ? item.relativePath.split('/')[0] : '__root__'))
+    return selected.length === 4
+        && selected.some(item => item.relativePath === 'README.md')
+        && !selected.some(item => item.relativePath === 'package-lock.json')
+        && roots.size >= 3
 })())
 check('网页预览图提取会优先保留具体内容图并过滤站点通用图', (() => {
     const html = '<meta property="og:image" content="https://example.com/og-card.png"><meta property="og:image" content="/images/qlu-11.jpg">'

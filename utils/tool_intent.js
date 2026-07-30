@@ -676,6 +676,22 @@ export function hasExplicitLocalFileReadIntent(text) {
         || new RegExp(`${fileName}.{0,36}(?:${readAction}|${fieldQuestion})`, 'i').test(value)
 }
 
+export function parseWorkspaceSurveyRequest(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value || isCapabilityOrUsageQuestion(value, '了解项目|熟悉项目|浏览目录|目录结构|项目结构')) return null
+    const hasSurveyAction = /(?:过目(?:一遍|一下)?|熟悉(?:一下)?|了解(?:一下)?|浏览(?:一下)?|通读(?:一下)?|看(?:一遍|一下)?|扫(?:一遍|一下)?|梳理(?:一下)?|摸清)/i.test(value)
+    const hasWorkspaceScope = /(?:目录(?:下)?|项目|仓库|代码库|源码|文件结构|目录结构|tree\s*结构|文件(?:先)?)/i.test(value)
+    if (!hasSurveyAction || !hasWorkspaceScope) return null
+    const absolutePath = value.match(/\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)(?:\/[A-Za-z0-9_.@+~-]+)+/i)?.[0]
+    const relativePath = value.match(/(?:^|[\s，,])((?:\.\.?\/)[^\s，。；;]+)/)?.[1]
+    return {
+        path: absolutePath || relativePath || '.',
+        depth: 3,
+        limit: 300,
+        include_hidden: true
+    }
+}
+
 export function parseExplicitLocalFileReadRequest(text) {
     const value = getPrimaryUserInstruction(text)
     if (!hasExplicitLocalFileReadIntent(value)) return null
