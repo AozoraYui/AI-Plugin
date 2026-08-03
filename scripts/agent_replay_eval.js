@@ -50,6 +50,14 @@ const incidents = [
         }
     },
     {
+        id: 'web-image-search-with-bare-zhang-counter',
+        input: '#c帮我搜张QBZ-03的图',
+        pass: text => {
+            const request = parseWebSearchRequest(text)
+            return request?.query === 'QBZ-03' && request.image_count === 1
+        }
+    },
+    {
         id: 'code-change-recalls-static-verification',
         input: '#c把tools/example.js里的旧逻辑修掉并确认代码没问题',
         pass: text => {

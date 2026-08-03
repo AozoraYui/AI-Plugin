@@ -104,6 +104,23 @@ check('“搜两张目标”省略图片二字仍按图片搜索处理', (() => 
     const request = parseWebSearchRequest('#c诺亚帮我去搜两张qlu-11')
     return request?.query === 'qlu-11' && request.image_count === 2
 })())
+check('裸量词搜型号会移除量词而保留完整型号', (() => {
+    const request = parseWebSearchRequest('#c帮我搜张QBZ-03的图')
+    return request?.query === 'QBZ-03' && request.image_count === 1
+})())
+check('裸量词中文搜图会提取实体而不是残留“张”', (() => {
+    const request = parseWebSearchRequest('#c搜张猫图')
+    return request?.query === '猫' && request.image_count === 1
+})())
+check('“张”作为姓氏时不会被搜图量词清洗误删', (() => {
+    const request = parseWebSearchRequest('#c帮我搜张学友的图')
+    return request?.query === '张学友' && request.image_count === 1
+})())
+check('普通人物资料搜索会保留姓氏且不要求图片', (() => {
+    const request = parseWebSearchRequest('#c搜张三的资料')
+    return request?.query === '张三的资料' && request.image_count === 0
+})())
+check('普通“找对象”表达不会被误判为联网搜索', parseWebSearchRequest('#c找对象') === null)
 check('搜图目标中的“发射器”不会被截断或误判为群代发', (() => {
     const text = '#c诺亚帮我去搜两张qlu-11式榴弹发射器的图'
     const request = parseWebSearchRequest(text)
