@@ -6,6 +6,7 @@ const {
     hasExplicitLocalFileDiscoveryIntent,
     hasExplicitLocalFileMutationIntent,
     hasExplicitLocalFileReadIntent,
+    hasExplicitSystemOperationIntent,
     hasExplicitUserProfileUpdateIntent,
     hasGroupChatContextQuestion,
     parseExplicitLocalFileReadRequest,
@@ -25,7 +26,7 @@ const replayEnabledTools = [
     'group_request_list', 'group_request_handle'
 ]
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
-const { isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
+const { hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
 const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMemorySubject } = await import('../utils/message_context.js')
 const { summarizeShellResultForReply } = await import('../utils/shell_result_summary.js')
 const { parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically } = await import('../tools/group_send.js')
@@ -33,6 +34,21 @@ const { parseStandalonePendingCommand } = await import('../utils/pending_actions
 const { classifyToolCallRisk } = await import('../utils/agent_policy.js')
 
 const incidents = [
+    {
+        id: 'natural-language-dependency-repair-executes-shell',
+        input: '#c我是在测试你的agent能力，你去补一下依赖',
+        pass: text => {
+            const tools = selectToolCandidates(replayEnabledTools, text).tools
+            const guarded = filterToolCallsByIntent([{
+                name: 'shell_exec',
+                args: { command: 'pnpm install', cwd: '/root/Yunzai' }
+            }], text)
+            return hasExplicitSystemOperationIntent(text)
+                && tools.includes('shell_exec')
+                && guarded.tools.length === 1
+                && guarded.blocked.length === 0
+        }
+    },
     {
         id: 'web-search-with-explicit-image-delivery',
         input: '#c帮我搜一下英伟达最新显卡，有图片的话带一张图发给我',
@@ -318,6 +334,15 @@ if (sanitized === '实际字段是 image' && isPlanOnlyResponse('【工具规划
 } else {
     failures.push('internal-plan-sanitization')
     console.error(`✗ replay internal-plan-sanitization: ${sanitized}`)
+}
+
+if (hasUnsupportedToolResultClaim('我已经完成 pnpm install，并成功重新编译 nodejieba。', { hasActualToolResults: false })
+    && !hasUnsupportedToolResultClaim('我已经完成 pnpm install，并成功重新编译 nodejieba。', { hasActualToolResults: true })) {
+    passed++
+    console.log('✓ replay unsupported-tool-success-claim')
+} else {
+    failures.push('unsupported-tool-success-claim')
+    console.error('✗ replay unsupported-tool-success-claim')
 }
 
 console.log(`\nAgent replay eval: ${passed}/${passed + failures.length} passed`)

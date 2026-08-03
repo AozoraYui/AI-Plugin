@@ -403,6 +403,18 @@ export function hasExplicitLocalFileMutationIntent(text) {
     return delegated && targetsFile && !(asksHow && !/(?:帮我|给我|请|麻烦)/i.test(value))
 }
 
+export function hasExplicitSystemOperationIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    const delegated = /(?:帮我|给我|请|麻烦你?|你来|你去|去|直接|现在|立刻|赶紧|替我|为我|把|将|我要你|需要你)/i.test(value)
+        || /^(?:再|继续|接着|重新)?\s*(?:安装|补全|补齐|修复|重装|卸载|更新|升级|降级|编译|构建|部署|启动|重启|停止|清理|恢复|迁移|导入|导出)/i.test(value)
+    if (!delegated) return false
+    const operation = /(?:安装|装上|补全|补齐|补一下|补一补|修复|修好|重装|卸载|更新|升级|降级|编译|重新编译|构建|打包|部署|启动|重启|停止|关闭|清理|恢复|迁移|导入|导出)/i.test(value)
+    const systemTarget = /(?:依赖|依赖包|包|模块|环境|运行环境|node_modules|原生扩展|插件|项目|仓库|服务|进程|容器|镜像|数据库|程序|应用|脚本|系统|服务器|Yunzai|云崽|nodejieba|npm|pnpm|yarn|pip|docker|systemd|pm2)/i.test(value)
+    const asksHow = /(?:怎么|如何|怎样|教程|方法).{0,40}(?:安装|补全|补齐|修复|编译|构建|部署|重启|清理)/i.test(value)
+    return operation && systemTarget && !(asksHow && !/(?:帮我|给我|请|麻烦|你来|你去|我要你|需要你)/i.test(value))
+}
+
 export function hasExplicitGroupChatContextIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
@@ -666,6 +678,7 @@ export function hasExplicitShellIntent(text, toolName = '') {
     }
     if (hasExplicitLocalFileMutationIntent(value)) return true
     if (hasExplicitLocalFileDiscoveryIntent(value)) return true
+    if (hasExplicitSystemOperationIntent(value)) return true
     if (toolName === 'shell_session' && new RegExp(sessionWords, 'i').test(value)) return true
     if (/\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\b/i.test(value)
         && /(?:看|看看|读|读取|打开|检查|分析|搜索|查找|统计|内容|日志|配置|脚本|文件|目录)/i.test(value)) return true
@@ -810,6 +823,7 @@ export function detectToolIntentFamilies(text, options = {}) {
     add(hasExplicitGroupFileListIntent(value), 'group_file_list')
     add(hasExplicitGroupFileDownloadIntent(value), 'group_file_download')
     add(hasExplicitLocalFileMutationIntent(value), 'local_file_mutation')
+    add(hasExplicitSystemOperationIntent(value), 'system_operation')
     add(urls.length === 0 && (hasExplicitShellIntent(value) || hasExplicitLocalFileReadIntent(value) || hasExplicitLocalFileDiscoveryIntent(value)
         || (localFileHint && /(?:瞅|读|看|找|列|检查|分析|打开)/i.test(value))), 'local_file')
     add(hasExplicitDrawIntent(value, { hasImages, hasRecentImages }), 'draw')
@@ -843,6 +857,7 @@ export function selectToolCandidates(enabledTools = [], text = '', options = {})
     if (families.has('system')) add(['system_info', 'shell_exec', 'shell_session'])
     if (families.has('local_file')) add(['workspace_list', 'workspace_search', 'workspace_read', 'shell_exec'])
     if (families.has('local_file_mutation')) add(['workspace_read', 'workspace_patch', 'workspace_verify', 'config_manage', 'shell_exec'])
+    if (families.has('system_operation')) add(['shell_exec', 'shell_session'])
     if (families.has('file_send')) add(['file_send', 'workspace_list', 'workspace_search', 'shell_exec'])
     if (families.has('file_download')) add(['file_download'])
     if (families.has('group_file_list')) add(['group_file_list'])

@@ -16,6 +16,7 @@ const {
     hasExplicitLocalFileDiscoveryIntent,
     hasExplicitGroupChatContextIntent,
     hasExplicitShellIntent,
+    hasExplicitSystemOperationIntent,
     hasExplicitUserProfileHistoryExtractionIntent,
     hasExplicitUserProfileUpdateIntent,
     hasGroupChatContextQuestion,
@@ -30,7 +31,7 @@ const {
     selectToolCandidates
 } = await import('../utils/tool_intent.js')
 const { classifyAgentRisk, classifyToolCallRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } = await import('../utils/agent_policy.js')
-const { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } = await import('../utils/model_output.js')
+const { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } = await import('../utils/model_output.js')
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMemorySubject } = await import('../utils/message_context.js')
 const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq_face.js')
@@ -402,6 +403,7 @@ const candidateCases = [
     ['文件名口语发送命中文件工具', '#c把 who_are_you.js 丢群里', ['file_send']],
     ['图片落盘命中文件下载', '#c把这张图落盘到服务器', ['file_download'], { hasImages: true }],
     ['口语瞅源码命中Shell', '#c瞅一眼 plugins/example/test.js 写了啥', ['shell_exec']],
+    ['自然语言系统维护命中Shell', '#c我是在测试你的agent能力，你去补一下依赖', ['shell_exec']],
     ['自然语言配置修改命中结构化配置', '#c把 config.yaml 里的 enable 设置成 true', ['config_manage', 'shell_exec']],
     ['群聊水群说法命中群上下文', '#c那个群刚才都在水什么', ['group_chat_context']],
     ['翻翻以前命中记忆检索', '#c翻翻以前我有没有提过中山', ['memory_search']],
@@ -416,6 +418,16 @@ for (const [name, text, expected, options = {}] of candidateCases) {
     const selected = selectToolCandidates(naturalLanguageEnabledTools, text, options)
     check(name, expected.every(tool => selected.tools.includes(tool)), JSON.stringify(selected))
 }
+
+check('委派式依赖补全识别为系统执行', hasExplicitSystemOperationIntent('#c我是在测试你的agent能力，你去补一下依赖'))
+check('询问依赖安装方法不会误执行', !hasExplicitSystemOperationIntent('#c这个项目的依赖应该怎么安装？'))
+check('自然语言依赖补全允许模型计划Shell', (() => {
+    const guarded = filterToolCallsByIntent([{
+        name: 'shell_exec',
+        args: { command: 'pnpm install', cwd: '/root/Yunzai' }
+    }], '#c我是在测试你的agent能力，你去补一下依赖')
+    return guarded.tools.length === 1 && guarded.blocked.length === 0
+})())
 
 const noToolCases = [
     ['普通困倦闲聊不联网', '#c我现在很困'],
@@ -673,6 +685,9 @@ check('纯工具规划会被识别', isPlanOnlyResponse('【工具规划】查�
 check('正常解释中的分析一词不会误删', sanitizeModelOutput('这个分析是合理的，因为已有真实结果。') === '这个分析是合理的，因为已有真实结果。')
 check('无工具纠正提示禁止伪造执行结果', buildFinalAnswerRetryInstruction({ hasActualToolResults: false }).includes('本轮没有执行任何工具'))
 check('有工具纠正提示限定系统结果区块', buildFinalAnswerRetryInstruction({ hasActualToolResults: true }).includes('由系统注入的工具结果区块'))
+check('零工具执行会拦截虚构完成声明', hasUnsupportedToolResultClaim('我已经为你运行 pnpm install，依赖补全成功。', { hasActualToolResults: false }))
+check('真实工具结果允许汇报完成', !hasUnsupportedToolResultClaim('我已经为你运行 pnpm install，依赖补全成功。', { hasActualToolResults: true }))
+check('普通建议不会被当成虚构完成声明', !hasUnsupportedToolResultClaim('你可以运行 pnpm install 来补全依赖。', { hasActualToolResults: false }))
 check('代码中出现图片字样不会误触发历史读图', !isGroupContextImageQuestion("dsc: '发送随机图片'"))
 check('明确询问刚才图片会触发历史读图', isGroupContextImageQuestion('刚才那张图里写了什么？'))
 check('过期QQ临时图片链接会被跳过', isExpiredGroupContextImageUrl('https://multimedia.nt.qq.com.cn/download?appid=1407&rkey=test', '2026-07-26 14:00:00', Date.parse('2026-07-26T14:10:01Z')))

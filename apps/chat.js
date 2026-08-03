@@ -19,7 +19,7 @@ import { clearPendingAction, loadPendingAction, parseStandalonePendingCommand, p
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
-import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } from '../utils/model_output.js'
+import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } from '../utils/model_output.js'
 import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, shouldContinueAgentRound, shouldStopRepeatedImageSearch, stableAgentStringify, updateAgentStagnationState } from '../utils/agent_runtime.js'
 import { findPendingWorkspaceVerification } from '../utils/agent_completion.js'
 import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK_SUMMARY_MAX_CHARS, mergeAgentRisk, recordAgentTaskStep } from '../utils/agent_task_runtime.js'
@@ -2194,7 +2194,7 @@ export class ChatHandler extends plugin {
             let agentTaskFinalStatus = ''
             let agentTaskLatestSummary = agentTask?.summary || ''
             let agentTaskLatestObservation = agentTask?.lastObservation || ''
-            let actualToolExecutionCount = 0
+            let verifiedToolResultCount = 0
             let shellToolExecutionCount = 0
             let failedImageSearchAttempts = 0
             const workspaceSurveyRequest = e.isMaster ? parseWorkspaceSurveyRequest(currentToolInstruction || originalUserMessage) : null
@@ -2485,7 +2485,6 @@ export class ChatHandler extends plugin {
                     })) {
                         const { call, index: roundCallIndex, key, result, protocol, formattedResult: runtimeFormattedResult, status: runtimeStatus, pending } = execution
                         seenToolCalls.add(key)
-                        actualToolExecutionCount++
                         if (call.name === 'shell_exec' || call.name === 'shell_session') shellToolExecutionCount++
                         if (!result.success) {
                             logger.warn(`[AI-Plugin] ${call.name} 失败: ${result.error}`)
@@ -2504,6 +2503,7 @@ export class ChatHandler extends plugin {
                         }
 
                         roundExecuted++
+                        if (protocol.ok && !pending) verifiedToolResultCount++
                         const agentFormattedResult = runtimeFormattedResult
                         const toolStatus = runtimeStatus
                         if (pending) roundPendingConfirmation = true
@@ -2969,7 +2969,6 @@ export class ChatHandler extends plugin {
                         }
                         logger.warn(`[AI-Plugin] Shell 补查第 ${round} 轮: ${command}${isPaging ? ` (offset=${offsetChars})` : ''}`)
                         const result = await toolRegistry.execute('shell_exec', args, e.isMaster, toolContext)
-                        actualToolExecutionCount++
                         shellToolExecutionCount++
                         if (!result.success) {
                             logger.warn(`[AI-Plugin] Shell 补查失败: ${result.error}`)
@@ -2986,6 +2985,7 @@ export class ChatHandler extends plugin {
                         }
 
                         const formattedResult = toolRegistry.formatToolResult('shell_exec', result.data)
+                        if (result.data?.ok !== false && result.data?.pending !== true) verifiedToolResultCount++
                         const pagingNote = result.data?.paging?.hasMore ? '（注意：本页仍未读完，如需完整数据可继续翻页）' : ''
                         userMessage += `\n\n【Shell补查第${round}轮】主模型判断需要继续补充服务器信息。请同样严格基于实际执行结果回答，不要编造未执行的结果。${pagingNote}${formattedResult}`
                         await recordAgentStep(this.conversationManager.db, agentTask, {
@@ -3257,8 +3257,12 @@ export class ChatHandler extends plugin {
             if (result.success) {
                 let rawResponseText = String(result.data || '').trim()
                 let finalResponseText = sanitizeModelOutput(rawResponseText, { showThinking: Config.show_thinking })
-                if (!finalResponseText || isPlanOnlyResponse(finalResponseText)) {
-                    logger.warn(`[AI-Plugin] 最终回复疑似仅含内部思考或工具规划，触发一次纠正重试: ${rawResponseText.slice(0, 180)}`)
+                let unsupportedToolClaim = hasUnsupportedToolResultClaim(finalResponseText, {
+                    showThinking: Config.show_thinking,
+                    hasActualToolResults: verifiedToolResultCount > 0
+                })
+                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim) {
+                    logger.warn(`[AI-Plugin] 最终回复缺少可验证依据，触发一次纠正重试: ${rawResponseText.slice(0, 180)}`)
                     const retryPayload = {
                         contents: [
                             ...contents,
@@ -3266,7 +3270,8 @@ export class ChatHandler extends plugin {
                                 role: 'user',
                                 parts: [{
                                     text: buildFinalAnswerRetryInstruction({
-                                        hasActualToolResults: actualToolExecutionCount > 0
+                                        hasActualToolResults: verifiedToolResultCount > 0,
+                                        unsupportedToolClaim
                                     })
                                 }]
                             }
@@ -3277,11 +3282,15 @@ export class ChatHandler extends plugin {
                         result = retryResult
                         rawResponseText = String(retryResult.data).trim()
                         finalResponseText = sanitizeModelOutput(rawResponseText, { showThinking: Config.show_thinking })
+                        unsupportedToolClaim = hasUnsupportedToolResultClaim(finalResponseText, {
+                            showThinking: Config.show_thinking,
+                            hasActualToolResults: verifiedToolResultCount > 0
+                        })
                     }
                 }
-                if (!finalResponseText || isPlanOnlyResponse(finalResponseText)) {
-                    logger.warn('[AI-Plugin] 最终回复纠正失败，使用安全提示替代内部思考/工具规划文本')
-                    finalResponseText = '这次没有拿到可验证的最终结果，我不能把内部规划当成答案发给你。请再试一次；如果需要读取文件或执行命令，我会先实际调用工具再回答。'
+                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim) {
+                    logger.warn('[AI-Plugin] 最终回复纠正失败，使用安全提示替代无依据的完成声明')
+                    finalResponseText = '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。请再试一次；我会先真正调用工具并确认结果，再向你汇报。'
                 }
                 if (shellToolExecutionCount > 0) {
                     finalResponseText = sanitizePlainTextOutput(finalResponseText, { showThinking: Config.show_thinking })

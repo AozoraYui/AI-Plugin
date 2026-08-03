@@ -13,7 +13,7 @@ import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memory_context.js'
 import { detectToolIntentFamilies, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
-import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
+import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } from '../utils/agent_runtime.js'
 import { findPendingWorkspaceVerification } from '../utils/agent_completion.js'
 import { classifyAgentRisk } from '../utils/agent_policy.js'
@@ -1279,6 +1279,7 @@ export class FastChatHandler extends plugin {
         logger.info(`[AI-Plugin] [畅聊] 环境提示: ${environmentHint}`)
 
         let toolContextText = ''
+        let hasVerifiedToolResult = false
         let fastAgentTask = null
         let fastAgentTaskStatus = ''
         let fastAgentLatestSummary = ''
@@ -1511,6 +1512,7 @@ export class FastChatHandler extends plugin {
                         const { call, result, protocol } = execution
                         seenToolCalls.add(execution.key)
                         roundExecutions.push(execution)
+                        if (result.success && protocol.ok && !execution.pending) hasVerifiedToolResult = true
                         if (result.success && isUnfulfilledImageSearch(call, result.data)) {
                             failedImageSearchAttempts++
                         } else if (result.success && call.name === 'web_search' && Number(result.data?.requestedImages || 0) > 0 && result.data?.sentImages?.length > 0) {
@@ -1858,8 +1860,11 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
 
         let replyText = cleanModelText(result.data)
         let usedSafeFallbackReply = false
-        if (!replyText || isPlanOnlyResponse(replyText)) {
-            logger.warn(`[AI-Plugin] [畅聊] 最终回复疑似仅含内部思考或工具规划，触发一次纠正重试: ${String(result.data).slice(0, 180)}`)
+        let unsupportedToolClaim = hasUnsupportedToolResultClaim(replyText, {
+            hasActualToolResults: hasVerifiedToolResult
+        })
+        if (!replyText || isPlanOnlyResponse(replyText) || unsupportedToolClaim) {
+            logger.warn(`[AI-Plugin] [畅聊] 最终回复缺少可验证依据，触发一次纠正重试: ${String(result.data).slice(0, 180)}`)
             const retryPayload = {
                 contents: [
                     ...contents,
@@ -1867,7 +1872,8 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                         role: 'user',
                         parts: [{
                             text: buildFinalAnswerRetryInstruction({
-                                hasActualToolResults: Boolean(ctx.toolContextText)
+                                hasActualToolResults: hasVerifiedToolResult,
+                                unsupportedToolClaim
                             })
                         }]
                     }
@@ -1877,11 +1883,14 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             if (retryResult.success && retryResult.data) {
                 result = retryResult
                 replyText = cleanModelText(retryResult.data)
+                unsupportedToolClaim = hasUnsupportedToolResultClaim(replyText, {
+                    hasActualToolResults: hasVerifiedToolResult
+                })
             }
         }
-        if (!replyText || isPlanOnlyResponse(replyText)) {
-            logger.warn('[AI-Plugin] [畅聊] 最终回复纠正失败，使用安全提示替代内部思考/工具规划文本')
-            replyText = '这次没有拿到可验证的最终结果，我不能把内部规划当成答案发出来。你可以再问一次，我会在拿到真实结果后直接回答。'
+        if (!replyText || isPlanOnlyResponse(replyText) || unsupportedToolClaim) {
+            logger.warn('[AI-Plugin] [畅聊] 最终回复纠正失败，使用安全提示替代无依据的完成声明')
+            replyText = '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。你可以再问一次，我会先真正调用工具并确认结果。'
             usedSafeFallbackReply = true
         }
         await e.reply(replyText, true)
