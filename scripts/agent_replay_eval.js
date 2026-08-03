@@ -71,6 +71,18 @@ const incidents = [
         pass: text => hasExplicitLocalFileReadIntent(text)
     },
     {
+        id: 'natural-workspace-discovery-not-blocked',
+        input: '#c找一下plugins下的example目录有没有个叫做依赖补全的插件',
+        pass: text => {
+            const calls = [
+                { name: 'workspace_search', args: { path: 'plugins/example', query: '依赖补全', mode: 'filename' } },
+                { name: 'workspace_search', args: { path: 'plugins/example', query: '依赖补全', mode: 'content' } }
+            ]
+            const guarded = filterToolCallsByIntent(calls, text, { allowModelPlannedLowRisk: true })
+            return hasExplicitLocalFileDiscoveryIntent(text) && guarded.tools.length === 2 && guarded.blocked.length === 0
+        }
+    },
+    {
         id: 'relay-message-to-named-group',
         input: '#c帮我给龟龟教那个群带个话，内容是"测试"',
         pass: text => {

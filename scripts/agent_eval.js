@@ -46,7 +46,7 @@ const { buildShellResultSummaryPrompt, summarizeShellResultForReply } = await im
 const { groupSendMessageTool, parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically, resolveTargetGroup } = await import('../tools/group_send.js')
 await import('../tools/group_admin.js')
 await import('../tools/file_send.js')
-const { verifyWorkspaceFile } = await import('../tools/workspace.js')
+const { scoreWorkspaceFilenameMatch, verifyWorkspaceFile } = await import('../tools/workspace.js')
 const { savePendingAction, loadPendingAction, listPendingActions, clearPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } = await import('../utils/pending_actions.js')
 const { deterministicToolDecision, normalizeToolResult } = await import('../utils/tool_result.js')
 const { agentToolCallKey, buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } = await import('../utils/agent_runtime.js')
@@ -1104,6 +1104,15 @@ const workspaceCandidates = selectToolCandidates(
     '#c帮我在项目里找一下handleChat的定义并读一下相关代码'
 )
 check('代码查找请求优先召回结构化工作区工具', workspaceCandidates.tools.includes('workspace_search') && workspaceCandidates.tools.includes('workspace_read'), JSON.stringify(workspaceCandidates))
+const naturalWorkspaceDiscovery = '#c找一下plugins下的example目录有没有个叫做依赖补全的插件'
+check('自然语言层级目录表达会识别为本地文件查找', hasExplicitLocalFileDiscoveryIntent(naturalWorkspaceDiscovery))
+const naturalWorkspaceCalls = [
+    { name: 'workspace_search', args: { path: 'plugins/example', query: '依赖补全', mode: 'filename' } },
+    { name: 'workspace_search', args: { path: 'plugins/example', query: '依赖补全', mode: 'content' } }
+]
+const naturalWorkspaceGuard = filterToolCallsByIntent(naturalWorkspaceCalls, naturalWorkspaceDiscovery, { allowModelPlannedLowRisk: true })
+check('语义模型规划的低风险工作区搜索不会被二次规则错误拦截', naturalWorkspaceGuard.tools.length === 2 && naturalWorkspaceGuard.blocked.length === 0, JSON.stringify(naturalWorkspaceGuard))
+check('工作区文件名搜索支持中文词序调换的模糊匹配', scoreWorkspaceFilenameMatch('补全依赖.js', '依赖补全') > 0 && scoreWorkspaceFilenameMatch('下载依赖.js', '依赖补全') === 0)
 check('工作区读取和静态校验属于低风险而补丁属于中风险', classifyToolCallRisk({ name: 'workspace_read', args: { path: '/tmp/a.js' } }) === 'low' && classifyToolCallRisk({ name: 'workspace_verify', args: { path: '/tmp/a.js' } }) === 'low' && classifyToolCallRisk({ name: 'workspace_patch', args: { path: '/tmp/a.js' } }) === 'medium')
 const guardedWorkspacePatch = filterToolCallsByIntent([{
     name: 'workspace_patch',

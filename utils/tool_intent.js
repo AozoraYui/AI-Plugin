@@ -381,12 +381,15 @@ export function hasExplicitLocalFileDiscoveryIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
     const relativePath = '(?:\\.{0,2}\\/)?(?:[\\w@+.-]+\\/)+[\\w@+.-]*'
+    const spokenPath = '(?:[\\w@+.-]+\\s*(?:目录)?\\s*(?:下的?|下面的?|里的?|里面的?|中的?|\\/)){1,4}[\\w@+.-]+(?:目录)?'
     const discoveryAction = '(?:看|看看|看下|看一下|检查|确认|查|查询|查找|搜索|找)'
     const existenceHint = '(?:有没[有无]|是否有|是不是有|存在|叫|名为|名称|名字|哪个|哪一个|列出|里面|目录下)'
     const localObject = '(?:插件|源码|源文件|脚本|文件|目录|代码)'
     return new RegExp(`${discoveryAction}.{0,60}${relativePath}.{0,80}(?:${existenceHint}|${localObject})`, 'i').test(value)
         || new RegExp(`${relativePath}.{0,80}(?:${discoveryAction}|${existenceHint}).{0,80}${localObject}`, 'i').test(value)
         || new RegExp(`${relativePath}.{0,80}${existenceHint}`, 'i').test(value)
+        || new RegExp(`${discoveryAction}.{0,60}${spokenPath}.{0,80}(?:${existenceHint}|${localObject})`, 'i').test(value)
+        || new RegExp(`${spokenPath}.{0,80}(?:${existenceHint}|${localObject})`, 'i').test(value)
 }
 
 export function hasExplicitLocalFileMutationIntent(text) {
@@ -888,6 +891,9 @@ function hasModelPlannedLowRiskEvidence(call = {}, instruction = '', options = {
         if (!requestedUrl) return true
         return urls.some(url => requestedUrl === url || requestedUrl.includes(url) || url.includes(requestedUrl))
     }
+    if (['workspace_list', 'workspace_search', 'workspace_read'].includes(call.name)) {
+        return detectToolIntentFamilies(instruction).has('local_file')
+    }
     return false
 }
 
@@ -910,7 +916,9 @@ export function isExplicitToolIntent(toolName, text, options = {}) {
         case 'workspace_list':
         case 'workspace_search':
         case 'workspace_read':
-            return hasExplicitLocalFileReadIntent(text) || hasExplicitLocalFileDiscoveryIntent(text)
+            return hasExplicitLocalFileReadIntent(text)
+                || hasExplicitLocalFileDiscoveryIntent(text)
+                || detectToolIntentFamilies(text).has('local_file')
         case 'workspace_patch':
             return hasExplicitLocalFileMutationIntent(text)
         case 'workspace_verify':

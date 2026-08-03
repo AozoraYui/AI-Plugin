@@ -4,7 +4,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import yaml from 'yaml'
 import { toolRegistry } from './registry.js'
-import { checkPathAllowed, checkPathAllowedForWrite, rememberResolvedPath, resolvePathInput } from '../utils/file_access.js'
+import { checkPathAllowed, checkPathAllowedForWrite, normalizeFuzzyFileName, rememberResolvedPath, resolvePathInput } from '../utils/file_access.js'
 
 const IGNORED_DIRS = new Set(['.git', 'node_modules', 'data/chroma_db'])
 
@@ -35,6 +35,36 @@ function runFile(command, args, options = {}) {
 
 function normalizeLimit(value, fallback, max) {
     return Math.max(1, Math.min(max, Math.floor(Number(value) || fallback)))
+}
+
+function containsCharacterMultiset(candidate = '', query = '') {
+    const counts = new Map()
+    for (const character of candidate) counts.set(character, (counts.get(character) || 0) + 1)
+    for (const character of query) {
+        const count = counts.get(character) || 0
+        if (count <= 0) return false
+        counts.set(character, count - 1)
+    }
+    return true
+}
+
+export function scoreWorkspaceFilenameMatch(fileName = '', query = '') {
+    const rawName = String(fileName || '').toLowerCase()
+    const rawQuery = String(query || '').trim().toLowerCase()
+    if (!rawName || !rawQuery) return 0
+    if (rawName.includes(rawQuery)) return 100
+
+    const normalizedName = normalizeFuzzyFileName(rawName)
+    const normalizedQuery = normalizeFuzzyFileName(rawQuery)
+    if (!normalizedName || !normalizedQuery) return 0
+    if (normalizedName.includes(normalizedQuery)) return 95
+
+    const cjkQuery = /^[\u4e00-\u9fff]{4,16}$/u.test(normalizedQuery)
+    const cjkName = /^[\u4e00-\u9fff]{2,40}$/u.test(normalizedName)
+    if (cjkQuery && cjkName && containsCharacterMultiset(normalizedName, normalizedQuery)) {
+        return Math.max(60, 88 - Math.max(0, normalizedName.length - normalizedQuery.length) * 2)
+    }
+    return 0
 }
 
 export const workspaceListTool = {
@@ -150,12 +180,13 @@ export const workspaceSearchTool = {
         const lines = result.stdout.split('\n').filter(Boolean)
         const matches = []
         for (const line of lines) {
-            if (matches.length >= limit) break
             if (mode === 'filename') {
-                if (!line.toLowerCase().includes(query.toLowerCase())) continue
-                matches.push({ path: path.resolve(target.path, line), relativePath: line, type: 'file' })
+                const matchScore = scoreWorkspaceFilenameMatch(path.basename(line), query)
+                if (matchScore <= 0) continue
+                matches.push({ path: path.resolve(target.path, line), relativePath: line, type: 'file', matchScore, matchType: matchScore >= 95 ? 'exact' : 'fuzzy' })
                 continue
             }
+            if (matches.length >= limit) break
             const match = line.match(/^(.+?):(\d+):(\d+):(.*)$/)
             if (!match) continue
             matches.push({
@@ -165,6 +196,10 @@ export const workspaceSearchTool = {
                 column: Number(match[3]),
                 text: match[4].slice(0, 1000)
             })
+        }
+        if (mode === 'filename') {
+            matches.sort((left, right) => right.matchScore - left.matchScore || left.relativePath.localeCompare(right.relativePath, 'zh-CN'))
+            matches.splice(limit)
         }
         return {
             ok: true,
