@@ -76,8 +76,8 @@ export class HelpHandler extends plugin {
   可用 #${chatCmd}任务状态 / #${chatCmd}继续刚才任务 / #${chatCmd}下一步 / #${chatCmd}取消任务 查看、续接或取消。
 > 🖥️ Shell 执行（主人专用）
   需在 models_config.yaml 开启 enable_shell_exec: true（独立开关）。
-  开启后 AI 会优先使用结构化工作区工具列目录、搜索、按行读取和精确修改文件；必要时再执行 Shell 命令查看日志、运行测试或诊断服务。
-  工作区读写同样受 file_roots.yaml 白名单限制，修改会原子写入并重新读取校验。
+  开启后 AI 会优先使用结构化工作区工具列目录、搜索、按行读取和精确修改文件；修改后会强制执行语法与 Git diff 静态校验，必要时再执行 Shell 命令运行测试或诊断服务。
+  工作区读写同样受 file_roots.yaml 白名单限制；静态校验不等于项目测试已经通过。
   注意：Shell 具备完整服务器权限。
 > 🖥️ 持久 Shell 会话（主人专用）
   需在 models_config.yaml 开启 enable_shell_session: true（独立开关）。

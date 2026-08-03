@@ -99,6 +99,12 @@ const TOOL_USAGE_GUIDES = {
         avoid: ['没有读取真实文件内容时不要猜 old_text；YAML/JSON 字段更新优先用 config_manage。'],
         rules: ['默认要求旧文本唯一匹配；修改后应根据任务要求继续运行测试或查看差异。']
     },
+    workspace_verify: {
+        capabilities: ['对修改后的文件执行确定性静态校验，包括语言语法检查和 git diff --check。'],
+        useWhen: ['workspace_patch 修改成功后必须使用，作为代码任务的最低完成门槛。'],
+        avoid: ['静态校验不等于项目测试通过；行为修复仍需运行相关测试、构建或复现命令。'],
+        rules: ['如校验失败，应读取错误、修复文件并重新校验；不得在 verified=false 时声称修改完成。']
+    },
     file_download: {
         capabilities: [
             '把当前消息或引用消息中的图片、视频、语音、普通文件保存到服务器白名单目录。',

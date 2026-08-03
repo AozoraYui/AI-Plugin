@@ -15,6 +15,7 @@ import { detectToolIntentFamilies, filterToolCallsByIntent, hasExplicitDrawInten
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } from '../utils/agent_runtime.js'
+import { findPendingWorkspaceVerification } from '../utils/agent_completion.js'
 import { classifyAgentRisk } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
 import { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, updateAgentTaskProgress } from '../utils/agent_task_runtime.js'
@@ -53,6 +54,7 @@ const FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS = [
     'workspace_search',
     'workspace_read',
     'workspace_patch',
+    'workspace_verify',
     'shell_session',
     'memory_search',
     'group_chat_context',
@@ -79,7 +81,7 @@ const FAST_CHAT_AGENT_STOP_TOOLS = [
     'group_essence',
     'group_request_handle'
 ]
-const FAST_CHAT_AGENT_SIDE_EFFECT_TOOLS = [...FAST_CHAT_AGENT_STOP_TOOLS, 'workspace_patch']
+const FAST_CHAT_AGENT_SIDE_EFFECT_TOOLS = [...FAST_CHAT_AGENT_STOP_TOOLS, 'workspace_patch', 'workspace_verify']
 const FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS = [...FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS, ...FAST_CHAT_AGENT_STOP_TOOLS]
 
 function stripLoneSurrogates(text) {
@@ -1008,7 +1010,7 @@ async function buildFastChatEnabledTools(e, client) {
     const shellEnabled = e.isMaster && client.enableShellExec
     if (shellEnabled) {
         enabledTools.push('config_manage')
-        enabledTools.push('workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch')
+        enabledTools.push('workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch', 'workspace_verify')
         enabledTools.push('shell_exec')
     }
     if (e.isMaster && client.enableShellSession) {
@@ -1083,6 +1085,9 @@ function formatFastChatToolInjection(toolName, result) {
     }
     if (toolName === 'config_manage') {
         return `\n\n【畅聊工具结果：结构化配置】请严格依据以下真实结果回答；只有 verified=true 才能声称成功，changed=false 表示原配置已满足目标。${formattedResult}`
+    }
+    if (toolName === 'workspace_verify') {
+        return `\n\n【畅聊工具结果：工作区静态校验】只有 verified=true 才能声称静态校验通过；静态校验不等于项目测试、构建或实际行为已经通过。${formattedResult}`
     }
     if (toolName === 'file_send' || toolName === 'file_download' || toolName === 'group_file_list' || toolName === 'group_file_download') {
         return `\n\n【畅聊工具结果：文件操作】请如实告知操作结果。${formattedResult}`
@@ -1434,6 +1439,7 @@ export class FastChatHandler extends plugin {
                     )
                 }
                 const seenToolCalls = new Set()
+                const fastAgentObservationHistory = []
                 let fastAgentStagnationState = { fingerprint: '', repeatCount: 0, shouldStop: false }
                 let failedImageSearchAttempts = 0
                 let workspaceSurveyEntries = []
@@ -1545,6 +1551,15 @@ export class FastChatHandler extends plugin {
                         }
                     }
 
+                    fastAgentObservationHistory.push(...roundExecutions.map(item => ({
+                        tool: item.call.name,
+                        args: item.call.args,
+                        status: item.status,
+                        protocol: item.protocol,
+                        data: item.result?.data,
+                        result: item.result
+                    })))
+
                     if (roundExecutions.length > 0 && fastAgentTask?.taskId) {
                         const pendingExecution = roundExecutions.find(item => item.pending)
                         const failedExecutions = roundExecutions.filter(item => !item.result.success || !item.protocol.ok)
@@ -1649,6 +1664,19 @@ export class FastChatHandler extends plugin {
                             logger.info(`[AI-Plugin] [畅聊] Agent 项目过目强制深读: ${selectedFiles.map(item => item.relativePath || item.path).join(', ')}`)
                             continue
                         }
+                    }
+                    const pendingWorkspaceVerification = findPendingWorkspaceVerification(fastAgentObservationHistory, seenToolCalls)
+                    if (pendingWorkspaceVerification) {
+                        toolContextText = truncateMiddleText(
+                            toolContextText + `\n\n【代码修改完成门槛】${pendingWorkspaceVerification.instruction}`,
+                            FAST_CHAT_TOOL_CONTEXT_MAX_CHARS
+                        )
+                        if (agentRound < FAST_CHAT_AGENT_MAX_ROUNDS) {
+                            toolCalls = [pendingWorkspaceVerification.call]
+                            logger.info(`[AI-Plugin] [畅聊] Agent 强制静态校验: ${pendingWorkspaceVerification.reason}`)
+                            continue
+                        }
+                        logger.warn(`[AI-Plugin] [畅聊] Agent 已达最大轮数，无法执行静态校验: ${pendingWorkspaceVerification.reason}`)
                     }
                     if (agentRound >= FAST_CHAT_AGENT_MAX_ROUNDS) break
                     const shouldContinue = deferredBatch.deferred.length > 0 || shouldContinueAgentRound({

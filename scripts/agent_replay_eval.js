@@ -19,6 +19,7 @@ const {
 
 const replayEnabledTools = [
     'web_search', 'web_fetch', 'shell_exec', 'config_manage', 'file_send', 'file_download',
+    'workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch', 'workspace_verify',
     'group_file_list', 'group_file_download', 'draw_image', 'user_profile_update', 'memory_search',
     'group_chat_context', 'group_send_message', 'group_leave', 'group_mute', 'group_kick',
     'group_request_list', 'group_request_handle'
@@ -46,6 +47,14 @@ const incidents = [
         pass: text => {
             const request = parseWebSearchRequest(text)
             return request?.query === 'qlu-11' && request.image_count === 2
+        }
+    },
+    {
+        id: 'code-change-recalls-static-verification',
+        input: '#c把tools/example.js里的旧逻辑修掉并确认代码没问题',
+        pass: text => {
+            const tools = selectToolCandidates(replayEnabledTools, text).tools
+            return tools.includes('workspace_read') && tools.includes('workspace_patch') && tools.includes('workspace_verify')
         }
     },
     {

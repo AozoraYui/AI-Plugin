@@ -373,11 +373,11 @@ export function hasExplicitLocalFileDiscoveryIntent(text) {
 export function hasExplicitLocalFileMutationIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
-    const action = '(?:写入|写到|添加到?|加入到?|追加到?|放进|放到|插入|修改|改成|设置成|设为|替换|删除|删掉|移除|清除)'
+    const action = '(?:写入|写到|添加到?|加入到?|追加到?|放进|放到|插入|修改|修复|修正|修掉|调整|改成|设置成|设为|替换|删除|删掉|移除|清除)'
     const target = '(?:\\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\\b|[\\w.-]+\\.(?:json|ya?ml|toml|ini|conf|cfg|js|ts|py|sh)|配置文件|群配置|配置(?:项|段|字段)?|disable|enable|白名单|黑名单|列表|字段)'
     const delegated = new RegExp(`(?:帮我|给我|请|麻烦你?|你能不能|能不能|可以帮我|把|将).{0,160}${action}|^\\s*${action}`, 'i').test(value)
     const targetsFile = new RegExp(`${action}.{0,120}${target}|${target}.{0,120}${action}`, 'i').test(value)
-    const asksHow = /(?:怎么|如何|怎样).{0,40}(?:写入|写到|添加|加入|追加|修改|替换|删除|移除)/i.test(value)
+    const asksHow = /(?:怎么|如何|怎样).{0,40}(?:写入|写到|添加|加入|追加|修改|修复|修正|调整|替换|删除|移除)/i.test(value)
     return delegated && targetsFile && !(asksHow && !/(?:帮我|给我|请|麻烦)/i.test(value))
 }
 
@@ -820,7 +820,7 @@ export function selectToolCandidates(enabledTools = [], text = '', options = {})
     if (families.has('web_fetch')) add(['web_fetch'])
     if (families.has('system')) add(['system_info', 'shell_exec', 'shell_session'])
     if (families.has('local_file')) add(['workspace_list', 'workspace_search', 'workspace_read', 'shell_exec'])
-    if (families.has('local_file_mutation')) add(['workspace_read', 'workspace_patch', 'config_manage', 'shell_exec'])
+    if (families.has('local_file_mutation')) add(['workspace_read', 'workspace_patch', 'workspace_verify', 'config_manage', 'shell_exec'])
     if (families.has('file_send')) add(['file_send', 'workspace_list', 'workspace_search', 'shell_exec'])
     if (families.has('file_download')) add(['file_download'])
     if (families.has('group_file_list')) add(['group_file_list'])
@@ -894,6 +894,8 @@ export function isExplicitToolIntent(toolName, text, options = {}) {
             return hasExplicitLocalFileReadIntent(text) || hasExplicitLocalFileDiscoveryIntent(text)
         case 'workspace_patch':
             return hasExplicitLocalFileMutationIntent(text)
+        case 'workspace_verify':
+            return options.allowContinuation === true && hasExplicitLocalFileMutationIntent(text)
         case 'file_download':
             return hasExplicitFileDownloadIntent(text, options)
         case 'file_send':

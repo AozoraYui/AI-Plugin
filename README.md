@@ -347,7 +347,7 @@ AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单
 | 服务器状态查询 | 在对话中询问服务器状态（如`#chat 服务器状态怎么样`） | 返回 CPU、内存、温度、磁盘等信息，支持 fastfetch/neofetch |
 | Shell 执行 | `enable_shell_exec: true` 后，主人对话中自动按意图调用 | 执行服务器 shell 命令并返回 stdout/stderr，适合 `grep`/`rg`/`find` 查文件、日志排查、服务诊断；具备完整服务器权限 |
 | 结构化配置管理 | `enable_shell_exec: true` 后，主人要求读取或修改 YAML/JSON 配置时优先调用 | 支持字段读取、语法校验、`set/append/remove/delete`；更新时自动去重、备份、原子写入并重新解析验证，避免模型临时生成 `sed`/Python 修改脚本 |
-| 结构化工作区 | `enable_shell_exec: true` 后，主人要求查看、搜索、读取或修改项目文件时优先调用 | 提供目录列表、文件名/正文搜索、带行号分页读取和精确文本补丁；全部受 `file_roots.yaml` 白名单约束，补丁原子写入并重新读取验证 |
+| 结构化工作区 | `enable_shell_exec: true` 后，主人要求查看、搜索、读取或修改项目文件时优先调用 | 提供目录列表、文件名/正文搜索、带行号分页读取、精确文本补丁和修改后静态校验；全部受 `file_roots.yaml` 白名单约束，补丁后会强制执行语言语法检查与 `git diff --check`，但静态校验不等于项目测试通过 |
 | 持久 Shell 会话 | `enable_shell_session: true` 后，主人明确提到 tmux/ai-shell/shell会话时调用 | 操作独立 tmux 会话（默认 `ai-shell`）：读取窗口、输入命令、Ctrl-C 中断、清屏、重启或关闭；发送命令后最多等待 64 秒直到窗口出现新输出，适合长任务和交互式排查 |
 | 文件上传 | `enable_file_transfer: true` 后，主人对话中按意图调用 | 把白名单目录内的文件/文件夹发送到当前会话；文件夹自动打包为 tar.gz；支持文件名模糊匹配 |
 | 文件下载 | `enable_file_transfer: true` 后，主人对话中按意图调用 | 把当前消息或引用消息里的图片/视频/语音/文件保存到白名单目录；支持合并转发递归提取 |
@@ -441,7 +441,7 @@ AI-Plugin/
 │   ├── image_gen.js        # AI 对话画图（按意图联动插件画图能力，可选开启）
 │   ├── memory_search.js    # 本地语义记忆检索
 │   ├── config_manage.js    # YAML/JSON 结构化配置管理（备份、原子写入、写后验证）
-│   ├── workspace.js        # 结构化工作区列表/搜索/读取/精确补丁（白名单约束）
+│   ├── workspace.js        # 结构化工作区列表/搜索/读取/精确补丁/静态校验（白名单约束）
 │   ├── shell_exec.js       # Shell 命令执行工具（主人专用，可选开启）
 │   ├── system_info.js      # 系统信息查询
 │   ├── search.js           # 联网搜索

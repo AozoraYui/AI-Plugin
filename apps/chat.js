@@ -21,6 +21,7 @@ import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summari
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
 import { buildFinalAnswerRetryInstruction, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } from '../utils/model_output.js'
 import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, shouldContinueAgentRound, shouldStopRepeatedImageSearch, stableAgentStringify, updateAgentStagnationState } from '../utils/agent_runtime.js'
+import { findPendingWorkspaceVerification } from '../utils/agent_completion.js'
 import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK_SUMMARY_MAX_CHARS, mergeAgentRisk, recordAgentTaskStep } from '../utils/agent_task_runtime.js'
 import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../utils/agent_plan.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
@@ -62,6 +63,7 @@ const CONTINUATION_ALLOWED_TOOLS = [
     'workspace_search',
     'workspace_read',
     'workspace_patch',
+    'workspace_verify',
     'shell_session',
     'memory_search',
     'user_profile_update',
@@ -88,7 +90,7 @@ const AGENT_LOOP_STOP_TOOLS = [
     'group_essence',
     'group_request_handle'
 ]
-const AGENT_SIDE_EFFECT_TOOLS = [...AGENT_LOOP_STOP_TOOLS, 'workspace_patch']
+const AGENT_SIDE_EFFECT_TOOLS = [...AGENT_LOOP_STOP_TOOLS, 'workspace_patch', 'workspace_verify']
 const AGENT_LOOP_ALLOWED_TOOLS = [
     'weather',
     'web_search',
@@ -100,6 +102,7 @@ const AGENT_LOOP_ALLOWED_TOOLS = [
     'workspace_search',
     'workspace_read',
     'workspace_patch',
+    'workspace_verify',
     'shell_session',
     'memory_search',
     'group_chat_context',
@@ -123,6 +126,7 @@ const TASK_CONTEXT_CONTINUATION_TOOLS = [
     'workspace_search',
     'workspace_read',
     'workspace_patch',
+    'workspace_verify',
     'shell_session',
     'memory_search',
     'group_chat_context',
@@ -1562,6 +1566,7 @@ ${toolSummary}
     - 用户要求“过目/熟悉/了解整个目录或项目”属于多步任务：先用 workspace_list depth=3 左右取得递归结构，再实际读取至少 4 个 README、项目清单、入口文件或不同子目录的代表性源码。仅执行顶层 ls 不足以宣称已经了解项目。
     - YAML/JSON 配置文件的读取、字段查询、语法校验和修改优先使用 config_manage；普通代码和文本文件优先 workspace_read，日志或特殊系统文件再使用 shell_exec。
 - 主人明确要求把内容写入/添加到/删除自服务器配置字段、disable/enable/白名单/黑名单时，应计划 config_manage(action=update)，不要误判为 file_send，也不要现场生成 sed/Python 文本修改命令。若目标路径可从刚刚完成的配置读取任务或近期任务语境明确解析，可以沿用该路径。
+- 代码修改必须遵循“读取真实内容 → workspace_patch → workspace_verify → 相关测试/构建（若适用）”的顺序。workspace_patch 的写后重读只证明文本写入成功；workspace_verify 只证明静态语法和 Git diff 检查通过；两者都不能冒充项目测试或实际行为通过。
 - config_manage 必须给出可直接执行的 params：path、action，以及 update 所需的 key_path、operation、value。配置写入由工具内部自动备份、原子写入并重新解析验证，通常不需要再追加 Shell 验证。
 - 普通快速一次性命令优先 shell_exec；预计耗时较长、持续输出、需要保留状态或用户明确提到 tmux/ai-shell/shell会话/独立shell 时，优先计划 shell_session。如果 shell_exec 未启用但 shell_session 可用，主人明确要求执行服务器命令时也可以计划 shell_session。
 - 规划 shell_session action=send 时，input 只应包含真实要发进终端的内容；不要把“命令/执行命令/输入命令”等中文引导词粘进 input。
@@ -2112,7 +2117,7 @@ export class ChatHandler extends plugin {
             const shellEnabled = e.isMaster && this.client.enableShellExec
             if (shellEnabled) {
                 enabledTools.push('config_manage')
-                enabledTools.push('workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch')
+                enabledTools.push('workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch', 'workspace_verify')
                 enabledTools.push('shell_exec')
             }
             if (e.isMaster && this.client.enableShellSession) {
@@ -2384,6 +2389,7 @@ export class ChatHandler extends plugin {
                     })
                 }
                 const seenToolCalls = new Set()
+                const agentObservationHistory = []
                 let agentStagnationState = { fingerprint: '', repeatCount: 0, shouldStop: false }
                 const repeatedFilter = filterRepeatedAgentToolCalls(toolCalls, seenToolCalls)
                 if (repeatedFilter.skipped.length > 0) {
@@ -2647,6 +2653,10 @@ export class ChatHandler extends plugin {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为群聊时间范围总结工具的实际结果。它已经在工具内部分页读取并分段摘要。请严格基于这份总结回答用户“最近几天/我不在时/上次发言后群里聊了什么”的问题；如果结果提示范围被截断，要明确说明只覆盖已处理部分；图片只按元信息提及，不能编造图片内容。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
+                        } else if (call.name === 'workspace_verify') {
+                            const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
+                            userMessage = userMessage + '\n\n【重要指令】以上为修改文件的确定性静态校验结果。只有 verified=true 才能声称静态校验通过；静态校验不等于项目测试、构建或实际行为已经通过。' + formattedResult
+                            logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (['workspace_list', 'workspace_search', 'workspace_read'].includes(call.name)) {
                             suppressAutoFastChatContext = true
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
@@ -2686,6 +2696,8 @@ export class ChatHandler extends plugin {
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         }
                     }
+
+                    agentObservationHistory.push(...roundObservations)
 
                     if (roundObservations.length > 0 && agentTask) {
                         const roundSummary = await summarizeAgentRound(this.client, modelGroupKey, providerFilter, {
@@ -2773,6 +2785,17 @@ export class ChatHandler extends plugin {
                             logger.info(`[AI-Plugin] Agent 项目过目强制深读: ${selectedFiles.map(item => item.relativePath || item.path).join(', ')}`)
                             continue
                         }
+                    }
+                    const pendingWorkspaceVerification = findPendingWorkspaceVerification(agentObservationHistory, seenToolCalls)
+                    if (pendingWorkspaceVerification) {
+                        userMessage += `\n\n【代码修改完成门槛】${pendingWorkspaceVerification.instruction}`
+                        if (agentRound < AGENT_LOOP_MAX_ROUNDS) {
+                            toolCalls = [pendingWorkspaceVerification.call]
+                            currentToolIntent = pendingWorkspaceVerification.instruction
+                            logger.info(`[AI-Plugin] Agent 强制静态校验: ${pendingWorkspaceVerification.reason}`)
+                            continue
+                        }
+                        logger.warn(`[AI-Plugin] Agent 已达最大轮数，无法执行静态校验: ${pendingWorkspaceVerification.reason}`)
                     }
                     if (agentRound >= AGENT_LOOP_MAX_ROUNDS) {
                         logger.info(`[AI-Plugin] Agent 达到最大轮数 ${AGENT_LOOP_MAX_ROUNDS}，停止循环`)

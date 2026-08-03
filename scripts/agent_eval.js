@@ -46,7 +46,7 @@ const { buildShellResultSummaryPrompt, summarizeShellResultForReply } = await im
 const { groupSendMessageTool, parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically, resolveTargetGroup } = await import('../tools/group_send.js')
 await import('../tools/group_admin.js')
 await import('../tools/file_send.js')
-await import('../tools/workspace.js')
+const { verifyWorkspaceFile } = await import('../tools/workspace.js')
 const { savePendingAction, loadPendingAction, listPendingActions, clearPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } = await import('../utils/pending_actions.js')
 const { deterministicToolDecision, normalizeToolResult } = await import('../utils/tool_result.js')
 const { agentToolCallKey, buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } = await import('../utils/agent_runtime.js')
@@ -58,6 +58,7 @@ const { executeConfirmedPendingToolCall, validatePendingToolCallScene } = await 
 const { AIDatabase } = await import('../utils/database.js')
 const { default: sqlite3 } = await import('sqlite3')
 const { selectWorkspaceSurveyFiles } = await import('../utils/workspace_survey.js')
+const { findPendingWorkspaceVerification } = await import('../utils/agent_completion.js')
 
 const failures = []
 let passed = 0
@@ -1080,18 +1081,54 @@ const structuredProtocol = normalizeToolResult('demo', {
 })
 check('统一工具协议保留事实、产物和下一步提示', structuredProtocol.facts.path === '/tmp/example.log' && structuredProtocol.artifacts.length === 1 && structuredProtocol.nextHints[0] === '可以发送文件')
 
-check('结构化工作区工具已完整注册', ['workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch'].every(name => toolRegistry.get(name)))
+check('结构化工作区工具已完整注册', ['workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch', 'workspace_verify'].every(name => toolRegistry.get(name)))
 const workspaceCandidates = selectToolCandidates(
-    ['workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch', 'shell_exec'],
+    ['workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch', 'workspace_verify', 'shell_exec'],
     '#c帮我在项目里找一下handleChat的定义并读一下相关代码'
 )
 check('代码查找请求优先召回结构化工作区工具', workspaceCandidates.tools.includes('workspace_search') && workspaceCandidates.tools.includes('workspace_read'), JSON.stringify(workspaceCandidates))
-check('工作区读取属于低风险而补丁属于中风险', classifyToolCallRisk({ name: 'workspace_read', args: { path: '/tmp/a.js' } }) === 'low' && classifyToolCallRisk({ name: 'workspace_patch', args: { path: '/tmp/a.js' } }) === 'medium')
+check('工作区读取和静态校验属于低风险而补丁属于中风险', classifyToolCallRisk({ name: 'workspace_read', args: { path: '/tmp/a.js' } }) === 'low' && classifyToolCallRisk({ name: 'workspace_verify', args: { path: '/tmp/a.js' } }) === 'low' && classifyToolCallRisk({ name: 'workspace_patch', args: { path: '/tmp/a.js' } }) === 'medium')
 const guardedWorkspacePatch = filterToolCallsByIntent([{
     name: 'workspace_patch',
     args: { path: '/tmp/a.js', old_text: 'a', new_text: 'b' }
 }], '#c把/tmp/a.js里的a改成b')
 check('明确代码修改允许结构化补丁通过安全意图过滤', guardedWorkspacePatch.tools.length === 1 && guardedWorkspacePatch.blocked.length === 0)
+
+const pendingStaticVerification = findPendingWorkspaceVerification([{
+    tool: 'workspace_patch',
+    args: { path: '/tmp/a.js' },
+    status: 'ok',
+    protocol: { ok: true },
+    data: { changed: true, facts: { path: '/tmp/a.js' } }
+}], new Set())
+check('代码补丁成功后会强制安排静态校验', pendingStaticVerification?.call?.name === 'workspace_verify' && pendingStaticVerification.call.args.path === '/tmp/a.js', JSON.stringify(pendingStaticVerification))
+const deferredCodeMutation = deferDependentSideEffectCalls([
+    { name: 'workspace_read', args: { path: '/tmp/a.js' } },
+    { name: 'workspace_patch', args: { path: '/tmp/a.js' } },
+    { name: 'workspace_verify', args: { path: '/tmp/a.js' } }
+], ['workspace_patch', 'workspace_verify'])
+check('读取修改校验同批规划时会先读取并保持修改后校验顺序', deferredCodeMutation.tools.length === 1 && deferredCodeMutation.tools[0].name === 'workspace_read' && deferredCodeMutation.deferred.map(item => item.name).join(',') === 'workspace_patch,workspace_verify', JSON.stringify(deferredCodeMutation))
+const completedStaticVerification = findPendingWorkspaceVerification([{
+    tool: 'workspace_patch',
+    args: { path: '/tmp/a.js' },
+    status: 'ok',
+    protocol: { ok: true },
+    data: { changed: true, facts: { path: '/tmp/a.js' } }
+}, {
+    tool: 'workspace_verify',
+    args: { path: '/tmp/a.js' },
+    status: 'ok',
+    protocol: { ok: true },
+    data: { verified: true, facts: { path: '/tmp/a.js' } }
+}], new Set())
+check('同一文件静态校验通过后不会重复安排', completedStaticVerification === null)
+const workspaceStaticResult = await verifyWorkspaceFile(path.resolve('scripts/agent_eval.js'), { includeGitDiff: true })
+check('workspace_verify 能执行真实 JavaScript 与 Git 静态检查', workspaceStaticResult.verified === true && workspaceStaticResult.checks.some(item => item.name === 'node --check'), JSON.stringify(workspaceStaticResult))
+const invalidWorkspaceFile = path.join(os.tmpdir(), `ai-plugin-invalid-${process.pid}.js`)
+await fs.writeFile(invalidWorkspaceFile, 'const =\n', 'utf8')
+const invalidWorkspaceResult = await verifyWorkspaceFile(invalidWorkspaceFile, { includeGitDiff: false })
+await fs.rm(invalidWorkspaceFile, { force: true })
+check('workspace_verify 会拒绝存在语法错误的代码', invalidWorkspaceResult.verified === false && invalidWorkspaceResult.checks.some(item => item.name === 'node --check' && item.ok === false), JSON.stringify(invalidWorkspaceResult))
 
 const adjudicatedIntent = await toolRegistry.resolveAmbiguousToolIntent(
     '把刚才那个弄过来',

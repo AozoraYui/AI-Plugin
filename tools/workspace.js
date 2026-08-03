@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
+import yaml from 'yaml'
 import { toolRegistry } from './registry.js'
 import { checkPathAllowed, checkPathAllowedForWrite, rememberResolvedPath, resolvePathInput } from '../utils/file_access.js'
 
@@ -284,7 +285,114 @@ export const workspacePatchTool = {
     }
 }
 
+function createCheck(name, ok, detail = '') {
+    return { name, ok: ok === true, detail: String(detail || '').trim() }
+}
+
+async function runStaticSyntaxCheck(targetPath) {
+    const extension = path.extname(targetPath).toLowerCase()
+    if (['.js', '.mjs', '.cjs'].includes(extension)) {
+        const result = await runFile(process.execPath, ['--check', targetPath], { timeout: 30000 })
+        return createCheck('node --check', result.ok, result.ok ? 'JavaScript 语法检查通过。' : (result.stderr || result.error))
+    }
+    if (extension === '.json') {
+        try {
+            JSON.parse(await fsp.readFile(targetPath, 'utf8'))
+            return createCheck('JSON parse', true, 'JSON 解析通过。')
+        } catch (err) {
+            return createCheck('JSON parse', false, err.message)
+        }
+    }
+    if (['.yaml', '.yml'].includes(extension)) {
+        try {
+            const documents = yaml.parseAllDocuments(await fsp.readFile(targetPath, 'utf8'))
+            const errors = documents.flatMap(document => document.errors || [])
+            return createCheck('YAML parse', errors.length === 0, errors.map(error => error.message).join('\n') || 'YAML 解析通过。')
+        } catch (err) {
+            return createCheck('YAML parse', false, err.message)
+        }
+    }
+    if (extension === '.py') {
+        const python = process.env.AI_PLUGIN_VECTOR_PYTHON || process.env.AI_PLUGIN_PYTHON || 'python3'
+        const script = 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))'
+        const result = await runFile(python, ['-c', script, targetPath], { timeout: 30000 })
+        return createCheck('Python ast.parse', result.ok, result.ok ? 'Python 语法检查通过。' : (result.stderr || result.error))
+    }
+    if (extension === '.sh') {
+        const result = await runFile('bash', ['-n', targetPath], { timeout: 30000 })
+        return createCheck('bash -n', result.ok, result.ok ? 'Shell 语法检查通过。' : (result.stderr || result.error))
+    }
+    return null
+}
+
+async function runGitDiffCheck(targetPath) {
+    const directory = path.dirname(targetPath)
+    const rootResult = await runFile('git', ['-C', directory, 'rev-parse', '--show-toplevel'], { timeout: 15000 })
+    if (!rootResult.ok) return createCheck('git diff --check', true, '目标不在 Git 仓库中，已跳过 diff 检查。')
+    const root = rootResult.stdout.trim()
+    const relativePath = path.relative(root, targetPath)
+    const diffResult = await runFile('git', ['-C', root, 'diff', '--check', '--', relativePath], { timeout: 30000 })
+    return createCheck('git diff --check', diffResult.ok, diffResult.ok ? 'Git diff 空白错误检查通过。' : (diffResult.stdout || diffResult.stderr || diffResult.error))
+}
+
+export async function verifyWorkspaceFile(targetPath, options = {}) {
+    const checks = []
+    const syntaxCheck = await runStaticSyntaxCheck(targetPath)
+    if (syntaxCheck) checks.push(syntaxCheck)
+    if (options.includeGitDiff !== false) checks.push(await runGitDiffCheck(targetPath))
+    if (checks.length === 0) checks.push(createCheck('文件可读性', true, '文件存在且可读取，但没有适用的语言语法检查器。'))
+    return { verified: checks.every(check => check.ok), checks }
+}
+
+export const workspaceVerifyTool = {
+    name: 'workspace_verify',
+    permission: 'master',
+    description: '对工作区文件执行确定性静态校验，包括语言语法检查和 git diff --check；用于代码修改后的最低完成门槛，不等同于项目测试。',
+    functionSchema: {
+        name: 'workspace_verify',
+        description: '静态验证刚刚修改的工作区文件。',
+        parameters: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: '需要验证的文件路径。' },
+                include_git_diff: { type: 'boolean', description: '是否执行 git diff --check，默认 true。' },
+                verification_token: { type: 'string', description: 'Agent 内部用于区分不同修改轮次的校验标识，普通调用无需填写。' }
+            },
+            required: ['path']
+        }
+    },
+    async execute(args = {}, context = {}) {
+        const target = resolveAllowedPath(args.path, context)
+        if (!target.ok) return { ok: false, recoverable: true, error: target.error }
+        let stat
+        try { stat = await fsp.stat(target.path) } catch (err) { return { ok: false, recoverable: true, error: err.message } }
+        if (!stat.isFile()) return { ok: false, recoverable: true, error: `目标不是文件: ${target.path}` }
+
+        const verification = await verifyWorkspaceFile(target.path, { includeGitDiff: args.include_git_diff !== false })
+        const { verified, checks } = verification
+        return {
+            ok: verified,
+            verified,
+            recoverable: !verified,
+            summary: verified
+                ? `已完成 ${target.path} 的静态校验；这不代表项目测试已经通过。`
+                : `${target.path} 的静态校验失败。`,
+            error: verified ? '' : checks.filter(check => !check.ok).map(check => `${check.name}: ${check.detail}`).join('\n'),
+            facts: { path: target.path, verification_scope: 'static', checks },
+            artifacts: [{ type: 'file', path: target.path, verified }],
+            next_hints: verified
+                ? ['如果任务涉及行为修复或功能修改，继续运行最相关的测试、构建或复现命令；不要把静态校验描述成测试通过。']
+                : ['根据失败信息修复文件后重新执行 workspace_verify。'],
+            checks
+        }
+    },
+    formatResult(data) {
+        return JSON.stringify(data, null, 2)
+    }
+}
+
 toolRegistry.register(workspaceListTool)
 toolRegistry.register(workspaceSearchTool)
 toolRegistry.register(workspaceReadTool)
 toolRegistry.register(workspacePatchTool)
+toolRegistry.register(workspaceVerifyTool)
