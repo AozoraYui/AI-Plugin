@@ -74,12 +74,13 @@ export function isPlanOnlyResponse(text) {
 }
 
 export function hasUnsupportedToolResultClaim(text, options = {}) {
-    if (options.hasActualToolResults === true) return false
     const value = sanitizeModelOutput(text, options)
     if (!value) return false
     const completionClaim = /(?:我(?:已经|已|刚刚|刚才)?(?:为你|帮你)?(?:完成|执行|运行|调用|查看|读取|检查|搜索|查询|安装|补全|补齐|修复|编译|构建|部署|发送|上传)|已经(?:为你|帮你)?(?:完成|执行|运行|调用|查看|读取|检查|搜索|查询|安装|补全|补齐|修复|编译|构建|部署|发送|上传)|(?:操作|命令|任务|依赖|模块|编译|构建|部署|文件|消息)(?:已经|已)(?:成功)?(?:完成|执行|运行|安装|补全|补齐|修复|编译|构建|部署|发送|上传)|(?:已|已经)(?:成功)?(?:切换到|运行了|执行了|读取了|查看了|搜索了|安装了|补全了|修复了|编译了|发送了|上传了))/i.test(value)
     const successConclusion = /(?:均已成功|已经修复好|已修复好|已经处理好|已处理好|执行成功|安装成功|编译成功|构建成功|部署成功|发送成功|上传成功|任务完成)/i.test(value)
-    return completionClaim || successConclusion
+    if (options.hasActualToolResults !== true) return completionClaim || successConclusion
+    if (options.hasTaskCompletionEvidence === false) return successConclusion
+    return false
 }
 
 export function needsFinalAnswerRetry(text, options = {}) {
@@ -94,5 +95,8 @@ export function buildFinalAnswerRetryInstruction(options = {}) {
     const issue = options.unsupportedToolClaim === true
         ? '上一条输出声称完成了工具操作，但本轮没有对应的真实工具执行证据。'
         : '上一条输出是内部思考或行动规划，不是可发送给用户的最终答复。'
-    return `${issue}上一条异常输出本身不可信，不能把其中声称的工具调用或结果当作事实。${toolAudit}请重新基于原始上下文直接回答用户的问题。不要输出 Thinking、Analysis、思考过程、工具规划或下一步计划；不要声称执行了尚未执行的工具。如果缺少完成请求所需的真实结果，请明确说明目前无法确认，不能猜测。`
+    const completionAudit = options.hasTaskCompletionEvidence === false
+        ? '虽然可能已有部分工具结果，但任务验证器尚未确认全部成功标准完成；可以描述已经取得的具体结果，不能扩大表述为任务完成、修复成功、部署成功或全部处理完毕。'
+        : ''
+    return `${issue}上一条异常输出本身不可信，不能把其中声称的工具调用或结果当作事实。${toolAudit}${completionAudit}请重新基于原始上下文直接回答用户的问题。不要输出 Thinking、Analysis、思考过程、工具规划或下一步计划；不要声称执行了尚未执行的工具。如果缺少完成请求所需的真实结果，请明确说明目前无法确认，不能猜测。`
 }

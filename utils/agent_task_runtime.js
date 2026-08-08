@@ -20,6 +20,22 @@ function taskLogPrefix(options = {}) {
     return String(options.logPrefix || '[AI-Plugin] Agent任务')
 }
 
+async function updateTaskWithOptimisticLock(db, task, updates, options = {}) {
+    const expectedVersion = Math.max(1, Math.floor(Number(task?.version) || 1))
+    const updated = await db.updateAgentTask(task.taskId, updates, { expectedVersion })
+    if (updated) return { ...task, ...updates, version: expectedVersion + 1 }
+
+    const latest = await db.getAgentTask?.(task.taskId)
+    if (!latest?.taskId) throw new Error(`Agent任务版本冲突，且无法重新加载任务 ${task.taskId}`)
+    const retryVersion = Math.max(1, Math.floor(Number(latest.version) || 1))
+    const retryUpdates = { ...updates }
+    if (retryUpdates.riskLevel) retryUpdates.riskLevel = mergeAgentRisk(latest.riskLevel, retryUpdates.riskLevel)
+    const retried = await db.updateAgentTask(task.taskId, retryUpdates, { expectedVersion: retryVersion })
+    if (!retried) throw new Error(`Agent任务版本连续冲突: ${task.taskId}`)
+    taskLogger(options)?.warn?.(`${taskLogPrefix(options)}检测到并发版本冲突，已重新加载并合并更新: ${task.taskId}`)
+    return { ...latest, ...retryUpdates, version: retryVersion + 1 }
+}
+
 export function mergeAgentRisk(previous = 'low', next = 'low') {
     const rank = { low: 0, medium: 1, high: 2 }
     return (rank[next] || 0) > (rank[previous] || 0) ? next : previous
@@ -61,8 +77,8 @@ export async function createOrResumeAgentTask(db, options = {}) {
     }
     if (options.objective) updates.objective = truncateTaskText(options.objective, 1200)
     try {
-        await db.updateAgentTask?.(currentTask.taskId, updates)
-        return { ...currentTask, ...updates }
+        if (!db.updateAgentTask) return { ...currentTask, ...updates }
+        return await updateTaskWithOptimisticLock(db, currentTask, updates, options)
     } catch (err) {
         logger?.warn?.(`${prefix}续接更新失败: ${err.message}`)
         return currentTask
@@ -90,8 +106,7 @@ export async function updateAgentTaskProgress(db, task, updates = {}, options = 
     if ('lastObservation' in normalized) normalized.lastObservation = truncateTaskText(normalized.lastObservation, AGENT_TASK_OBSERVATION_MAX_CHARS)
     if (normalized.riskLevel) normalized.riskLevel = mergeAgentRisk(task.riskLevel, normalized.riskLevel)
     try {
-        await db.updateAgentTask(task.taskId, normalized)
-        return { ...task, ...normalized }
+        return await updateTaskWithOptimisticLock(db, task, normalized, options)
     } catch (err) {
         taskLogger(options)?.warn?.(`${taskLogPrefix(options)}状态更新失败: ${err.message}`)
         return task

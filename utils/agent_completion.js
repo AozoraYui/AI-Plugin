@@ -1,5 +1,23 @@
 import { agentToolCallKey } from './agent_runtime.js'
 
+const COMPLETION_STATUSES = new Set(['ready', 'continue', 'waiting', 'blocked'])
+
+export function normalizeAgentCompletionStatus(value, fallback = 'continue') {
+    const normalized = String(value || '').trim().toLowerCase()
+    if (COMPLETION_STATUSES.has(normalized)) return normalized
+    return COMPLETION_STATUSES.has(fallback) ? fallback : 'continue'
+}
+
+export function resolvePersistedAgentStatus(options = {}) {
+    if (options.usedSafeFallback === true) return 'blocked'
+    if (options.pendingVerification === true) return 'active'
+    const completionStatus = normalizeAgentCompletionStatus(options.completionStatus, 'continue')
+    if (completionStatus === 'ready') return 'completed'
+    if (completionStatus === 'waiting') return 'waiting'
+    if (completionStatus === 'blocked') return 'blocked'
+    return 'active'
+}
+
 function observationTool(observation = {}) {
     return String(observation.tool || observation.call?.name || '')
 }

@@ -2,6 +2,41 @@ import sharp from 'sharp'
 import { urlToBuffer, getImageMimeType } from './common.js'
 import { Config } from './config.js'
 
+function payloadSizeMB(contents = []) {
+    return JSON.stringify({ contents }).length / (1024 * 1024)
+}
+
+export function trimInlineImagesToPayloadLimit(contents = [], limitMB = 10, options = {}) {
+    const minimumImages = Math.max(0, Math.floor(Number(options.minimumImages) || 0))
+    const cloned = (Array.isArray(contents) ? contents : []).map(content => ({
+        ...content,
+        parts: Array.isArray(content?.parts) ? [...content.parts] : content?.parts
+    }))
+    const imageRefs = []
+    cloned.forEach((content, contentIndex) => {
+        if (!Array.isArray(content.parts)) return
+        content.parts.forEach((part, partIndex) => {
+            if (part?.inline_data?.data) imageRefs.push({ contentIndex, partIndex })
+        })
+    })
+
+    let removedImages = 0
+    let currentSizeMB = payloadSizeMB(cloned)
+    while (currentSizeMB > limitMB && imageRefs.length - removedImages > minimumImages) {
+        const target = imageRefs[imageRefs.length - 1 - removedImages]
+        cloned[target.contentIndex].parts[target.partIndex] = null
+        removedImages++
+        currentSizeMB = payloadSizeMB(cloned)
+    }
+    if (removedImages > 0) {
+        for (const content of cloned) {
+            if (Array.isArray(content.parts)) content.parts = content.parts.filter(Boolean)
+        }
+        currentSizeMB = payloadSizeMB(cloned)
+    }
+    return { contents: cloned, removedImages, sizeMB: currentSizeMB }
+}
+
 export async function processImageBufferForAI(imageBuffer) {
     try {
         imageBuffer = Buffer.from(imageBuffer)

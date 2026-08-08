@@ -28,6 +28,7 @@ export class AiClient {
         this.groupLeaveConfig = { enabled: false }
         this.fastChatConfig = { enabled: false }
         this.vectorMemoryConfig = { enabled: false }
+        this.modelStatusSaveTimer = null
         this.weatherApiKey = null
         this.openWeatherMapApiKey = null
         this.loadModelsConfig()
@@ -597,6 +598,15 @@ export class AiClient {
         } catch (error) {
             logger.error('[AI-Plugin] 保存模型状态文件失败:', error)
         }
+    }
+
+    scheduleModelStatusSave(delayMs = 750) {
+        if (this.modelStatusSaveTimer) return
+        this.modelStatusSaveTimer = setTimeout(() => {
+            this.modelStatusSaveTimer = null
+            this.saveModelStatus()
+        }, Math.max(50, Number(delayMs) || 750))
+        this.modelStatusSaveTimer.unref?.()
     }
 
     loadDisabledModels() {
@@ -1185,13 +1195,13 @@ export class AiClient {
 
                 if (result.success) {
                     this._recordModelSuccess(statusKey, elapsedMs)
-                    this.saveModelStatus()
+                    this.scheduleModelStatusSave()
                     logger.debug(`[AI-Plugin] 请求成功: ${provider.name} (${modelId})，耗时 ${elapsed}s, 得分:${score?.toFixed(2)}`)
                     return result
                 }
 
                 this._recordModelFail(statusKey)
-                this.saveModelStatus()
+                this.scheduleModelStatusSave()
                 logger.debug(`[AI-Plugin] 请求失败: ${provider.name} (${modelId})，耗时 ${elapsed}s，得分:${score?.toFixed(2)}, 错误: ${result.error}`)
                 lastError += `[${provider.name}-${modelId}]: ${result.error}\n`
             }

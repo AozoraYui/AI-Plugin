@@ -35,7 +35,7 @@ const defaultConfig = {
     // ========== API 请求体大小控制 ==========
     // 请求体大小警告阈值（MB），超过此值时记录警告日志并开始裁剪历史
     // 使用场景: apps/chat.js 中检测请求体大小
-    REQUEST_SIZE_WARNING_MB: 16,
+    REQUEST_SIZE_WARNING_MB: 8,
     // 请求体大小限制（MB），裁剪历史直到低于此值
     // 使用场景: apps/chat.js 中循环裁剪历史
     REQUEST_SIZE_LIMIT_MB: 10,
@@ -375,10 +375,21 @@ export const Config = {
     set MAX_IMAGE_RESIZE(val) { config.MAX_IMAGE_RESIZE = val },
     get IMAGE_QUALITY() { return config.IMAGE_QUALITY ?? defaultConfig.IMAGE_QUALITY },
     set IMAGE_QUALITY(val) { config.IMAGE_QUALITY = val },
-    get REQUEST_SIZE_WARNING_MB() { return config.REQUEST_SIZE_WARNING_MB ?? defaultConfig.REQUEST_SIZE_WARNING_MB },
-    set REQUEST_SIZE_WARNING_MB(val) { config.REQUEST_SIZE_WARNING_MB = val },
-    get REQUEST_SIZE_LIMIT_MB() { return config.REQUEST_SIZE_LIMIT_MB ?? defaultConfig.REQUEST_SIZE_LIMIT_MB },
-    set REQUEST_SIZE_LIMIT_MB(val) { config.REQUEST_SIZE_LIMIT_MB = val },
+    get REQUEST_SIZE_WARNING_MB() {
+        const limit = Math.max(1, Number(config.REQUEST_SIZE_LIMIT_MB ?? defaultConfig.REQUEST_SIZE_LIMIT_MB) || defaultConfig.REQUEST_SIZE_LIMIT_MB)
+        const warning = Math.max(1, Number(config.REQUEST_SIZE_WARNING_MB ?? defaultConfig.REQUEST_SIZE_WARNING_MB) || defaultConfig.REQUEST_SIZE_WARNING_MB)
+        return Math.min(warning, limit)
+    },
+    set REQUEST_SIZE_WARNING_MB(val) {
+        const limit = Math.max(1, Number(config.REQUEST_SIZE_LIMIT_MB ?? defaultConfig.REQUEST_SIZE_LIMIT_MB) || defaultConfig.REQUEST_SIZE_LIMIT_MB)
+        config.REQUEST_SIZE_WARNING_MB = Math.min(Math.max(1, Number(val) || defaultConfig.REQUEST_SIZE_WARNING_MB), limit)
+    },
+    get REQUEST_SIZE_LIMIT_MB() { return Math.max(1, Number(config.REQUEST_SIZE_LIMIT_MB ?? defaultConfig.REQUEST_SIZE_LIMIT_MB) || defaultConfig.REQUEST_SIZE_LIMIT_MB) },
+    set REQUEST_SIZE_LIMIT_MB(val) {
+        const limit = Math.max(1, Number(val) || defaultConfig.REQUEST_SIZE_LIMIT_MB)
+        config.REQUEST_SIZE_LIMIT_MB = limit
+        if (Number(config.REQUEST_SIZE_WARNING_MB) > limit) config.REQUEST_SIZE_WARNING_MB = limit
+    },
     get MIN_HISTORY_FOR_TRUNCATION() { return config.MIN_HISTORY_FOR_TRUNCATION ?? defaultConfig.MIN_HISTORY_FOR_TRUNCATION },
     set MIN_HISTORY_FOR_TRUNCATION(val) { config.MIN_HISTORY_FOR_TRUNCATION = val },
     get FORWARD_MSG_MAX_DEPTH() { return config.FORWARD_MSG_MAX_DEPTH ?? defaultConfig.FORWARD_MSG_MAX_DEPTH },

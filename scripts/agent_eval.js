@@ -60,7 +60,8 @@ const { executeConfirmedPendingToolCall, validatePendingToolCallScene } = await 
 const { AIDatabase } = await import('../utils/database.js')
 const { default: sqlite3 } = await import('sqlite3')
 const { selectWorkspaceSurveyFiles } = await import('../utils/workspace_survey.js')
-const { findPendingWorkspaceVerification } = await import('../utils/agent_completion.js')
+const { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resolvePersistedAgentStatus } = await import('../utils/agent_completion.js')
+const { trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
 
 const failures = []
 let passed = 0
@@ -1336,6 +1337,52 @@ sharedTask = await finalizeAgentTask(fakeTaskDb, sharedTask, {
 })
 check('共享任务收尾不会把待确认任务误标完成', sharedTask.status === 'waiting' && !sharedTask.completedAt)
 check('共享任务步骤可被普通对话状态命令读取', persistedSteps.some(step => step.taskId === sharedTask.taskId && step.toolName === 'shell_exec'))
+
+check('未知完成状态保守降级为continue', normalizeAgentCompletionStatus('unexpected', 'continue') === 'continue')
+check('continue任务不会在回复收尾时误标completed', resolvePersistedAgentStatus({ completionStatus: 'continue' }) === 'active')
+check('ready任务只有无待验证门槛时才标completed', resolvePersistedAgentStatus({ completionStatus: 'ready' }) === 'completed')
+check('末轮仍缺少强制验证时保持active', resolvePersistedAgentStatus({ completionStatus: 'ready', pendingVerification: true }) === 'active')
+check('安全兜底回复会把任务标记blocked', resolvePersistedAgentStatus({ completionStatus: 'ready', usedSafeFallback: true }) === 'blocked')
+
+const oversizedInlineContents = [{
+    role: 'user',
+    parts: [
+        { text: '分析这些图片' },
+        { inline_data: { mime_type: 'image/jpeg', data: 'a'.repeat(900000) } },
+        { inline_data: { mime_type: 'image/jpeg', data: 'b'.repeat(900000) } },
+        { inline_data: { mime_type: 'image/jpeg', data: 'c'.repeat(900000) } }
+    ]
+}]
+const trimmedInlinePayload = trimInlineImagesToPayloadLimit(oversizedInlineContents, 1.2, { minimumImages: 1 })
+check('请求体硬限制会动态裁剪内联图片', trimmedInlinePayload.removedImages >= 1 && trimmedInlinePayload.sizeMB <= 1.2, JSON.stringify({ removed: trimmedInlinePayload.removedImages, size: trimmedInlinePayload.sizeMB }))
+check('请求体图片裁剪至少保留指定数量', trimmedInlinePayload.contents[0].parts.filter(part => part?.inline_data).length >= 1)
+
+check('已有部分工具结果但任务未验证时拒绝强完成声明', hasUnsupportedToolResultClaim('已经修复好，任务完成。', {
+    hasActualToolResults: true,
+    hasTaskCompletionEvidence: false
+}) === true)
+check('任务验证ready后允许有证据的完成声明', hasUnsupportedToolResultClaim('已经修复好，任务完成。', {
+    hasActualToolResults: true,
+    hasTaskCompletionEvidence: true
+}) === false)
+
+let conflictAttempts = 0
+const conflictDb = {
+    async updateAgentTask(_taskId, _updates, options = {}) {
+        conflictAttempts++
+        return conflictAttempts > 1 && options.expectedVersion === 2
+    },
+    async getAgentTask(taskId) {
+        return { taskId, version: 2, status: 'active', riskLevel: 'low', summary: '并发新摘要' }
+    }
+}
+const conflictTask = await updateAgentTaskProgress(conflictDb, {
+    taskId: 'agent_conflict',
+    version: 1,
+    status: 'active',
+    riskLevel: 'low'
+}, { status: 'waiting', lastObservation: '等待确认' })
+check('共享任务更新遇到版本冲突会重载并重试', conflictAttempts === 2 && conflictTask.version === 3 && conflictTask.status === 'waiting', JSON.stringify(conflictTask))
 
 console.log(`\nAgent eval: ${passed} passed, ${failures.length} failed`)
 if (failures.length > 0) process.exit(1)
