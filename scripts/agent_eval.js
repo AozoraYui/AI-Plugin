@@ -17,6 +17,7 @@ const {
     hasExplicitGroupChatContextIntent,
     hasExplicitShellIntent,
     hasExplicitSystemOperationIntent,
+    hasExplicitWebFetchIntent,
     hasExplicitUserProfileHistoryExtractionIntent,
     hasExplicitUserProfileUpdateIntent,
     hasGroupChatContextQuestion,
@@ -212,6 +213,64 @@ check('用户明确要求附图时允许搜索工具发送图片', (() => {
     ], '#c查一下今天的 Linux 新闻，有图片的话发一张给我')
     return guarded.tools[0]?.name === 'web_search' && guarded.blocked.length === 0
 })())
+check('动作紧贴URL仍识别网页抓取', hasExplicitWebFetchIntent('#c看一下https://kokode.su/zh-cn/blog/Yui'))
+check('语义规划的同源网页抓取不会被二次安全门误杀', (() => {
+    const guarded = filterToolCallsByIntent([{
+        name: 'web_fetch',
+        args: { url: 'https://kokode.su/zh-cn/blog/Yui/' }
+    }], '#c替我过目 https://kokode.su/zh-cn/blog/Yui', {
+        candidateUrls: ['https://kokode.su/zh-cn/blog/Yui'],
+        allowModelPlannedLowRisk: true
+    })
+    return guarded.tools.length === 1 && guarded.blocked.length === 0
+})())
+check('语义网页抓取仍拒绝模型替换成无关URL', (() => {
+    const guarded = filterToolCallsByIntent([{
+        name: 'web_fetch',
+        args: { url: 'https://kokode.su.evil.example/zh-cn/blog/Yui' }
+    }], '#c替我过目 https://kokode.su/zh-cn/blog/Yui', {
+        candidateUrls: ['https://kokode.su/zh-cn/blog/Yui'],
+        allowModelPlannedLowRisk: true
+    })
+    return guarded.tools.length === 0 && guarded.blocked[0]?.name === 'web_fetch'
+})())
+const directWebFetchPlan = await toolRegistry.compileToolPlan({
+    need_tools: true,
+    resolved_request: '读取用户给出的网页',
+    tool_plan: [{
+        tool: 'web_fetch',
+        params: { url: 'https://kokode.su/zh-cn/blog/Yui' },
+        purpose: '读取网页正文'
+    }]
+}, null, ['web_fetch'], {
+    currentInstruction: '#c看一下https://kokode.su/zh-cn/blog/Yui',
+    userMessage: '#c看一下https://kokode.su/zh-cn/blog/Yui',
+    candidateUrls: ['https://kokode.su/zh-cn/blog/Yui']
+})
+const directWebFetchOuterGuard = filterToolCallsByIntent(
+    directWebFetchPlan.tools,
+    '#c看一下https://kokode.su/zh-cn/blog/Yui',
+    {
+        candidateUrls: ['https://kokode.su/zh-cn/blog/Yui'],
+        allowModelPlannedLowRisk: ['main_model_plan', 'main_model_direct'].includes(directWebFetchPlan.routedBy)
+    }
+)
+check('主模型直出网页计划通过内外两层安全校验', directWebFetchPlan.routedBy === 'main_model_direct'
+    && directWebFetchOuterGuard.tools.length === 1
+    && directWebFetchOuterGuard.blocked.length === 0,
+JSON.stringify({ directWebFetchPlan, directWebFetchOuterGuard }))
+check('语义规划可放行无副作用只读系统查询', filterToolCallsByIntent([
+    { name: 'system_info', args: { type: 'overview' } }
+], '#c看看这台机器现在喘不喘', { allowModelPlannedLowRisk: true }).tools.length === 1)
+check('语义规划不能绕过跨群发送显式授权', filterToolCallsByIntent([{
+    name: 'group_send_message', args: { target: '测试群', message: '测试' }
+}], '#c你看着办吧', { allowModelPlannedLowRisk: true }).blocked.length === 1)
+check('语义规划不能绕过Shell执行显式授权', filterToolCallsByIntent([{
+    name: 'shell_exec', args: { command: 'pnpm install', cwd: '/root/Yunzai' }
+}], '#c你看着处理吧', { allowModelPlannedLowRisk: true }).blocked.length === 1)
+check('普通语义搜索不能私自升级为图片发送', filterToolCallsByIntent([{
+    name: 'web_search', args: { query: '最新内核新闻', image_count: 1 }
+}], '#c了解一下最近内核圈有什么动静', { allowModelPlannedLowRisk: true }).blocked.length === 1)
 check('搜图未发送任何图片会被计为未完成尝试', isUnfulfilledImageSearch(
     { name: 'web_search', args: { query: 'QLU-11', image_count: 2 } },
     { requestedImages: 2, sentImages: [] }

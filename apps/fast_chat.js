@@ -1435,7 +1435,8 @@ export class FastChatHandler extends plugin {
                             strictWebSearch: false,
                             allowContinuation: recentAgentTaskPlanningContext.length > 0,
                             allowTaskContextContinuation: recentAgentTaskPlanningContext.length > 0,
-                            continuationTools: FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS
+                            continuationTools: FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS,
+                            allowModelPlannedLowRisk: true
                         }
                     )
                 }
@@ -1709,7 +1710,8 @@ export class FastChatHandler extends plugin {
                             currentInstruction: toolRoutingText,
                             allowContinuation: true,
                             allowTaskContextContinuation: true,
-                            continuationTools: FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS
+                            continuationTools: FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS,
+                            allowModelPlannedLowRisk: true
                         }
                     )
                     toolCalls = filterFastChatToolCalls(

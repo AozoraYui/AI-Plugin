@@ -3,6 +3,13 @@ const SEND_VERBS = '(?:发送|群发|代发|转达|带(?:个|句)?话|捎(?:个|
 const TARGET_SUFFIX = '(?:(?:那个|这个|该|目标)群|群聊|群里|群内|群|那边|里面|里)?'
 const BOT_CALL_PREFIX = '(?:(?:诺亚|noa|喏亚|诺娅)[,，。!！~～\\s]*)?'
 const FORBIDDEN_GROUP_SET_PATTERN = /(?:所有|全部|全体|每个|各个|不友好(?:的)?(?:那些|这些)?|有问题(?:的)?(?:那些|这些)?)/i
+const MODEL_PLANNED_READ_ONLY_TOOLS = new Set([
+    'web_fetch', 'web_search', 'weather', 'system_info', 'shell_session',
+    'workspace_list', 'workspace_search', 'workspace_read',
+    'group_chat_context', 'group_chat_digest', 'group_file_list',
+    'group_member_aliases', 'group_member_list', 'group_member_resolve',
+    'memory_search', 'config_manage'
+])
 
 export function getPrimaryUserInstruction(text) {
     const value = String(text || '').trim()
@@ -348,10 +355,12 @@ export function hasExplicitWebFetchIntent(text, candidateUrls = []) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
     const hasUrl = extractUrls(value).length > 0 || (Array.isArray(candidateUrls) && candidateUrls.length > 0)
+    const directUrlRead = /(?:看|看看|看下|看一下|打开|读|读取|抓取|分析|总结|概括|解释)\s*(?:一下|下)?\s*(?:这个|该|此)?\s*https?:\/\/\S+/i.test(value)
     return hasUrl && (/\bfetch\b|(?:抓一下|爬一下|扒一下)/i.test(value)
         || /(?:试试|再试试|重试|重新试|换(?:成|用)?这个|用这个|这个呢|这个可以吗|这个能行吗|能打开吗|能抓吗|能不能打开|能不能抓)/i.test(value)
         || /(?:看|看看|打开|读|读取|抓取|总结|分析|解释|概括).{0,20}(?:链接|网页|网址|页面|内容|这个|这条|上面)/i.test(value)
         || /(?:这个|这条|上面).{0,8}(?:链接|网页|网址).{0,12}(?:讲|说|内容|总结|看看|分析)/i.test(value)
+        || directUrlRead
         || /^(?:帮我|给我|请|麻烦你?)?\s*(?:fetch|看|看看|看一下|打开|读取|抓取|抓一下|爬一下|扒一下|总结|总结一下|概括|分析|解释|试试|再试试|重试)(?:一下|下)?[。！!？?\s]*$/i.test(value))
 }
 
@@ -887,10 +896,26 @@ function extractUrls(text) {
     return String(text || '').match(/https?:\/\/[^\s<>'"，。！？、]+/gi) || []
 }
 
+function normalizeComparableUrl(value = '') {
+    const raw = String(value || '').trim()
+    if (!raw) return ''
+    try {
+        const parsed = new URL(raw)
+        parsed.hash = ''
+        if (parsed.pathname.length > 1) parsed.pathname = parsed.pathname.replace(/\/+$/, '')
+        return parsed.toString()
+    } catch {
+        return raw.replace(/\/+$/, '')
+    }
+}
+
 function hasModelPlannedLowRiskEvidence(call = {}, instruction = '', options = {}) {
     if (options.allowModelPlannedLowRisk !== true) return false
+    if (!MODEL_PLANNED_READ_ONLY_TOOLS.has(call.name)) return false
+    const args = call.args || call.params || {}
+    if (call.name === 'web_search' && Number(args.image_count || 0) > 0 && !hasExplicitImageSearchIntent(instruction)) return false
+    if (call.name === 'config_manage' && String(args.action || '').trim().toLowerCase() === 'update') return false
     if (call.name === 'shell_session') {
-        const args = call.args || call.params || {}
         const action = String(args.action || '').trim().toLowerCase()
         if (['read', 'status'].includes(action)) {
             return /(?:输出|回显|结果|窗口|画面|终端内容|tmux内容|shell内容|看看|看一下|读取|查看|刷新|现在)/i.test(instruction)
@@ -902,14 +927,12 @@ function hasModelPlannedLowRiskEvidence(call = {}, instruction = '', options = {
             ...(Array.isArray(options.candidateUrls) ? options.candidateUrls : [])
         ].filter(Boolean)
         if (urls.length === 0) return false
-        const requestedUrl = String(call.args?.url || call.params?.url || '').trim()
+        const requestedUrl = String(args.url || '').trim()
         if (!requestedUrl) return true
-        return urls.some(url => requestedUrl === url || requestedUrl.includes(url) || url.includes(requestedUrl))
+        const normalizedRequested = normalizeComparableUrl(requestedUrl)
+        return urls.some(url => normalizedRequested === normalizeComparableUrl(url))
     }
-    if (['workspace_list', 'workspace_search', 'workspace_read'].includes(call.name)) {
-        return detectToolIntentFamilies(instruction).has('local_file')
-    }
-    return false
+    return true
 }
 
 export function isExplicitToolIntent(toolName, text, options = {}) {

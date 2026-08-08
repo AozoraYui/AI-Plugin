@@ -2369,7 +2369,7 @@ export class ChatHandler extends plugin {
                     allowContinuation: allowToolContinuation,
                     allowTaskContextContinuation: taskContextContinuation,
                     continuationTools: continuationToolsForGuard,
-                    allowModelPlannedLowRisk: toolAnalysis?.routedBy === 'main_model_plan'
+                    allowModelPlannedLowRisk: ['main_model_plan', 'main_model_direct'].includes(toolAnalysis?.routedBy)
                 })
                 if (guardedToolCalls.blocked.length > 0) {
                     logger.warn(`[AI-Plugin] [工具安全] 已拦截缺少明确当前指令的工具: ${guardedToolCalls.blocked.map(call => call.name).join(', ')}`)

@@ -7,6 +7,7 @@ const {
     hasExplicitLocalFileMutationIntent,
     hasExplicitLocalFileReadIntent,
     hasExplicitSystemOperationIntent,
+    hasExplicitWebFetchIntent,
     hasExplicitUserProfileUpdateIntent,
     hasGroupChatContextQuestion,
     parseExplicitLocalFileReadRequest,
@@ -34,6 +35,21 @@ const { parseStandalonePendingCommand } = await import('../utils/pending_actions
 const { classifyToolCallRisk } = await import('../utils/agent_policy.js')
 
 const incidents = [
+    {
+        id: 'adjacent-url-read-not-blocked-after-semantic-plan',
+        input: '#c看一下https://kokode.su/zh-cn/blog/Yui',
+        pass: text => {
+            const call = { name: 'web_fetch', args: { url: 'https://kokode.su/zh-cn/blog/Yui' } }
+            const guarded = filterToolCallsByIntent([call], text, {
+                candidateUrls: ['https://kokode.su/zh-cn/blog/Yui'],
+                allowModelPlannedLowRisk: true
+            })
+            return hasExplicitWebFetchIntent(text)
+                && selectToolCandidates(replayEnabledTools, text).tools.includes('web_fetch')
+                && guarded.tools.length === 1
+                && guarded.blocked.length === 0
+        }
+    },
     {
         id: 'natural-language-dependency-repair-executes-shell',
         input: '#c我是在测试你的agent能力，你去补一下依赖',
