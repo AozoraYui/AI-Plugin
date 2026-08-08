@@ -14,7 +14,7 @@ import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject } from '../utils/message_context.js'
 import { collectQQFaceImageUrls, describeQQFaceSegment, formatQQFaceSegments } from '../utils/qq_face.js'
-import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
+import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parsePluginUpdateRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } from '../utils/pending_actions.js'
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
@@ -1638,13 +1638,13 @@ ${agentRoundBlock}
     const result = await client.makeRequest('chat', payload, modelGroupKey, 2048, providerFilter)
     if (!result.success || !result.data) {
         logger.warn(`[AI-Plugin] 主模型工具规划失败: ${result.error || '无返回'}`)
-        return { need_tools: false, reason: '主模型工具规划失败' }
+        return { need_tools: false, planning_failed: true, reason: '主模型工具规划失败', error: result.error || '无返回' }
     }
 
     const parsed = parseJsonObject(result.data)
     if (!parsed) {
         logger.warn(`[AI-Plugin] 主模型工具规划 JSON 解析失败: ${String(result.data).slice(0, 300)}`)
-        return { need_tools: false, reason: '主模型工具规划 JSON 解析失败' }
+        return { need_tools: false, planning_failed: true, reason: '主模型工具规划 JSON 解析失败', error: 'JSON 解析失败' }
     }
 
     const plannedTools = Array.isArray(parsed.tool_plan) ? parsed.tool_plan : []
@@ -2350,6 +2350,32 @@ export class ChatHandler extends plugin {
                                 continuationTools: continuationToolsForGuard
                             })
                             toolAnalysis.plan = mainToolPlan
+                        } else if (mainToolPlan?.planning_failed && e.isMaster && planningCandidates.tools.includes('shell_exec')) {
+                            const pluginUpdateArgs = parsePluginUpdateRequest(currentToolInstruction)
+                            if (pluginUpdateArgs) {
+                                logger.warn('[AI-Plugin] 主模型规划失败，启用受限降级: 主人明确要求更新当前 AI-Plugin，执行 git pull')
+                                toolAnalysis = {
+                                    intent: '规划模型不可用时的受限降级：主人明确要求更新当前 AI-Plugin。',
+                                    tools: [{ name: 'shell_exec', args: pluginUpdateArgs }],
+                                    routedBy: 'planner_failure_fallback',
+                                    plan: {
+                                        need_tools: true,
+                                        resolved_request: '更新当前 AI-Plugin 仓库到远端最新版本',
+                                        task_kind: 'single_step',
+                                        requires_followup_check: false,
+                                        success_criteria: ['git pull 返回成功结果'],
+                                        tool_plan: [{ tool: 'shell_exec', purpose: '拉取当前插件仓库最新代码', params: pluginUpdateArgs }]
+                                    }
+                                }
+                            } else {
+                                logger.info(`[AI-Plugin] 主模型工具规划失败且没有满足受限降级条件: ${String(mainToolPlan?.reason || '').slice(0, 180)}`)
+                                toolAnalysis = {
+                                    intent: mainToolPlan?.reason || '',
+                                    tools: [],
+                                    routedBy: 'main_model_plan_failed',
+                                    plan: mainToolPlan
+                                }
+                            }
                         } else {
                             logger.info(`[AI-Plugin] 主模型判断本轮无需工具: ${String(mainToolPlan?.reason || '').slice(0, 180)}`)
                             toolAnalysis = {

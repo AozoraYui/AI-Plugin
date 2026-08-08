@@ -26,6 +26,7 @@ const {
     parseGroupSendRequest,
     parseExplicitLocalFileReadRequest,
     parseNamedGroupChatContextRequest,
+    parsePluginUpdateRequest,
     parseRecentGroupChatFollowupRequest,
     parseWebSearchRequest,
     parseWorkspaceSurveyRequest,
@@ -62,7 +63,7 @@ const { default: sqlite3 } = await import('sqlite3')
 const { selectWorkspaceSurveyFiles } = await import('../utils/workspace_survey.js')
 const { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resolvePersistedAgentStatus } = await import('../utils/agent_completion.js')
 const { trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
-const { resolveFastChatImageDelivery, resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
+const { getPureImageReplyPolicy, resolveFastChatImageDelivery, resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
 
 const failures = []
 let passed = 0
@@ -484,6 +485,20 @@ for (const [name, text, expected, options = {}] of candidateCases) {
 
 check('委派式依赖补全识别为系统执行', hasExplicitSystemOperationIntent('#c我是在测试你的agent能力，你去补一下依赖'))
 check('询问依赖安装方法不会误执行', !hasExplicitSystemOperationIntent('#c这个项目的依赖应该怎么安装？'))
+check('明确更新当前插件可生成规划失败降级参数', (() => {
+    const request = parsePluginUpdateRequest('#c诺亚更新一下插件')
+    return request?.command === 'git pull' && request?.cwd === 'plugins/AI-Plugin'
+})())
+check('规划失败生成的插件更新命令可通过第二道Shell意图门', (() => {
+    const request = parsePluginUpdateRequest('#c诺亚更新一下插件')
+    const guarded = filterToolCallsByIntent([{ name: 'shell_exec', args: request }], '#c诺亚更新一下插件')
+    return guarded.tools.length === 1 && guarded.blocked.length === 0
+})())
+check('询问插件更新方法不会触发规划失败降级', parsePluginUpdateRequest('#c这个插件应该怎么更新？') === null)
+check('询问插件是否最新不会触发规划失败降级', parsePluginUpdateRequest('#c插件是不是最新版本？') === null)
+check('强制更新不会进入普通 git pull 降级', parsePluginUpdateRequest('#c强制更新插件，丢弃本地修改') === null)
+check('否定更新请求不会进入规划失败降级', parsePluginUpdateRequest('#c先别更新插件') === null)
+check('更新其他具名插件不会误降级为更新AI-Plugin', parsePluginUpdateRequest('#c更新一下miao插件') === null)
 check('自然语言依赖补全允许模型计划Shell', (() => {
     const guarded = filterToolCallsByIntent([{
         name: 'shell_exec',
@@ -1393,7 +1408,7 @@ const masterImageTrigger = resolveFastChatTrigger({
     instructionText: '',
     keywords: ['诺亚']
 })
-check('单独发送一张图片会触发畅聊读图', masterImageTrigger.triggered && masterImageTrigger.forceReadCurrentImages === true)
+check('单独发送一张图片会静默读图但不触发回复', !masterImageTrigger.triggered && masterImageTrigger.forceReadCurrentImages === true)
 
 const masterMultiImageTrigger = resolveFastChatTrigger({
     triggerOnImage: true,
@@ -1401,14 +1416,15 @@ const masterMultiImageTrigger = resolveFastChatTrigger({
     instructionText: '',
     keywords: ['诺亚']
 })
-check('单独发送多张图片会触发原有分批读图链路', masterMultiImageTrigger.triggered && masterMultiImageTrigger.forceReadCurrentImages === true)
+check('单独发送多张图片会静默进入原有分批读图链路', !masterMultiImageTrigger.triggered && masterMultiImageTrigger.forceReadCurrentImages === true)
 
-check('关闭图片自然触发时不自动回复', resolveFastChatTrigger({
+const disabledImageRead = resolveFastChatTrigger({
     triggerOnImage: false,
     currentImageCount: 1,
     instructionText: '',
     keywords: ['诺亚']
-}).triggered === false)
+})
+check('关闭图片静默读取时既不读图也不自动回复', disabledImageRead.triggered === false && disabledImageRead.forceReadCurrentImages === false)
 
 const mixedImageTrigger = resolveFastChatTrigger({
     triggerOnImage: true,
@@ -1416,8 +1432,8 @@ const mixedImageTrigger = resolveFastChatTrigger({
     instructionText: '这张图怎么样',
     keywords: ['诺亚']
 })
-check('图片带普通文字且未提及AI也会自动触发读图', mixedImageTrigger.triggered
-    && mixedImageTrigger.reason === 'image_with_text'
+check('图文混合消息未提及AI时静默读图但不回复', !mixedImageTrigger.triggered
+    && mixedImageTrigger.reason === 'none'
     && mixedImageTrigger.forceReadCurrentImages === true)
 const mentionedMixedImageTrigger = resolveFastChatTrigger({
     triggerOnImage: true,
@@ -1426,11 +1442,24 @@ const mentionedMixedImageTrigger = resolveFastChatTrigger({
     instructionText: '诺亚看看这些截图',
     keywords: ['诺亚']
 })
-check('图文消息即使同时@机器人也优先强制读取全部当前图片', mentionedMixedImageTrigger.triggered
-    && mentionedMixedImageTrigger.reason === 'image_with_text'
+check('图文消息@机器人时正常回复并强制读取全部当前图片', mentionedMixedImageTrigger.triggered
+    && mentionedMixedImageTrigger.reason === 'mentioned_bot'
     && mentionedMixedImageTrigger.forceReadCurrentImages === true)
+const keywordMixedImageTrigger = resolveFastChatTrigger({
+    triggerOnImage: true,
+    currentImageCount: 2,
+    instructionText: '诺亚看看这个',
+    keywords: ['诺亚']
+})
+check('图文消息提到AI名称时正常回复并读取图片', keywordMixedImageTrigger.triggered
+    && keywordMixedImageTrigger.reason === 'keyword'
+    && keywordMixedImageTrigger.forceReadCurrentImages === true)
 check('单条四张图片直接交给最终多模态模型', resolveFastChatImageDelivery(4, 4) === 'direct')
 check('单条五张图片进入原有分批摘要逻辑', resolveFastChatImageDelivery(5, 4) === 'batch')
+check('纯图片回复策略禁止机械描述和无关劝睡', (() => {
+    const policy = getPureImageReplyPolicy()
+    return policy.includes('不要逐项复述画面') && policy.includes('不要主动提及当前时间') && policy.includes('不要劝睡')
+})())
 
 console.log(`\nAgent eval: ${passed} passed, ${failures.length} failed`)
 if (failures.length > 0) process.exit(1)

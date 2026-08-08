@@ -426,6 +426,29 @@ export function hasExplicitSystemOperationIntent(text) {
     return operation && systemTarget && !(asksHow && !/(?:帮我|给我|请|麻烦|你来|你去|我要你|需要你)/i.test(value))
 }
 
+export function parsePluginUpdateRequest(text) {
+    const value = getPrimaryUserInstruction(text).replace(/^(?:诺亚|noa|喏亚|诺娅)\s*/i, '').trim()
+    if (!value) return null
+    if (/(?:不要|不用|无需|先别|暂时别|停止|取消).{0,12}(?:更新|升级|同步|拉取|pull)/i.test(value)) return null
+    if (/(?:强制更新|强制拉取|reset\s+--hard|丢弃.{0,12}(?:修改|改动|变更))/i.test(value)) return null
+
+    const asksHow = /(?:怎么|如何|怎样|教程|方法).{0,24}(?:更新|升级|同步|拉取|pull)|(?:更新|升级|同步|拉取|pull).{0,24}(?:怎么|如何|怎样)/i.test(value)
+    const asksStatus = /(?:更新了吗|更新了没|有没有更新|是否更新|是不是最新|当前版本|最新版本|版本号)/i.test(value)
+    const action = /(?:更新|升级|同步|拉取|git\s+pull|pull)/i.test(value)
+    const explicitTarget = /(?:AI[-_ ]?Plugin|AI插件|这个插件|本插件|当前插件)/i.test(value)
+    const genericSelfTarget = /^(?:(?:帮我|给我|请|麻烦你?|你来|你去|直接|现在|立刻|赶紧)\s*)?(?:再|继续|接着|重新)?\s*(?:更新|升级|同步|拉取|git\s+pull|pull)(?:一下|下)?\s*(?:插件|插件代码|插件仓库)(?:一下|下|吧)?[。！!\s]*$/i.test(value)
+        || /^(?:插件|插件代码|插件仓库)\s*(?:更新|升级|同步|拉取)(?:一下|下|吧)?[。！!\s]*$/i.test(value)
+    const delegated = /(?:帮我|给我|请|麻烦你?|你来|你去|直接|现在|立刻|赶紧|替我|为我|我要你|需要你)/i.test(value)
+        || /^(?:再|继续|接着|重新)?\s*(?:更新|升级|同步|拉取|git\s+pull|pull)/i.test(value)
+        || /(?:插件|AI[-_ ]?Plugin|AI插件).{0,10}(?:更新|升级|同步|拉取)(?:一下|下|吧)?[。！!\s]*$/i.test(value)
+
+    if (!action || (!explicitTarget && !genericSelfTarget) || !delegated || asksHow || asksStatus) return null
+    return {
+        command: 'git pull',
+        cwd: 'plugins/AI-Plugin'
+    }
+}
+
 export function hasExplicitGroupChatContextIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
@@ -671,6 +694,7 @@ export function hasGroupChatContextQuestion(text) {
 export function hasExplicitShellIntent(text, toolName = '') {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
+    if (toolName === 'shell_exec' && parsePluginUpdateRequest(value)) return true
     const commandKeywords = 'ssh|scp|rsync|git|npm|pnpm|node|python3?|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head|nmap|ip|tmux|sqlite3|sqlite|curl|wget|jq|sed|awk'
     const shellKeywords = `${commandKeywords}|shell|命令|终端`
     const sessionWords = '(?:tmux|ai-shell|shell\\s*session|shell会话|shell窗口|独立shell|终端会话)'

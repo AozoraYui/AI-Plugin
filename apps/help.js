@@ -119,7 +119,7 @@ export class HelpHandler extends plugin {
   可询问“我刚在别的群说了什么”来检索自己的跨群消息；主人可查询所有已捕获群流水。
   主人在私聊中也可以问“你加了哪些群/能看到哪些群”，查看机器人可见或已捕获群列表。
   可明确说“记到我的个人档案：xxx”或“从刚才聊天提炼我的档案”，AI 会合并更新你的长期画像。
-  图片不保存本体；纯图片和图文混合消息都会读图并保存视觉摘要，最多 ${fastChatDirectImageLimit} 张直接交给最终模型，更多图片按每批 ${fastChatImageBatchSize} 张摘要。
+  图片不保存本体；纯图片和图文混合消息会静默读图并保存视觉摘要，不会仅因发图自动回复。最多 ${fastChatDirectImageLimit} 张直接识别，更多图片按每批 ${fastChatImageBatchSize} 张摘要。
   历史上下文每轮最多临时读取 ${fastChatMaxImagesText}；自动回看单条历史图片消息时使用 ${fastChatAutoImageLimit} 张阈值。
 > 🧠 本地向量记忆（可选）
   需在 models_config.yaml 开启 enable_vector_memory: true，并安装 scripts/requirements.txt 里的 Python 依赖。
@@ -293,7 +293,7 @@ export class HelpHandler extends plugin {
   所有对话指令都支持发送图片，支持引用消息、合并转发展开。
   主人也可让 #c/畅聊直接查看白名单内的服务器本地图片绝对路径，如 /root/Yunzai/resources/tmp/a.jpg。
   问“能看到我的头像吗 / 看看 @某人 的头像 / 你的头像是什么样”时，会把对应 QQ 头像作为本轮图片输入。
-  畅聊模式会自动读取纯图片和图文混合消息：不超过 ${fastChatDirectImageLimit} 张直接读，更多图片按每批 ${fastChatImageBatchSize} 张分批摘要；冷却期仍后台识图入库。
+  畅聊模式会静默读取纯图片和图文混合消息：不超过 ${fastChatDirectImageLimit} 张直接读，更多图片按每批 ${fastChatImageBatchSize} 张分批摘要；发图本身不会触发回复。
 > 🌐 临时开关
   默认关闭联网搜索和网页抓取，避免无意义的 Token 消耗。
   需要时添加 v (Vision)、n (Net)、w (Web) 开关临时启用：

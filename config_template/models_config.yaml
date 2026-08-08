@@ -216,10 +216,10 @@ enable_web_fetch: false
 #     注意：unlimited 不代表最终回复会把全库直接喂给模型；数据库保留全部，最终 prompt 会按安全上限截取
 #     该配置只影响本轮上下文，不会删除数据库记录
 #   FAST_CHAT_REPLY_COOLDOWN_MS: 同一群两次畅聊主动回复之间的冷却时间，避免刷屏
-#   FAST_CHAT_TRIGGER_ON_IMAGE: 纯图片或图文混合消息是否自动触发畅聊读图；默认 true，所有有访问权限的群成员生效
+#   FAST_CHAT_TRIGGER_ON_IMAGE: 纯图片或图文混合消息是否静默识图并写入群聊记忆；默认 true，发图本身不会触发回复
 #   FAST_CHAT_DIRECT_IMAGE_LIMIT: 单条消息最多多少张图直接交给最终多模态模型；默认 4，超过后按 FAST_CHAT_IMAGE_BATCH_SIZE 分批摘要
-#   FAST_CHAT_AUTO_READ_IMAGE_LIMIT: 自动回看单条历史图片消息的阈值；当前图片自然触发消息不受此阈值截断
-#   FAST_CHAT_MAX_CONTEXT_IMAGES: 本轮最多读取多少张历史上下文图片；当前自动触发消息会完整读取并按 DIRECT_IMAGE_LIMIT 决定直读或分批；0 表示禁用畅聊读图
+#   FAST_CHAT_AUTO_READ_IMAGE_LIMIT: 自动回看单条历史图片消息的阈值；当前静默识图消息不受此阈值截断
+#   FAST_CHAT_MAX_CONTEXT_IMAGES: 本轮最多读取多少张历史上下文图片；当前静默识图消息会完整读取并按 DIRECT_IMAGE_LIMIT 决定直读或分批；0 表示禁用畅聊读图
 #   FAST_CHAT_MAX_CONTEXT_IMAGES 可设为 unlimited / -1 表示本轮读图数量不限制
 #   FAST_CHAT_IMAGE_BATCH_SIZE: 分批读图批大小；待读图片超过该值时，会按批预读成文字摘要后再最终回复
 #   FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS: 历史 QQ 临时图片链接最大可读年龄；默认 300 秒，超过后跳过以避免过期 rkey 返回 HTTP 400；0 表示不限制
@@ -251,7 +251,7 @@ enable_web_fetch: false
 # enable_group_send: false            # 代发群消息，主人专用；高风险跨群发言，默认关闭
 # enable_group_leave: false           # 遥控退群，主人专用；高风险操作，默认关闭，执行前需二次确认
 # enable_fast_chat: false              # 是否开启畅聊：全局捕获群消息（黑名单除外，含 # 命令消息），有权限时自然回复
-# FAST_CHAT_TRIGGER_ON_IMAGE: true       # 纯图片和图文混合消息都自动触发读图；冷却期仍后台识图入库但不额外回复
+# FAST_CHAT_TRIGGER_ON_IMAGE: true       # 纯图片和图文混合消息静默识图入库，不会仅因发图自动回复
 # FAST_CHAT_DIRECT_IMAGE_LIMIT: 4        # 单条消息不超过此数量时直接交给最终多模态模型；超过后走分批图片摘要
 # FAST_CHAT_CONTEXT_LIMIT: 60          # 每次回复/记录查询读取最近 60 条畅聊流水；unlimited / -1 为不限制。普通 #c 自动上下文和畅聊最终回复会内部限量
 # FAST_CHAT_REPLY_COOLDOWN_MS: 8000    # 同一群畅聊回复冷却 8000ms，防止连续触发刷屏

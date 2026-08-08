@@ -22,7 +22,7 @@ import { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, update
 import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../utils/agent_plan.js'
 import { verifyAgentRound } from '../utils/agent_verifier.js'
 import { selectWorkspaceSurveyFiles } from '../utils/workspace_survey.js'
-import { resolveFastChatImageDelivery, resolveFastChatTrigger } from '../utils/fast_chat_trigger.js'
+import { getPureImageReplyPolicy, resolveFastChatImageDelivery, resolveFastChatTrigger } from '../utils/fast_chat_trigger.js'
 
 const replyCooldown = new Map()
 const PERSONAL_MEMORY_MAX_CHARS = 2600
@@ -568,7 +568,7 @@ function buildImageReadPlan(normalized, logs = []) {
             imageUrls.push(...currentUrls)
             const omitted = Math.max(0, currentCount - currentUrls.length)
             const readReason = forcedCurrentRead
-                ? (normalized.fastChatTriggerReason === 'image_with_text' ? '图文混合消息自动触发读图' : '纯图片消息自动触发读图')
+                ? ((normalized.instructionText || '').trim() ? '图文混合消息自动读图' : '纯图片消息自动读图')
                 : '用户明确要求读图'
             logLines.push(`[AI-Plugin] [畅聊] ${readReason}，读取当前消息图片 ${currentUrls.length}/${currentCount} 张${omitted > 0 ? `，受上限 ${formatImageLimit(maxImages)} 省略 ${omitted} 张` : ''}`)
             if (omitted > 0) {
@@ -752,20 +752,6 @@ async function prepareFastChatImageContext(client, imageReadPlan, normalized) {
 
 function cleanModelText(text) {
     return sanitizeModelOutput(text, { showThinking: Config.show_thinking })
-}
-
-function parseFastChatImageMemoryResponse(text) {
-    const value = String(text || '').trim()
-    const summaryMatch = value.match(/【图片记忆摘要】([\s\S]*?)【\/图片记忆摘要】/)
-    const replyMatch = value.match(/【自然回复】([\s\S]*?)【\/自然回复】/)
-    const imageSummary = truncateText(summaryMatch?.[1]?.trim() || '', FAST_CHAT_IMAGE_MEMORY_MAX_CHARS)
-    let replyText = replyMatch?.[1]?.trim() || value
-    replyText = replyText
-        .replace(/【图片记忆摘要】[\s\S]*?【\/图片记忆摘要】/g, '')
-        .replace(/【\/?自然回复】/g, '')
-        .replace(/【\/?图片记忆摘要】/g, '')
-        .trim()
-    return { replyText, imageSummary }
 }
 
 async function buildDirectImageMemoryFallback(client, imageParts, normalized) {
@@ -1229,12 +1215,23 @@ export class FastChatHandler extends plugin {
         if (!replyAllowed) return false
         if (normalized.isBot || normalized.isCommand) return false
         const trigger = getFastChatTrigger(e, normalized)
-        if (!trigger.triggered) return false
         normalized.forceReadCurrentImages = trigger.forceReadCurrentImages === true
         normalized.fastChatTriggerReason = trigger.reason
-        if (['image_only', 'image_with_text'].includes(trigger.reason)) {
-            const messageKind = trigger.reason === 'image_only' ? '纯图片' : '图文混合'
-            logger.info(`[AI-Plugin] [畅聊] ${messageKind}消息自然触发: 图片=${normalized.currentImageCount}`)
+        if (!trigger.triggered) {
+            if (trigger.forceReadCurrentImages && normalized.currentImageCount > 0) {
+                const messageKind = (normalized.instructionText || '').trim() ? '图文混合' : '纯图片'
+                logger.info(`[AI-Plugin] [畅聊] ${messageKind}消息未触发回复，开始静默读图入库: 图片=${normalized.currentImageCount}`)
+                void persistCurrentMessageImageMemory(this.client, this.conversationManager.db, normalized, {
+                    reason: '静默读图'
+                })
+                    .catch(err => {
+                        logger.warn(`[AI-Plugin] [畅聊] 静默读图入库失败: ${err.message}`)
+                    })
+            }
+            return false
+        }
+        if (trigger.forceReadCurrentImages && normalized.currentImageCount > 0) {
+            logger.info(`[AI-Plugin] [畅聊] 图片消息同时命中回复触发条件: reason=${trigger.reason}, 图片=${normalized.currentImageCount}`)
         }
 
         const cooldownMs = Math.max(0, Number(Config.FAST_CHAT_REPLY_COOLDOWN_MS) || 0)
@@ -1244,13 +1241,12 @@ export class FastChatHandler extends plugin {
         if (cooldownMs > 0 && now - lastReplyAt < cooldownMs) {
             logger.info(`[AI-Plugin] [畅聊] 触发命中但仍在冷却中: 群 ${e.group_id}`)
             if (trigger.forceReadCurrentImages && normalized.currentImageCount > 0) {
-                try {
-                    await persistCurrentMessageImageMemory(this.client, this.conversationManager.db, normalized, {
-                        reason: '冷却期后台读图'
+                void persistCurrentMessageImageMemory(this.client, this.conversationManager.db, normalized, {
+                    reason: '冷却期后台读图'
+                })
+                    .catch(err => {
+                        logger.warn(`[AI-Plugin] [畅聊] 冷却期后台读图失败: ${err.message}`)
                     })
-                } catch (err) {
-                    logger.warn(`[AI-Plugin] [畅聊] 冷却期后台读图失败: ${err.message}`)
-                }
             }
             return true
         }
@@ -1265,7 +1261,7 @@ export class FastChatHandler extends plugin {
     }
 
     async replyWithGroupContext(e, normalized) {
-        const isPureImageTrigger = normalized.fastChatTriggerReason === 'image_only'
+        const isPureImageTrigger = normalized.currentImageCount > 0 && !(normalized.instructionText || '').trim()
         const configuredLimit = Number(Config.FAST_CHAT_CONTEXT_LIMIT)
         const limit = normalizeFastChatReplyContextLimit()
         if (configuredLimit === Infinity || configuredLimit > limit) {
@@ -1360,7 +1356,6 @@ export class FastChatHandler extends plugin {
         const imageContext = await prepareFastChatImageContext(this.client, imageReadPlan, normalized)
         const imageParts = imageContext.imageParts
         const shouldCaptureCurrentImageMemory = normalized.currentImageCount > 0 && imageContext.processedCount > 0
-        const shouldRequestDirectImageMemory = shouldCaptureCurrentImageMemory && imageContext.batchMode === false && imageParts.length > 0
         const imageReadNotes = [...imageReadPlan.notes, ...imageContext.notes]
         if (imageReadPlan.imageUrls.length > 0 && imageContext.processedCount < imageReadPlan.imageUrls.length) {
             logger.warn(`[AI-Plugin] [畅聊] 图片读取成功 ${imageContext.processedCount}/${imageReadPlan.imageUrls.length} 张，部分图片处理失败或被跳过`)
@@ -1905,19 +1900,11 @@ export class FastChatHandler extends plugin {
 - “语义相关记忆”来自本地向量检索，只是和当前消息相关的旧线索，不等于当前群正在发生的事；命中不足时要说明不确定。
 - 不要编造没有出现在上下文里的事实。
 - 如果上下文不足，就坦诚说不太确定。
-${isPureImageTrigger ? `- 本轮由用户单独发送图片触发。把图片当作一句自然的群聊表达：默认只用 1 至 3 句简短回应；表情包优先说清它传达的情绪、梗或反应，不要逐项写成长篇画面说明。
-- 用户没有提出问题时，不要擅自推断其正在做什么、为什么发图、接下来要做什么，也不要根据时间、档案或旧记忆进行作息提醒、劝告或说教。确实看不懂时，只需简短说明不确定或自然询问。` : ''}
-${shouldRequestDirectImageMemory ? `- 本轮直接附带了当前消息图片。你的输出必须严格包含以下两个区块：
-【图片记忆摘要】
-为后续对话保存的客观图片摘要；按图片顺序记录主体、场景、动作、表情、关键文字/UI/二维码/水印和不确定点，不猜发送动机，最多 ${FAST_CHAT_IMAGE_MEMORY_MAX_CHARS} 字。
-【/图片记忆摘要】
-【自然回复】
-实际发给用户的自然回复。
-【/自然回复】
-图片记忆摘要只用于内部持久化，不要在自然回复里机械复述完整摘要。` : ''}
+${isPureImageTrigger ? getPureImageReplyPolicy() : ''}
 
-【当前时间】
+${!isPureImageTrigger ? `【当前时间】
 ${getBeijingTimeStr()}
+` : ''}
 
 ${compactNote ? `【上下文分段整理说明】\n以下部分资料因过长，已先由模型逐段提炼，再把汇总结果注入本轮最终回复。摘要只作为资料压缩，不代表新的事实来源。\n${compactNote}\n\n` : ''}
 【最近群聊上下文】
@@ -2006,12 +1993,9 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             return
         }
 
-        let parsedImageResponse = shouldRequestDirectImageMemory
-            ? parseFastChatImageMemoryResponse(cleanModelText(result.data))
-            : { replyText: cleanModelText(result.data), imageSummary: '' }
-        let replyText = parsedImageResponse.replyText
+        let replyText = cleanModelText(result.data)
         let imageMemorySummary = shouldCaptureCurrentImageMemory
-            ? truncateText(imageContext.summaryText || parsedImageResponse.imageSummary || '', FAST_CHAT_IMAGE_MEMORY_MAX_CHARS)
+            ? truncateText(imageContext.summaryText || '', FAST_CHAT_IMAGE_MEMORY_MAX_CHARS)
             : ''
         let usedSafeFallbackReply = false
         const hasTaskCompletionEvidence = fastAgentCompletionStatus === 'ready' && !fastAgentPendingMandatoryVerification
@@ -2039,11 +2023,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             const retryResult = await this.client.makeRequest('chat', retryPayload, 'flash', 4096)
             if (retryResult.success && retryResult.data) {
                 result = retryResult
-                parsedImageResponse = shouldRequestDirectImageMemory
-                    ? parseFastChatImageMemoryResponse(cleanModelText(retryResult.data))
-                    : { replyText: cleanModelText(retryResult.data), imageSummary: '' }
-                replyText = parsedImageResponse.replyText
-                if (parsedImageResponse.imageSummary) imageMemorySummary = parsedImageResponse.imageSummary
+                replyText = cleanModelText(retryResult.data)
                 unsupportedToolClaim = hasUnsupportedToolResultClaim(replyText, {
                     hasActualToolResults: hasSuccessfulToolResult,
                     hasTaskCompletionEvidence
@@ -2055,9 +2035,14 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             replyText = '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。你可以再问一次，我会先真正调用工具并确认结果。'
             usedSafeFallbackReply = true
         }
-        if (shouldRequestDirectImageMemory && !imageMemorySummary) {
-            logger.warn('[AI-Plugin] [畅聊] 最终模型未返回图片记忆摘要，启动独立视觉摘要降级')
-            imageMemorySummary = await buildDirectImageMemoryFallback(this.client, imageParts, normalized)
+        await e.reply(replyText, true)
+        if (shouldCaptureCurrentImageMemory && !imageMemorySummary && imageParts.length > 0) {
+            logger.info('[AI-Plugin] [畅聊] 前台回复已发送，启动独立后台视觉摘要')
+            try {
+                imageMemorySummary = await buildDirectImageMemoryFallback(this.client, imageParts, normalized)
+            } catch (err) {
+                logger.warn(`[AI-Plugin] [畅聊] 独立后台视觉摘要失败，不影响自然回复: ${err.message}`)
+            }
         }
         if (shouldCaptureCurrentImageMemory && imageMemorySummary) {
             normalized.imageSummary = imageMemorySummary
@@ -2072,7 +2057,6 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                 logger.warn(`[AI-Plugin] [畅聊] 写回图片语义摘要失败: ${err.message}`)
             }
         }
-        await e.reply(replyText, true)
         if (fastAgentTask?.taskId) {
             const finalStatus = resolvePersistedAgentStatus({
                 completionStatus: fastAgentCompletionStatus || fastAgentTaskStatus,
