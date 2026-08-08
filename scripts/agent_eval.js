@@ -62,6 +62,7 @@ const { default: sqlite3 } = await import('sqlite3')
 const { selectWorkspaceSurveyFiles } = await import('../utils/workspace_survey.js')
 const { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resolvePersistedAgentStatus } = await import('../utils/agent_completion.js')
 const { trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
+const { resolveFastChatImageDelivery, resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
 
 const failures = []
 let passed = 0
@@ -1383,6 +1384,38 @@ const conflictTask = await updateAgentTaskProgress(conflictDb, {
     riskLevel: 'low'
 }, { status: 'waiting', lastObservation: '等待确认' })
 check('共享任务更新遇到版本冲突会重载并重试', conflictAttempts === 2 && conflictTask.version === 3 && conflictTask.status === 'waiting', JSON.stringify(conflictTask))
+
+const masterImageTrigger = resolveFastChatTrigger({
+    triggerOnImage: true,
+    currentImageCount: 1,
+    instructionText: '',
+    keywords: ['诺亚']
+})
+check('单独发送一张图片会触发畅聊读图', masterImageTrigger.triggered && masterImageTrigger.forceReadCurrentImages === true)
+
+const masterMultiImageTrigger = resolveFastChatTrigger({
+    triggerOnImage: true,
+    currentImageCount: 8,
+    instructionText: '',
+    keywords: ['诺亚']
+})
+check('单独发送多张图片会触发原有分批读图链路', masterMultiImageTrigger.triggered && masterMultiImageTrigger.forceReadCurrentImages === true)
+
+check('关闭图片自然触发时不自动回复', resolveFastChatTrigger({
+    triggerOnImage: false,
+    currentImageCount: 1,
+    instructionText: '',
+    keywords: ['诺亚']
+}).triggered === false)
+
+check('图片带普通文字但未提及AI不会改变原有触发规则', resolveFastChatTrigger({
+    triggerOnImage: true,
+    currentImageCount: 1,
+    instructionText: '这张图怎么样',
+    keywords: ['诺亚']
+}).triggered === false)
+check('单条四张图片直接交给最终多模态模型', resolveFastChatImageDelivery(4, 4) === 'direct')
+check('单条五张图片进入原有分批摘要逻辑', resolveFastChatImageDelivery(5, 4) === 'batch')
 
 console.log(`\nAgent eval: ${passed} passed, ${failures.length} failed`)
 if (failures.length > 0) process.exit(1)

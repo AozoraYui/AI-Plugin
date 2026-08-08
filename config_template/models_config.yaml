@@ -216,6 +216,8 @@ enable_web_fetch: false
 #     注意：unlimited 不代表最终回复会把全库直接喂给模型；数据库保留全部，最终 prompt 会按安全上限截取
 #     该配置只影响本轮上下文，不会删除数据库记录
 #   FAST_CHAT_REPLY_COOLDOWN_MS: 同一群两次畅聊主动回复之间的冷却时间，避免刷屏
+#   FAST_CHAT_TRIGGER_ON_IMAGE: 单独发送图片时是否自动触发畅聊回复；默认 true，所有有访问权限的群成员生效
+#   FAST_CHAT_DIRECT_IMAGE_LIMIT: 单条消息最多多少张图直接交给最终多模态模型；默认 4，超过后按 FAST_CHAT_IMAGE_BATCH_SIZE 分批摘要
 #   FAST_CHAT_AUTO_READ_IMAGE_LIMIT: 自动读图阈值；触发消息含图数 <= 该值时自动临时读图，超过则需明确说“读图/看图/分析图片”
 #   FAST_CHAT_MAX_CONTEXT_IMAGES: 本轮最多读取多少张图；3 表示最多读 3 张，不是超过 3 张就分批；0 表示禁用畅聊读图
 #   FAST_CHAT_MAX_CONTEXT_IMAGES 可设为 unlimited / -1 表示本轮读图数量不限制
@@ -249,6 +251,8 @@ enable_web_fetch: false
 # enable_group_send: false            # 代发群消息，主人专用；高风险跨群发言，默认关闭
 # enable_group_leave: false           # 遥控退群，主人专用；高风险操作，默认关闭，执行前需二次确认
 # enable_fast_chat: false              # 是否开启畅聊：全局捕获群消息（黑名单除外，含 # 命令消息），有权限时自然回复
+# FAST_CHAT_TRIGGER_ON_IMAGE: true       # 单独发送图片时自动触发畅聊读图；配合群冷却避免刷屏
+# FAST_CHAT_DIRECT_IMAGE_LIMIT: 4        # 单条消息不超过此数量时直接交给最终多模态模型；超过后走分批图片摘要
 # FAST_CHAT_CONTEXT_LIMIT: 60          # 每次回复/记录查询读取最近 60 条畅聊流水；unlimited / -1 为不限制。普通 #c 自动上下文和畅聊最终回复会内部限量
 # FAST_CHAT_REPLY_COOLDOWN_MS: 8000    # 同一群畅聊回复冷却 8000ms，防止连续触发刷屏
 # FAST_CHAT_MAX_CONTEXT_IMAGES: 3      # 本轮最多读 3 张图；unlimited / -1 为不限制，0 为禁用读图

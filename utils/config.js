@@ -85,6 +85,8 @@ const defaultConfig = {
     enable_group_send: false,
     enable_group_leave: false,
     enable_fast_chat: false,
+    FAST_CHAT_TRIGGER_ON_IMAGE: true,
+    FAST_CHAT_DIRECT_IMAGE_LIMIT: 4,
     FAST_CHAT_TRIGGER_KEYWORDS: ['诺亚', 'noa'],
     FAST_CHAT_CONTEXT_LIMIT: 60,
     FAST_CHAT_REPLY_COOLDOWN_MS: 8000,
@@ -428,6 +430,14 @@ export const Config = {
     set enable_group_leave(val) { config.enable_group_leave = val === true },
     get enable_fast_chat() { return config.enable_fast_chat ?? defaultConfig.enable_fast_chat },
     set enable_fast_chat(val) { config.enable_fast_chat = val === true },
+    get FAST_CHAT_TRIGGER_ON_IMAGE() { return config.FAST_CHAT_TRIGGER_ON_IMAGE ?? defaultConfig.FAST_CHAT_TRIGGER_ON_IMAGE },
+    set FAST_CHAT_TRIGGER_ON_IMAGE(val) { config.FAST_CHAT_TRIGGER_ON_IMAGE = val === true },
+    get FAST_CHAT_DIRECT_IMAGE_LIMIT() {
+        return Math.max(1, Math.floor(Number(config.FAST_CHAT_DIRECT_IMAGE_LIMIT ?? defaultConfig.FAST_CHAT_DIRECT_IMAGE_LIMIT) || defaultConfig.FAST_CHAT_DIRECT_IMAGE_LIMIT))
+    },
+    set FAST_CHAT_DIRECT_IMAGE_LIMIT(val) {
+        config.FAST_CHAT_DIRECT_IMAGE_LIMIT = Math.max(1, Math.floor(Number(val) || defaultConfig.FAST_CHAT_DIRECT_IMAGE_LIMIT))
+    },
     get FAST_CHAT_TRIGGER_KEYWORDS() { return config.FAST_CHAT_TRIGGER_KEYWORDS ?? defaultConfig.FAST_CHAT_TRIGGER_KEYWORDS },
     set FAST_CHAT_TRIGGER_KEYWORDS(val) { config.FAST_CHAT_TRIGGER_KEYWORDS = Array.isArray(val) ? val : defaultConfig.FAST_CHAT_TRIGGER_KEYWORDS },
     get FAST_CHAT_CONTEXT_LIMIT() { return parseContextLimit(config.FAST_CHAT_CONTEXT_LIMIT, defaultConfig.FAST_CHAT_CONTEXT_LIMIT) },

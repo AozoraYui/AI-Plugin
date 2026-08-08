@@ -22,6 +22,7 @@ import { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, update
 import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../utils/agent_plan.js'
 import { verifyAgentRound } from '../utils/agent_verifier.js'
 import { selectWorkspaceSurveyFiles } from '../utils/workspace_survey.js'
+import { resolveFastChatImageDelivery, resolveFastChatTrigger } from '../utils/fast_chat_trigger.js'
 
 const replyCooldown = new Map()
 const PERSONAL_MEMORY_MAX_CHARS = 2600
@@ -365,6 +366,7 @@ async function checkCaptureAccess(e) {
 
 async function normalizeGroupMessage(e) {
     const current = await normalizeSegments(e, e.message || [], 'message')
+    const currentImageCount = current.imageMeta.length
     const instructionText = normalizeInstructionSegments(e.message || [])
     const currentText = current.text || String(e.msg || '').trim()
     let normalizedText = currentText
@@ -398,6 +400,7 @@ async function normalizeGroupMessage(e) {
         instructionText,
         normalizedText,
         imageMeta,
+        currentImageCount,
         isCommand: String(e.msg || '').trim().startsWith('#'),
         isBot: String(e.user_id) === getBotUin(e)
     }
@@ -419,19 +422,22 @@ function isContextSummaryQuestion(text) {
         || /(聊了啥|聊了什么|说了啥|发了啥|发生了什么|什么情况|前情提要|总结.{0,12}群聊|群聊.{0,12}总结)/i.test(value)
 }
 
-function shouldTriggerFastChat(e, normalizedText) {
+function getFastChatTrigger(e, normalized) {
     const botUin = getBotUin(e)
     const mentionedBot = e.message?.some(seg => seg.type === 'at' && String(seg.data?.qq || seg.qq) === botUin)
-    if (mentionedBot) return true
-
-    const keywords = new Set([
+    return resolveFastChatTrigger({
+        mentionedBot,
+        instructionText: normalized.instructionText || '',
+        currentImageCount: normalized.currentImageCount,
+        isMaster: e.isMaster === true,
+        triggerOnImage: Config.FAST_CHAT_TRIGGER_ON_IMAGE === true,
+        keywords: [
         Config.AI_NAME,
         ...Config.FAST_CHAT_TRIGGER_KEYWORDS,
         '诺亚',
         'noa'
-    ].filter(Boolean).map(s => String(s).toLowerCase()))
-    const lower = String(normalizedText || '').toLowerCase()
-    return [...keywords].some(keyword => keyword && lower.includes(keyword))
+        ]
+    })
 }
 
 function splitTextByLength(text, maxLength) {
@@ -535,7 +541,7 @@ function buildImageReadPlan(normalized, logs = []) {
     const currentMeta = normalized.imageMeta || []
     const currentCount = currentMeta.length
     const routingText = normalized.instructionText || normalized.normalizedText || ''
-    const explicitRead = isExplicitImageReadRequest(routingText, currentCount > 0)
+    const explicitRead = normalized.forceReadCurrentImages === true || isExplicitImageReadRequest(routingText, currentCount > 0)
     const imageQuestion = isImageQuestion(routingText)
     const contextSummaryQuestion = isContextSummaryQuestion(routingText)
     const seen = new Set()
@@ -661,7 +667,7 @@ async function prepareFastChatImageContext(client, imageReadPlan, normalized) {
         return { imageParts: [], summaryText: '', notes, requestedCount: 0, processedCount: 0, batchMode: false }
     }
 
-    if (imageUrls.length <= batchSize) {
+    if (resolveFastChatImageDelivery(imageUrls.length, Config.FAST_CHAT_DIRECT_IMAGE_LIMIT) === 'direct') {
         const imageParts = await processImagesInBatches(imageUrls, { maxImages: imageUrls.length })
         if (imageParts.length < imageUrls.length) {
             notes.push(`本轮计划读取 ${imageUrls.length} 张图片，实际成功处理 ${imageParts.length} 张；请不要描述处理失败的图片。`)
@@ -1159,7 +1165,12 @@ export class FastChatHandler extends plugin {
 
         if (!replyAllowed) return false
         if (normalized.isBot || normalized.isCommand) return false
-        if (!shouldTriggerFastChat(e, normalized.instructionText || normalized.currentText || '')) return false
+        const trigger = getFastChatTrigger(e, normalized)
+        if (!trigger.triggered) return false
+        normalized.forceReadCurrentImages = trigger.forceReadCurrentImages === true
+        if (trigger.reason === 'master_image_only') {
+            logger.info(`[AI-Plugin] [畅聊] 纯图片消息自然触发: 图片=${normalized.currentImageCount}`)
+        }
 
         const cooldownMs = Math.max(0, Number(Config.FAST_CHAT_REPLY_COOLDOWN_MS) || 0)
         const cooldownKey = String(e.group_id)
