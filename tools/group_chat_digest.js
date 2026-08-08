@@ -257,9 +257,10 @@ async function resolveTargetGroupId(event, target) {
 function formatLogLine(log, options = {}) {
     const name = log.isBot ? 'AI' : (log.nickname || `用户${log.userId}`)
     const groupHint = options.showGroupId ? `群${log.groupId} ` : ''
-    const imageHint = log.imageMeta?.length ? `（含 ${log.imageMeta.length} 张图片，仅元信息）` : ''
+    const imageHint = log.imageMeta?.length ? `（含 ${log.imageMeta.length} 张图片${log.imageSummary ? '，已有视觉摘要' : '，仅元信息'}）` : ''
     const commandHint = log.isCommand ? ' [命令消息]' : ''
-    return `[${formatDBTimestampToBeijing(log.createdAt)}]${commandHint} ${groupHint}${name}(${log.userId}): ${truncateText(log.normalizedText, 650)}${imageHint}`
+    const imageSummary = log.imageSummary ? `\n  【图片内容摘要】${truncateText(log.imageSummary, 1200)}` : ''
+    return `[${formatDBTimestampToBeijing(log.createdAt)}]${commandHint} ${groupHint}${name}(${log.userId}): ${truncateText(log.normalizedText, 650)}${imageHint}${imageSummary}`
 }
 
 function buildBatches(logs = [], showGroupId = false) {

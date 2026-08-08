@@ -384,12 +384,15 @@ export class AiClient {
                 value.enable_group_send !== undefined ||
                 value.enable_group_leave !== undefined ||
                 value.enable_fast_chat !== undefined ||
+                value.FAST_CHAT_TRIGGER_ON_IMAGE !== undefined ||
+                value.FAST_CHAT_DIRECT_IMAGE_LIMIT !== undefined ||
                 value.FAST_CHAT_TRIGGER_KEYWORDS !== undefined ||
                 value.FAST_CHAT_CONTEXT_LIMIT !== undefined ||
                 value.FAST_CHAT_REPLY_COOLDOWN_MS !== undefined ||
                 value.FAST_CHAT_MAX_CONTEXT_IMAGES !== undefined ||
                 value.FAST_CHAT_AUTO_READ_IMAGE_LIMIT !== undefined ||
                 value.FAST_CHAT_IMAGE_BATCH_SIZE !== undefined ||
+                value.FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS !== undefined ||
                 value.show_thinking !== undefined ||
                 value.show_thinking_notice !== undefined ||
                 value.draw_review_after_generate !== undefined ||
@@ -498,7 +501,7 @@ export class AiClient {
                 Config.enable_group_leave = rawConfig.enable_group_leave === true
                 Config.enable_fast_chat = rawConfig.enable_fast_chat === true
                 Config.enable_vector_memory = rawConfig.enable_vector_memory === true
-                for (const key of ['FAST_CHAT_CONTEXT_LIMIT', 'FAST_CHAT_REPLY_COOLDOWN_MS', 'FAST_CHAT_MAX_CONTEXT_IMAGES', 'FAST_CHAT_AUTO_READ_IMAGE_LIMIT', 'FAST_CHAT_IMAGE_BATCH_SIZE']) {
+                for (const key of ['FAST_CHAT_TRIGGER_ON_IMAGE', 'FAST_CHAT_DIRECT_IMAGE_LIMIT', 'FAST_CHAT_CONTEXT_LIMIT', 'FAST_CHAT_REPLY_COOLDOWN_MS', 'FAST_CHAT_MAX_CONTEXT_IMAGES', 'FAST_CHAT_AUTO_READ_IMAGE_LIMIT', 'FAST_CHAT_IMAGE_BATCH_SIZE', 'FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
                 if (Array.isArray(rawConfig.FAST_CHAT_TRIGGER_KEYWORDS)) {

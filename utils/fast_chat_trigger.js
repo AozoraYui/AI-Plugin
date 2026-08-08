@@ -1,15 +1,17 @@
 export function resolveFastChatTrigger(options = {}) {
-    if (options.mentionedBot === true) {
-        return { triggered: true, reason: 'mentioned_bot', forceReadCurrentImages: false }
-    }
-
     const instructionText = String(options.instructionText || '').trim()
     const currentImageCount = Math.max(0, Math.floor(Number(options.currentImageCount) || 0))
-    const imageTrigger = options.triggerOnImage === true
-        && currentImageCount > 0
-        && !instructionText
+    const imageTrigger = options.triggerOnImage === true && currentImageCount > 0
     if (imageTrigger) {
-        return { triggered: true, reason: 'image_only', forceReadCurrentImages: true }
+        return {
+            triggered: true,
+            reason: instructionText ? 'image_with_text' : 'image_only',
+            forceReadCurrentImages: true
+        }
+    }
+
+    if (options.mentionedBot === true) {
+        return { triggered: true, reason: 'mentioned_bot', forceReadCurrentImages: false }
     }
 
     const lower = instructionText.toLowerCase()

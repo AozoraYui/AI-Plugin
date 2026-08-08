@@ -63,6 +63,7 @@ function normalizeGroupMessageRow(row) {
         userId: row.user_id,
         nickname: row.nickname,
         normalizedText: row.normalized_text,
+        imageSummary: row.image_summary || '',
         imageMeta: (() => {
             try { return JSON.parse(row.image_meta || '[]') } catch { return [] }
         })(),
@@ -128,7 +129,7 @@ export class AIDatabase {
                 CREATE INDEX IF NOT EXISTS idx_summary_user_date 
                 ON summary_cache(user_id, date_str);
 
-                -- 群聊流水表（畅聊模式使用，仅存文本化内容与图片元信息，不存图片本体）
+                -- 群聊流水表（畅聊模式使用，保存文本、图片元信息和可选视觉摘要，不存图片本体）
                 CREATE TABLE IF NOT EXISTS group_message_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     group_id TEXT NOT NULL,
@@ -138,6 +139,7 @@ export class AIDatabase {
                     nickname TEXT,
                     normalized_text TEXT NOT NULL,
                     image_meta TEXT,
+                    image_summary TEXT,
                     is_command BOOLEAN DEFAULT 0,
                     is_bot BOOLEAN DEFAULT 0,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -266,25 +268,26 @@ export class AIDatabase {
                                 logger.debug('[AI-Plugin] base_checkpoint_date 字段迁移:', summaryAlterErr.message)
                             }
 
-                            const agentTaskMigrations = [
+                            const schemaMigrations = [
+                                `ALTER TABLE group_message_logs ADD COLUMN image_summary TEXT`,
                                 `ALTER TABLE agent_tasks ADD COLUMN plan_json TEXT`,
                                 `ALTER TABLE agent_tasks ADD COLUMN current_step_id TEXT`,
                                 `ALTER TABLE agent_tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
                                 `ALTER TABLE agent_tasks ADD COLUMN scene_id TEXT`
                             ]
-                            const runAgentTaskMigration = (index = 0) => {
-                                if (index >= agentTaskMigrations.length) {
+                            const runSchemaMigration = (index = 0) => {
+                                if (index >= schemaMigrations.length) {
                                     this.checkAndCreateUserHistoriesTable(resolve, reject)
                                     return
                                 }
-                                this.db.run(agentTaskMigrations[index], (agentAlterErr) => {
-                                    if (agentAlterErr && agentAlterErr.message && !agentAlterErr.message.includes('duplicate column')) {
-                                        logger.debug('[AI-Plugin] agent_tasks 字段迁移:', agentAlterErr.message)
+                                this.db.run(schemaMigrations[index], (schemaAlterErr) => {
+                                    if (schemaAlterErr && schemaAlterErr.message && !schemaAlterErr.message.includes('duplicate column')) {
+                                        logger.debug('[AI-Plugin] 数据库字段迁移:', schemaAlterErr.message)
                                     }
-                                    runAgentTaskMigration(index + 1)
+                                    runSchemaMigration(index + 1)
                                 })
                             }
-                            runAgentTaskMigration()
+                            runSchemaMigration()
                         })
                     })
                 })
@@ -484,8 +487,8 @@ export class AIDatabase {
             const createdAt = log.createdAt || getDBTimestamp()
             this.db.run(`
                 INSERT OR IGNORE INTO group_message_logs
-                    (group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, image_summary, is_command, is_bot, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `, [
                 String(log.groupId),
                 log.messageId ? String(log.messageId) : null,
@@ -494,6 +497,7 @@ export class AIDatabase {
                 log.nickname || '',
                 log.normalizedText || '',
                 JSON.stringify(log.imageMeta || []),
+                log.imageSummary || '',
                 log.isCommand ? 1 : 0,
                 log.isBot ? 1 : 0,
                 createdAt
@@ -511,11 +515,65 @@ export class AIDatabase {
         })
     }
 
+    updateGroupMessageImageSummary(groupId, messageId, imageSummary) {
+        return new Promise((resolve, reject) => {
+            const summary = String(imageSummary || '').trim()
+            if (!groupId || !messageId || !summary) {
+                resolve(false)
+                return
+            }
+            const group = String(groupId)
+            const message = String(messageId)
+            this.db.get(`
+                SELECT id
+                FROM group_message_logs
+                WHERE group_id = ?
+                  AND (message_id = ? OR message_id LIKE ?)
+                  AND image_meta IS NOT NULL
+                  AND image_meta != '[]'
+                ORDER BY CASE WHEN message_id = ? THEN 0 ELSE 1 END, id ASC
+                LIMIT 1
+            `, [group, message, `${message}:part:%`, message], (findErr, row) => {
+                if (findErr) {
+                    reject(findErr)
+                    return
+                }
+                if (!row?.id) {
+                    resolve(false)
+                    return
+                }
+                this.db.run(`UPDATE group_message_logs SET image_summary = ? WHERE id = ?`, [summary, row.id], function(updateErr) {
+                    if (updateErr) {
+                        reject(updateErr)
+                        return
+                    }
+                    resolve((this.changes || 0) > 0)
+                })
+            })
+        }).then(async updated => {
+            if (!updated) return false
+            const row = await new Promise((resolve, reject) => {
+                this.db.get(`
+                    SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, image_summary, is_command, is_bot, created_at
+                    FROM group_message_logs
+                    WHERE group_id = ? AND (message_id = ? OR message_id LIKE ?)
+                    ORDER BY CASE WHEN message_id = ? THEN 0 ELSE 1 END, id ASC
+                    LIMIT 1
+                `, [String(groupId), String(messageId), `${String(messageId)}:part:%`, String(messageId)], (err, result) => {
+                    if (err) reject(err)
+                    else resolve(result ? normalizeGroupMessageRow(result) : null)
+                })
+            })
+            if (row) queueGroupMessageVectorIndex(row)
+            return true
+        })
+    }
+
     getRecentGroupMessageLogs(groupId, limit = 60, options = {}) {
         return new Promise((resolve, reject) => {
             const params = [String(groupId)]
             let query = `
-                SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at
+                SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, image_summary, is_command, is_bot, created_at
                 FROM group_message_logs
                 WHERE group_id = ?
             `
@@ -539,7 +597,7 @@ export class AIDatabase {
         return new Promise((resolve, reject) => {
             const params = []
             let query = `
-                SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at
+                SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, image_summary, is_command, is_bot, created_at
                 FROM group_message_logs
                 WHERE 1 = 1
             `
@@ -578,8 +636,8 @@ export class AIDatabase {
             const q = String(options.query || '').trim()
             if (q) {
                 const like = `%${q}%`
-                query += ' AND (normalized_text LIKE ? OR nickname LIKE ? OR user_id LIKE ? OR group_id LIKE ?)'
-                params.push(like, like, like, like)
+                query += ' AND (normalized_text LIKE ? OR image_summary LIKE ? OR nickname LIKE ? OR user_id LIKE ? OR group_id LIKE ?)'
+                params.push(like, like, like, like, like)
             }
 
             query = appendLimitClause(`${query} ORDER BY id DESC`, params, options.limit, 60, 300)
@@ -642,8 +700,8 @@ export class AIDatabase {
             const q = String(options.query || '').trim()
             if (q) {
                 const like = `%${q}%`
-                query += ' AND (normalized_text LIKE ? OR nickname LIKE ? OR user_id LIKE ? OR group_id LIKE ?)'
-                params.push(like, like, like, like)
+                query += ' AND (normalized_text LIKE ? OR image_summary LIKE ? OR nickname LIKE ? OR user_id LIKE ? OR group_id LIKE ?)'
+                params.push(like, like, like, like, like)
             }
 
             this.db.get(query, params, (err, row) => {
@@ -660,7 +718,7 @@ export class AIDatabase {
         return new Promise((resolve, reject) => {
             const params = []
             let query = `
-                SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at
+                SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, image_summary, is_command, is_bot, created_at
                 FROM group_message_logs
                 WHERE 1 = 1
             `
@@ -708,8 +766,8 @@ export class AIDatabase {
             const q = String(options.query || '').trim()
             if (q) {
                 const like = `%${q}%`
-                query += ' AND (normalized_text LIKE ? OR nickname LIKE ? OR user_id LIKE ? OR group_id LIKE ?)'
-                params.push(like, like, like, like)
+                query += ' AND (normalized_text LIKE ? OR image_summary LIKE ? OR nickname LIKE ? OR user_id LIKE ? OR group_id LIKE ?)'
+                params.push(like, like, like, like, like)
             }
 
             query += ' ORDER BY created_at ASC, id ASC'
@@ -734,7 +792,7 @@ export class AIDatabase {
         return new Promise((resolve, reject) => {
             const params = [String(groupId), String(userId)]
             let query = `
-                SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at
+                SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, image_summary, is_command, is_bot, created_at
                 FROM group_message_logs
                 WHERE group_id = ?
                   AND user_id = ?
@@ -1343,7 +1401,7 @@ export class AIDatabase {
     getVectorGroupMessageRowsAfter(lastId = 0, limit = 200) {
         return new Promise((resolve, reject) => {
             this.db.all(`
-                SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, is_command, is_bot, created_at
+                SELECT id, group_id, message_id, seq, user_id, nickname, normalized_text, image_meta, image_summary, is_command, is_bot, created_at
                 FROM group_message_logs
                 WHERE id > ?
                 ORDER BY id ASC

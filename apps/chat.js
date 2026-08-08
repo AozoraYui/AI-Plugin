@@ -1398,9 +1398,10 @@ function truncateAutoFastChatContextBlock(block) {
 function formatAutoFastChatContextLine(log, options = {}) {
     const name = log.isBot ? Config.AI_NAME : (log.nickname || `用户${log.userId}`)
     const groupHint = options.showGroupId ? `群${log.groupId} ` : ''
-    const imageHint = log.imageMeta?.length ? `（含 ${log.imageMeta.length} 张图片）` : ''
+    const imageHint = log.imageMeta?.length ? `（含 ${log.imageMeta.length} 张图片${log.imageSummary ? '，已有视觉摘要' : ''}）` : ''
     const commandHint = log.isCommand ? ' [命令消息]' : ''
-    return `[${formatDBTimestampToBeijing(log.createdAt)}]${commandHint} ${groupHint}${name}(${log.userId}): ${truncateFastChatLogText(log.normalizedText)}${imageHint}`
+    const imageSummary = log.imageSummary ? `\n  【图片内容摘要】${truncateFastChatLogText(log.imageSummary, 1200)}` : ''
+    return `[${formatDBTimestampToBeijing(log.createdAt)}]${commandHint} ${groupHint}${name}(${log.userId}): ${truncateFastChatLogText(log.normalizedText)}${imageHint}${imageSummary}`
 }
 
 async function buildAutoFastChatContextBlock(client, db, e, triggerText = '', options = {}) {

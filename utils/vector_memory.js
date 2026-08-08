@@ -260,7 +260,11 @@ export function buildGroupMessageVectorDoc(log = {}) {
 }
 
 export function buildGroupMessageVectorDocs(log = {}) {
-    const body = normalizeText(log.normalizedText || '')
+    const imageSummary = normalizeText(log.imageSummary || log.image_summary || '')
+    const body = normalizeText([
+        log.normalizedText || '',
+        imageSummary ? `图片内容摘要：${imageSummary}` : ''
+    ].filter(Boolean).join('\n'))
     if (!isWorthIndexing(body)) return []
     const sourceId = log.id
         ? String(log.id)
@@ -284,7 +288,7 @@ export function buildGroupMessageVectorDocs(log = {}) {
         groupId ? `群号: ${groupId}` : '',
         nickname || userId ? `发送者: ${nickname || '用户'}(${userId})` : '',
         createdAt ? `时间: ${createdAt}` : '',
-        imageCount > 0 ? `图片: ${imageCount} 张（仅元信息）` : '',
+        imageCount > 0 ? `图片: ${imageCount} 张${imageSummary ? '（已有视觉摘要）' : '（仅元信息）'}` : '',
         '内容:'
     ])
 }

@@ -216,6 +216,8 @@ check('用户明确要求附图时允许搜索工具发送图片', (() => {
     return guarded.tools[0]?.name === 'web_search' && guarded.blocked.length === 0
 })())
 check('动作紧贴URL仍识别网页抓取', hasExplicitWebFetchIntent('#c看一下https://kokode.su/zh-cn/blog/Yui'))
+check('询问根域名能否访问会识别网页抓取', hasExplicitWebFetchIntent('#c能访问https://kokode.su吗？'))
+check('询问URL是否连通会识别网页抓取', hasExplicitWebFetchIntent('这个网址 https://kokode.su 能连通吗'))
 check('语义规划的同源网页抓取不会被二次安全门误杀', (() => {
     const guarded = filterToolCallsByIntent([{
         name: 'web_fetch',
@@ -1408,12 +1410,25 @@ check('关闭图片自然触发时不自动回复', resolveFastChatTrigger({
     keywords: ['诺亚']
 }).triggered === false)
 
-check('图片带普通文字但未提及AI不会改变原有触发规则', resolveFastChatTrigger({
+const mixedImageTrigger = resolveFastChatTrigger({
     triggerOnImage: true,
     currentImageCount: 1,
     instructionText: '这张图怎么样',
     keywords: ['诺亚']
-}).triggered === false)
+})
+check('图片带普通文字且未提及AI也会自动触发读图', mixedImageTrigger.triggered
+    && mixedImageTrigger.reason === 'image_with_text'
+    && mixedImageTrigger.forceReadCurrentImages === true)
+const mentionedMixedImageTrigger = resolveFastChatTrigger({
+    triggerOnImage: true,
+    mentionedBot: true,
+    currentImageCount: 6,
+    instructionText: '诺亚看看这些截图',
+    keywords: ['诺亚']
+})
+check('图文消息即使同时@机器人也优先强制读取全部当前图片', mentionedMixedImageTrigger.triggered
+    && mentionedMixedImageTrigger.reason === 'image_with_text'
+    && mentionedMixedImageTrigger.forceReadCurrentImages === true)
 check('单条四张图片直接交给最终多模态模型', resolveFastChatImageDelivery(4, 4) === 'direct')
 check('单条五张图片进入原有分批摘要逻辑', resolveFastChatImageDelivery(5, 4) === 'batch')
 

@@ -13,6 +13,7 @@ const REQUEST_TIMEOUT_MS = 30000
 const BROWSER_TIMEOUT_MS = 45000
 const READER_TIMEOUT_MS = 20000
 const READER_FAILURE_COOLDOWN_MS = 5 * 60 * 1000
+const MAX_CLIENT_REDIRECTS = 3
 const MAX_RESPONSE_SIZE = 10 * 1024 * 1024 // 10MB
 const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 const DEFAULT_HEADERS = {
@@ -832,13 +833,52 @@ function htmlToText(html) {
     return text
 }
 
+function extractSameOriginClientRedirect(html, baseUrl) {
+    const source = String(html || '')
+    if (!source || !baseUrl) return ''
+    const candidates = []
+
+    for (const tag of source.match(/<meta\b[^>]*>/gi) || []) {
+        if (!/http-equiv\s*=\s*["']?refresh\b/i.test(tag)) continue
+        const content = tag.match(/content\s*=\s*["']([^"']+)["']/i)?.[1]
+            || tag.match(/content\s*=\s*([^\s>]+)/i)?.[1]
+            || ''
+        const target = content.match(/(?:^|;)\s*url\s*=\s*(.+)$/i)?.[1]?.trim().replace(/^["']|["']$/g, '')
+        if (target) candidates.push(target)
+    }
+
+    for (const pattern of [
+        /(?:window\.)?location\.replace\(\s*["']([^"']+)["']\s*\)/gi,
+        /(?:window\.)?location\.assign\(\s*["']([^"']+)["']\s*\)/gi,
+        /(?:window\.)?location\.href\s*=\s*["']([^"']+)["']/gi
+    ]) {
+        for (const match of source.matchAll(pattern)) {
+            if (match[1]) candidates.push(match[1])
+        }
+    }
+
+    try {
+        const base = new URL(baseUrl)
+        for (const candidate of candidates) {
+            const target = new URL(candidate, base)
+            if (!['http:', 'https:'].includes(target.protocol)) continue
+            if (target.origin !== base.origin) continue
+            if (target.toString() === base.toString()) continue
+            return target.toString()
+        }
+    } catch {
+        return ''
+    }
+    return ''
+}
+
 /**
  * 抓取网页并提取文本
  * @param {string} url - 目标 URL
  * @param {number} maxChars - 最大返回字符数
  * @returns {Promise<string>}
  */
-async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS) {
+async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
     if (!url || typeof url !== 'string' || !url.trim()) {
         return '\n\n【网页抓取失败】未指定 URL。\n'
     }
@@ -901,6 +941,11 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS) {
         return `\n\n【网页抓取失败】HTTP ${res.status}\n`
     }
 
+    const finalUrl = res.url || resolvedUrl
+    const redirectNote = finalUrl !== resolvedUrl
+        ? `\n请求地址: ${targetUrl}\n最终地址: ${finalUrl}\n重定向: 是`
+        : `\n最终地址: ${finalUrl}\n重定向: 否`
+
     // 检查 Content-Type，跳过非 HTML 响应
     const contentType = res.headers.get('content-type') || ''
     if (contentType.includes('application/') && !contentType.includes('html') && !contentType.includes('xml')) {
@@ -909,8 +954,8 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS) {
             try {
                 const json = await res.text()
                 const truncated = truncateContent(json, maxChars)
-                logger.info(`[AI-Plugin] WebFetch 成功(JSON): ${targetUrl} (${truncated.length} 字符)`)
-                return `\n\n【网页内容「${targetUrl}」(JSON, ${json.length} 字符)】：\n${truncated}\n`
+                logger.info(`[AI-Plugin] WebFetch 成功(JSON): ${targetUrl} -> ${finalUrl} (${truncated.length} 字符)`)
+                return `\n\n【网页内容「${targetUrl}」(JSON, ${json.length} 字符)】${redirectNote}\n${truncated}\n`
             } catch {
                 return `\n\n【网页抓取失败】无法解析 JSON 响应\n`
             }
@@ -932,6 +977,19 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS) {
         const fallbackResult = await tryBrowserThenReader(resolvedUrl, maxChars, `读取 HTTP 响应失败: ${err.message}`)
         if (fallbackResult.ok) return fallbackResult.content
         return `\n\n【网页抓取失败】读取响应出错: ${err.message}；${fallbackResult.error}。\n`
+    }
+
+    const clientRedirectDepth = Math.max(0, Number(options.clientRedirectDepth) || 0)
+    const clientRedirectUrl = extractSameOriginClientRedirect(html, finalUrl)
+    if (clientRedirectUrl && clientRedirectDepth < MAX_CLIENT_REDIRECTS) {
+        logger.info(`[AI-Plugin] WebFetch: 跟随同源客户端跳转 ${finalUrl} -> ${clientRedirectUrl}`)
+        const redirectedContent = await fetchWebPage(clientRedirectUrl, maxChars, {
+            clientRedirectDepth: clientRedirectDepth + 1
+        })
+        return `\n\n【网页客户端重定向】\n请求地址: ${targetUrl}\n跳转来源: ${finalUrl}\n跳转目标: ${clientRedirectUrl}\n${redirectedContent}`
+    }
+    if (clientRedirectUrl) {
+        logger.warn(`[AI-Plugin] WebFetch: 客户端跳转超过上限 ${MAX_CLIENT_REDIRECTS}，停止跟随: ${clientRedirectUrl}`)
     }
 
     // 提取文本
@@ -959,9 +1017,9 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS) {
     const originalLen = text.length
     text = truncateContent(text, maxChars)
 
-    logger.info(`[AI-Plugin] WebFetch 成功: ${targetUrl} (${originalLen} 字符, 返回 ${text.length} 字符)`)
+    logger.info(`[AI-Plugin] WebFetch 成功: ${targetUrl} -> ${finalUrl} (${originalLen} 字符, 返回 ${text.length} 字符)`)
 
-    return `\n\n【网页内容「${targetUrl}」(${originalLen} 字符)：】\n${text}\n【网页内容结束】\n`
+    return `\n\n【网页内容「${targetUrl}」(${originalLen} 字符)】${redirectNote}\n${text}\n【网页内容结束】\n`
 }
 
 export const webFetchTool = {

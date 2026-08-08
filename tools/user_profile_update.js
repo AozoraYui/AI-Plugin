@@ -100,8 +100,9 @@ function inferSourceOptions(args = {}, instruction = '', event = {}) {
 
 function formatGroupLog(log) {
     const name = log?.nickname || `用户${log?.userId || ''}`
-    const imageHint = log?.imageMeta?.length ? `（含 ${log.imageMeta.length} 张图片，仅元信息）` : ''
-    return `[${log?.createdAt || ''}] ${name}(${log?.userId || ''}): ${truncateText(log?.normalizedText || '', 900)}${imageHint}`
+    const imageHint = log?.imageMeta?.length ? `（含 ${log.imageMeta.length} 张图片${log.imageSummary ? '，已有视觉摘要' : '，仅元信息'}）` : ''
+    const imageSummary = log?.imageSummary ? `\n  【图片内容摘要】${truncateText(log.imageSummary, 1200)}` : ''
+    return `[${log?.createdAt || ''}] ${name}(${log?.userId || ''}): ${truncateText(log?.normalizedText || '', 900)}${imageHint}${imageSummary}`
 }
 
 async function buildGroupSelfLogText(db, groupId, userId, limit) {

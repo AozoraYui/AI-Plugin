@@ -22,12 +22,15 @@ function saveRuntimeSwitch(key, value) {
                 value.enable_group_send !== undefined ||
                 value.enable_group_leave !== undefined ||
                 value.enable_fast_chat !== undefined ||
+                value.FAST_CHAT_TRIGGER_ON_IMAGE !== undefined ||
+                value.FAST_CHAT_DIRECT_IMAGE_LIMIT !== undefined ||
                 value.FAST_CHAT_TRIGGER_KEYWORDS !== undefined ||
                 value.FAST_CHAT_CONTEXT_LIMIT !== undefined ||
                 value.FAST_CHAT_REPLY_COOLDOWN_MS !== undefined ||
                 value.FAST_CHAT_MAX_CONTEXT_IMAGES !== undefined ||
                 value.FAST_CHAT_AUTO_READ_IMAGE_LIMIT !== undefined ||
                 value.FAST_CHAT_IMAGE_BATCH_SIZE !== undefined ||
+                value.FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS !== undefined ||
                 value.show_thinking !== undefined ||
                 value.draw_review_after_generate !== undefined
             )

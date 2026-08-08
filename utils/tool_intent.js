@@ -355,11 +355,13 @@ export function hasExplicitWebFetchIntent(text, candidateUrls = []) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
     const hasUrl = extractUrls(value).length > 0 || (Array.isArray(candidateUrls) && candidateUrls.length > 0)
-    const directUrlRead = /(?:看|看看|看下|看一下|打开|读|读取|抓取|分析|总结|概括|解释)\s*(?:一下|下)?\s*(?:这个|该|此)?\s*https?:\/\/\S+/i.test(value)
+    const directUrlRead = /(?:看|看看|看下|看一下|打开|访问|连接|连通|测试|检查|读|读取|抓取|分析|总结|概括|解释)\s*(?:一下|下)?\s*(?:这个|该|此)?\s*https?:\/\/\S+/i.test(value)
+    const connectivityCheck = /(?:能不能|能否|是否|可不可以|可以(?:不可以)?|能|可以).{0,10}(?:访问|连接|连通|打开|到达)|(?:访问|连接|连通|打开).{0,16}(?:吗|么|能不能|能否|是否可以|可以吗)/i.test(value)
     return hasUrl && (/\bfetch\b|(?:抓一下|爬一下|扒一下)/i.test(value)
-        || /(?:试试|再试试|重试|重新试|换(?:成|用)?这个|用这个|这个呢|这个可以吗|这个能行吗|能打开吗|能抓吗|能不能打开|能不能抓)/i.test(value)
+        || /(?:试试|再试试|重试|重新试|换(?:成|用)?这个|用这个|这个呢|这个可以吗|这个能行吗|能打开吗|能访问吗|能连通吗|能抓吗|能不能打开|能不能访问|能不能连通|能不能抓)/i.test(value)
         || /(?:看|看看|打开|读|读取|抓取|总结|分析|解释|概括).{0,20}(?:链接|网页|网址|页面|内容|这个|这条|上面)/i.test(value)
         || /(?:这个|这条|上面).{0,8}(?:链接|网页|网址).{0,12}(?:讲|说|内容|总结|看看|分析)/i.test(value)
+        || connectivityCheck
         || directUrlRead
         || /^(?:帮我|给我|请|麻烦你?)?\s*(?:fetch|看|看看|看一下|打开|读取|抓取|抓一下|爬一下|扒一下|总结|总结一下|概括|分析|解释|试试|再试试|重试)(?:一下|下)?[。！!？?\s]*$/i.test(value))
 }
