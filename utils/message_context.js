@@ -34,6 +34,14 @@ export function resolvePrivateMemorySubject(actorUserId = '', mentionedUserIds =
     return { userId: '', targetUserId: '', label: '第三方成员', allowed: false }
 }
 
+export function shouldPrioritizeCurrentMultimodalTurn(text = '', options = {}) {
+    if (options.hasDirectImages !== true) return false
+    const value = String(text || '').trim()
+    if (!value) return true
+    const requiresEarlierContext = /(?:刚才|刚刚|之前|前面|上面|上一条|上(?:一|几)张|前(?:一|几)张|另一张|前情|历史|记忆|档案|我们(?:刚才|之前)|你(?:刚才|之前)|结合(?:前文|上文|刚才|之前)|根据(?:前文|上文|刚才|之前)|继续|接着|还是(?:刚才|之前)|那个(?:问题|话题|方案)|前几轮|前面说的)/i.test(value)
+    return !requiresEarlierContext
+}
+
 export function buildParticipantIdentityHint(actorUserId = '', mentionedUserIds = [], options = {}) {
     const actor = String(actorUserId || '').trim()
     const mentions = normalizeParticipantIds(mentionedUserIds, actor)

@@ -36,7 +36,7 @@ const {
 const { classifyAgentRisk, classifyToolCallRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } = await import('../utils/agent_policy.js')
 const { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } = await import('../utils/model_output.js')
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
-const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMemorySubject } = await import('../utils/message_context.js')
+const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldPrioritizeCurrentMultimodalTurn } = await import('../utils/message_context.js')
 const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq_face.js')
 const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
@@ -65,7 +65,7 @@ const { default: sqlite3 } = await import('sqlite3')
 const { selectWorkspaceSurveyFiles } = await import('../utils/workspace_survey.js')
 const { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resolvePersistedAgentStatus } = await import('../utils/agent_completion.js')
 const { trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
-const { getPureImageReplyPolicy, resolveFastChatImageDelivery, resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
+const { getPureImageReplyPolicy, isReferentialBotKeywordMention, resolveFastChatImageDelivery, resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
 const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, classifyWebUrl, hasOverconfidentLowEvidenceAnswer, updateWebEvidenceState } = await import('../utils/web_evidence.js')
 
 const failures = []
@@ -841,6 +841,14 @@ check('有工具纠正提示限定系统结果区块', buildFinalAnswerRetryInst
 check('零工具执行会拦截虚构完成声明', hasUnsupportedToolResultClaim('我已经为你运行 pnpm install，依赖补全成功。', { hasActualToolResults: false }))
 check('真实工具结果允许汇报完成', !hasUnsupportedToolResultClaim('我已经为你运行 pnpm install，依赖补全成功。', { hasActualToolResults: true }))
 check('普通建议不会被当成虚构完成声明', !hasUnsupportedToolResultClaim('你可以运行 pnpm install 来补全依赖。', { hasActualToolResults: false }))
+check('无工具结果会拦截虚构游戏指令执行', hasUnsupportedToolResultClaim(
+    '正在执行指令：/difficulty hard\n完成啦！现在服务器难度已经成功修改为困难模式。',
+    { hasActualToolResults: false }
+))
+check('操作建议不会被状态成功检查误伤', !hasUnsupportedToolResultClaim(
+    '现在你可以在设置里修改难度，调整配置后再重启服务。',
+    { hasActualToolResults: false }
+))
 check('代码中出现图片字样不会误触发历史读图', !isGroupContextImageQuestion("dsc: '发送随机图片'"))
 check('明确询问刚才图片会触发历史读图', isGroupContextImageQuestion('刚才那张图里写了什么？'))
 check('过期QQ临时图片链接会被跳过', isExpiredGroupContextImageUrl('https://multimedia.nt.qq.com.cn/download?appid=1407&rkey=test', '2026-07-26 14:00:00', Date.parse('2026-07-26T14:10:01Z')))
@@ -1529,6 +1537,34 @@ const keywordMixedImageTrigger = resolveFastChatTrigger({
 check('图文消息提到AI名称时正常回复并读取图片', keywordMixedImageTrigger.triggered
     && keywordMixedImageTrigger.reason === 'keyword'
     && keywordMixedImageTrigger.forceReadCurrentImages === true)
+check('当前图文请求默认聚焦本轮内容', shouldPrioritizeCurrentMultimodalTurn(
+    '#c给认真科普的老哥点赞',
+    { hasDirectImages: true }
+))
+check('明确引用历史的图文请求保留上下文', !shouldPrioritizeCurrentMultimodalTurn(
+    '#c结合刚才的讨论看看这张图',
+    { hasDirectImages: true }
+))
+check('对比上一张图片时保留历史上下文', !shouldPrioritizeCurrentMultimodalTurn(
+    '#c这张图和上一张有什么区别',
+    { hasDirectImages: true }
+))
+check('没有当前图片时不启用图文聚焦', !shouldPrioritizeCurrentMultimodalTurn(
+    '#c给认真科普的老哥点赞',
+    { hasDirectImages: false }
+))
+check('第三人称引用AI名称能够被识别', isReferentialBotKeywordMention('照着诺亚说的去执行', '诺亚'))
+check('评价AI先前观点也视为第三人称引用', isReferentialBotKeywordMention('我觉得诺亚说得有道理', '诺亚'))
+check('直接叫AI回答不视为第三人称引用', !isReferentialBotKeywordMention('诺亚知道吗', '诺亚'))
+check('直接请AI发表看法不视为第三人称引用', !isReferentialBotKeywordMention('诺亚说说你怎么看', '诺亚'))
+const referentialKeywordTrigger = resolveFastChatTrigger({
+    triggerOnImage: true,
+    currentImageCount: 0,
+    instructionText: '照着诺亚说的去执行',
+    keywords: ['诺亚', 'noa']
+})
+check('引用AI建议不触发畅聊回复', referentialKeywordTrigger.triggered === false
+    && referentialKeywordTrigger.reason === 'keyword_reference')
 check('单条四张图片直接交给最终多模态模型', resolveFastChatImageDelivery(4, 4) === 'direct')
 check('单条五张图片进入原有分批摘要逻辑', resolveFastChatImageDelivery(5, 4) === 'batch')
 check('纯图片回复策略禁止机械描述和无关劝睡', (() => {

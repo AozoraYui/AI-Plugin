@@ -1,3 +1,15 @@
+function escapeRegExp(text = '') {
+    return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+export function isReferentialBotKeywordMention(instructionText = '', keyword = '') {
+    const value = String(instructionText || '').trim()
+    const name = String(keyword || '').trim()
+    if (!value || !name) return false
+    const escaped = escapeRegExp(name)
+    return new RegExp(`(?:照着|按照|根据|依照|按|听|参考).{0,10}${escaped}.{0,10}(?:说的|讲的|提的|建议|说过|讲过|提过)|${escaped}.{0,10}(?:(?:刚才|之前|前面|上次)?(?:说的|讲的|提的|建议的|说过的|讲过的|提过的)|说得|讲得|认为|建议(?:我|他|她|大家|我们|应该|可以|要)|的(?:建议|说法|观点|方案))`, 'i').test(value)
+}
+
 export function resolveFastChatTrigger(options = {}) {
     const instructionText = String(options.instructionText || '').trim()
     const currentImageCount = Math.max(0, Math.floor(Number(options.currentImageCount) || 0))
@@ -13,6 +25,9 @@ export function resolveFastChatTrigger(options = {}) {
         .filter(Boolean))]
     const matchedKeyword = keywords.find(keyword => lower.includes(keyword)) || ''
     if (matchedKeyword) {
+        if (isReferentialBotKeywordMention(instructionText, matchedKeyword)) {
+            return { triggered: false, reason: 'keyword_reference', matchedKeyword, forceReadCurrentImages: shouldReadCurrentImages }
+        }
         return { triggered: true, reason: 'keyword', matchedKeyword, forceReadCurrentImages: shouldReadCurrentImages }
     }
 

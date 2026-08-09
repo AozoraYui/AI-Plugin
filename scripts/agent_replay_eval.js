@@ -28,7 +28,8 @@ const replayEnabledTools = [
 ]
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
-const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMemorySubject } = await import('../utils/message_context.js')
+const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldPrioritizeCurrentMultimodalTurn } = await import('../utils/message_context.js')
+const { resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
 const { summarizeShellResultForReply } = await import('../utils/shell_result_summary.js')
 const { parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically } = await import('../tools/group_send.js')
 const { parseStandalonePendingCommand } = await import('../utils/pending_actions.js')
@@ -79,6 +80,23 @@ const incidents = [
             return tools.includes('shell_exec')
                 && guarded.tools.length === 1
                 && guarded.blocked.length === 0
+        }
+    },
+    {
+        id: 'current-image-turn-does-not-inherit-unrelated-history',
+        input: '#c给认真科普的老哥点赞',
+        pass: text => shouldPrioritizeCurrentMultimodalTurn(text, { hasDirectImages: true })
+    },
+    {
+        id: 'referential-ai-name-does-not-trigger-fast-chat',
+        input: '照着诺亚说的去执行',
+        pass: text => {
+            const trigger = resolveFastChatTrigger({
+                mentionedBot: false,
+                instructionText: text,
+                keywords: ['诺亚', 'noa']
+            })
+            return trigger.triggered === false && trigger.reason === 'keyword_reference'
         }
     },
     {
@@ -423,6 +441,17 @@ if (hasUnsupportedToolResultClaim('我已经完成 pnpm install，并成功重�
 } else {
     failures.push('unsupported-tool-success-claim')
     console.error('✗ replay unsupported-tool-success-claim')
+}
+
+if (hasUnsupportedToolResultClaim(
+    '正在执行指令：/difficulty hard\n完成啦！现在服务器难度已经成功修改为困难模式。',
+    { hasActualToolResults: false }
+)) {
+    passed++
+    console.log('✓ replay unsupported-game-command-claim')
+} else {
+    failures.push('unsupported-game-command-claim')
+    console.error('✗ replay unsupported-game-command-claim')
 }
 
 console.log(`\nAgent replay eval: ${passed}/${passed + failures.length} passed`)
