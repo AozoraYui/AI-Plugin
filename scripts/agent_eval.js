@@ -15,6 +15,7 @@ const {
     hasExplicitFileSendIntent,
     hasExplicitLocalFileDiscoveryIntent,
     hasExplicitGroupChatContextIntent,
+    hasExplicitPortDiagnosticIntent,
     hasExplicitShellIntent,
     hasExplicitSystemOperationIntent,
     hasExplicitWebFetchIntent,
@@ -275,6 +276,25 @@ check('语义规划不能绕过跨群发送显式授权', filterToolCallsByInten
 check('语义规划不能绕过Shell执行显式授权', filterToolCallsByIntent([{
     name: 'shell_exec', args: { command: 'pnpm install', cwd: '/root/Yunzai' }
 }], '#c你看着处理吧', { allowModelPlannedLowRisk: true }).blocked.length === 1)
+check('自然语言端口状态查询允许只读Shell诊断',
+    hasExplicitPortDiagnosticIntent('诺亚看一下33341端口状态')
+    && hasExplicitShellIntent('诺亚看一下33341端口状态', 'shell_exec'))
+check('端口占用查询允许Shell诊断', hasExplicitShellIntent('帮我查一下谁占用了 33341 端口', 'shell_exec'))
+check('端口监听查询允许Shell诊断', hasExplicitShellIntent('33341端口有没有监听', 'shell_exec'))
+check('无编号监听端口查询允许Shell诊断', hasExplicitShellIntent('看看有哪些端口正在监听', 'shell_exec'))
+check('本机端口诊断不会混入联网搜索候选', (() => {
+    const tools = selectToolCandidates(['web_search', 'shell_exec'], '帮我查一下谁占用了 33341 端口').tools
+    return tools.includes('shell_exec') && !tools.includes('web_search')
+})())
+check('语义模型规划的端口诊断不会被第二道安全门误杀', (() => {
+    const guarded = filterToolCallsByIntent([{
+        name: 'shell_exec',
+        args: { command: "ss -tulpn | grep ':33341' || echo '33341端口未发现监听/占用'" }
+    }], '诺亚看一下33341端口状态', { allowModelPlannedLowRisk: true })
+    return guarded.tools.length === 1 && guarded.blocked.length === 0
+})())
+check('询问查看端口的方法不会直接执行', !hasExplicitShellIntent('Linux 怎么查看端口状态？', 'shell_exec'))
+check('普通提及端口不会执行Shell', !hasExplicitShellIntent('这个游戏使用33341端口', 'shell_exec'))
 check('普通语义搜索不能私自升级为图片发送', filterToolCallsByIntent([{
     name: 'web_search', args: { query: '最新内核新闻', image_count: 1 }
 }], '#c了解一下最近内核圈有什么动静', { allowModelPlannedLowRisk: true }).blocked.length === 1)

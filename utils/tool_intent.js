@@ -277,6 +277,7 @@ export function hasExplicitWebSearchIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
     if (isCapabilityOrUsageQuestion(value, '搜索|联网|上网|web[_ -]?search')) return false
+    if (hasExplicitPortDiagnosticIntent(value)) return false
     return /(?:搜索|搜一下|查一下|查询|检索|联网查|上网查).{0,80}/i.test(value)
         || /^搜(?:一下|下|搜)?\s*[^，。；;!?！？]{1,80}/i.test(value)
         || /(?:搜|找)(?:一|二|两|三|几|[1-3])张\s*[^，。；;!?！？]{1,80}/i.test(value)
@@ -691,6 +692,35 @@ export function hasGroupChatContextQuestion(text) {
         || /(?:我不在|没看群|漏看).{0,24}(?:聊|说|发|发生|总结|前情)/i.test(value)
 }
 
+function isPortDiagnosticHowToQuestion(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    return /(?:怎么|如何|怎样).{0,12}(?:查看|查询|检查|检测|诊断|确认|看|查).{0,20}(?:端口|监听|占用|连接|socket|TCP|UDP)|(?:端口|监听|占用|连接|socket|TCP|UDP).{0,24}(?:怎么|如何|怎样)(?:查看|查询|检查|检测|诊断|确认|看|查)|(?:查看|查询|检查|检测|诊断)(?:端口|监听|占用|连接).{0,16}(?:教程|方法|步骤|命令)|(?:什么|哪条|哪个|用什么).{0,8}命令.{0,20}(?:端口|监听|占用|连接)/i.test(value)
+}
+
+export function hasExplicitPortDiagnosticIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    if (isPortDiagnosticHowToQuestion(value)) return false
+
+    const numericPortMatches = [
+        ...value.matchAll(/\b(\d{1,5})\s*端口/gi),
+        ...value.matchAll(/端口\s*[:：#]?\s*(\d{1,5})\b/gi),
+        ...value.matchAll(/\b(\d{1,5})\s*port\b/gi),
+        ...value.matchAll(/\bport\s*[:：#]?\s*(\d{1,5})\b/gi)
+    ]
+    const hasValidNumericPort = numericPortMatches.some(match => {
+        const port = Number(match[1])
+        return Number.isInteger(port) && port >= 1 && port <= 65535
+    })
+    const hasNetworkTarget = hasValidNumericPort
+        || /(?:监听端口|端口.{0,8}(?:监听|占用|开放|状态|连接)|占用端口|开放端口|TCP\s*监听|UDP\s*监听|socket\s*状态)/i.test(value)
+    if (!hasNetworkTarget) return false
+
+    const diagnosticAction = /(?:看(?:一下|下|看|一眼)?|查(?:一下|下|查)?|查询|检查|确认|检测|诊断|排查|状态|监听|占用|开放|开着|开启|关闭|通不通|连通|连接|谁在用|哪个进程|什么进程|是否|有没有|有无)/i
+    return diagnosticAction.test(value)
+}
+
 export function hasExplicitShellIntent(text, toolName = '') {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
@@ -711,9 +741,11 @@ export function hasExplicitShellIntent(text, toolName = '') {
         && !new RegExp(`(?:帮我|给我|请|麻烦|执行|运行|调用|用|拿|通过).{0,20}(?:${shellKeywords})`, 'i').test(value)) {
         return false
     }
+    if (isPortDiagnosticHowToQuestion(value)) return false
     if (hasExplicitLocalFileMutationIntent(value)) return true
     if (hasExplicitLocalFileDiscoveryIntent(value)) return true
     if (hasExplicitSystemOperationIntent(value)) return true
+    if (hasExplicitPortDiagnosticIntent(value)) return true
     if (toolName === 'shell_session' && new RegExp(sessionWords, 'i').test(value)) return true
     if (/\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\b/i.test(value)
         && /(?:看|看看|读|读取|打开|检查|分析|搜索|查找|统计|内容|日志|配置|脚本|文件|目录)/i.test(value)) return true

@@ -66,6 +66,20 @@ const incidents = [
         }
     },
     {
+        id: 'fast-chat-port-status-diagnostic-not-blocked',
+        input: '诺亚看一下33341端口状态',
+        pass: text => {
+            const tools = selectToolCandidates(replayEnabledTools, text).tools
+            const guarded = filterToolCallsByIntent([{
+                name: 'shell_exec',
+                args: { command: "ss -tulpn | grep ':33341' || echo '33341端口未发现监听/占用'" }
+            }], text, { allowModelPlannedLowRisk: true })
+            return tools.includes('shell_exec')
+                && guarded.tools.length === 1
+                && guarded.blocked.length === 0
+        }
+    },
+    {
         id: 'web-search-with-explicit-image-delivery',
         input: '#c帮我搜一下英伟达最新显卡，有图片的话带一张图发给我',
         pass: text => {
