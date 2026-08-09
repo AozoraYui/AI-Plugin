@@ -276,6 +276,24 @@ check('语义规划不能绕过跨群发送显式授权', filterToolCallsByInten
 check('语义规划不能绕过Shell执行显式授权', filterToolCallsByIntent([{
     name: 'shell_exec', args: { command: 'pnpm install', cwd: '/root/Yunzai' }
 }], '#c你看着处理吧', { allowModelPlannedLowRisk: true }).blocked.length === 1)
+const archiveThenSendInstruction = '#c用7z把/root/Yunzai/resources/qqimage/20260809_170249这个目录打包成压缩包然后传到群里'
+check('打包后发送识别为复合文件发送任务', hasExplicitFileSendIntent(archiveThenSendInstruction))
+check('打包后发送同时召回Shell和原生文件发送工具', (() => {
+    const tools = selectToolCandidates(['shell_exec', 'shell_session', 'file_send'], archiveThenSendInstruction).tools
+    return tools.includes('shell_exec') && tools.includes('file_send')
+})())
+check('打包后发送拒绝模型绕过原生工具调用OneBot API', filterToolCallsByIntent([{
+    name: 'shell_exec',
+    args: { command: 'curl -s -X POST http://127.0.0.1:4001/upload_group_file -d @payload.json' }
+}], archiveThenSendInstruction, { allowModelPlannedLowRisk: true }).blocked.length === 1)
+check('打包后发送拒绝无关探测消息适配器进程端口', filterToolCallsByIntent([{
+    name: 'shell_exec',
+    args: { command: "ps -ef | grep -E 'node|napcat|lagrange|gocq|llonebot' && ss -tlnp" }
+}], archiveThenSendInstruction, { allowModelPlannedLowRisk: true }).blocked.length === 1)
+check('用户明确指定OneBot接口时仍允许相应Shell调用', filterToolCallsByIntent([{
+    name: 'shell_exec',
+    args: { command: 'curl -s -X POST http://127.0.0.1:4001/upload_group_file -d @payload.json' }
+}], '#c用curl调用OneBot的upload_group_file接口上传这个文件', { allowModelPlannedLowRisk: true }).tools.length === 1)
 check('自然语言端口状态查询允许只读Shell诊断',
     hasExplicitPortDiagnosticIntent('诺亚看一下33341端口状态')
     && hasExplicitShellIntent('诺亚看一下33341端口状态', 'shell_exec'))

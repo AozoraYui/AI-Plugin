@@ -383,10 +383,22 @@ export function hasExplicitFileSendIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
     if (isCapabilityOrUsageQuestion(value, '文件发送|发送文件|上传文件|发文件')) return false
-    if (hasExplicitLocalFileMutationIntent(value)) return false
-    const sendIntent = /(?:发给我|发我|发送|发出来|发到(?:群里|这里)?|丢到?(?:群里|这里)|扔到?(?:群里|这里)|传给我|上传(?:到(?:群里|这里)?)?|把.{0,80}(?:上传|发群里|丢群里|扔群里)|试(?:一下|下)?上传)/i.test(value)
+    const createsSendableArtifact = /(?:打包|压缩|压缩包|归档|生成)[\s\S]{0,120}(?:发|传|上传|丢|扔)|(?:发|传|上传|丢|扔)[\s\S]{0,120}(?:打包|压缩|压缩包|归档|生成)/i.test(value)
+    if (hasExplicitLocalFileMutationIntent(value) && !createsSendableArtifact) return false
+    const sendIntent = /(?:发给我|发我|发送|发出来|发到(?:群里|这里)?|丢到?(?:群里|这里)|扔到?(?:群里|这里)|传给我|传到?(?:群里|这里)|上传(?:到(?:群里|这里)?)?|把.{0,80}(?:上传|发群里|传群里|丢群里|扔群里)|试(?:一下|下)?上传)/i.test(value)
     const targetHint = /\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)\b|(?:\.{0,2}\/)?(?:[\w@+.-]+\/)+[\w@+.-]*|[\w.-]+\.(?:png|jpe?g|webp|gif|mp4|mov|avi|mkv|mp3|wav|ogg|flac|zip|7z|rar|gz|pdf|txt|log|md|json|ya?ml|js|ts|db|sqlite|bin)\b|(?:日志|配置|插件|源码|源文件|脚本|文件|目录|压缩包|这个|那个|刚才|上面)/i.test(value)
     return sendIntent && targetHint
+}
+
+function isUnrequestedMessagingApiShellCall(text, toolArgs = {}) {
+    const command = String(toolArgs.command || toolArgs.input || '').trim()
+    if (!command) return false
+    const callsMessagingApi = /(?:\b(?:curl|wget)\b[\s\S]{0,500}\/(?:upload_(?:group|private)_file|send_(?:group|private)_msg)\b|\b(?:upload_(?:group|private)_file|send_(?:group|private)_msg)\b|\bOneBot\b[\s\S]{0,120}(?:API|接口|上传|发送))/i.test(command)
+    const probesMessagingAdapter = /(?:\b(?:ps|pgrep|ss|netstat|lsof|docker)\b[\s\S]{0,500}\b(?:napcat|lagrange|go-?cqhttp|gocq|llonebot|onebot)\b|\b(?:napcat|lagrange|go-?cqhttp|gocq|llonebot|onebot)\b[\s\S]{0,500}\b(?:ps|pgrep|ss|netstat|lsof|docker)\b)/i.test(command)
+    if (!callsMessagingApi && !probesMessagingAdapter) return false
+    const value = getPrimaryUserInstruction(text)
+    const explicitlyRequestedApi = /(?:curl|wget|OneBot|NapCat|Lagrange|go-?cqhttp|gocq|llonebot|HTTP\s*API|接口|upload_(?:group|private)_file|send_(?:group|private)_msg|127\.0\.0\.1:\d+)/i.test(value)
+    return !explicitlyRequestedApi
 }
 
 export function hasExplicitLocalFileDiscoveryIntent(text) {
@@ -759,6 +771,7 @@ export function hasExplicitShellIntent(text, toolName = '') {
     if (new RegExp(`\\b(?:${commandKeywords})\\b[\\s\\S]{0,200}(?:命令|执行|运行|输入|发送|打入|跑一下|试一下)`, 'i').test(value)) return true
     if (/\b(?:git\s+(?:pull|status|diff|log|show|fetch)|tmux\s+ls|nmap\s+-|ip\s+(?:route|addr)|pnpm\s+|npm\s+|node\s+|python3?\s+|docker\s+|systemctl\s+|sqlite3\s+|curl\s+|wget\s+|jq\s+)/i.test(value)) return true
     if (new RegExp(`(?:用|拿|通过).{0,12}(?:${commandKeywords}).{0,12}(?:命令|工具)`, 'i').test(value)) return true
+    if (new RegExp(`(?:用|通过)\\s*(?:${commandKeywords})\\b.{0,20}(?:调用|请求|访问|上传|发送|下载)`, 'i').test(value)) return true
     if (new RegExp(`(?:${commandKeywords}).{0,10}(?:命令).{0,16}(?:查|看|读取|查询|检查|列出)`, 'i').test(value)) return true
     if (/(?:git|commit|提交|提交记录|变更记录|更新记录|改动记录|changelog|change\s*log).{0,40}(?:记录|历史|日志|log|提交|commit|变更|改动|更新|最近|最新|前\s*\d{1,4}\s*条)|(?:记录|历史|日志|log|提交|commit|变更|改动|更新|最近|最新|前\s*\d{1,4}\s*条).{0,40}(?:git|commit|提交|提交记录|变更记录|更新记录|改动记录|changelog|change\s*log)/i.test(value)) return true
     if (/(?:插件|AI-Plugin|仓库|repo|repository|代码).{0,40}(?:git|commit|提交|提交记录|变更记录|更新记录|改动记录|changelog|change\s*log|历史|日志)|(?:git|commit|提交|提交记录|变更记录|更新记录|改动记录|changelog|change\s*log|历史|日志).{0,40}(?:插件|AI-Plugin|仓库|repo|repository|代码)/i.test(value)) return true
@@ -1003,7 +1016,8 @@ export function isExplicitToolIntent(toolName, text, options = {}) {
             return hasExplicitDrawIntent(text, options)
         case 'shell_exec':
         case 'shell_session':
-            return hasExplicitShellIntent(text, toolName)
+            return !isUnrequestedMessagingApiShellCall(text, options.toolArgs)
+                && hasExplicitShellIntent(text, toolName)
         case 'config_manage': {
             const action = String(options.toolArgs?.action || '').trim()
             if (action === 'update') return hasExplicitLocalFileMutationIntent(text)

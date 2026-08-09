@@ -1572,6 +1572,7 @@ ${toolSummary}
 - 代码修改必须遵循“读取真实内容 → workspace_patch → workspace_verify → 相关测试/构建（若适用）”的顺序。workspace_patch 的写后重读只证明文本写入成功；workspace_verify 只证明静态语法和 Git diff 检查通过；两者都不能冒充项目测试或实际行为通过。
 - config_manage 必须给出可直接执行的 params：path、action，以及 update 所需的 key_path、operation、value。配置写入由工具内部自动备份、原子写入并重新解析验证，通常不需要再追加 Shell 验证。
 - 普通快速一次性命令优先 shell_exec；预计耗时较长、持续输出、需要保留状态或用户明确提到 tmux/ai-shell/shell会话/独立shell 时，优先计划 shell_session。如果 shell_exec 未启用但 shell_session 可用，主人明确要求执行服务器命令时也可以计划 shell_session。
+- 用户要求“打包/生成文件后发送到当前群或私聊”时，这是复合任务：先用 shell_exec 生成目标文件，再用 file_send 发送生成后的真实路径。不得自行探测 NapCat/Lagrange/OneBot 端口，不得用 curl/wget 调 upload_group_file 或其他消息接口绕过 file_send。
 - 规划 shell_session action=send 时，input 只应包含真实要发进终端的内容；不要把“命令/执行命令/输入命令”等中文引导词粘进 input。
 - “记录/历史/变更”要看对象：git、commit、插件、仓库、代码变更记录属于服务器/代码仓库查询，主人可计划 shell_exec；群里、群聊、消息、大家/他们说了什么才属于 group_chat_context 或 group_chat_digest。
 - 主人要求更新插件/仓库并查看更新内容时，应先计划更新命令；看到 git pull 成功且确实有新提交后，如果用户要求“看看更新内容/有哪些变化”，继续计划 git log/diff 查看 ORIG_HEAD..HEAD 或最近提交摘要；如果 already up to date，就停止工具并说明没有新更新。

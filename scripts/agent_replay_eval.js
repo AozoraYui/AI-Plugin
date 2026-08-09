@@ -80,6 +80,31 @@ const incidents = [
         }
     },
     {
+        id: 'archive-then-send-uses-native-file-tool',
+        input: '#c用7z把/root/Yunzai/resources/qqimage/20260809_170249这个目录打包成压缩包然后传到群里',
+        pass: text => {
+            const tools = selectToolCandidates(replayEnabledTools, text).tools
+            const bypass = filterToolCallsByIntent([{
+                name: 'shell_exec',
+                args: { command: 'curl -s -X POST http://127.0.0.1:4001/upload_group_file -d @payload.json' }
+            }], text, { allowModelPlannedLowRisk: true })
+            const adapterProbe = filterToolCallsByIntent([{
+                name: 'shell_exec',
+                args: { command: "ps -ef | grep -E 'node|napcat|lagrange|gocq|llonebot' && ss -tlnp" }
+            }], text, { allowModelPlannedLowRisk: true })
+            const nativeSend = filterToolCallsByIntent([{
+                name: 'file_send',
+                args: { path: '/root/Yunzai/resources/qqimage/20260809_170249.7z' }
+            }], text)
+            return hasExplicitFileSendIntent(text)
+                && tools.includes('shell_exec')
+                && tools.includes('file_send')
+                && bypass.blocked.length === 1
+                && adapterProbe.blocked.length === 1
+                && nativeSend.tools.length === 1
+        }
+    },
+    {
         id: 'web-search-with-explicit-image-delivery',
         input: '#c帮我搜一下英伟达最新显卡，有图片的话带一张图发给我',
         pass: text => {
