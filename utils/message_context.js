@@ -36,10 +36,47 @@ export function resolvePrivateMemorySubject(actorUserId = '', mentionedUserIds =
 
 export function shouldPrioritizeCurrentMultimodalTurn(text = '', options = {}) {
     if (options.hasDirectImages !== true) return false
+    return true
+}
+
+export function hasEarlierConversationReference(text = '', options = {}) {
     const value = String(text || '').trim()
-    if (!value) return true
-    const requiresEarlierContext = /(?:刚才|刚刚|之前|前面|上面|上一条|上(?:一|几)张|前(?:一|几)张|另一张|前情|历史|记忆|档案|我们(?:刚才|之前)|你(?:刚才|之前)|结合(?:前文|上文|刚才|之前)|根据(?:前文|上文|刚才|之前)|继续|接着|还是(?:刚才|之前)|那个(?:问题|话题|方案)|前几轮|前面说的)/i.test(value)
-    return !requiresEarlierContext
+    if (!value) return false
+    if (/(?:刚才|刚刚|之前|前面|上面|上一条|上(?:一|几)张|前(?:一|几)张|另一张|前情|历史|记忆|档案|我们(?:刚才|之前)|你(?:刚才|之前)|结合(?:前文|上文|刚才|之前)|根据(?:前文|上文|刚才|之前)|继续|接着|还是(?:刚才|之前)|那个(?:问题|话题|方案)|前几轮|前面说的)/i.test(value)) return true
+    if (options.hasDirectImages === true) return false
+    return /^(?:所以|然后|那|那么|这个|那个|它|这样|那样|对|是的|是啊|没错|确实|为什么|怎么说|还有呢|后来呢|结果呢|继续说|接着说)(?:呢|吗|嘛|呀|啊|吧|？|\?|，|,|。|！|!|\s|$)/i.test(value)
+}
+
+export function hasPersonalMemoryContextRequest(text = '') {
+    const value = String(text || '').trim()
+    if (!value) return false
+    return /(?:你(?:还)?记得|记不记得|还记得).{0,24}(?:我|我的)|(?:我|我的).{0,16}(?:个人档案|档案|画像|资料|长期记忆|名字|昵称|生日|年龄|所在地|住哪|城市|来自哪里|喜欢|偏好|习惯|职业|身份|性格|忌口|雷点)/i.test(value)
+}
+
+export function resolveCurrentTurnContextPolicy(text = '', options = {}) {
+    const value = String(text || '').trim()
+    const hasDirectImages = options.hasDirectImages === true
+    const earlierReference = hasEarlierConversationReference(value, { hasDirectImages })
+    const personalMemoryRequest = options.explicitMemoryContext === true || hasPersonalMemoryContextRequest(value)
+    const explicitGroupContext = options.explicitGroupContext === true
+    const autoFastChatAvailable = options.autoFastChatAvailable === true
+    const configuredHistoryLimit = Math.max(1, Math.floor(Number(options.maxHistoryTurns) || 16))
+    let recentHistoryLimit = hasDirectImages && !earlierReference ? 0 : 4
+    if (earlierReference) recentHistoryLimit = Math.min(configuredHistoryLimit, 8)
+    if (personalMemoryRequest) recentHistoryLimit = configuredHistoryLimit
+
+    return {
+        focusCurrentTurn: Boolean(value || hasDirectImages),
+        earlierReference,
+        personalMemoryRequest,
+        recentHistoryLimit,
+        includeCheckpoint: personalMemoryRequest,
+        includeProfile: personalMemoryRequest,
+        includeSemanticMemory: personalMemoryRequest,
+        includeAutoFastChat: explicitGroupContext || (autoFastChatAvailable && (!hasDirectImages || earlierReference)),
+        autoFastChatLimit: explicitGroupContext ? undefined : 12,
+        excludeAutoFastChatCommands: !explicitGroupContext
+    }
 }
 
 export function buildParticipantIdentityHint(actorUserId = '', mentionedUserIds = [], options = {}) {

@@ -28,7 +28,7 @@ const replayEnabledTools = [
 ]
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
-const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldPrioritizeCurrentMultimodalTurn } = await import('../utils/message_context.js')
+const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolveCurrentTurnContextPolicy, resolvePrivateMemorySubject, shouldPrioritizeCurrentMultimodalTurn } = await import('../utils/message_context.js')
 const { resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
 const { summarizeShellResultForReply } = await import('../utils/shell_result_summary.js')
 const { parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically } = await import('../tools/group_send.js')
@@ -86,6 +86,29 @@ const incidents = [
         id: 'current-image-turn-does-not-inherit-unrelated-history',
         input: '#c给认真科普的老哥点赞',
         pass: text => shouldPrioritizeCurrentMultimodalTurn(text, { hasDirectImages: true })
+    },
+    {
+        id: 'standalone-technical-statement-uses-layered-context',
+        input: '#c camm和dimm最大的区别就是连接方式了，dimm的金手指很容易因为干扰导致性能瓶颈，camm使用触点解决了这个问题',
+        pass: text => {
+            const policy = resolveCurrentTurnContextPolicy(text, {
+                maxHistoryTurns: 16,
+                autoFastChatAvailable: true
+            })
+            return policy.focusCurrentTurn
+                && policy.recentHistoryLimit === 4
+                && policy.includeProfile === false
+                && policy.includeSemanticMemory === false
+                && policy.includeAutoFastChat === true
+                && policy.autoFastChatLimit === 12
+                && policy.excludeAutoFastChatCommands === true
+        }
+    },
+    {
+        id: 'personal-prior-conversation-is-not-group-log-query',
+        input: '#c我之前和你说的事情，关于这个的，已经修了，但是不知道效果怎么样，还没实际测试',
+        pass: text => !hasGroupChatContextQuestion(text)
+            && !selectToolCandidates(replayEnabledTools, text).tools.includes('group_chat_context')
     },
     {
         id: 'referential-ai-name-does-not-trigger-fast-chat',
