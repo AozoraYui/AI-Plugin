@@ -40,7 +40,7 @@ const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMe
 const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq_face.js')
 const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
-const { buildBingImageSearchUrl, extractPageImageUrls, filterRelevantSearchResults, parseSo360ImageResults, parseYahooSearchResults, prepareSearchResults, scoreSearchResultRelevance } = await import('../tools/search.js')
+const { buildBingImageSearchUrl, extractPageImageUrls, filterRelevantSearchResults, parseSo360ImageResults, parseYahooSearchResults, prepareSearchResults, scoreSearchResultRelevance, scoreSearchSourceAuthority } = await import('../tools/search.js')
 const { getProxyCandidates } = await import('../utils/common.js')
 const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
@@ -54,7 +54,7 @@ await import('../tools/file_send.js')
 const { scoreWorkspaceFilenameMatch, verifyWorkspaceFile } = await import('../tools/workspace.js')
 const { savePendingAction, loadPendingAction, listPendingActions, clearPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } = await import('../utils/pending_actions.js')
 const { deterministicToolDecision, normalizeToolResult } = await import('../utils/tool_result.js')
-const { agentToolCallKey, buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } = await import('../utils/agent_runtime.js')
+const { agentToolCallKey, buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, retainAgentContinuationTools, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } = await import('../utils/agent_runtime.js')
 const { createOrResumeAgentTask, finalizeAgentTask, recordAgentTaskStep, updateAgentTaskProgress } = await import('../utils/agent_task_runtime.js')
 const { buildAgentTaskPlan, normalizeAgentTaskPlan, selectNextAgentPlanStep, updateAgentTaskPlanFromObservations } = await import('../utils/agent_plan.js')
 const { verifyAgentRound } = await import('../utils/agent_verifier.js')
@@ -148,6 +148,35 @@ check('型号搜索会过滤学校、Windows 与泛中国页面', (() => {
     return results.length === 2
         && results.every(result => /QLU-11/i.test(result.title))
         && scoreSearchResultRelevance(query, results[0]).verified
+})())
+check('中文自然问句会抽取核心短语而非要求整句命中', (() => {
+    const cases = [
+        {
+            query: '2026年中国下一个法定节假日',
+            result: { title: '国务院办公厅关于2026年部分节假日安排的通知', url: 'https://www.gov.cn/example', snippet: '中秋节、国庆节放假调休安排' }
+        },
+        {
+            query: '2026年英伟达最新显卡信息',
+            result: { title: '英伟达2026年新款显卡发布信息', url: 'https://example.com/nvidia', snippet: '新一代GPU产品资料' }
+        },
+        {
+            query: '2026年下一场F1比赛安排',
+            result: { title: '2026 F1赛程与下一站比赛时间', url: 'https://example.com/f1', snippet: '大奖赛赛程安排' }
+        }
+    ]
+    return cases.every(item => filterRelevantSearchResults(item.query, [item.result]).length === 1)
+})())
+check('动态时效问句可跨多个领域召回联网搜索', (() => {
+    const messages = ['#c下一个法定节假日是哪个？', '#c下一场比赛是什么时候？', '#c最新版本是哪个？', '#c接下来的航班安排是什么？']
+    return messages.every(text => selectToolCandidates(['web_search', 'web_fetch'], text).tools.includes('web_search'))
+})())
+check('搜索排序会通用优先官方政府来源', (() => {
+    const results = filterRelevantSearchResults('2026年节假日安排', [
+        { title: '2026年节假日安排攻略', url: 'https://example.com/holiday', snippet: '2026年节假日安排' },
+        { title: '国务院办公厅关于2026年部分节假日安排的通知', url: 'https://www.gov.cn/zhengce/example', snippet: '2026年节假日安排' }
+    ])
+    return results[0]?.url.includes('gov.cn')
+        && scoreSearchSourceAuthority(results[0].url) > scoreSearchSourceAuthority(results[1].url)
 })())
 check('360图片结果只保留与型号及实体语义相关的候选', (() => {
     const results = parseSo360ImageResults({
@@ -575,6 +604,12 @@ const deferredSideEffects = deferDependentSideEffectCalls([
 check('依赖真实结果的发送动作延后到下一轮', deferredSideEffects.tools.length === 1
     && deferredSideEffects.tools[0].name === 'shell_exec'
     && deferredSideEffects.deferred[0]?.name === 'file_send')
+check('Agent续轮会保留上一轮已授权工具能力', (() => {
+    const tools = retainAgentContinuationTools([], [
+        { name: 'web_search', args: { query: '改写前查询' } }
+    ], ['web_search', 'web_fetch', 'shell_exec'], ['web_search', 'web_fetch'])
+    return tools.length === 1 && tools[0] === 'web_search'
+})())
 const independentSideEffect = deferDependentSideEffectCalls([{ name: 'file_send', args: { path: 'ready.txt' } }], ['file_send'])
 check('单独且参数完整的动作工具不会被延后', independentSideEffect.tools.length === 1 && independentSideEffect.deferred.length === 0)
 

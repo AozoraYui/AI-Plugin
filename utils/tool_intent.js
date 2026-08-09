@@ -278,6 +278,7 @@ export function hasExplicitWebSearchIntent(text) {
     if (!value) return false
     if (isCapabilityOrUsageQuestion(value, '搜索|联网|上网|web[_ -]?search')) return false
     if (hasExplicitPortDiagnosticIntent(value)) return false
+    if (/(?:下一个|下次|最近(?:一个|的)?|接下来|之后|当前|现在|今天|明天|今年|最新).{0,24}(?:版本|价格|汇率|政策|公告|新闻|赛程|比赛|航班|列车|节假日|假期|放假|活动|演出|展会|会议|考试|报名|截止日期|安排|数据|资料|信息|情况)|(?:版本|价格|汇率|政策|公告|新闻|赛程|比赛|航班|列车|节假日|假期|放假|活动|演出|展会|会议|考试|报名|截止日期|安排|数据|资料|信息|情况).{0,24}(?:下一个|下次|最近|接下来|之后|当前|现在|今天|明天|今年|最新|是哪天|是哪个|什么时候)/i.test(value)) return true
     return /(?:搜索|搜一下|查一下|查询|检索|联网查|上网查).{0,80}/i.test(value)
         || /^搜(?:一下|下|搜)?\s*[^，。；;!?！？]{1,80}/i.test(value)
         || /(?:搜|找)(?:一|二|两|三|几|[1-3])张\s*[^，。；;!?！？]{1,80}/i.test(value)

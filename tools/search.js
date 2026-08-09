@@ -126,17 +126,40 @@ function normalizeSearchText(text = '') {
         .replace(/[^a-z0-9\u3400-\u9fff]+/g, '')
 }
 
+export function scoreSearchSourceAuthority(url = '') {
+    let hostname = ''
+    try {
+        hostname = new URL(String(url || '')).hostname.toLowerCase()
+    } catch {
+        return 0
+    }
+    if (hostname === 'gov.cn' || hostname.endsWith('.gov.cn')) return 36
+    if (hostname.endsWith('.gov') || hostname.includes('.gov.')) return 30
+    if (hostname === 'europa.eu' || hostname.endsWith('.europa.eu')) return 30
+    if (hostname.endsWith('.edu') || hostname.includes('.edu.')) return 6
+    return 0
+}
+
 function extractQueryRelevanceProfile(query = '') {
     const value = decodeHtmlEntities(String(query || '')).toLowerCase()
     const modelAnchors = [...new Set((value.match(/[a-z]{1,12}[\s_-]*\d[a-z0-9\s_-]*/gi) || [])
         .map(normalizeSearchText)
-        .filter(anchor => anchor.length >= 3))]
+        .filter(anchor => anchor.length >= 2))]
     const numberAnchors = [...new Set((value.match(/\d{2,}/g) || []).map(normalizeSearchText))]
     const chineseRuns = value.match(/[\u3400-\u9fff]{2,}/g) || []
-    const semanticAnchors = [...new Set(chineseRuns
-        .map(run => run.replace(/^(?:帮我|给我|请|搜索|搜|查|找|关于|有关|式|型)+/g, ''))
-        .map(run => run.replace(/(?:的|图片|照片|资料|信息|介绍)$/g, ''))
-        .filter(run => run.length >= 3))]
+    const semanticAnchors = [...new Set(chineseRuns.flatMap(run => {
+        const cleaned = run
+            .replace(/^(?:帮我|给我|请|搜索|搜一下|搜|查一下|查询|查|找一下|找|关于|有关|式|型)+/g, '')
+            .replace(/(?:今年|明年|后年|当前|现在|目前|中国|国内|下一个|下次|最近一个|最近的|最近|接下来|之后|未来|是哪一个|是哪天|什么时候|日期|哪个|什么|如何|怎么|怎样|吗|呢|嘛)+/g, '')
+            .replace(/(?:的|图片|照片|资料|信息|介绍|情况)$/g, '')
+        const anchors = cleaned.length >= 3 ? [cleaned] : []
+        for (let length = 3; length <= Math.min(8, cleaned.length); length++) {
+            for (let index = 0; index + length <= cleaned.length; index++) {
+                anchors.push(cleaned.slice(index, index + length))
+            }
+        }
+        return anchors
+    }))]
     return {
         modelAnchors,
         numberAnchors,
@@ -160,6 +183,8 @@ export function scoreSearchResultRelevance(query, result = {}) {
     score += matchedNumbers.length * 2
     score += matchedSemantics.length * 6
     if (profile.semanticAnchors.some(anchor => title.includes(anchor))) score += 3
+    const authorityScore = scoreSearchSourceAuthority(result.url || result.pageUrl)
+    score += authorityScore
     const verified = !profile.strict
         || matchedModels.length > 0
         || (matchedSemantics.length > 0
@@ -171,7 +196,8 @@ export function scoreSearchResultRelevance(query, result = {}) {
         strict: profile.strict,
         matchedModels,
         matchedNumbers,
-        matchedSemantics
+        matchedSemantics,
+        authorityScore
     }
 }
 

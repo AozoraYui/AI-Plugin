@@ -33,6 +33,8 @@ const { summarizeShellResultForReply } = await import('../utils/shell_result_sum
 const { parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically } = await import('../tools/group_send.js')
 const { parseStandalonePendingCommand } = await import('../utils/pending_actions.js')
 const { classifyToolCallRisk } = await import('../utils/agent_policy.js')
+const { filterRelevantSearchResults } = await import('../tools/search.js')
+const { retainAgentContinuationTools } = await import('../utils/agent_runtime.js')
 
 const incidents = [
     {
@@ -102,6 +104,29 @@ const incidents = [
                 && bypass.blocked.length === 1
                 && adapterProbe.blocked.length === 1
                 && nativeSend.tools.length === 1
+        }
+    },
+    {
+        id: 'next-statutory-holiday-keeps-search-evidence',
+        input: '#c下一个法定节假日是哪个？',
+        pass: text => {
+            const tools = selectToolCandidates(replayEnabledTools, text).tools
+            const results = filterRelevantSearchResults('2026年中国下一个法定节假日', [{
+                title: '国务院办公厅关于2026年部分节假日安排的通知',
+                url: 'https://www.gov.cn/zhengce/content/202511/content_7040000.htm',
+                snippet: '2026年中秋节、国庆节放假调休日期安排'
+            }])
+            return tools.includes('web_search') && results.length === 1
+        }
+    },
+    {
+        id: 'semantic-tool-survives-recoverable-round',
+        input: '#c谁获得了今年的诺贝尔物理学奖？',
+        pass: () => {
+            const tools = retainAgentContinuationTools([], [
+                { name: 'web_search', args: { query: '2026年诺贝尔物理学奖获得者' } }
+            ], replayEnabledTools, replayEnabledTools)
+            return tools.includes('web_search')
         }
     },
     {

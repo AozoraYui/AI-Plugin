@@ -20,7 +20,7 @@ import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToo
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
 import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } from '../utils/model_output.js'
-import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, shouldContinueAgentRound, shouldStopRepeatedImageSearch, stableAgentStringify, updateAgentStagnationState } from '../utils/agent_runtime.js'
+import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, retainAgentContinuationTools, shouldContinueAgentRound, shouldStopRepeatedImageSearch, stableAgentStringify, updateAgentStagnationState } from '../utils/agent_runtime.js'
 import { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resolvePersistedAgentStatus } from '../utils/agent_completion.js'
 import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK_SUMMARY_MAX_CHARS, mergeAgentRisk, recordAgentTaskStep, updateAgentTaskProgress } from '../utils/agent_task_runtime.js'
 import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../utils/agent_plan.js'
@@ -2924,6 +2924,15 @@ export class ChatHandler extends plugin {
                         webFetchFlag: e._webFetchFlag === true,
                         webSearchFlag: e._netFlag === true
                     })
+                    nextPlanningCandidates.tools = retainAgentContinuationTools(
+                        nextPlanningCandidates.tools,
+                        [...roundToolCalls, ...deferredBatch.deferred],
+                        enabledTools,
+                        AGENT_LOOP_ALLOWED_TOOLS
+                    )
+                    if (nextPlanningCandidates.tools.length > 0) {
+                        nextPlanningCandidates.reason = `${nextPlanningCandidates.reason}; 保留上轮已授权能力=${[...new Set([...roundToolCalls, ...deferredBatch.deferred].map(call => call.name))].join(', ')}`
+                    }
                     const nextEnabledTools = pickEnabledTools(nextPlanningCandidates.tools, AGENT_LOOP_ALLOWED_TOOLS)
                     if (nextEnabledTools.length === 0) {
                         logger.info(`[AI-Plugin] Agent 后续规划无安全候选工具，停止循环：${nextPlanningCandidates.reason}`)

@@ -39,6 +39,17 @@ export function deferDependentSideEffectCalls(toolCalls = [], stopTools = []) {
     return { tools: readCalls, deferred: sideEffectCalls }
 }
 
+export function retainAgentContinuationTools(candidateTools = [], previousToolCalls = [], enabledTools = [], allowedTools = []) {
+    const enabled = new Set(Array.isArray(enabledTools) ? enabledTools : [])
+    const allowed = new Set(Array.isArray(allowedTools) ? allowedTools : [])
+    const merged = new Set((Array.isArray(candidateTools) ? candidateTools : []).filter(name => enabled.has(name)))
+    for (const call of Array.isArray(previousToolCalls) ? previousToolCalls : []) {
+        const name = String(call?.name || '').trim()
+        if (name && enabled.has(name) && (allowed.size === 0 || allowed.has(name))) merged.add(name)
+    }
+    return [...merged]
+}
+
 export function createAgentToolContext(baseContext = {}, call = {}, index = 0) {
     return {
         ...baseContext,
