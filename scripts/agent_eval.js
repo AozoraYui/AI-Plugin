@@ -64,6 +64,7 @@ const { selectWorkspaceSurveyFiles } = await import('../utils/workspace_survey.j
 const { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resolvePersistedAgentStatus } = await import('../utils/agent_completion.js')
 const { trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
 const { getPureImageReplyPolicy, resolveFastChatImageDelivery, resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
+const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, classifyWebUrl, hasOverconfidentLowEvidenceAnswer, updateWebEvidenceState } = await import('../utils/web_evidence.js')
 
 const failures = []
 let passed = 0
@@ -1460,6 +1461,86 @@ check('纯图片回复策略禁止机械描述和无关劝睡', (() => {
     const policy = getPureImageReplyPolicy()
     return policy.includes('不要逐项复述画面') && policy.includes('不要主动提及当前时间') && policy.includes('不要劝睡')
 })())
+
+check('百度搜索中转链接不会被当作原始来源', (() => {
+    const result = classifyWebUrl('https://www.baidu.com/link?url=abc123')
+    return result.category === 'search_redirect' && result.autoFetchEligible === false
+})())
+check('360 图片搜索页不会被当作文章正文', (() => {
+    const result = classifyWebUrl('https://image.so.com/i?q=test')
+    return result.category === 'search_page' && result.direct === false
+})())
+check('微信错误页 URL 会被识别为错误页面', (() => {
+    const result = classifyWebUrl('https://weixin.qq.com/cgi-bin/readtemplate?t=weixin_external_links_content_management&waerrpage=1')
+    return result.category === 'error_page' && result.autoFetchEligible === false
+})())
+check('过短网页不会形成可用证据', (() => {
+    const result = assessFetchedContent('https://example.com/post', `【网页内容「https://example.com/post」(117 字符)】\n${'短内容'.repeat(20)}\n【网页内容结束】`)
+    return result.ok === false && result.usableEvidence === false && result.quality === 'low'
+})())
+check('足够长的直接文章正文可形成证据', (() => {
+    const body = '这是一段用于回归测试的直接网页正文，包含明确主题、背景、过程和来源说明。'.repeat(30)
+    const result = assessFetchedContent('https://news.example.org/article/1', `【网页内容「https://news.example.org/article/1」(${body.length} 字符)】\n${body}\n【网页内容结束】`)
+    return result.ok === true && result.usableEvidence === true && result.domain === 'news.example.org'
+})())
+check('搜索中转成功跳到直接正文时按最终来源归档', (() => {
+    const body = '这是经搜索中转后获取到的真实直接网页正文，内容长度足够并包含可核对信息。'.repeat(30)
+    const result = assessFetchedContent('https://www.baidu.com/link?url=abc', `【网页内容】\n请求地址: https://www.baidu.com/link?url=abc\n最终地址: https://source.example/article/1\n重定向: 是\n${body}`)
+    return result.ok === true && result.effectiveUrl === 'https://source.example/article/1' && result.domain === 'source.example'
+})())
+check('搜索证据只统计独立直接来源域名', (() => {
+    const assessed = assessSearchResults([
+        { title: '来源一', url: 'https://a.example/article', snippet: '这是来源一提供的足够长度搜索摘要，用于验证直接来源统计。' },
+        { title: '来源二', url: 'https://b.example/report', snippet: '这是来源二提供的足够长度搜索摘要，用于验证独立域名统计。' },
+        { title: '中转', url: 'https://www.baidu.com/link?url=abc', snippet: '这条摘要即使很长也不应被视为直接来源或自动抓取候选。' }
+    ])
+    return assessed.independentSourceCount === 2
+        && assessed.autoFetchCandidate?.url === 'https://a.example/article'
+        && assessed.results[2]?.usableEvidence === false
+})())
+check('改写搜索词但没有新增来源时证据指纹保持不变', (() => {
+    const first = updateWebEvidenceState({}, 'web_search', {
+        evidenceKeys: ['a.example:fact'], independentDomains: ['a.example'], usableEvidenceCount: 1
+    })
+    const second = updateWebEvidenceState(first, 'web_search', {
+        evidenceKeys: ['a.example:fact'], independentDomains: ['a.example'], usableEvidenceCount: 1
+    })
+    return buildWebEvidenceFingerprint(first) === buildWebEvidenceFingerprint(second)
+})())
+check('同一来源摘要变化不会伪造新网页证据', (() => {
+    const first = assessSearchResults([{ title: '旧标题', url: 'https://a.example/post?utm_source=x', snippet: '这是旧版本但长度足够的搜索摘要，用于模拟搜索词改写前结果。' }])
+    const second = assessSearchResults([{ title: '新标题', url: 'https://a.example/post?utm_source=y', snippet: '这是完全不同但长度足够的搜索摘要，用于模拟搜索词改写后结果。' }])
+    return first.evidenceKeys[0] === second.evidenceKeys[0]
+})())
+check('重复抓取同一网页不会伪造证据增长', (() => {
+    const fetched = {
+        facts: { usableEvidence: true, evidenceKey: 'a.example:article', domain: 'a.example' }
+    }
+    const first = updateWebEvidenceState({}, 'web_fetch', fetched)
+    const second = updateWebEvidenceState(first, 'web_fetch', fetched)
+    return first.usableFetchCount === 1
+        && second.usableFetchCount === 1
+        && buildWebEvidenceFingerprint(first) === buildWebEvidenceFingerprint(second)
+})())
+check('多个搜索摘要仍不足以单独支撑敏感结论', (() => {
+    const assessed = assessSearchResults([
+        { title: '来源一', url: 'https://a.example/article', snippet: '这是来源一提供的足够长度搜索摘要，用于验证敏感结论门槛。' },
+        { title: '来源二', url: 'https://b.example/report', snippet: '这是来源二提供的足够长度搜索摘要，用于验证敏感结论门槛。' },
+        { title: '来源三', url: 'https://c.example/post', snippet: '这是来源三提供的足够长度搜索摘要，用于验证敏感结论门槛。' }
+    ])
+    return assessed.quality === 'high' && assessed.sufficientForSensitiveClaims === false
+})())
+check('低证据人物争议回答会拦截确定性指控', hasOverconfidentLowEvidenceAnswer(
+    '该 UP 主在2025年实施了诈骗，事件发酵后引发大量讨论。',
+    '查一下这个B站UP主的诈骗争议始末',
+    { sufficientForSensitiveClaims: false }
+))
+check('低证据人物争议回答允许明确表达无法核实', !hasOverconfidentLowEvidenceAnswer(
+    '目前只找到搜索摘要，未能核实原始材料，因此无法确认相关诈骗指控。',
+    '查一下这个B站UP主的诈骗争议始末',
+    { sufficientForSensitiveClaims: false }
+))
+check('未完成任务在最大轮次耗尽后应持久化为 blocked', resolvePersistedAgentStatus({ completionStatus: 'blocked' }) === 'blocked')
 
 console.log(`\nAgent eval: ${passed} passed, ${failures.length} failed`)
 if (failures.length > 0) process.exit(1)

@@ -31,6 +31,7 @@ import { executePendingShellExec } from '../tools/shell_exec.js'
 import { executePendingShellSession } from '../tools/shell_session.js'
 import { summarizeShellResultForReply } from '../utils/shell_result_summary.js'
 import { selectWorkspaceSurveyFiles } from '../utils/workspace_survey.js'
+import { buildWebEvidenceFingerprint, hasOverconfidentLowEvidenceAnswer, updateWebEvidenceState } from '../utils/web_evidence.js'
 import yaml from 'yaml'
 
 function saveMainConfigSwitch(key, value) {
@@ -2201,6 +2202,9 @@ export class ChatHandler extends plugin {
             let verifiedToolResultCount = 0
             let shellToolExecutionCount = 0
             let failedImageSearchAttempts = 0
+            let webEvidenceState = {}
+            let webEvidenceStagnationState = { fingerprint: '', repeatCount: 0, shouldStop: false }
+            let webResearchUsed = false
             const workspaceSurveyRequest = e.isMaster ? parseWorkspaceSurveyRequest(currentToolInstruction || originalUserMessage) : null
             let workspaceSurveyEntries = []
             const workspaceSurveyAttemptedPaths = new Set()
@@ -2544,6 +2548,11 @@ export class ChatHandler extends plugin {
                             data: result.data,
                             protocol
                         })
+                        if (call.name === 'web_search' || call.name === 'web_fetch') {
+                            webResearchUsed = true
+                            suppressAutoFastChatContext = true
+                            webEvidenceState = updateWebEvidenceState(webEvidenceState, call.name, result.data)
+                        }
                         if (workspaceSurveyRequest && call.name === 'workspace_list' && Array.isArray(result.data?.entries)) {
                             workspaceSurveyEntries = result.data.entries
                         }
@@ -2616,13 +2625,30 @@ export class ChatHandler extends plugin {
 
                                 // 图片搜索已经经过候选页与视觉复核，不再自动抓取首条网页污染后续判断。
                                 const isImageSearch = !Array.isArray(searchData) && Number(searchData.requestedImages || 0) > 0
-                                if (e.isMaster && !isImageSearch && uniqueResults[0]?.url) {
+                                const autoFetchCandidate = !Array.isArray(searchData) ? searchData.autoFetchCandidate : null
+                                if (e.isMaster && !isImageSearch && autoFetchCandidate?.url) {
                                     try {
-                                        const topUrl = uniqueResults[0].url
+                                        const topUrl = autoFetchCandidate.url
                                         logger.info(`[AI-Plugin] 自动抓取搜索结果首条: ${topUrl}`)
-                                        const fetchResult = await toolRegistry.execute('web_fetch', { url: topUrl, max_chars: 12000 }, e.isMaster)
+                                        const fetchArgs = { url: topUrl, max_chars: 12000 }
+                                        const fetchResult = await toolRegistry.execute('web_fetch', fetchArgs, e.isMaster)
                                         if (fetchResult.success) {
-                                            userMessage = userMessage + fetchResult.data
+                                            const fetchProtocol = fetchResult.protocol
+                                            const fetchFormatted = toolRegistry.formatToolResult('web_fetch', fetchResult.data)
+                                            webEvidenceState = updateWebEvidenceState(webEvidenceState, 'web_fetch', fetchResult.data)
+                                            roundObservations.push({
+                                                tool: 'web_fetch',
+                                                args: fetchArgs,
+                                                status: fetchProtocol?.ok ? 'ok' : 'tool_failed',
+                                                text: fetchFormatted,
+                                                data: fetchResult.data,
+                                                protocol: fetchProtocol
+                                            })
+                                            if (fetchProtocol?.ok) successfulToolResultCount++
+                                            userMessage = userMessage + fetchFormatted
+                                            if (!fetchProtocol?.ok) {
+                                                userMessage += '\n【自动抓取判定】该页面未形成可用证据，不得把它当作原文或事实依据。'
+                                            }
                                         }
                                     } catch (err) {
                                         logger.warn(`[AI-Plugin] 自动抓取失败: ${err.message}`)
@@ -2632,6 +2658,13 @@ export class ChatHandler extends plugin {
                                 const formattedResult = toolRegistry.formatToolResult('web_search', searchData)
                                 userMessage = userMessage + formattedResult + '\n请如实告诉用户没有找到足够的网页资料或可发送图片。'
                             }
+                        } else if (call.name === 'web_fetch') {
+                            const formattedResult = toolRegistry.formatToolResult('web_fetch', result.data)
+                            userMessage += formattedResult
+                            if (result.data?.usableEvidence !== true) {
+                                userMessage += '\n【重要指令】本次抓取没有得到可用网页正文。不得根据错误页、跳转页、搜索页或短文本猜测网页内容；应改找直接来源，或明确告诉用户无法核实。'
+                            }
+                            logger.info(`[AI-Plugin] web_fetch 完成，证据质量=${result.data?.quality || 'unknown'}，可用=${result.data?.usableEvidence === true}`)
                         } else if (call.name === 'shell_exec') {
                             suppressAutoFastChatContext = true
                             const formattedResult = toolRegistry.formatToolResult('shell_exec', result.data)
@@ -2721,12 +2754,31 @@ export class ChatHandler extends plugin {
                             userMessage = userMessage + '\n\n【重要指令】以上为群管理工具的实际执行结果，请如实转告操作者，不要编造结果。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else {
-                            userMessage = userMessage + result.data
+                            userMessage = userMessage + toolRegistry.formatToolResult(call.name, result.data)
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         }
                     }
 
                     agentObservationHistory.push(...roundObservations)
+
+                    if (roundToolCalls.some(call => call.name === 'web_search' || call.name === 'web_fetch')) {
+                        const webFingerprint = buildWebEvidenceFingerprint(webEvidenceState)
+                        webEvidenceStagnationState = updateAgentStagnationState(webEvidenceStagnationState, webFingerprint)
+                        if (webEvidenceStagnationState.shouldStop) {
+                            agentTaskLatestObservation = `${agentTaskLatestObservation}\n连续多轮联网检索没有增加新的独立直接来源或可用正文，已停止改写关键词式空转。`.trim()
+                            agentTaskFinalStatus = 'blocked'
+                            userMessage += '\n\n【联网检索停止条件】连续多轮没有获得新证据。停止继续搜索；最终回答必须明确说明证据不足，不得补写日期、因果、违法结论、他人反应或事件后续。'
+                            if (agentTask) {
+                                agentTask = await updateAgentTaskProgress(this.conversationManager.db, agentTask, {
+                                    status: 'blocked',
+                                    summary: agentTaskLatestSummary,
+                                    lastObservation: agentTaskLatestObservation
+                                }, { logger, logPrefix: '[AI-Plugin] Agent任务' })
+                            }
+                            logger.warn(`[AI-Plugin] 联网证据连续 ${webEvidenceStagnationState.repeatCount + 1} 轮无增长，提前停止`)
+                            break
+                        }
+                    }
 
                     if (roundObservations.length > 0 && agentTask) {
                         const roundSummary = await summarizeAgentRound(this.client, modelGroupKey, providerFilter, {
@@ -2823,7 +2875,18 @@ export class ChatHandler extends plugin {
                         agentTaskLatestObservation = `${agentTaskLatestObservation}\n代码已修改，但轮次预算耗尽，必需的静态校验尚未执行。`.trim()
                     }
                     if (agentRound >= AGENT_LOOP_MAX_ROUNDS) {
-                        logger.info(`[AI-Plugin] Agent 达到最大轮数 ${AGENT_LOOP_MAX_ROUNDS}，停止循环`)
+                        if (agentTaskFinalStatus !== 'ready' && agentTaskFinalStatus !== 'waiting') {
+                            agentTaskFinalStatus = 'blocked'
+                            agentTaskLatestObservation = `${agentTaskLatestObservation}\n已达到最大规划轮数，但任务仍未形成可验证的完成证据。`.trim()
+                            if (agentTask) {
+                                agentTask = await updateAgentTaskProgress(this.conversationManager.db, agentTask, {
+                                    status: 'blocked',
+                                    summary: agentTaskLatestSummary,
+                                    lastObservation: agentTaskLatestObservation
+                                }, { logger, logPrefix: '[AI-Plugin] Agent任务' })
+                            }
+                        }
+                        logger.info(`[AI-Plugin] Agent 达到最大轮数 ${AGENT_LOOP_MAX_ROUNDS}，以 ${agentTaskFinalStatus || 'blocked'} 状态停止循环`)
                         break
                     }
                     if (shouldStopAgentLoop(roundToolCalls)) {
@@ -2937,7 +3000,7 @@ export class ChatHandler extends plugin {
                     }
                 }
 
-                if (!groupChatContextToolUsed && !suppressAutoFastChatContext) {
+                if (!groupChatContextToolUsed && !suppressAutoFastChatContext && !webResearchUsed) {
                     try {
                         const autoFastChatContextBlock = await buildAutoFastChatContextBlock(
                             this.client,
@@ -3049,6 +3112,10 @@ export class ChatHandler extends plugin {
 
             if (successfulToolResultCount > 0) {
                 userMessage += `\n\n【Agent证据账本】本轮成功工具结果=${successfulToolResultCount}，工具自身确定性验证=${verifiedToolResultCount}，任务验证状态=${agentTaskFinalStatus || 'continue'}。可以陈述工具返回的具体事实；只有任务状态为 ready 时才能声称整个任务完成。`
+            }
+            if (webResearchUsed) {
+                const domains = (webEvidenceState.domains || []).join('、') || '无'
+                userMessage += `\n\n【联网证据账本】证据质量=${webEvidenceState.quality || 'low'}；可用正文抓取=${webEvidenceState.usableFetchCount || 0}；独立直接来源=${(webEvidenceState.domains || []).length}（${domains}）；低质量/失败页面=${webEvidenceState.lowQualityCount || 0}。搜索摘要只是线索，不等于原文。若证据质量不足，必须明确说无法核实，并禁止自行补全具体日期、金额、动机、违法性质、因果关系、他人反应和事件后续。`
             }
 
             avatarImageInput = await buildAvatarImageInputContext(e, currentToolInstruction || originalUserMessage || userMessage, {
@@ -3321,7 +3388,8 @@ export class ChatHandler extends plugin {
                     hasActualToolResults: successfulToolResultCount > 0,
                     hasTaskCompletionEvidence
                 })
-                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim) {
+                let lowEvidenceOverclaim = hasOverconfidentLowEvidenceAnswer(finalResponseText, currentToolInstruction, webEvidenceState)
+                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || lowEvidenceOverclaim) {
                     logger.warn(`[AI-Plugin] 最终回复缺少可验证依据，触发一次纠正重试: ${rawResponseText.slice(0, 180)}`)
                     const retryPayload = {
                         contents: [
@@ -3333,7 +3401,9 @@ export class ChatHandler extends plugin {
                                         hasActualToolResults: successfulToolResultCount > 0,
                                         hasTaskCompletionEvidence,
                                         unsupportedToolClaim
-                                    })
+                                    }) + (lowEvidenceOverclaim
+                                        ? '\n本轮涉及可识别个人或组织的争议性联网调查，但证据质量不足。请重写：只列出能够由直接来源支持的内容；搜索摘要、转述和网传必须明确标注；若没找到原始材料就直接说无法核实。不得断言具体日期、金额、违法违规、动机、因果、他人反应或后续影响。'
+                                        : '')
                                 }]
                             }
                         ]
@@ -3348,11 +3418,14 @@ export class ChatHandler extends plugin {
                             hasActualToolResults: successfulToolResultCount > 0,
                             hasTaskCompletionEvidence
                         })
+                        lowEvidenceOverclaim = hasOverconfidentLowEvidenceAnswer(finalResponseText, currentToolInstruction, webEvidenceState)
                     }
                 }
-                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim) {
+                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || lowEvidenceOverclaim) {
                     logger.warn('[AI-Plugin] 最终回复纠正失败，使用安全提示替代无依据的完成声明')
-                    finalResponseText = '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。请再试一次；我会先真正调用工具并确认结果，再向你汇报。'
+                    finalResponseText = lowEvidenceOverclaim
+                        ? '这次只找到搜索摘要、跳转页或不足以交叉验证的材料，没有拿到足够可靠的原始来源，所以我不能负责任地还原事件经过或断言相关指控。你可以把原帖、视频、截图或更明确的来源发来，我再基于原始材料核对。'
+                        : '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。请再试一次；我会先真正调用工具并确认结果，再向你汇报。'
                     usedSafeFallbackReply = true
                 }
                 if (shellToolExecutionCount > 0) {
