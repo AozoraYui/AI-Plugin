@@ -10,7 +10,7 @@ import net from 'node:net'
 import sharp from 'sharp'
 import { hasExplicitImageSearchIntent } from '../utils/tool_intent.js'
 import { fetchWithProxy } from '../utils/common.js'
-import { assessSearchResults } from '../utils/web_evidence.js'
+import { assessSearchResults, classifyWebUrl } from '../utils/web_evidence.js'
 
 const SEARCH_TIMEOUT_MS = 15000
 const IMAGE_DOWNLOAD_TIMEOUT_MS = 18000
@@ -57,6 +57,10 @@ function decodeHtmlEntities(text = '') {
         .replace(/&quot;/g, '"')
         .replace(/&#39;/g, "'")
         .replace(/&nbsp;/g, ' ')
+        .replace(/&middot;/g, '·')
+        .replace(/&hellip;/g, '…')
+        .replace(/&ndash;/g, '–')
+        .replace(/&mdash;/g, '—')
         .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
         .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
 }
@@ -211,7 +215,7 @@ async function fetchSearchHtml(url, engineName) {
             })
         } catch (retryErr) {
             logger.warn(`[AI-Plugin] ${engineName} IPv4 fetch 仍失败，切换 Node HTTP/代理通道: ${retryErr.message}`)
-            res = await fetchWithProxy(url, { headers, timeout: SEARCH_TIMEOUT_MS })
+            res = await fetchWithProxy(url, { headers, timeout: SEARCH_TIMEOUT_MS, autoDetectProxy: true })
         }
     }
 
@@ -324,7 +328,8 @@ async function searchDuckDuckGoImages(query, count = 10) {
     if (!vqd) throw new Error('DuckDuckGo 图片搜索令牌提取失败')
     const imageApiUrl = `https://duckduckgo.com/i.js?l=wt-wt&o=json&q=${encodeURIComponent(query)}&vqd=${encodeURIComponent(vqd)}&f=,,,`
     const headers = {
-        'User-Agent': USER_AGENT,
+        // DuckDuckGo i.js 会对部分完整浏览器 UA 返回 403，最小 UA 反而是其稳定兼容路径。
+        'User-Agent': 'Mozilla/5.0',
         'Accept': 'application/json,text/javascript,*/*;q=0.8',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.7',
         'Referer': 'https://duckduckgo.com/',
@@ -346,7 +351,7 @@ async function searchDuckDuckGoImages(query, count = 10) {
             })
         } catch (retryErr) {
             logger.warn(`[AI-Plugin] DuckDuckGo 图片 API IPv4 fetch 仍失败，切换 Node HTTP/代理通道: ${retryErr.message}`)
-            response = await fetchWithProxy(imageApiUrl, { headers, timeout: SEARCH_TIMEOUT_MS })
+            response = await fetchWithProxy(imageApiUrl, { headers, timeout: SEARCH_TIMEOUT_MS, autoDetectProxy: true })
         }
     }
     if (!response.ok) throw new Error(`DuckDuckGo 图片 HTTP ${response.status}`)
@@ -387,7 +392,7 @@ async function searchSo360Images(query, count = 10) {
         response = await fetch(url, { headers, signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS) })
     } catch (err) {
         logger.warn(`[AI-Plugin] 360 图片 API 原生 fetch 失败，切换 Node HTTP/代理通道: ${err.message}`)
-        response = await fetchWithProxy(url, { headers, timeout: SEARCH_TIMEOUT_MS })
+        response = await fetchWithProxy(url, { headers, timeout: SEARCH_TIMEOUT_MS, autoDetectProxy: true })
     }
     if (!response.ok) throw new Error(`360 图片 HTTP ${response.status}`)
     const data = await response.json()
@@ -700,27 +705,49 @@ async function searchDuckDuckGo(query, count) {
     return results
 }
 
-async function searchYahoo(query, count) {
-    const url = `https://search.yahoo.com/search?p=${encodeURIComponent(query)}`
-    const html = await fetchSearchHtml(url, 'Yahoo')
+export function parseYahooSearchResults(html = '', count = 10) {
     const results = []
-    const itemRegex = /<h3[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?=<h3|<\/ol>|$)/gi
+    const itemRegex = /<div class="sw-Card Algo[^"]*">([\s\S]*?)(?=<div class="sw-CardBase"|<\/main>|$)/gi
     let match
 
     while ((match = itemRegex.exec(html)) !== null && results.length < count) {
-        const url = normalizeUrl(match[1])
-        const title = cleanText(match[2])
-        const itemHtml = match[0]
-        const snippetMatch = itemHtml.match(/<(?:p|div|span)[^>]*class="[^"]*(?:compText|fc-obsidian|lh-)[^"]*"[^>]*>([\s\S]*?)<\/(?:p|div|span)>/i)
-        const snippet = snippetMatch ? cleanText(snippetMatch[1]) : cleanText(itemHtml).replace(title, '').slice(0, 180) || '无摘要'
+        const itemHtml = match[1]
+        const titleMatch = itemHtml.match(/<a(?=[^>]*class="sw-Card__titleInner")(?=[^>]*href="([^"]+)")[^>]*>[\s\S]*?<h3[^>]*>([\s\S]*?)<\/h3>/i)
+        if (!titleMatch) continue
+        const url = normalizeUrl(titleMatch[1])
+        const title = cleanText(titleMatch[2])
+        const snippetMatch = itemHtml.match(/<p[^>]*class="sw-Card__summary"[^>]*>([\s\S]*?)<\/p>/i)
+        const snippet = snippetMatch ? cleanText(snippetMatch[1]) : '无摘要'
 
         if (isValidResult(title, url)) {
-            results.push({ title, url, snippet, source: 'Yahoo' })
+            results.push({ title, url, snippet, source: 'Yahoo Japan' })
         }
     }
 
+    return results
+}
+
+async function searchYahoo(query, count) {
+    const url = `https://search.yahoo.co.jp/search?p=${encodeURIComponent(query)}&ei=UTF-8`
+    const html = await fetchSearchHtml(url, 'Yahoo')
+    const results = parseYahooSearchResults(html, count)
+
     logger.info(`[AI-Plugin] Yahoo 搜索返回 ${results.length} 条结果`)
     return results
+}
+
+function rankSearchResults(results = []) {
+    return [...results].sort((left, right) => {
+        const leftInfo = classifyWebUrl(left?.url || '')
+        const rightInfo = classifyWebUrl(right?.url || '')
+        if (leftInfo.direct !== rightInfo.direct) return leftInfo.direct ? -1 : 1
+        return Number(right?.relevanceScore || 0) - Number(left?.relevanceScore || 0)
+    })
+}
+
+export function prepareSearchResults(query, candidates = [], count = 5) {
+    const relevant = filterRelevantSearchResults(query, candidates)
+    return rankSearchResults(relevant).slice(0, count)
 }
 
 async function searchSo360(query, count) {
@@ -746,29 +773,6 @@ async function searchSo360(query, count) {
     return results
 }
 
-async function searchSogou(query, count) {
-    const url = `https://www.sogou.com/web?query=${encodeURIComponent(query)}`
-    const html = await fetchSearchHtml(url, '搜狗')
-    const results = []
-    const itemRegex = /<h3[^>]*>[\s\S]*?<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h3>([\s\S]*?)(?=<h3|<div class="(?:vrwrap|rb)"|$)/gi
-    let match
-
-    while ((match = itemRegex.exec(html)) !== null && results.length < count) {
-        const url = normalizeUrl(match[1])
-        const title = cleanText(match[2])
-        const tailHtml = match[3]
-        const snippetMatch = tailHtml.match(/<p[^>]*class="[^"]*str_info[^"]*"[^>]*>([\s\S]*?)<\/p>/i) || tailHtml.match(/<p[^>]*>([\s\S]*?)<\/p>/i)
-        const snippet = snippetMatch ? cleanText(snippetMatch[1]) : '无摘要'
-
-        if (isValidResult(title, url)) {
-            results.push({ title, url, snippet, source: '搜狗' })
-        }
-    }
-
-    logger.info(`[AI-Plugin] 搜狗搜索返回 ${results.length} 条结果`)
-    return results
-}
-
 function mergeSearchResults(resultGroups, limit) {
     const merged = []
     const seen = new Set()
@@ -790,7 +794,7 @@ function mergeSearchResults(resultGroups, limit) {
 }
 
 /**
- * 搜索网络：Bing + 百度并行主搜索，DuckDuckGo/Yahoo/360 补位，搜狗兜底
+ * 搜索网络：Bing + 百度并行主搜索，DuckDuckGo/Yahoo Japan/360 补位
  * @param {string} query - 搜索关键词
  * @param {number} count - 返回结果数量
  * @returns {Promise<object>} 结构化搜索结果与证据质量信息
@@ -809,11 +813,12 @@ async function searchWeb(query, count = 5) {
     const mainGroups = mainRuns.map(run => run.results)
 
     let mergedCandidates = mergeSearchResults(mainGroups, candidateCount)
-    let merged = filterRelevantSearchResults(query, mergedCandidates).slice(0, count)
+    let merged = prepareSearchResults(query, mergedCandidates, count)
+    let assessment = assessSearchResults(merged)
     let fallbackGroups = []
 
-    if (merged.length < count) {
-        logger.info(`[AI-Plugin] 主搜索结果不足 (${merged.length}/${count})，启用冗余搜索源补位`)
+    if (assessment.usableEvidenceCount < count) {
+        logger.info(`[AI-Plugin] 主搜索直接来源不足 (${assessment.usableEvidenceCount}/${count})，启用冗余搜索源补位`)
         const fallbackRuns = await Promise.all([
             runSearchEngine('DuckDuckGo', () => searchDuckDuckGo(query, candidateCount)),
             runSearchEngine('Yahoo', () => searchYahoo(query, candidateCount)),
@@ -823,24 +828,11 @@ async function searchWeb(query, count = 5) {
         engineRuns.push(...fallbackRuns)
 
         mergedCandidates = mergeSearchResults([...mainGroups, ...fallbackGroups], candidateCount)
-        merged = filterRelevantSearchResults(query, mergedCandidates).slice(0, count)
-    }
-
-    if (merged.length < count) {
-        logger.info(`[AI-Plugin] 搜索结果仍不足 (${merged.length}/${count})，使用搜狗兜底补位`)
-        try {
-            const sogouRun = await runSearchEngine('搜狗', () => searchSogou(query, candidateCount))
-            engineRuns.push(sogouRun)
-            const sogouResults = sogouRun.results
-            mergedCandidates = mergeSearchResults([...mainGroups, ...fallbackGroups, sogouResults], candidateCount)
-            merged = filterRelevantSearchResults(query, mergedCandidates).slice(0, count)
-        } catch (err) {
-            logger.warn(`[AI-Plugin] 搜狗兜底搜索异常: ${err.message}`)
-        }
+        merged = prepareSearchResults(query, mergedCandidates, count)
+        assessment = assessSearchResults(merged)
     }
 
     logger.info(`[AI-Plugin] 搜索相关性过滤: 候选=${mergedCandidates.length}, 通过=${merged.length}, 严格模式=${strictRelevance}`)
-    const assessment = assessSearchResults(merged)
     return {
         query,
         results: assessment.results,

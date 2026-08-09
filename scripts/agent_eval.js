@@ -39,7 +39,8 @@ const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMe
 const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq_face.js')
 const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
-const { buildBingImageSearchUrl, extractPageImageUrls, filterRelevantSearchResults, parseSo360ImageResults, scoreSearchResultRelevance } = await import('../tools/search.js')
+const { buildBingImageSearchUrl, extractPageImageUrls, filterRelevantSearchResults, parseSo360ImageResults, parseYahooSearchResults, prepareSearchResults, scoreSearchResultRelevance } = await import('../tools/search.js')
+const { getProxyCandidates } = await import('../utils/common.js')
 const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
 const { executePendingShellExec, shellExecTool } = await import('../tools/shell_exec.js')
@@ -1465,6 +1466,29 @@ check('纯图片回复策略禁止机械描述和无关劝睡', (() => {
 check('百度搜索中转链接不会被当作原始来源', (() => {
     const result = classifyWebUrl('https://www.baidu.com/link?url=abc123')
     return result.category === 'search_redirect' && result.autoFetchEligible === false
+})())
+check('搜索网络失败时会候选探测 Clash 常见本地端口', (() => {
+    const candidates = getProxyCandidates({ autoDetectProxy: true })
+    return candidates.includes('http://127.0.0.1:7897/') && candidates.includes('http://127.0.0.1:7890/')
+})())
+check('显式代理地址优先于自动探测候选', (() => {
+    const candidates = getProxyCandidates({ proxyUrl: 'http://proxy.example:8080', autoDetectProxy: true })
+    return candidates[0] === 'http://proxy.example:8080/'
+})())
+check('Yahoo Japan 新版卡片结构可以提取直接来源', (() => {
+    const html = '<div class="sw-CardBase"><div class="sw-Card Algo Algo-anotherSuggest"><section><a href="https://example.com/article" class="sw-Card__titleInner"><h3 class="sw-Card__titleMain"><span>示例标题</span></h3></a><p class="sw-Card__summary">这是足够清晰的示例摘要 &middot; 包含正文线索</p></section></div></div><div class="sw-CardBase">'
+    const results = parseYahooSearchResults(html, 5)
+    return results.length === 1
+        && results[0].url === 'https://example.com/article'
+        && results[0].title === '示例标题'
+        && results[0].snippet.includes('·')
+})())
+check('聚合搜索优先保留直接来源而不是搜索中转页', (() => {
+    const results = prepareSearchResults('测试主题', [
+        { title: '中转结果', url: 'https://www.baidu.com/link?url=abc', snippet: '测试主题的搜索中转摘要内容足够长。' },
+        { title: '直接结果', url: 'https://example.com/article', snippet: '测试主题的直接来源摘要内容足够长。' }
+    ], 1)
+    return results.length === 1 && results[0].url === 'https://example.com/article'
 })())
 check('360 图片搜索页不会被当作文章正文', (() => {
     const result = classifyWebUrl('https://image.so.com/i?q=test')

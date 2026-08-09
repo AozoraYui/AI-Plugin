@@ -2,6 +2,7 @@ import https from 'https'
 import http from 'http'
 import fs from 'node:fs'
 import path from 'node:path'
+import net from 'node:net'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { Config, expandPrompt } from './config.js'
 
@@ -42,11 +43,85 @@ export async function setMsgEmojiLike(e, emojiID) {
     }
 }
 
+const LOCAL_PROXY_PORTS = [7897, 7890, 7891, 10809, 1080]
+let autoProxyCache = { url: '', expiresAt: 0 }
+let lastAutoProxyLog = { url: '', at: 0 }
+
+function normalizeProxyUrl(value = '') {
+    const raw = String(value || '').trim()
+    if (!raw) return ''
+    try {
+        const parsed = new URL(raw.includes('://') ? raw : `http://${raw}`)
+        if (!['http:', 'https:'].includes(parsed.protocol)) return ''
+        return parsed.toString()
+    } catch {
+        return ''
+    }
+}
+
+function canConnect(host, port, timeout = 180) {
+    return new Promise(resolve => {
+        const socket = net.createConnection({ host, port })
+        const finish = result => {
+            socket.destroy()
+            resolve(result)
+        }
+        socket.setTimeout(timeout)
+        socket.once('connect', () => finish(true))
+        socket.once('timeout', () => finish(false))
+        socket.once('error', () => finish(false))
+    })
+}
+
+export function getProxyCandidates(options = {}) {
+    const values = [
+        options.proxyUrl,
+        Config.USE_PROXY ? Config.PROXY_URL : '',
+        process.env.HTTPS_PROXY,
+        process.env.HTTP_PROXY,
+        process.env.ALL_PROXY,
+        process.env.https_proxy,
+        process.env.http_proxy,
+        process.env.all_proxy
+    ]
+    if (options.autoDetectProxy === true) {
+        values.push(Config.PROXY_URL)
+        values.push(...LOCAL_PROXY_PORTS.map(port => `http://127.0.0.1:${port}`))
+    }
+    return [...new Set(values.map(normalizeProxyUrl).filter(Boolean))]
+}
+
+export async function resolveProxyUrl(options = {}) {
+    const explicitCandidates = getProxyCandidates({ ...options, autoDetectProxy: false })
+    if (explicitCandidates.length > 0) return explicitCandidates[0]
+    if (options.autoDetectProxy !== true) return ''
+    const candidates = getProxyCandidates(options)
+    if (candidates.length === 0) return ''
+    if (options.autoDetectProxy === true && autoProxyCache.expiresAt > Date.now() && candidates.includes(autoProxyCache.url)) {
+        return autoProxyCache.url
+    }
+    for (const candidate of candidates) {
+        try {
+            const parsed = new URL(candidate)
+            const port = Number(parsed.port) || (parsed.protocol === 'https:' ? 443 : 80)
+            if (await canConnect(parsed.hostname, port)) {
+                if (options.autoDetectProxy === true) {
+                    autoProxyCache = { url: candidate, expiresAt: Date.now() + 60_000 }
+                }
+                return candidate
+            }
+        } catch { /* 尝试下一个候选代理 */ }
+    }
+    return ''
+}
+
 export async function fetchWithProxy(url, options = {}) {
-    const agent = Config.USE_PROXY ? new HttpsProxyAgent(Config.PROXY_URL) : null
+    const proxyUrl = await resolveProxyUrl(options)
+    const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : null
     const requestTimeout = options.timeout || 600000
-    return new Promise((resolve, reject) => {
-        const urlObj = new URL(url)
+    const maxRedirects = Math.max(0, Math.min(10, Number(options.maxRedirects ?? 5) || 0))
+    const request = (targetUrl, redirectCount = 0) => new Promise((resolve, reject) => {
+        const urlObj = new URL(targetUrl)
         const httpModule = urlObj.protocol === 'https:' ? https : http
         const requestOptions = {
             hostname: urlObj.hostname,
@@ -58,6 +133,13 @@ export async function fetchWithProxy(url, options = {}) {
             timeout: requestTimeout
         }
         const req = httpModule.request(requestOptions, (res) => {
+            const location = res.headers.location
+            if (location && res.statusCode >= 300 && res.statusCode < 400 && options.redirect !== 'manual' && redirectCount < maxRedirects) {
+                res.resume()
+                const nextUrl = new URL(location, targetUrl).toString()
+                resolve(request(nextUrl, redirectCount + 1))
+                return
+            }
             const chunks = []
             res.on('data', chunk => chunks.push(chunk))
             res.on('end', () => {
@@ -73,6 +155,8 @@ export async function fetchWithProxy(url, options = {}) {
                 resolve({
                     ok: res.statusCode >= 200 && res.statusCode < 300,
                     status: res.statusCode,
+                    url: targetUrl,
+                    headers: res.headers,
                     text: () => Promise.resolve(data),
                     json: jsonResponse,
                     arrayBuffer: () => Promise.resolve(buffer)
@@ -84,6 +168,11 @@ export async function fetchWithProxy(url, options = {}) {
         if (options.body) req.write(options.body)
         req.end()
     })
+    if (proxyUrl && options.autoDetectProxy === true && (lastAutoProxyLog.url !== proxyUrl || Date.now() - lastAutoProxyLog.at > 60_000)) {
+        logger.info(`[AI-Plugin] 网络请求自动使用本地代理: ${proxyUrl}`)
+        lastAutoProxyLog = { url: proxyUrl, at: Date.now() }
+    }
+    return request(url)
 }
 
 export async function urlToBuffer(url) {
