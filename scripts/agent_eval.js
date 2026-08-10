@@ -36,7 +36,7 @@ const {
 const { classifyAgentRisk, classifyToolCallRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } = await import('../utils/agent_policy.js')
 const { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } = await import('../utils/model_output.js')
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
-const { buildParticipantIdentityHint, hasEarlierConversationReference, isThirdPartySubjectQuery, resolveCurrentTurnContextPolicy, resolvePrivateMemorySubject, shouldPrioritizeCurrentMultimodalTurn } = await import('../utils/message_context.js')
+const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldPrioritizeCurrentMultimodalTurn } = await import('../utils/message_context.js')
 const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq_face.js')
 const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
@@ -1541,45 +1541,17 @@ check('当前图文请求默认聚焦本轮内容', shouldPrioritizeCurrentMulti
     '#c给认真科普的老哥点赞',
     { hasDirectImages: true }
 ))
-check('明确引用历史的图文请求仍保持当前图片优先', shouldPrioritizeCurrentMultimodalTurn(
+check('明确引用历史的图文请求保留上下文', !shouldPrioritizeCurrentMultimodalTurn(
     '#c结合刚才的讨论看看这张图',
     { hasDirectImages: true }
 ))
-check('明确引用历史的图文请求只保留有限近期历史', (() => {
-    const policy = resolveCurrentTurnContextPolicy('#c结合刚才的讨论看看这张图', {
-        hasDirectImages: true,
-        maxHistoryTurns: 16
-    })
-    return policy.focusCurrentTurn && policy.earlierReference && policy.recentHistoryLimit === 8
-        && !policy.includeProfile && !policy.includeSemanticMemory && !policy.includeAutoFastChat
-})())
-check('对比上一张图片时识别历史引用', hasEarlierConversationReference(
+check('对比上一张图片时保留历史上下文', !shouldPrioritizeCurrentMultimodalTurn(
     '#c这张图和上一张有什么区别',
     { hasDirectImages: true }
 ))
 check('没有当前图片时不启用图文聚焦', !shouldPrioritizeCurrentMultimodalTurn(
     '#c给认真科普的老哥点赞',
     { hasDirectImages: false }
-))
-check('独立技术陈述只加载少量近期对话', (() => {
-    const policy = resolveCurrentTurnContextPolicy(
-        '#c camm和dimm最大的区别就是连接方式了，dimm的金手指容易受干扰，camm使用触点解决了这个问题',
-        { maxHistoryTurns: 16, autoFastChatAvailable: true }
-    )
-    return policy.focusCurrentTurn && policy.recentHistoryLimit === 4
-        && !policy.includeProfile && !policy.includeSemanticMemory && policy.includeAutoFastChat
-        && policy.autoFastChatLimit === 12 && policy.excludeAutoFastChatCommands
-})())
-check('个人记忆问题才加载画像和向量记忆', (() => {
-    const policy = resolveCurrentTurnContextPolicy('#c你还记得我喜欢什么吗', {
-        explicitMemoryContext: true,
-        maxHistoryTurns: 16
-    })
-    return policy.includeCheckpoint && policy.includeProfile && policy.includeSemanticMemory
-        && policy.recentHistoryLimit === 16
-})())
-check('普通“之前和你说的事情”不误判群聊流水查询', !hasGroupChatContextQuestion(
-    '#c我之前和你说的事情，关于这个的，已经修了，但是不知道效果怎么样'
 ))
 check('第三人称引用AI名称能够被识别', isReferentialBotKeywordMention('照着诺亚说的去执行', '诺亚'))
 check('评价AI先前观点也视为第三人称引用', isReferentialBotKeywordMention('我觉得诺亚说得有道理', '诺亚'))

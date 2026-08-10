@@ -695,13 +695,12 @@ export function hasGroupChatContextQuestion(text) {
     if (hasNonChatRecordDomain(value)) return false
     if (hasStrongGroupChatContextQuestion(value)) return true
 
-    const contextVerbs = '(?:聊(?:了|过)?(?:啥|什么|些啥|些什么)|在聊(?:啥|什么)|水(?:了|过)?(?:啥|什么|些啥|些什么)|在水(?:啥|什么)|说(?:了|过)?(?:啥|什么|些啥|些什么)|在说(?:啥|什么)|发(?:了|过)?(?:啥|什么|些啥|些什么)|发生(?:了)?(?:啥|什么|什么事)|什么情况|啥情况|咋了|怎么了|在干嘛|在干什么|前情|前情提要|总结|概括|回顾|消息|流水)'
+    const contextVerbs = '(?:聊(?:了|过)?(?:啥|什么|些啥|些什么)?|在聊(?:啥|什么)|水(?:了|过)?(?:啥|什么|些啥|些什么)?|在水(?:啥|什么)|说(?:了|过)?(?:啥|什么|些啥|些什么)?|在说(?:啥|什么)|发(?:了|过)?(?:啥|什么|些啥|些什么)?|发生(?:了)?(?:啥|什么|什么事)?|什么情况|啥情况|咋了|怎么了|在干嘛|在干什么|前情|前情提要|总结|概括|回顾|消息|流水)'
     const timeWords = '(?:刚才|刚刚|之前|前面|最近|这会儿|刚才那会儿|我不在的时候|我没看的时候)'
-    const currentGroupWords = '(?:他们|她们|大家|群里|群内|群聊|群消息|这群|这个群|本群|这里)'
+    const currentGroupWords = '(?:他们|她们|大家|群里|群内|这群|这个群|这里|刚才|刚刚|之前|前面)'
     const crossGroupWords = '(?:所有群|全部群|跨群|各群|别的群|其他群|其它群|别群|那边群|别处群)'
 
     return new RegExp(`${currentGroupWords}.{0,28}${contextVerbs}|${contextVerbs}.{0,20}(?:${timeWords}|群里|大家|他们|她们)`, 'i').test(value)
-        || new RegExp(`${timeWords}.{0,20}${contextVerbs}|${contextVerbs}.{0,20}${timeWords}`, 'i').test(value)
         || new RegExp(`${crossGroupWords}.{0,28}${contextVerbs}|${contextVerbs}.{0,20}${crossGroupWords}`, 'i').test(value)
         || /(?:我不在|没看群|漏看).{0,24}(?:聊|说|发|发生|总结|前情)/i.test(value)
 }
