@@ -343,13 +343,18 @@ export class ManagementHandler extends plugin {
             message: `🧠 思考过程显示: ${thinkingStatus}`
         }]
         
-        // 保持配置文件中的供应商顺序
-        const sortedProviders = [...this.client.modelsConfig]
-        
-        // 收集所有模型组
+        const providers = [...this.client.modelsConfig]
         const allGroups = new Set()
-        sortedProviders.forEach(p => Object.keys(p.model_groups).forEach(g => allGroups.add(g)))
-        const sortedGroups = Array.from(allGroups).sort()
+        providers.forEach(provider => Object.keys(provider.model_groups || {}).forEach(groupName => allGroups.add(groupName)))
+        const preferredGroupOrder = ['flash', 'pro', 'ultra']
+        const sortedGroups = [...allGroups].sort((a, b) => {
+            const aIndex = preferredGroupOrder.indexOf(String(a).toLowerCase())
+            const bIndex = preferredGroupOrder.indexOf(String(b).toLowerCase())
+            if (aIndex !== -1 || bIndex !== -1) {
+                return (aIndex === -1 ? preferredGroupOrder.length : aIndex) - (bIndex === -1 ? preferredGroupOrder.length : bIndex)
+            }
+            return String(a).localeCompare(String(b))
+        })
         
         const buildStatusText = (status, statusKey) => {
             if (this.client.disabledModels.has(statusKey)) {
@@ -382,65 +387,74 @@ export class ManagementHandler extends plugin {
             return `━━ ${title} ━━`
         }
 
-        for (const provider of sortedProviders) {
-            const groupsWithModels = []
+        const modelsByGroup = new Map()
+        for (const provider of providers) {
             for (const groupName of sortedGroups) {
-                const group = provider.model_groups[groupName]
+                const group = provider.model_groups?.[groupName]
                 if (!group) continue
-                
-                const sections = []
-                if (group.chat_models) {
-                    const chatModels = group.chat_models.map(modelId => {
-                        const modelConfig = this.client.resolveModelConfig(modelId, provider.id)
-                        const modelKey = modelConfig?.id || modelId
-                        const actualModelId = modelConfig?.model_id || modelId
+                const groupModels = modelsByGroup.get(groupName) || { chat: [], draw: [] }
+                for (const type of ['chat', 'draw']) {
+                    const modelReferences = group[`${type}_models`]
+                    if (!Array.isArray(modelReferences)) continue
+                    for (const modelReference of modelReferences) {
+                        const modelConfig = this.client.resolveModelConfig(modelReference, provider.id)
+                        const modelKey = modelConfig?.id || modelReference
+                        const modelId = modelConfig?.model_id || modelReference
                         const statusKey = `${provider.id}-${modelKey}`
-                        const perCall = modelConfig?.per_call === true
-                        return { modelId: actualModelId, alias: modelConfig?.alias, status: this.client.modelStatus[statusKey], statusKey, perCall }
-                    })
-                    if (chatModels.length > 0) sections.push({ type: 'chat', label: '💬 chat', models: chatModels })
-                }
-                if (group.draw_models) {
-                    const drawModels = group.draw_models.map(modelId => {
-                        const modelConfig = this.client.resolveModelConfig(modelId, provider.id)
-                        const modelKey = modelConfig?.id || modelId
-                        const actualModelId = modelConfig?.model_id || modelId
-                        const statusKey = `${provider.id}-${modelKey}`
-                        const perCall = modelConfig?.per_call === true
-                        return { modelId: actualModelId, alias: modelConfig?.alias, status: this.client.modelStatus[statusKey], statusKey, perCall }
-                    })
-                    if (drawModels.length > 0) sections.push({ type: 'draw', label: '🎨 draw', models: drawModels })
-                }
-                if (sections.length > 0) {
-                    groupsWithModels.push({ groupName, sections })
-                }
-            }
-            
-            if (groupsWithModels.length === 0) continue
-
-            let providerMsg = `📦 [${provider.name}]\n`
-            
-            for (let gi = 0; gi < groupsWithModels.length; gi++) {
-                const { groupName, sections } = groupsWithModels[gi]
-                
-                if (gi > 0) providerMsg += `\n`
-                providerMsg += `${groupDisplay(groupName)}\n`
-                
-                for (let si = 0; si < sections.length; si++) {
-                    const { label, models } = sections[si]
-                    
-                    providerMsg += `  ${label}\n`
-                    
-                    for (let mi = 0; mi < models.length; mi++) {
-                        const { modelId, alias, status, statusKey, perCall } = models[mi]
-                        const costTag = perCall ? ' 💰按次' : ''
-                        const aliasText = alias && alias !== modelId ? `${alias} (${modelId})` : modelId
-                        providerMsg += `    • ${aliasText}${costTag}${buildStatusText(status, statusKey)}\n`
+                        groupModels[type].push({
+                            modelId,
+                            alias: modelConfig?.alias,
+                            status: this.client.modelStatus[statusKey],
+                            statusKey,
+                            perCall: modelConfig?.per_call === true,
+                            providerName: provider.name
+                        })
                     }
                 }
+                modelsByGroup.set(groupName, groupModels)
             }
-            
-            forwardMsgNodes.push({ user_id: Bot.uin, nickname: Config.AI_NAME, message: providerMsg.trimEnd() })
+        }
+
+        for (const groupName of sortedGroups) {
+            const groupModels = modelsByGroup.get(groupName)
+            if (!groupModels || (groupModels.chat.length === 0 && groupModels.draw.length === 0)) continue
+
+            const allModels = [...groupModels.chat, ...groupModels.draw]
+            const duplicateNames = new Set(
+                allModels
+                    .map(model => model.alias || model.modelId)
+                    .filter(name => allModels.filter(item => (item.alias || item.modelId) === name).length > 1)
+            )
+            let groupMessage = `${groupDisplay(groupName)}\n`
+            for (const [type, label] of [['chat', '💬 chat'], ['draw', '🎨 draw']]) {
+                const models = groupModels[type]
+                if (models.length === 0) continue
+                groupMessage += `  ${label}\n`
+                for (const model of models) {
+                    const costTag = model.perCall ? ' 💰按次' : ''
+                    const name = model.alias && model.alias !== model.modelId ? `${model.alias} (${model.modelId})` : model.modelId
+                    const sourceTag = duplicateNames.has(model.alias || model.modelId) ? ` [${model.providerName}]` : ''
+                    groupMessage += `    • ${name}${sourceTag}${costTag}${buildStatusText(model.status, model.statusKey)}\n`
+                }
+            }
+            forwardMsgNodes.push({ user_id: Bot.uin, nickname: Config.AI_NAME, message: groupMessage.trimEnd() })
+        }
+
+        const listedStatusKeys = new Set(
+            [...modelsByGroup.values()].flatMap(group => [...group.chat, ...group.draw].map(model => model.statusKey))
+        )
+        const relayModels = (this.client.visionModels || [])
+            .filter(model => !listedStatusKeys.has(`${model.provider_id}-${model.model_key || model.id || model.model_id}`))
+        if (relayModels.length > 0) {
+            let relayMessage = `━━ 👁 Vision Relay${this.client.enableVisionRelay ? '' : '（未启用）'} ━━\n`
+            for (const model of relayModels) {
+                const modelKey = model.model_key || model.id || model.model_id
+                const statusKey = `${model.provider_id}-${modelKey}`
+                const name = model.alias && model.alias !== model.model_id ? `${model.alias} (${model.model_id})` : model.model_id
+                const status = this.client.modelStatus[statusKey]
+                relayMessage += `  • ${name}${buildStatusText(status, statusKey)}\n`
+            }
+            forwardMsgNodes.push({ user_id: Bot.uin, nickname: Config.AI_NAME, message: relayMessage.trimEnd() })
         }
 
         return await Bot.makeForwardMsg(forwardMsgNodes)
