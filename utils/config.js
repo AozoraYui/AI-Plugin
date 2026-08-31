@@ -68,7 +68,7 @@ const defaultConfig = {
     FULL_CHUNK_SIZE: 128,
     // 距上次增量总结达到此完整对话轮数时自动触发增量总结
     // 使用场景: apps/chat.js 中 handleChat 自动触发增量总结
-    AUTO_SUMMARY_THRESHOLD: 8,
+    AUTO_SUMMARY_THRESHOLD: 16,
     // Redis 缓存过期时间（秒），用于缓存用户对话历史
     // 使用场景: model/conversation.js 中 getUserHistory/saveUserHistory
     REDIS_CACHE_EXPIRE_SECONDS: 604800,
