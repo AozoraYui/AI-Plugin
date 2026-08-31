@@ -332,31 +332,17 @@ export function normalizeModelGroup(value, fallback = 'flash') {
 
 export function hasExplicitModelGroup(prefix) {
     if (!prefix) return false
-    const p = String(prefix).toLowerCase().replace(/^\d+/, '').replace(/[vnw]/g, '')
+    const p = String(prefix).toLowerCase().replace(/[vnw]/g, '')
     return ['flash', 'f', 'pro', 'p', 'ultra', 'u'].includes(p)
 }
 
 export function resolveModelGroup(prefix, fallback = Config.DEFAULT_MODEL_GROUP) {
     const defaultGroup = normalizeModelGroup(fallback, 'flash')
     if (!prefix) return defaultGroup
-    // 剥离前导数字（数字用于临时指定供应商优先级，如 #2p手办化）
-    // 再剥离 chat 临时 flag（v/n/w），保留 f 作为 flash 模型组前缀。
-    const p = String(prefix).toLowerCase().replace(/^\d+/, '').replace(/[vnw]/g, '')
+    // 剥离 chat 临时 flag（v/n/w），保留 f 作为 Flash 模型组前缀。
+    const p = String(prefix).toLowerCase().replace(/[vnw]/g, '')
     if (!p) return defaultGroup
     return normalizeModelGroup(p, defaultGroup)
-}
-
-/**
- * 解析数字前缀为供应商优先级
- * 例如 prefix="3" → 3，用于临时指定某家供应商
- * @param {string} prefix - 前缀文本
- * @returns {number|null} 供应商优先级，或 null
- */
-export function resolveProviderPriority(prefix) {
-    if (!prefix) return null
-    const num = parseInt(prefix, 10)
-    if (isNaN(num) || num < 1 || num > 9) return null
-    return num
 }
 
 export function resolveModelDisplay(modelGroupKey) {

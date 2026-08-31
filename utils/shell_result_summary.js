@@ -41,7 +41,7 @@ ${JSON.stringify(data, null, 2)}
 - 控制在 800 字以内。`
 }
 
-export async function summarizeShellResultForReply(client, modelGroupKey, providerFilter, toolName, pending = {}, result = {}) {
+export async function summarizeShellResultForReply(client, modelGroupKey, toolName, pending = {}, result = {}) {
     if (result?.ok === false) {
         return `Shell 命令执行失败：${String(result.error || '未知错误').slice(0, 1000)}`
     }
@@ -53,7 +53,7 @@ export async function summarizeShellResultForReply(client, modelGroupKey, provid
     try {
         const response = await client.makeRequest('chat', {
             contents: [{ role: 'user', parts: [{ text: prompt }] }]
-        }, modelGroupKey, 1200, providerFilter)
+        }, modelGroupKey, 1200)
         const summary = sanitizePlainTextOutput(response?.data || '')
         if (response?.success && summary && !isPlanOnlyResponse(summary)) {
             return summary.slice(0, MAX_SUMMARY_CHARS)

@@ -76,7 +76,7 @@ ${observationText}
 
     const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
     try {
-        const result = await options.client.makeRequest('chat', payload, options.modelGroupKey || 'flash', 1400, options.providerFilter)
+        const result = await options.client.makeRequest('chat', payload, options.modelGroupKey || 'flash', 1400)
         if (!result?.success || !result.data) return null
         const parsed = parseJsonObject(result.data)
         if (!parsed) return null

@@ -52,14 +52,6 @@ export class HelpHandler extends plugin {
 > #us${chatCmd} [内容] / #ultras${chatCmd} [内容]
   单次对话模式（Ultra），不保存历史记录。
 
-> 🏷️ 数字前缀临时指定供应商
-  在 # 后直接加数字（1-9），临时使用对应优先级的供应商。
-  格式: #[数字][模型组前缀][命令] [内容]
-  > 示例: #3${chatCmd} 你好 → 使用 priority=3 的供应商
-  > 示例: #3f${chatCmd} 你好 → priority=3 + Flash 模型组
-  > 示例: #3p${chatCmd} 复杂问题 → priority=3 + Pro 模型组
-  > 示例: #3s${chatCmd} 临时提问 → priority=3 + 单次对话
-
 > 💡 所有对话指令都支持发送图片哦！
   > 示例: #${chatCmd} 你好呀！
   > 示例: #p${chatCmd} 这张图里是什么？ [图片]
@@ -67,7 +59,7 @@ export class HelpHandler extends plugin {
 > 🌐 临时功能开关（默认关闭，按需启用）
 > #${chatCmd}v [内容]
   临时启用图文转述（Vision Relay），强制用 Vision 模型描述图片。
-  全局开启后，仅当前模型组/指定供应商没有可用多模态模型时自动启用；有图请求会优先使用多模态模型。
+  全局开启后，仅当前模型组没有可用多模态模型时自动启用；有图请求会优先使用多模态模型。
 > #${chatCmd}n [内容]
   临时启用联网搜索，AI 自动判断是否搜索并注入结果。
 > #${chatCmd}w [URL]
@@ -143,14 +135,6 @@ export class HelpHandler extends plugin {
 --- 预设作图 ---
 > #画图预设列表
   查看所有可用指令，如 #手办化, #二次元化 等。
-> 🏷️ 数字前缀临时指定供应商
-  在指令前加数字（1-9），临时使用对应优先级的供应商。
-  格式: #[数字][模型组前缀][命令] [额外描述]
-  如 #3手办化、#3f手办化、#3p手办化、#3u手办化
-> 示例: #3手办化 → 默认模型组（${defaultModelDisplay}）+ priority=3 的供应商
-> 示例: #3f手办化 → Flash + priority=3 的供应商
-> 示例: #3p手办化 → Pro + priority=3 的供应商
-
 > 💡 在指令前加模型组前缀切换模型：
   #手办化        → 默认模型组（${defaultModelDisplay}）
   #f手办化       → Flash 模型组
@@ -168,8 +152,6 @@ export class HelpHandler extends plugin {
 > #u${drawCmd} [...] / #ultra${drawCmd} [...]
   使用 Ultra 模型组，效果更佳！
   > 示例: #u${drawCmd} 一个女孩在星空下看书
-> 💡 自定义作图同样支持数字前缀：如 #3${drawCmd}、#3f${drawCmd}、#3p${drawCmd}、#3u${drawCmd}
-
 --- 预设管理 (主人专用) ---
 > #画图预设列表pro
   查看详细预设列表（含Prompt内容）

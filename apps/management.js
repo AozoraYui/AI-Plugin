@@ -343,8 +343,8 @@ export class ManagementHandler extends plugin {
             message: `🧠 思考过程显示: ${thinkingStatus}`
         }]
         
-        // 按优先级排序供应商
-        const sortedProviders = [...this.client.modelsConfig].sort((a, b) => (a.priority ?? 1) - (b.priority ?? 1))
+        // 保持配置文件中的供应商顺序
+        const sortedProviders = [...this.client.modelsConfig]
         
         // 收集所有模型组
         const allGroups = new Set()
@@ -418,7 +418,7 @@ export class ManagementHandler extends plugin {
             
             if (groupsWithModels.length === 0) continue
 
-            let providerMsg = `📦 [${provider.name}] ⭐ 优先级 ${provider.priority ?? 1}\n`
+            let providerMsg = `📦 [${provider.name}]\n`
             
             for (let gi = 0; gi < groupsWithModels.length; gi++) {
                 const { groupName, sections } = groupsWithModels[gi]

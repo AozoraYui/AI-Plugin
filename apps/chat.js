@@ -5,7 +5,7 @@ import { Config, MODELS_CONFIG_FILE } from '../utils/config.js'
 import { AiClient } from '../client/AiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
-import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, getDBTimestamp, hasExplicitModelGroup, resolveModelGroup, resolveModelDisplay, resolveProviderPriority, formatDBTimestampToBeijing } from '../utils/common.js'
+import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, getDBTimestamp, hasExplicitModelGroup, resolveModelGroup, resolveModelDisplay, formatDBTimestampToBeijing } from '../utils/common.js'
 import { processImagesInBatches, trimInlineImagesToPayloadLimit } from '../utils/image.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedUserIds } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
@@ -192,9 +192,9 @@ async function getRecentImageCacheInfo(e) {
 }
 
 const MODEL_GROUP_PREFIX_PATTERN = '(?:flash|f|pro|p|ultra|u)'
-const CHAT_PREFIX_PATTERN = `((?:[1-9])?(?:${MODEL_GROUP_PREFIX_PATTERN})?[vnw]*)`
+const CHAT_PREFIX_PATTERN = `((?:${MODEL_GROUP_PREFIX_PATTERN})?[vnw]*)`
 const CHAT_FLAG_PATTERN = '([vnwf]*)'
-const DRAW_COMMAND_PREFIX_PATTERN = `(?:[1-9])?(?:${MODEL_GROUP_PREFIX_PATTERN})?`
+const DRAW_COMMAND_PREFIX_PATTERN = `(?:${MODEL_GROUP_PREFIX_PATTERN})?`
 
 function escapeRegex(text) {
     return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -286,7 +286,7 @@ function formatPendingActionForJudge(record = {}) {
     return `操作类型：${type}\n目标群：\n${groupLines}${message}`
 }
 
-async function judgePendingActionDecision(client, modelGroupKey, providerFilter, pending, instruction = '') {
+async function judgePendingActionDecision(client, modelGroupKey, pending, instruction = '') {
     const text = String(instruction || '').trim()
     if (!text) return { decision: 'none', reason: 'empty' }
     const standaloneCommand = parseStandalonePendingCommand(text)
@@ -320,7 +320,7 @@ ${text}
 {"decision":"confirm|cancel|none","reason":"一句很短的中文理由"}`
 
     const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
-    const result = await client.makeRequest('chat', payload, modelGroupKey, 256, providerFilter)
+    const result = await client.makeRequest('chat', payload, modelGroupKey, 256)
     if (!result.success || !result.data) {
         logger.warn(`[AI-Plugin] 待确认操作意图判断失败: ${result.error || '无返回'}`)
         return { decision: 'none', reason: 'classifier failed' }
@@ -334,7 +334,7 @@ ${text}
     return { decision, reason: String(parsed?.reason || '').slice(0, 160) }
 }
 
-async function handlePendingActionShortcut(e, instruction = '', client = null, modelGroupKey = Config.DEFAULT_MODEL_GROUP, providerFilter = null) {
+async function handlePendingActionShortcut(e, instruction = '', client = null, modelGroupKey = Config.DEFAULT_MODEL_GROUP) {
     if (!e?.user_id) return false
     const text = getPrimaryUserInstruction(instruction).trim()
     if (!text) return false
@@ -385,7 +385,7 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
         return false
     }
 
-    const judgement = await judgePendingActionDecision(client, modelGroupKey, providerFilter, pending, text)
+    const judgement = await judgePendingActionDecision(client, modelGroupKey, pending, text)
     logger.info(`[AI-Plugin] 待确认操作意图判断: ${judgement.decision}, reason=${judgement.reason || ''}`)
 
     if (judgement.decision === 'cancel') {
@@ -415,7 +415,7 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
             ? await executePendingShellExec(pending, e)
             : await executePendingShellSession(pending, e)
         await updatePendingActionAgentTask(e, pending, result, 'confirm')
-        const summary = await summarizeShellResultForReply(client, modelGroupKey, providerFilter, pending.type, pending, result)
+        const summary = await summarizeShellResultForReply(client, modelGroupKey, pending.type, pending, result)
         await e.reply(summary, true)
         return true
     }
@@ -758,7 +758,7 @@ async function recordAgentStep(db, task, step = {}) {
     })
 }
 
-async function summarizeAgentRound(client, modelGroupKey, providerFilter, task, round, observations = [], plan = {}) {
+async function summarizeAgentRound(client, modelGroupKey, task, round, observations = [], plan = {}) {
     const deterministic = summarizeDeterministicAgentRound(observations)
     if (deterministic) return deterministic
     if (!client?.makeRequest || observations.length === 0) return null
@@ -802,7 +802,7 @@ ${observationText}
 {"summary":"更新后的任务摘要","last_observation":"本轮最重要观察","completion_status":"continue|ready|waiting|blocked","next_hint":"如果需要继续，下一步建议；否则留空"}`
 
     const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
-    const result = await client.makeRequest('chat', payload, modelGroupKey, 1024, providerFilter)
+    const result = await client.makeRequest('chat', payload, modelGroupKey, 1024)
     if (!result.success || !result.data) {
         logger.warn(`[AI-Plugin] Agent观察摘要失败: ${result.error || '无返回'}`)
         return null
@@ -1490,7 +1490,7 @@ function formatHistoryForToolPlanner(history = [], maxTurns = 12, maxTextPerTurn
     return lines.join('\n')
 }
 
-async function askMainModelForToolPlan(client, modelGroupKey, providerFilter, options = {}) {
+async function askMainModelForToolPlan(client, modelGroupKey, options = {}) {
     const {
         userMessage = '',
         history = [],
@@ -1637,7 +1637,7 @@ ${agentRoundBlock}
 }`
 
     const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
-    const result = await client.makeRequest('chat', payload, modelGroupKey, 2048, providerFilter)
+    const result = await client.makeRequest('chat', payload, modelGroupKey, 2048)
     if (!result.success || !result.data) {
         logger.warn(`[AI-Plugin] 主模型工具规划失败: ${result.error || '无返回'}`)
         return { need_tools: false, planning_failed: true, reason: '主模型工具规划失败', error: result.error || '无返回' }
@@ -1661,7 +1661,7 @@ ${agentRoundBlock}
     return parsed
 }
 
-async function askMainModelForNextShellCommand(client, modelGroupKey, providerFilter, userMessage, executedCommands, round) {
+async function askMainModelForNextShellCommand(client, modelGroupKey, userMessage, executedCommands, round) {
     const prompt = `你是服务器 Shell 补查决策器。请根据用户原始需求和已经执行过的工具结果，判断是否还需要再执行一条 Shell 命令来补充信息。
 
 规则：
@@ -1693,7 +1693,7 @@ ${executedCommands.length > 0 ? executedCommands.map((cmd, i) => `${i + 1}. ${cm
 ${truncateForPrompt(userMessage, Config.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS)}`
 
     const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
-    const result = await client.makeRequest('chat', payload, modelGroupKey, 1024, providerFilter)
+    const result = await client.makeRequest('chat', payload, modelGroupKey, 1024)
     if (!result.success || !result.data) {
         logger.warn(`[AI-Plugin] Shell 补查决策失败: ${result.error || '无返回'}`)
         return null
@@ -1756,12 +1756,6 @@ export class ChatHandler extends plugin {
         const clean1 = stripChatFeatureFlags(prefix1)
         const clean2 = stripChatFeatureFlags(prefix2)
 
-        // 从 prefix1 和 prefix2 解析数字优先匹配（临时指定供应商）
-        const numericPriority = resolveProviderPriority(clean1) || resolveProviderPriority(clean2)
-        if (numericPriority) {
-            e._providerPriority = numericPriority
-        }
-
         let modelPrefix = ''
         if (hasExplicitModelGroup(clean1)) modelPrefix = clean1
         if (hasExplicitModelGroup(clean2)) modelPrefix = clean2
@@ -1797,9 +1791,6 @@ export class ChatHandler extends plugin {
         const cleanPrefix = stripChatFeatureFlags(prefix)
         const modelGroupKey = resolveModelGroup(cleanPrefix, Config.DEFAULT_MODEL_GROUP)
         const modelDisplay = resolveModelDisplay(modelGroupKey)
-
-        // 数字优先匹配：临时指定供应商（优先级高于 handleSingleChat 传递的）
-        const providerFilter = resolveProviderPriority(cleanPrefix) || e._providerPriority || null
 
         const startTime = Date.now()
         let allImages = []
@@ -2021,7 +2012,7 @@ export class ChatHandler extends plugin {
             // 工具调用：规则预路由优先；其余场景由主模型规划，意图模型只负责编译工具参数。
             const enabledTools = []
             const currentToolInstruction = originalUserMessage || getPrimaryUserInstruction(userMessage)
-            if (await handlePendingActionShortcut(e, currentToolInstruction, this.client, modelGroupKey, providerFilter)) {
+            if (await handlePendingActionShortcut(e, currentToolInstruction, this.client, modelGroupKey)) {
                 return true
             }
             let agentTask = null
@@ -2331,7 +2322,7 @@ export class ChatHandler extends plugin {
                         }
                     } else {
                         logger.info(`[AI-Plugin] 工具预路由未命中，进入主模型规划流程；工具候选裁剪: ${enabledTools.length} -> ${planningCandidates.tools.length} (${planningCandidates.tools.join(', ')})`)
-                        const mainToolPlan = await askMainModelForToolPlan(this.client, modelGroupKey, providerFilter, {
+                        const mainToolPlan = await askMainModelForToolPlan(this.client, modelGroupKey, {
                             userMessage,
                             history,
                             incrementalCheckpoint,
@@ -2789,7 +2780,7 @@ export class ChatHandler extends plugin {
                     }
 
                     if (roundObservations.length > 0 && agentTask) {
-                        const roundSummary = await summarizeAgentRound(this.client, modelGroupKey, providerFilter, {
+                        const roundSummary = await summarizeAgentRound(this.client, modelGroupKey, {
                             ...agentTask,
                             summary: agentTaskLatestSummary,
                             lastObservation: agentTaskLatestObservation
@@ -2946,7 +2937,7 @@ export class ChatHandler extends plugin {
                         break
                     }
 
-                    const nextPlan = await askMainModelForToolPlan(this.client, modelGroupKey, providerFilter, {
+                    const nextPlan = await askMainModelForToolPlan(this.client, modelGroupKey, {
                         userMessage,
                         history,
                         incrementalCheckpoint,
@@ -3040,7 +3031,7 @@ export class ChatHandler extends plugin {
                     // 翻页续读使用 "命令@offset" 作为去重键，允许同命令不同分页继续
                     const seenPagedKeys = new Set()
                     for (let round = 1; round <= Config.SHELL_EXEC_FOLLOWUP_MAX_ROUNDS; round++) {
-                        const decision = await askMainModelForNextShellCommand(this.client, modelGroupKey, providerFilter, userMessage, [...seenCommands], round)
+                        const decision = await askMainModelForNextShellCommand(this.client, modelGroupKey, userMessage, [...seenCommands], round)
                         if (!decision?.need_shell) {
                             logger.info(`[AI-Plugin] Shell 补查结束: ${decision?.reason || '无需补查'}`)
                             break
@@ -3146,7 +3137,7 @@ export class ChatHandler extends plugin {
             }
 
             // Vision Relay：flag v 强制启用，否则按全局配置 + 模型是否需要转述
-            const useVisionRelay = e._visionFlag || (this.client.enableVisionRelay && this.client._checkModelGroupNeedsVisionRelay(modelGroupKey, providerFilter))
+            const useVisionRelay = e._visionFlag || (this.client.enableVisionRelay && this.client._checkModelGroupNeedsVisionRelay(modelGroupKey))
             if (allImages.length > 0) {
                 // 图片编号替换：将文本中的 [图片] 替换为 [图片#N]，让AI能对应图片和发送者
                 let imgIndex = 0
@@ -3404,7 +3395,7 @@ export class ChatHandler extends plugin {
                 return true
             }
             
-            let result = await this.client.makeRequest('chat', currentPayload, modelGroupKey, 8192, providerFilter)
+            let result = await this.client.makeRequest('chat', currentPayload, modelGroupKey, 8192)
 
             if (result.success) {
                 let rawResponseText = String(result.data || '').trim()
@@ -3436,7 +3427,7 @@ export class ChatHandler extends plugin {
                             }
                         ]
                     }
-                    const retryResult = await this.client.makeRequest('chat', retryPayload, modelGroupKey, 8192, providerFilter)
+                    const retryResult = await this.client.makeRequest('chat', retryPayload, modelGroupKey, 8192)
                     if (retryResult.success && retryResult.data) {
                         result = retryResult
                         rawResponseText = String(retryResult.data).trim()

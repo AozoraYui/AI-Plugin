@@ -4,7 +4,7 @@ import { AiClient } from '../client/AiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { sessionManager } from '../utils/session.js'
-import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, resolveModelGroup, resolveModelDisplay, resolveProviderPriority } from '../utils/common.js'
+import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
 import fs from 'node:fs'
 import yaml from 'yaml'
@@ -12,7 +12,7 @@ import sharp from 'sharp'
 import { PRESETS_FILE } from '../utils/config.js'
 
 const DRAW_MODEL_PREFIX_PATTERN = '(?:flash|f|pro|p|ultra|u)'
-const DRAW_PREFIX_PATTERN = `((?:[1-9])?(?:${DRAW_MODEL_PREFIX_PATTERN})?)`
+const DRAW_PREFIX_PATTERN = `((?:${DRAW_MODEL_PREFIX_PATTERN})?)`
 
 function escapeRegex(text) {
     return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -73,7 +73,6 @@ export class ImageHandler extends plugin {
         if (!await checkAccess(e)) return true
 
         let modelGroupKey = resolveModelGroup('', Config.DEFAULT_MODEL_GROUP)
-        let providerFilter = null
         let isCustomCommand = false
         let instruction = ''
         let extraInstruction = ''
@@ -88,7 +87,6 @@ export class ImageHandler extends plugin {
             const prefix = match[1].toLowerCase()
             instruction = match[2].trim()
             modelGroupKey = resolveModelGroup(prefix, Config.DEFAULT_MODEL_GROUP)
-            providerFilter = resolveProviderPriority(prefix)
         } else {
             const dynamicRule = this.rule.find(r => r.key === 'dynamicImageCommand')
             if (dynamicRule) {
@@ -101,7 +99,6 @@ export class ImageHandler extends plugin {
                     command = match[2]
                     extraInstruction = (match[3] || '').trim()
                     modelGroupKey = resolveModelGroup(prefix, Config.DEFAULT_MODEL_GROUP)
-                    providerFilter = resolveProviderPriority(prefix)
                 }
             }
         }
@@ -174,7 +171,7 @@ export class ImageHandler extends plugin {
             }
 
             const payload = { "contents": [{ "parts": parts }] }
-            const result = await this.client.makeRequest('image', payload, modelGroupKey, 8192, providerFilter)
+            const result = await this.client.makeRequest('image', payload, modelGroupKey, 8192)
 
             if (result.success && result.data) {
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)

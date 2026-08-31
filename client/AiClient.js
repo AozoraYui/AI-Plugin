@@ -77,23 +77,16 @@ export class AiClient {
     }
 
     /** 检查当前模型组是否有可用多模态对话模型 */
-    _modelGroupHasMultimodalChatModel(modelGroupKey, providerFilter = null) {
-        let pool = this.activeModelPools[modelGroupKey]?.chat || []
-        if (providerFilter !== null) {
-            pool = pool.filter(item => item.provider.priority === providerFilter)
-        }
+    _modelGroupHasMultimodalChatModel(modelGroupKey) {
+        const pool = this.activeModelPools[modelGroupKey]?.chat || []
         return pool.some(item => item.modelConfig?.multimodal !== false)
     }
 
     /** 检查当前模型组是否所有对话模型都来自非多模态 provider（需要 Vision Relay） */
-    _checkModelGroupNeedsVisionRelay(modelGroupKey, providerFilter = null) {
+    _checkModelGroupNeedsVisionRelay(modelGroupKey) {
         const pool = this.activeModelPools[modelGroupKey]?.chat
         if (!pool || pool.length === 0) return true  // 无模型，保守启用
-        const scopedPool = providerFilter !== null
-            ? pool.filter(item => item.provider.priority === providerFilter)
-            : pool
-        if (scopedPool.length === 0) return true
-        return scopedPool.every(item => item.modelConfig?.multimodal === false)
+        return pool.every(item => item.modelConfig?.multimodal === false)
     }
 
     /**
@@ -311,21 +304,20 @@ export class AiClient {
         return successRate * 0.7 + latencyScore * 0.3
     }
 
-    /** 智能排序模型池：先按 provider priority 分组，再按成本档（按量优先），同档内按得分排序 */
+    /** 智能排序模型池：按可用性、成本档和健康得分排序 */
     _sortModelPool(pool) {
         const scored = pool.map(item => {
             const key = item.statusKey || `${item.provider.id}-${item.modelKey || item.modelId}`
             if (!this.modelStatus[key]) this._initModelStatusEntry(key)
-            const priority = item.provider.priority ?? 1
             const score = this._getModelScore(this.modelStatus[key])
             // 成本档：0=按量计费（优先），1=按次扣费（尽量避开）
             const costTier = item.perCall ? 1 : 0
-            return { ...item, score, priority, costTier }
+            return { ...item, score, costTier }
         })
 
-        // 排序优先级：priority 升 → 可用性（熔断排末尾）→ 成本档（按量优先）→ 得分降
+        // 熔断模型排末尾，随后优先使用按量模型，再按健康得分排序。
+        // 得分相同时保留配置中的供应商和模型顺序。
         scored.sort((a, b) => {
-            if (a.priority !== b.priority) return a.priority - b.priority
             // 熔断模型（score < 0）统一沉底，不参与成本/得分比较
             const aDown = a.score < 0
             const bDown = b.score < 0
@@ -335,7 +327,7 @@ export class AiClient {
         })
 
         const logging = scored.map(s =>
-            `${s.provider.name}(${s.modelId}) [P${s.priority}]${s.costTier ? '[按次]' : ''} 得分:${s.score.toFixed(2)}`
+            `${s.provider.name}(${s.modelId})${s.costTier ? '[按次]' : ''} 得分:${s.score.toFixed(2)}`
         ).join(', ')
         logger.debug(`[AI-Plugin] 模型排序: ${logging}`)
 
@@ -1155,22 +1147,10 @@ export class AiClient {
         throw new Error(`API业务错误: ${result.error}`)
     }
 
-    async makeRequest(type, payload, modelGroupKey = 'flash', maxTokens = 8192, providerFilter = null) {
+    async makeRequest(type, payload, modelGroupKey = 'flash', maxTokens = 8192) {
         let modelPool = this.activeModelPools[modelGroupKey]?.[type]
         const taskTypeName = type === 'image' ? '绘图' : '对话'
         let lastError = `模型组 [${modelGroupKey}] 中没有可用的 [${taskTypeName}] 模型。`
-
-        // 数字优先级过滤：临时指定某家供应商
-        if (providerFilter !== null && modelPool && modelPool.length > 0) {
-            const providerName = modelPool.find(m => m.provider.priority === providerFilter)?.provider?.name || `P${providerFilter}`
-            const filtered = modelPool.filter(m => m.provider.priority === providerFilter)
-            if (filtered.length > 0) {
-                modelPool = filtered
-                logger.info(`[AI-Plugin] 数字优先级过滤: 仅使用 ${providerName}(${filtered.length}个模型)`)
-            } else {
-                logger.warn(`[AI-Plugin] 数字优先级 ${providerFilter} 无匹配供应商，回退到完整模型池`)
-            }
-        }
 
         // 有图片的对话请求只交给多模态模型，避免纯文本模型接收图片导致失败
         if (type === 'chat' && this._payloadHasImages(payload) && modelPool && modelPool.length > 0) {

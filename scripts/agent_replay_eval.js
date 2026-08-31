@@ -361,7 +361,7 @@ const incidents = [
                 async makeRequest() {
                     return { success: true, data: '* **操作系统**：Gentoo Linux\n* **桌面环境**：`KDE Plasma`' }
                 }
-            }, 'flash', null, 'shell_session', {
+            }, 'flash', 'shell_session', {
                 userMessage: '在tmux执行fastfetch'
             }, {
                 ok: true,

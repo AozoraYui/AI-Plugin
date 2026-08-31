@@ -393,7 +393,7 @@ const summarizedShellReply = await summarizeShellResultForReply({
         shellSummaryPrompt = payload.contents[0].parts[0].text
         return { success: true, data: 'fastfetch 执行成功。系统使用 KDE Plasma，Shell 为 zsh。' }
     }
-}, 'flash', null, 'shell_session', {
+}, 'flash', 'shell_session', {
     userMessage: '在tmux执行fastfetch'
 }, {
     ok: true,
@@ -406,7 +406,7 @@ check('确认后的Shell输出只供模型阅读并返回摘要', shellSummaryPr
     && !summarizedShellReply.includes('FASTFETCH_MARKER'))
 const shellSummaryFallback = await summarizeShellResultForReply({
     async makeRequest() { return { success: false, error: '上游不可用' } }
-}, 'flash', null, 'shell_session', {}, {
+}, 'flash', 'shell_session', {}, {
     ok: true,
     output: 'RAW_OUTPUT_MUST_NOT_LEAK'
 })
