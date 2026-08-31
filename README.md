@@ -55,7 +55,7 @@
 - 有图片输入时会优先使用 `multimodal: true` 的对话模型，避免纯文本模型直接接收图片
 
 ### ⚙️ 模型管理
-- 多模型供应商支持，通过 `provider_id + model_id` 唯一标识模型
+- 独立模型配置，模型可分别声明 `alias`、供应商、实际 API 模型名与 `multimodal`
 - 模型优先级分组与智能排序（基于成功率与响应速度）
 - 成本感知调度：可标记按次扣费模型，同优先级内优先使用按量计费模型，按量模型全部不可用时才降级
 - 数字前缀临时指定供应商（如 `#3chat` 使用 priority=3 的供应商）
@@ -93,33 +93,34 @@ pnpm install
 
 在 `plugins/AI-Plugin/config/` 目录下创建或编辑以下文件（请根据模型能力以及响应速度综合评估后手动排序归类，此排序归类与模型名称无直接关联）：
 
-**`models_config.yaml`** - 模型供应商配置（YAML 多文档格式，用 `---` 分隔）
+**`models_config.yaml`** - 模型供应商与独立模型配置（YAML 多文档格式，用 `---` 分隔）
 
 ```yaml
-# 模型供应商列表
-- id: "provider1"
-  name: "供应商名称"
-  priority: 1          # 优先级分组（数字越小越优先）
-  multimodal: true     # 是否支持识图（默认 true）
-  base_url: "https://api.example.com/v1"
-  api_key: "your-api-key-here"
-  # per_call_models:   # 可选：该站按次扣费的模型名，调度时尽量避开
-  #   - "c-gemini-2.5-flash"
-  model_groups:
-    flash:
-      chat_models:
-        - "gemini-2.5-flash"
-      draw_models:
-        - "gemini-2.5-flash-image"
-    pro:
-      chat_models:
-        - "gemini-2.5-pro"
-      draw_models: []
-    ultra:
-      chat_models:
-        - "gemini-3-pro"
-      draw_models:
-        - "gemini-3-flash-image"
+# 新版推荐：供应商只保存连接信息，模型单独声明来源与能力。
+# 模型组可引用模型 id，也兼容 alias 与实际 API 模型名。
+providers:
+  - id: "provider1"
+    name: "供应商名称"
+    priority: 1
+    base_url: "https://api.example.com/v1"
+    api_key: "your-api-key-here"
+
+models:
+  - id: "gemini-flash"
+    alias: "flash"
+    provider: "provider1"
+    model: "gemini-2.5-flash"
+    multimodal: true
+  - id: "text-model"
+    alias: "text"
+    provider: "provider1"
+    model: "deepseek-chat"
+    multimodal: false
+
+model_groups:
+  flash:
+    chat_models: ["gemini-flash", "text-model"]
+    draw_models: []
 
 ---
 # 自定义指令关键词（可选，默认 chat/draw）
@@ -508,7 +509,7 @@ AI-Plugin/
 每个模型组可独立配置 `chat_models`（对话模型）和 `draw_models`（绘图模型）。
 
 #### 按次扣费模型（成本感知调度）
-部分中转站的模型按「每次请求固定计费」，而非按 token 计费。可在供应商下用 `per_call_models` 列出这些模型名：
+部分中转站的模型按「每次请求固定计费」，而非按 token 计费。新版可直接在模型上配置 `per_call: true`；旧版也可在供应商下用 `per_call_models` 列出这些模型名：
 
 ```yaml
 - id: "provider1"

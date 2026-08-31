@@ -5,6 +5,7 @@ import { Config, MODELS_CONFIG_FILE, MODEL_STATUS_FILE, DISABLED_MODELS_FILE, TE
 import { fetchWithProxy, normalizeModelGroup } from '../utils/common.js'
 import { ensureShellSession } from '../utils/shell_session.js'
 import { toolRegistry } from '../tools/index.js'
+import { normalizeModelConfigDocuments, resolveModelReference } from '../utils/model_config.js'
 
 // 熔断常量
 const CONSECUTIVE_FAILS_THRESHOLD = 3    // 连续失败 N 次后熔断
@@ -15,6 +16,7 @@ const ULTRA_CHAT_REQUEST_TIMEOUT_MS = 600000 // Ultra 长思考模型固定等�
 export class AiClient {
     constructor() {
         this.modelsConfig = []
+        this.modelDefinitions = []
         this.modelStatus = {}
         this.disabledModels = new Set()
         this.activeModelPools = {}
@@ -47,24 +49,15 @@ export class AiClient {
 
     /** 是否有可用的 Vision 模型 */
     get hasVisionModels() {
-        const v = this.visionRelayConfig?.vision_model
-        if (!v) return false
-        // 兼容旧格式（单对象）
-        if (v.provider_id && v.model_id) return true
-        // 新格式（列表）
-        if (Array.isArray(v) && v.length > 0) return v.some(m => m.provider_id && m.model_id)
-        return false
+        return this.visionModels.length > 0
     }
 
     /** Vision 模型配置列表（统一返回数组） */
     get visionModels() {
         const v = this.visionRelayConfig?.vision_model
         if (!v) return []
-        // 兼容旧格式（单对象）
-        if (v.provider_id && v.model_id) return [{ provider_id: v.provider_id, model_id: v.model_id }]
-        // 新格式（列表）
-        if (Array.isArray(v)) return v.filter(m => m.provider_id && m.model_id)
-        return []
+        const references = Array.isArray(v) ? v : [v]
+        return references.map(reference => this._resolveConfiguredModelReference(reference)).filter(Boolean)
     }
 
     /** 检查 payload 是否包含图片 */
@@ -89,7 +82,7 @@ export class AiClient {
         if (providerFilter !== null) {
             pool = pool.filter(item => item.provider.priority === providerFilter)
         }
-        return pool.some(item => item.provider.multimodal)
+        return pool.some(item => item.modelConfig?.multimodal !== false)
     }
 
     /** 检查当前模型组是否所有对话模型都来自非多模态 provider（需要 Vision Relay） */
@@ -100,7 +93,7 @@ export class AiClient {
             ? pool.filter(item => item.provider.priority === providerFilter)
             : pool
         if (scopedPool.length === 0) return true
-        return scopedPool.every(item => !item.provider.multimodal)
+        return scopedPool.every(item => item.modelConfig?.multimodal === false)
     }
 
     /**
@@ -120,7 +113,7 @@ export class AiClient {
                 continue
             }
             const startTime = Date.now()
-            const result = await this.attemptRequest('chat', payload, provider, modelConfig.model_id, 1024, 30000)
+            const result = await this.attemptRequest('chat', payload, provider, modelConfig.model_id, 1024, 30000, modelConfig)
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
             if (result.success) {
                 logger.info(`[AI-Plugin] 意图分析成功: ${provider.name}/${modelConfig.model_id}, 耗时 ${elapsed}s`)
@@ -217,9 +210,34 @@ export class AiClient {
 
     /** 搜索意图分析专用模型列表 */
     get webSearchIntentModels() {
-        const models = this.webSearchConfig?.intent_model
-        if (!models || !Array.isArray(models)) return []
-        return models.filter(m => m.provider_id && m.model_id)
+        const configured = this.webSearchConfig?.intent_model
+        if (!configured) return []
+        const models = Array.isArray(configured) ? configured : [configured]
+        return models.map(model => this._resolveConfiguredModelReference(model)).filter(Boolean)
+    }
+
+    _resolveConfiguredModelReference(reference) {
+        const providerId = typeof reference === 'string'
+            ? ''
+            : String(reference?.provider_id ?? reference?.provider ?? '').trim()
+        const modelReference = typeof reference === 'string'
+            ? reference
+            : reference?.model_id ?? reference?.model_identifier ?? reference?.model ?? reference?.id ?? reference?.alias
+        const model = this.resolveModelConfig(modelReference, providerId)
+        if (!model) return null
+        return {
+            ...model,
+            provider_id: model.provider_id,
+            model_id: model.model_id,
+            model_key: model.id
+        }
+    }
+
+    resolveModelConfig(modelReference, providerId = '') {
+        const definitions = providerId
+            ? this.modelDefinitions.filter(model => model.provider_id === providerId)
+            : this.modelDefinitions
+        return resolveModelReference(modelReference, definitions, providerId) || null
     }
 
     /** 初始化模型状态条目（兼容旧格式） */
@@ -301,7 +319,7 @@ export class AiClient {
     /** 智能排序模型池：先按 provider priority 分组，再按成本档（按量优先），同档内按得分排序 */
     _sortModelPool(pool) {
         const scored = pool.map(item => {
-            const key = `${item.provider.id}-${item.modelId}`
+            const key = item.statusKey || `${item.provider.id}-${item.modelKey || item.modelId}`
             if (!this.modelStatus[key]) this._initModelStatusEntry(key)
             const priority = item.provider.priority ?? 1
             const score = this._getModelScore(this.modelStatus[key])
@@ -331,6 +349,7 @@ export class AiClient {
 
     loadModelsConfig() {
         this.modelsConfig = []
+        this.modelDefinitions = []
         this.commandConfig = {}
         this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
         this.webSearchConfig = { enabled: false, intent_model: null }
@@ -355,7 +374,6 @@ export class AiClient {
                 .map(doc => doc?.toJS?.())
                 .filter(value => value !== null && value !== undefined)
 
-            const providersConfig = docValues.find(value => Array.isArray(value))
             const commandConfig = docValues.find(value => value && typeof value === 'object' && !Array.isArray(value) && (value.DEFAULT_MODEL_GROUP || value.CHAT_COMMAND || value.DRAW_COMMAND))
             const visionConfigDoc = docValues.find(value => value && typeof value === 'object' && !Array.isArray(value) && (value.enable_vision_relay !== undefined || value.vision_model !== undefined))
             const runtimeConfigDoc = docValues.find(value => value && typeof value === 'object' && !Array.isArray(value) && (
@@ -400,20 +418,11 @@ export class AiClient {
                 value.openweathermap_api_key !== undefined
             ))
 
-            if (providersConfig) {
-                const configs = providersConfig
-                if (Array.isArray(configs)) {
-                    for (const provider of configs) {
-                        if (!provider.model_groups || typeof provider.model_groups !== 'object') {
-                            logger.error(`[AI-Plugin] 供应商 ${provider.id} 的配置缺少 'model_groups'，已跳过。`)
-                            continue
-                        }
-                        this.modelsConfig.push(provider)
-                    }
-                    logger.debug(`[AI-Plugin] 成功加载 ${this.modelsConfig.length} 个供应商配置。`)
-                } else {
-                    throw new Error("模型配置文件格式不正确，第一个文档应为YAML数组。")
-                }
+            const normalized = normalizeModelConfigDocuments(docValues)
+            if (normalized.providers.length > 0) {
+                this.modelsConfig = normalized.providers
+                this.modelDefinitions = normalized.definitions
+                logger.debug(`[AI-Plugin] 成功加载 ${this.modelsConfig.length} 个供应商配置，${this.modelDefinitions.length} 个独立模型配置（${normalized.legacy ? '兼容旧格式' : '独立模型格式'}）。`)
             } else {
                 throw new Error("模型配置文件为空或格式不正确。")
             }
@@ -652,6 +661,14 @@ export class AiClient {
         return list.includes(modelId)
     }
 
+    _prepareModelStatusKey(statusKey, provider, modelConfig) {
+        const legacyKey = `${provider.id}-${modelConfig.model_id}`
+        if (!this.modelStatus[statusKey] && statusKey !== legacyKey && this.modelStatus[legacyKey]) {
+            this.modelStatus[statusKey] = { ...this.modelStatus[legacyKey] }
+        }
+        this._initModelStatusEntry(statusKey)
+    }
+
     _buildActiveModelPools() {
         this.activeModelPools = {}
 
@@ -668,23 +685,33 @@ export class AiClient {
                 const group = provider.model_groups[groupName]
 
                 if (group.chat_models) {
-                    for (const modelId of group.chat_models) {
-                        const statusKey = `${provider.id}-${modelId}`
+                    for (const modelReference of group.chat_models) {
+                        const modelConfig = this.resolveModelConfig(modelReference, provider.id)
+                        if (!modelConfig) {
+                            logger.warn(`[AI-Plugin] 模型组 ${groupName} 引用了不存在的模型: ${provider.id}/${modelReference}`)
+                            continue
+                        }
+                        const statusKey = `${provider.id}-${modelConfig.id}`
                         // 跳过手动禁用的模型
                         if (this.disabledModels.has(statusKey)) continue
-                        this._initModelStatusEntry(statusKey)
-                        const perCall = this._isPerCallModel(provider, modelId)
-                        this.activeModelPools[groupName].chat.push({ provider, modelId, perCall })
+                        this._prepareModelStatusKey(statusKey, provider, modelConfig)
+                        const perCall = modelConfig.per_call === true || this._isPerCallModel(provider, modelConfig.model_id)
+                        this.activeModelPools[groupName].chat.push({ provider, modelId: modelConfig.model_id, modelKey: modelConfig.id, modelConfig, perCall, statusKey })
                     }
                 }
                 if (group.draw_models) {
-                    for (const modelId of group.draw_models) {
-                        const statusKey = `${provider.id}-${modelId}`
+                    for (const modelReference of group.draw_models) {
+                        const modelConfig = this.resolveModelConfig(modelReference, provider.id)
+                        if (!modelConfig) {
+                            logger.warn(`[AI-Plugin] 模型组 ${groupName} 引用了不存在的模型: ${provider.id}/${modelReference}`)
+                            continue
+                        }
+                        const statusKey = `${provider.id}-${modelConfig.id}`
                         // 跳过手动禁用的模型
                         if (this.disabledModels.has(statusKey)) continue
-                        this._initModelStatusEntry(statusKey)
-                        const perCall = this._isPerCallModel(provider, modelId)
-                        this.activeModelPools[groupName].image.push({ provider, modelId, perCall })
+                        this._prepareModelStatusKey(statusKey, provider, modelConfig)
+                        const perCall = modelConfig.per_call === true || this._isPerCallModel(provider, modelConfig.model_id)
+                        this.activeModelPools[groupName].image.push({ provider, modelId: modelConfig.model_id, modelKey: modelConfig.id, modelConfig, perCall, statusKey })
                     }
                 }
             }
@@ -701,7 +728,7 @@ export class AiClient {
         this.saveModelStatus()
     }
 
-    buildRequest(type, payload, providerConfig, modelId, maxTokens = 8192) {
+    buildRequest(type, payload, providerConfig, modelId, maxTokens = 8192, modelConfig = null) {
         if (type === 'image' && this._isOpenAIImageModel(modelId)) {
             return this._buildDirectImageRequest(payload, providerConfig, modelId)
         }
@@ -717,7 +744,7 @@ export class AiClient {
             },
             body: JSON.stringify({
                 model: modelId,
-                messages: this.convertToOpenAIMessages(payload, providerConfig.multimodal !== false),
+                messages: this.convertToOpenAIMessages(payload, modelConfig?.multimodal !== false && providerConfig.multimodal !== false),
                 max_tokens: maxTokens,
                 stream: false,
             })
@@ -937,9 +964,9 @@ export class AiClient {
         }
     }
 
-    async attemptRequest(type, payload, provider, modelId, maxTokens = 8192, timeout = 0) {
+    async attemptRequest(type, payload, provider, modelId, maxTokens = 8192, timeout = 0, modelConfig = null) {
         try {
-            const { url, options } = this.buildRequest(type, payload, provider, modelId, maxTokens)
+            const { url, options } = this.buildRequest(type, payload, provider, modelId, maxTokens, modelConfig)
             if (timeout > 0) options.timeout = timeout
             
             // 检查请求体大小，防止 413 错误
@@ -1163,7 +1190,7 @@ export class AiClient {
 
         // 有图片的对话请求只交给多模态模型，避免纯文本模型接收图片导致失败
         if (type === 'chat' && this._payloadHasImages(payload) && modelPool && modelPool.length > 0) {
-            const multimodalPool = modelPool.filter(item => item.provider.multimodal)
+            const multimodalPool = modelPool.filter(item => item.modelConfig?.multimodal !== false)
             if (multimodalPool.length > 0) {
                 modelPool = multimodalPool
                 logger.info(`[AI-Plugin] 检测到图片输入，仅使用 ${multimodalPool.length} 个多模态对话模型`)
@@ -1189,10 +1216,10 @@ export class AiClient {
 
             lastError = ''
             const requestTimeout = this._resolveRequestTimeout(type, maxTokens, modelGroupKey)
-            for (const { provider, modelId, score } of poolToTry) {
-                const statusKey = `${provider.id}-${modelId}`
+            for (const { provider, modelId, modelKey, modelConfig, statusKey: poolStatusKey, score } of poolToTry) {
+                const statusKey = poolStatusKey || `${provider.id}-${modelKey || modelId}`
                 const startTime = Date.now()
-                const result = await this.attemptRequest(type, payload, provider, modelId, maxTokens, requestTimeout)
+                const result = await this.attemptRequest(type, payload, provider, modelId, maxTokens, requestTimeout, modelConfig)
                 const elapsedMs = Date.now() - startTime
                 const elapsed = (elapsedMs / 1000).toFixed(2)
 
@@ -1229,8 +1256,11 @@ export class AiClient {
             for (const groupName in provider.model_groups) {
                 const group = provider.model_groups[groupName]
                 const allModels = [...(group.chat_models || []), ...(group.draw_models || [])]
-                if (allModels.includes(modelId)) {
-                    matchingModels.push({ providerId: provider.id, modelId: modelId })
+                const model = allModels
+                    .map(reference => this.resolveModelConfig(reference, provider.id))
+                    .find(candidate => candidate && (candidate.id === modelId || candidate.alias === modelId || candidate.model_id === modelId))
+                if (model && !matchingModels.some(item => item.providerId === provider.id && item.modelKey === model.id)) {
+                    matchingModels.push({ providerId: provider.id, modelId: model.model_id, modelKey: model.id, alias: model.alias })
                 }
             }
         }
@@ -1243,8 +1273,8 @@ export class AiClient {
             return { success: false, message: `发现多个供应商 (${providers}) 拥有相同的模型ID "${modelId}"，无法确定要操作哪一个。` }
         }
 
-        const { providerId, modelId: mid } = matchingModels[0]
-        const statusKey = `${providerId}-${mid}`
+        const { providerId, modelId: mid, modelKey } = matchingModels[0]
+        const statusKey = `${providerId}-${modelKey}`
 
         if (action === '禁用') {
             if (this.disabledModels.has(statusKey)) {

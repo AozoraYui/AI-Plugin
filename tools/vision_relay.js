@@ -49,22 +49,25 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
         }
 
         // 找到 vision model 对应的 provider
-        const provider = client.modelsConfig.find(p => p.id === visionModelConfig.provider_id)
+        const modelConfig = client.resolveModelConfig?.(visionModelConfig.model_id, visionModelConfig.provider_id) || visionModelConfig
+        const provider = client.modelsConfig.find(p => p.id === modelConfig.provider_id)
         if (!provider) {
-            logger.warn(`[AI-Plugin] Vision Relay: 找不到供应商标识 ${visionModelConfig.provider_id}`)
+            logger.warn(`[AI-Plugin] Vision Relay: 找不到供应商标识 ${modelConfig.provider_id}`)
             return ''
         }
+        const statusKey = `${modelConfig.provider_id}-${modelConfig.id || modelConfig.model_id}`
+        client._prepareModelStatusKey?.(statusKey, provider, modelConfig)
 
         // 直接调用 provider API
-        const request = client.buildRequest('chat', payload, provider, visionModelConfig.model_id, 2048)
+        const request = client.buildRequest('chat', payload, provider, modelConfig.model_id, 2048, modelConfig)
 
-        logger.info(`[AI-Plugin] Vision Relay: 调用 ${visionModelConfig.provider_id}/${visionModelConfig.model_id}`)
+        logger.info(`[AI-Plugin] Vision Relay: 调用 ${modelConfig.provider_id}/${modelConfig.model_id}`)
 
         const response = await fetchWithProxy(request.url, request.options)
 
         if (!response.ok) {
             const errBody = await response.text().catch(() => '')
-            client._recordModelFail(`${visionModelConfig.provider_id}-${visionModelConfig.model_id}`)
+            client._recordModelFail(statusKey)
             client.saveModelStatus()
             logger.warn(`[AI-Plugin] Vision Relay: API 返回 ${response.status}: ${errBody.slice(0, 300)}`)
             return ''
@@ -74,12 +77,12 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
         const description = client.parseResponse(data, 'chat')
 
         if (description.success && description.data) {
-            client._recordModelSuccess(`${visionModelConfig.provider_id}-${visionModelConfig.model_id}`, Date.now() - startTime)
+            client._recordModelSuccess(statusKey, Date.now() - startTime)
             client.saveModelStatus()
             logger.info(`[AI-Plugin] Vision Relay: 转述成功 (${description.data.length} 字符)`)
             return description.data
         } else {
-            client._recordModelFail(`${visionModelConfig.provider_id}-${visionModelConfig.model_id}`)
+            client._recordModelFail(statusKey)
             client.saveModelStatus()
             logger.warn(`[AI-Plugin] Vision Relay: 解析失败: ${description.error || '未知'}`)
             return ''

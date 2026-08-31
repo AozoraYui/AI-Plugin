@@ -2,28 +2,31 @@
 # AI 插件模型供应商配置
 # ----------------------------------------------------------------
 # 本文件为多文档 YAML，用 "---" 分隔为若干段落：
-#   1) 供应商列表（模型来源）
+#   1) 供应商与独立模型配置
 #   2) 指令自定义
 #   3) 图文转述 Vision Relay
 #   4) 联网搜索 / 网页抓取 / Shell / 文件收发 / 向量记忆 / 天气 等开关
 # ----------------------------------------------------------------
-# 每个供应商字段说明：
-#   id          供应商唯一标识（被 intent_model / vision_model 引用）
+# 供应商字段说明：
+#   id          供应商唯一标识（被模型、intent_model / vision_model 引用）
 #   name        显示名称（用于 #ai模型列表 等展示）
 #   priority    优先级，数字越小越优先（默认 1）
 #               同优先级内按模型得分（成功率 + 延迟）自动排序
 #               高优先级组全部失败后自动降级到下一优先级
 #               例：priority 1 主力，priority 2 备用
-#   multimodal  是否支持识图（默认 true）
-#               false 表示纯文本模型，遇图片时自动走 Vision Relay
 #   base_url    API 基础地址（仅到 /v1，结尾不要带斜杠或多余空格）
 #   api_key     API 密钥
-#   per_call_models  （可选）按次扣费模型名单
-#               列在此处的模型视为「每次请求固定计费」，调度时尽量避开：
-#               同优先级内，按量计费模型只要没全部熔断就优先使用，
-#               按量模型全挂了才降级到按次模型。名单按模型名精确匹配。
-#               不同中转站的按次模型名各异，按各自实际名称填写即可。
-#   model_groups 模型组，分 flash / pro / ultra 三档：
+#   model_groups （可选）也可以写在供应商下；推荐统一写在顶层
+#
+# 独立模型字段说明：
+#   id          模型内部唯一 ID，模型组、intent_model、vision_model 可引用
+#   alias       给人看的别名，可用于管理命令和模型展示
+#   model       实际发送给 API 的模型名（也可写 model_id/model_identifier）
+#   provider    所属供应商 ID（也可写 provider_id）
+#   multimodal  是否支持图片输入；模型级配置优先于供应商旧字段
+#   per_call    是否按次扣费；模型级配置优先于旧 per_call_models
+#
+# 顶层 model_groups 模型组分 flash / pro / ultra 三档：
 #               flash  轻量组    → #fchat / #fdraw（若 DEFAULT_MODEL_GROUP=flash，则 #chat / #draw 也走它）
 #               pro    专业组    → #pchat / #pdraw
 #               ultra  旗舰组    → #uchat / #udraw
@@ -31,33 +34,52 @@
 #     每组含：
 #       chat_models  对话模型列表（同优先级、同计费档内按得分排序）
 #       draw_models  绘图模型列表（不支持绘图填 [] 即可）
-#       直接填模型名字符串，插件自动适配 chat / images 端点
+#       填独立模型 id，也兼容填 alias 或实际 API 模型名
 # ================================================================
 
-- id: "your-provider-id"
-  name: "供应商名称"
-  priority: 1
-  multimodal: true
-  base_url: "https://api.example.com/v1"
-  api_key: "your-api-key-here"
-  # per_call_models:           # 可选：该站按次扣费的模型名（调度时尽量避开）
-  #   - "c-gemini-2.5-flash"
-  model_groups:
-    flash:
-      chat_models:
-        - "gemini-2.5-flash"
-      draw_models:
-        - "gemini-2.5-flash-image"
+providers:
+  - id: "your-provider-id"
+    name: "供应商名称"
+    priority: 1
+    base_url: "https://api.example.com/v1"
+    api_key: "your-api-key-here"
 
-    pro:
-      chat_models:
-        - "gemini-2.5-pro"
-      draw_models: []
+models:
+  - id: "gemini-flash"
+    alias: "flash"
+    provider: "your-provider-id"
+    model: "gemini-2.5-flash"
+    multimodal: true
+    per_call: false
 
-    ultra:
-      chat_models:
-        - "gemini-3-pro"
-      draw_models: []
+  - id: "gemini-flash-image"
+    alias: "flash-image"
+    provider: "your-provider-id"
+    model: "gemini-2.5-flash-image"
+    multimodal: true
+
+  - id: "gemini-pro"
+    alias: "pro"
+    provider: "your-provider-id"
+    model: "gemini-2.5-pro"
+    multimodal: true
+
+model_groups:
+  flash:
+    chat_models:
+      - "gemini-flash"
+    draw_models:
+      - "gemini-flash-image"
+  pro:
+    chat_models:
+      - "gemini-pro"
+    draw_models: []
+  ultra:
+    chat_models: []
+    draw_models: []
+
+# 旧版也继续兼容：供应商数组 + provider.model_groups。
+# 旧版供应商级 multimodal/per_call_models 会自动转换成模型级元数据。
 
 ---
 # ================================================

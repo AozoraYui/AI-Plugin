@@ -391,17 +391,23 @@ export class ManagementHandler extends plugin {
                 const sections = []
                 if (group.chat_models) {
                     const chatModels = group.chat_models.map(modelId => {
-                        const statusKey = `${provider.id}-${modelId}`
-                        const perCall = Array.isArray(provider.per_call_models) && provider.per_call_models.includes(modelId)
-                        return { modelId, status: this.client.modelStatus[statusKey], statusKey, perCall }
+                        const modelConfig = this.client.resolveModelConfig(modelId, provider.id)
+                        const modelKey = modelConfig?.id || modelId
+                        const actualModelId = modelConfig?.model_id || modelId
+                        const statusKey = `${provider.id}-${modelKey}`
+                        const perCall = modelConfig?.per_call === true || (Array.isArray(provider.per_call_models) && provider.per_call_models.includes(actualModelId))
+                        return { modelId: actualModelId, alias: modelConfig?.alias, status: this.client.modelStatus[statusKey], statusKey, perCall }
                     })
                     if (chatModels.length > 0) sections.push({ type: 'chat', label: '💬 chat', models: chatModels })
                 }
                 if (group.draw_models) {
                     const drawModels = group.draw_models.map(modelId => {
-                        const statusKey = `${provider.id}-${modelId}`
-                        const perCall = Array.isArray(provider.per_call_models) && provider.per_call_models.includes(modelId)
-                        return { modelId, status: this.client.modelStatus[statusKey], statusKey, perCall }
+                        const modelConfig = this.client.resolveModelConfig(modelId, provider.id)
+                        const modelKey = modelConfig?.id || modelId
+                        const actualModelId = modelConfig?.model_id || modelId
+                        const statusKey = `${provider.id}-${modelKey}`
+                        const perCall = modelConfig?.per_call === true || (Array.isArray(provider.per_call_models) && provider.per_call_models.includes(actualModelId))
+                        return { modelId: actualModelId, alias: modelConfig?.alias, status: this.client.modelStatus[statusKey], statusKey, perCall }
                     })
                     if (drawModels.length > 0) sections.push({ type: 'draw', label: '🎨 draw', models: drawModels })
                 }
@@ -426,9 +432,10 @@ export class ManagementHandler extends plugin {
                     providerMsg += `  ${label}\n`
                     
                     for (let mi = 0; mi < models.length; mi++) {
-                        const { modelId, status, statusKey, perCall } = models[mi]
+                        const { modelId, alias, status, statusKey, perCall } = models[mi]
                         const costTag = perCall ? ' 💰按次' : ''
-                        providerMsg += `    • ${modelId}${costTag}${buildStatusText(status, statusKey)}\n`
+                        const aliasText = alias && alias !== modelId ? `${alias} (${modelId})` : modelId
+                        providerMsg += `    • ${aliasText}${costTag}${buildStatusText(status, statusKey)}\n`
                     }
                 }
             }

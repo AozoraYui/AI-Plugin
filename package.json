@@ -6,8 +6,8 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "node scripts/agent_eval.js && node scripts/agent_replay_eval.js",
-    "eval:agent": "node scripts/agent_eval.js && node scripts/agent_replay_eval.js",
+    "test": "node scripts/model_config_eval.js && node scripts/agent_eval.js && node scripts/agent_replay_eval.js",
+    "eval:agent": "node scripts/model_config_eval.js && node scripts/agent_eval.js && node scripts/agent_replay_eval.js",
     "eval:agent:replay": "node scripts/agent_replay_eval.js",
     "update:qq-face-map": "node scripts/update_qq_face_map.js"
   },
