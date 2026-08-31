@@ -16,15 +16,14 @@
 #               例：priority 1 主力，priority 2 备用
 #   base_url    API 基础地址（仅到 /v1，结尾不要带斜杠或多余空格）
 #   api_key     API 密钥
-#   model_groups （可选）也可以写在供应商下；推荐统一写在顶层
 #
 # 独立模型字段说明：
 #   id          模型内部唯一 ID，模型组、intent_model、vision_model 可引用
 #   alias       给人看的别名，可用于管理命令和模型展示
-#   model       实际发送给 API 的模型名（也可写 model_id/model_identifier）
-#   provider    所属供应商 ID（也可写 provider_id）
-#   multimodal  是否支持图片输入；模型级配置优先于供应商旧字段
-#   per_call    是否按次扣费；模型级配置优先于旧 per_call_models
+#   model       实际发送给 API 的模型名
+#   provider    所属供应商 ID
+#   multimodal  是否支持图片输入，默认 true
+#   per_call    是否按次扣费，默认 false
 #
 # 顶层 model_groups 模型组分 flash / pro / ultra 三档：
 #               flash  轻量组    → #fchat / #fdraw（若 DEFAULT_MODEL_GROUP=flash，则 #chat / #draw 也走它）
@@ -34,7 +33,7 @@
 #     每组含：
 #       chat_models  对话模型列表（同优先级、同计费档内按得分排序）
 #       draw_models  绘图模型列表（不支持绘图填 [] 即可）
-#       填独立模型 id，也兼容填 alias 或实际 API 模型名
+#       填独立模型 id，也可填 alias 或实际 API 模型名
 # ================================================================
 
 providers:
@@ -78,9 +77,6 @@ model_groups:
     chat_models: []
     draw_models: []
 
-# 旧版也继续兼容：供应商数组 + provider.model_groups。
-# 旧版供应商级 multimodal/per_call_models 会自动转换成模型级元数据。
-
 ---
 # ================================================
 # 指令自定义（可选，不配置则使用默认值）
@@ -109,37 +105,26 @@ model_groups:
 # 默认关闭，可使用 #cv 临时强制启用图文转述
 #
 # vision_model: 支持配置多个 Vision 模型，按顺序依次尝试
-#   单模型（兼容旧格式）:
+#   每个条目通过 model 引用独立模型 id:
 #     vision_model:
-#       provider_id: "xxx"
-#       model_id: "gemini-2.5-flash"
-#   多模型:
-#     vision_model:
-#       - provider_id: "xxx"
-#         model_id: "gemini-2.5-flash"
-#       - provider_id: "yyy"
-#         model_id: "gemini-3-flash"
+#       - model: "gemini-flash"
 # ================================================
 enable_vision_relay: false
 
 vision_model:
-  provider_id: "your-provider-id"
-  model_id: "gemini-2.5-flash"
+  - model: "gemini-flash"
 
 ---
 # ================================================
 # 联网搜索配置
 # enable_web_search: 是否启用联网搜索功能（默认 false，使用 #cn 临时启用）
-# intent_model: 搜索意图分析专用模型（支持多模型故障转移）
+# intent_model: 搜索意图分析专用模型 id（支持多模型故障转移）
 #   如果不配置 intent_model，则使用 Flash 模型组做意图分析
 #   配置独立模型可大幅加快分析速度，推荐使用轻量模型
 #   注意：intent_model 必须与 enable_web_search 平级（不要缩进！）
 #   例:
 #   intent_model:
-#     - provider_id: "provider1"
-#       model_id: "gemini-2.5-flash"
-#     - provider_id: "provider2"
-#       model_id: "qwen-turbo"
+#     - model: "gemini-flash"
 # ================================================
 enable_web_search: false
 # intent_model: []

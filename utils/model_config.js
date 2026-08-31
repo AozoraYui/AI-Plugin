@@ -7,30 +7,29 @@ function asText(value) {
 }
 
 /** Normalize one independently configured model. */
-export function normalizeModelDefinition(raw = {}, fallbackId = '', defaultProviderId = '') {
-    if (typeof raw === 'string') raw = { model_id: raw }
+export function normalizeModelDefinition(raw = {}) {
     if (!isRecord(raw)) return null
 
-    const modelId = asText(raw.model_id ?? raw.model_identifier ?? raw.model ?? raw.name ?? raw.id)
-    const id = asText(raw.id ?? raw.key ?? fallbackId) || modelId
-    const providerId = asText(raw.provider_id ?? raw.provider ?? raw.api_provider ?? defaultProviderId)
+    const modelId = asText(raw.model)
+    const id = asText(raw.id)
+    const providerId = asText(raw.provider)
     if (!id || !modelId || !providerId) return null
 
     return {
         ...raw,
         id,
-        alias: asText(raw.alias ?? raw.name ?? id) || id,
+        alias: asText(raw.alias) || id,
         model_id: modelId,
         provider_id: providerId,
-        multimodal: raw.multimodal ?? raw.visual ?? true,
-        per_call: raw.per_call ?? raw.perCall ?? false
+        multimodal: raw.multimodal ?? true,
+        per_call: raw.per_call ?? false
     }
 }
 
 export function modelReferenceId(reference) {
     if (typeof reference === 'string' || typeof reference === 'number') return asText(reference)
     if (!isRecord(reference)) return ''
-    return asText(reference.id ?? reference.key ?? reference.alias ?? reference.model_id ?? reference.model_identifier ?? reference.model)
+    return asText(reference.id)
 }
 
 export function resolveModelReference(reference, definitions = [], providerId = '') {
@@ -75,57 +74,20 @@ function collectNewFormat(docValues) {
     return { providers, models, modelGroups }
 }
 
-/**
- * Convert both supported YAML layouts into the provider-shaped runtime layout.
- * The rest of the plugin can therefore keep using provider.model_groups.
- */
 export function normalizeModelConfigDocuments(docValues = []) {
-    const arrayDocs = docValues.filter(Array.isArray)
     const { providers: declaredProviders, models: declaredModels, modelGroups: topLevelGroups } = collectNewFormat(docValues)
-    const hasIndependentModels = declaredProviders.length > 0 || declaredModels.length > 0 || Object.keys(topLevelGroups).length > 0
-
-    if (!hasIndependentModels) {
-        const providers = arrayDocs
-            .flat()
-            .filter(provider => isRecord(provider) && isRecord(provider.model_groups))
-            .map(provider => {
-                const providerId = asText(provider.id)
-                const definitions = []
-                const modelGroups = {}
-                for (const [groupName, group] of Object.entries(provider.model_groups || {})) {
-                    modelGroups[groupName] = normalizeGroup(group, definitions, providerId)
-                    for (const role of ['chat_models', 'draw_models']) {
-                        for (const modelId of group?.[role] || []) {
-                            const reference = modelReferenceId(modelId)
-                            if (!reference || definitions.some(model => model.id === reference)) continue
-                            const definition = normalizeModelDefinition({
-                                id: reference,
-                                model_id: reference,
-                                provider_id: providerId,
-                                multimodal: provider.multimodal,
-                                per_call: Array.isArray(provider.per_call_models) && provider.per_call_models.includes(reference)
-                            })
-                            if (definition) definitions.push(definition)
-                        }
-                    }
-                }
-                return {
-                    ...provider,
-                    model_groups: modelGroups,
-                    model_definitions: definitions
-                }
-            })
-        return { providers, definitions: providers.flatMap(provider => provider.model_definitions || []), legacy: true }
+    if (declaredProviders.length === 0 || declaredModels.length === 0 || Object.keys(topLevelGroups).length === 0) {
+        return { providers: [], definitions: [] }
     }
 
     const providers = declaredProviders
-        .filter(isRecord)
-        .map(provider => ({ ...provider, model_groups: isRecord(provider.model_groups) ? provider.model_groups : {}, model_definitions: [] }))
+        .filter(provider => isRecord(provider) && asText(provider.id))
+        .map(provider => ({ ...provider, model_groups: {}, model_definitions: [] }))
     const providerById = new Map(providers.map(provider => [asText(provider.id), provider]))
     const definitions = []
 
-    for (const [index, rawModel] of declaredModels.entries()) {
-        const definition = normalizeModelDefinition(rawModel, `model-${index + 1}`)
+    for (const rawModel of declaredModels) {
+        const definition = normalizeModelDefinition(rawModel)
         if (!definition) continue
         const provider = providerById.get(definition.provider_id)
         if (!provider) continue
@@ -134,15 +96,6 @@ export function normalizeModelConfigDocuments(docValues = []) {
         provider.model_definitions.push(definition)
     }
 
-    const addGroups = (providerId, groups) => {
-        const provider = providerById.get(providerId)
-        if (!provider || !isRecord(groups)) return
-        for (const [groupName, group] of Object.entries(groups)) {
-            provider.model_groups[groupName] = normalizeGroup(group, definitions, providerId)
-        }
-    }
-
-    for (const provider of providers) addGroups(asText(provider.id), provider.model_groups)
     for (const [groupName, group] of Object.entries(topLevelGroups)) {
         for (const provider of providers) {
             const scopedReferences = ['chat_models', 'draw_models']
@@ -157,5 +110,5 @@ export function normalizeModelConfigDocuments(docValues = []) {
         }
     }
 
-    return { providers, definitions, legacy: false }
+    return { providers, definitions }
 }

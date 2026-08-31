@@ -97,7 +97,7 @@ pnpm install
 
 ```yaml
 # 新版推荐：供应商只保存连接信息，模型单独声明来源与能力。
-# 模型组可引用模型 id，也兼容 alias 与实际 API 模型名。
+# 模型组可引用模型 id、alias 或实际 API 模型名。
 providers:
   - id: "provider1"
     name: "供应商名称"
@@ -136,22 +136,13 @@ DRAW_COMMAND: draw
 # 当当前模型组/指定供应商没有可用多模态对话模型时，Vision 模型先描述图片再喂给主模型
 # 如果模型池中存在 multimodal: true 的对话模型，图片会优先直接交给多模态模型
 # 默认关闭，可使用 #cv 临时强制启用图文转述
-# vision_model 支持多模型故障转移（按顺序依次尝试）：
-#   单模型:
-#     vision_model:
-#       provider_id: "xxx"
-#       model_id: "gemini-2.5-flash"
-#   多模型:
-#     vision_model:
-#       - provider_id: "xxx"
-#         model_id: "gemini-2.5-flash"
-#       - provider_id: "yyy"
-#         model_id: "gemini-3-flash"
+# vision_model 使用独立模型 id，支持按顺序故障转移：
+#   vision_model:
+#     - model: "gemini-flash"
 enable_vision_relay: false
 
 vision_model:
-  provider_id: "provider1"
-  model_id: "gemini-2.5-flash"
+  - model: "gemini-flash"
 
 ---
 # 联网搜索配置（可选）
@@ -161,10 +152,7 @@ vision_model:
 #   注意：intent_model 必须与 enable_web_search 平级（不要缩进！）
 #   例:
 #   intent_model:
-#     - provider_id: "provider1"
-#       model_id: "gemini-2.5-flash"
-#     - provider_id: "provider2"
-#       model_id: "qwen-turbo"
+#     - model: "gemini-flash"
 enable_web_search: false
 # intent_model: []
 enable_web_fetch: false
@@ -509,16 +497,16 @@ AI-Plugin/
 每个模型组可独立配置 `chat_models`（对话模型）和 `draw_models`（绘图模型）。
 
 #### 按次扣费模型（成本感知调度）
-部分中转站的模型按「每次请求固定计费」，而非按 token 计费。新版可直接在模型上配置 `per_call: true`；旧版也可在供应商下用 `per_call_models` 列出这些模型名：
+部分中转站的模型按「每次请求固定计费」，而非按 token 计费。可直接在模型上配置 `per_call: true`：
 
 ```yaml
-- id: "provider1"
-  name: "供应商名称"
-  per_call_models:
-    - "c-gemini-2.5-flash"
-    - "c-gemini-3-pro-high"
-  model_groups:
-    ...
+models:
+  - id: "gemini-flash"
+    alias: "flash"
+    provider: "provider1"
+    model: "c-gemini-2.5-flash"
+    multimodal: true
+    per_call: true
 ```
 
 调度规则：同一优先级内，**按量计费模型只要没有全部熔断，就始终优先于按次扣费模型**；只有按量模型全部不可用时才降级使用按次模型。`#ai模型列表` 中按次模型会标注 `💰按次`。不同中转站的按次模型名各异，按各自实际名称填写即可。

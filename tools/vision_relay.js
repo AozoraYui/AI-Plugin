@@ -56,7 +56,7 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
             return ''
         }
         const statusKey = `${modelConfig.provider_id}-${modelConfig.id || modelConfig.model_id}`
-        client._prepareModelStatusKey?.(statusKey, provider, modelConfig)
+        client._prepareModelStatusKey?.(statusKey)
 
         // 直接调用 provider API
         const request = client.buildRequest('chat', payload, provider, modelConfig.model_id, 2048, modelConfig)

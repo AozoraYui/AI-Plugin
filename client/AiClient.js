@@ -217,13 +217,8 @@ export class AiClient {
     }
 
     _resolveConfiguredModelReference(reference) {
-        const providerId = typeof reference === 'string'
-            ? ''
-            : String(reference?.provider_id ?? reference?.provider ?? '').trim()
-        const modelReference = typeof reference === 'string'
-            ? reference
-            : reference?.model_id ?? reference?.model_identifier ?? reference?.model ?? reference?.id ?? reference?.alias
-        const model = this.resolveModelConfig(modelReference, providerId)
+        const modelReference = typeof reference === 'string' ? reference : reference?.model ?? reference?.id
+        const model = this.resolveModelConfig(modelReference)
         if (!model) return null
         return {
             ...model,
@@ -240,7 +235,7 @@ export class AiClient {
         return resolveModelReference(modelReference, definitions, providerId) || null
     }
 
-    /** 初始化模型状态条目（兼容旧格式） */
+    /** 初始化模型状态条目 */
     _initModelStatusEntry(key) {
         const entry = this.modelStatus[key]
         if (!entry) {
@@ -254,7 +249,7 @@ export class AiClient {
             }
             return
         }
-        // 兼容旧格式：补充缺失字段
+        // 补充运行时可能缺失的统计字段
         if (entry.success_count === undefined) entry.success_count = 0
         if (entry.fail_count === undefined) entry.fail_count = 0
         if (entry.avg_latency_ms === undefined) entry.avg_latency_ms = 0
@@ -422,7 +417,7 @@ export class AiClient {
             if (normalized.providers.length > 0) {
                 this.modelsConfig = normalized.providers
                 this.modelDefinitions = normalized.definitions
-                logger.debug(`[AI-Plugin] 成功加载 ${this.modelsConfig.length} 个供应商配置，${this.modelDefinitions.length} 个独立模型配置（${normalized.legacy ? '兼容旧格式' : '独立模型格式'}）。`)
+                logger.debug(`[AI-Plugin] 成功加载 ${this.modelsConfig.length} 个供应商配置，${this.modelDefinitions.length} 个独立模型配置。`)
             } else {
                 throw new Error("模型配置文件为空或格式不正确。")
             }
@@ -654,18 +649,7 @@ export class AiClient {
         }
     }
 
-    /** 判断某模型是否为按次扣费（命中供应商的 per_call_models 名单） */
-    _isPerCallModel(provider, modelId) {
-        const list = provider?.per_call_models
-        if (!Array.isArray(list) || list.length === 0) return false
-        return list.includes(modelId)
-    }
-
-    _prepareModelStatusKey(statusKey, provider, modelConfig) {
-        const legacyKey = `${provider.id}-${modelConfig.model_id}`
-        if (!this.modelStatus[statusKey] && statusKey !== legacyKey && this.modelStatus[legacyKey]) {
-            this.modelStatus[statusKey] = { ...this.modelStatus[legacyKey] }
-        }
+    _prepareModelStatusKey(statusKey) {
         this._initModelStatusEntry(statusKey)
     }
 
@@ -695,7 +679,7 @@ export class AiClient {
                         // 跳过手动禁用的模型
                         if (this.disabledModels.has(statusKey)) continue
                         this._prepareModelStatusKey(statusKey, provider, modelConfig)
-                        const perCall = modelConfig.per_call === true || this._isPerCallModel(provider, modelConfig.model_id)
+                        const perCall = modelConfig.per_call === true
                         this.activeModelPools[groupName].chat.push({ provider, modelId: modelConfig.model_id, modelKey: modelConfig.id, modelConfig, perCall, statusKey })
                     }
                 }
@@ -710,7 +694,7 @@ export class AiClient {
                         // 跳过手动禁用的模型
                         if (this.disabledModels.has(statusKey)) continue
                         this._prepareModelStatusKey(statusKey, provider, modelConfig)
-                        const perCall = modelConfig.per_call === true || this._isPerCallModel(provider, modelConfig.model_id)
+                        const perCall = modelConfig.per_call === true
                         this.activeModelPools[groupName].image.push({ provider, modelId: modelConfig.model_id, modelKey: modelConfig.id, modelConfig, perCall, statusKey })
                     }
                 }
@@ -744,7 +728,7 @@ export class AiClient {
             },
             body: JSON.stringify({
                 model: modelId,
-                messages: this.convertToOpenAIMessages(payload, modelConfig?.multimodal !== false && providerConfig.multimodal !== false),
+                messages: this.convertToOpenAIMessages(payload, modelConfig?.multimodal !== false),
                 max_tokens: maxTokens,
                 stream: false,
             })

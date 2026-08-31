@@ -18,14 +18,14 @@ models:
     multimodal: true
   - id: text
     alias: deepseek
-    provider_id: p1
-    model_identifier: vendor/text
+    provider: p1
+    model: vendor/text
     multimodal: false
   - id: duplicate
     alias: same
     provider: p2
     model: vendor/text
-    visual: true
+    multimodal: true
 model_groups:
   flash:
     chat_models: [qwen-vl, deepseek]
@@ -33,7 +33,6 @@ model_groups:
 `)
 
 const normalized = normalizeModelConfigDocuments([newFormat])
-assert.equal(normalized.legacy, false)
 assert.equal(normalized.providers.length, 2)
 assert.equal(normalized.definitions.length, 3)
 assert.deepEqual(normalized.providers[0].model_groups.flash.chat_models, ['vision', 'text'])
@@ -50,23 +49,10 @@ const stringReference = normalizeModelConfigDocuments([{
 }])
 assert.equal(stringReference.providers[0].model_groups.flash.chat_models[0], 'vision-3')
 
-const legacy = yaml.parse(`
-- id: legacy
-  name: Legacy
-  multimodal: false
-  per_call_models: [legacy-text]
-  model_groups:
-    flash:
-      chat_models: [legacy-text]
-      draw_models: []
-`)
-const legacyNormalized = normalizeModelConfigDocuments([legacy])
-assert.equal(legacyNormalized.legacy, true)
-const legacyModel = legacyNormalized.definitions[0]
-assert.equal(legacyModel.id, 'legacy-text')
-assert.equal(legacyModel.model_id, 'legacy-text')
-assert.equal(legacyModel.multimodal, false)
-assert.equal(legacyModel.per_call, true)
-assert.deepEqual(legacyNormalized.providers[0].model_groups.flash.chat_models, ['legacy-text'])
+const oldFormat = normalizeModelConfigDocuments([{
+    legacy: true,
+    model_groups: { flash: { chat_models: ['legacy-text'] } }
+}])
+assert.equal(oldFormat.providers.length, 0)
 
-console.log('模型配置评估通过：独立模型、兼容别名、模型级能力与旧格式迁移均正常。')
+console.log('模型配置评估通过：新版供应商、模型、别名与模型级能力均正常。')

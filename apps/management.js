@@ -395,7 +395,7 @@ export class ManagementHandler extends plugin {
                         const modelKey = modelConfig?.id || modelId
                         const actualModelId = modelConfig?.model_id || modelId
                         const statusKey = `${provider.id}-${modelKey}`
-                        const perCall = modelConfig?.per_call === true || (Array.isArray(provider.per_call_models) && provider.per_call_models.includes(actualModelId))
+                        const perCall = modelConfig?.per_call === true
                         return { modelId: actualModelId, alias: modelConfig?.alias, status: this.client.modelStatus[statusKey], statusKey, perCall }
                     })
                     if (chatModels.length > 0) sections.push({ type: 'chat', label: '💬 chat', models: chatModels })
@@ -406,7 +406,7 @@ export class ManagementHandler extends plugin {
                         const modelKey = modelConfig?.id || modelId
                         const actualModelId = modelConfig?.model_id || modelId
                         const statusKey = `${provider.id}-${modelKey}`
-                        const perCall = modelConfig?.per_call === true || (Array.isArray(provider.per_call_models) && provider.per_call_models.includes(actualModelId))
+                        const perCall = modelConfig?.per_call === true
                         return { modelId: actualModelId, alias: modelConfig?.alias, status: this.client.modelStatus[statusKey], statusKey, perCall }
                     })
                     if (drawModels.length > 0) sections.push({ type: 'draw', label: '🎨 draw', models: drawModels })
