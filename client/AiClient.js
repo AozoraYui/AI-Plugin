@@ -954,9 +954,9 @@ export class AiClient {
             const res = await fetchWithProxy(url, options)
 
             if (!res.ok) {
+                const errBody = await res.text().catch(() => '')
                 // 绘图请求：如果 503 且提示需要 /images/generations，自动重试
                 if (type === 'image' && res.status === 503) {
-                    const errBody = await res.text().catch(() => '')
                     if (/\/images\/generations|\/images\/edits/.test(errBody)) {
                         logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 需要 /images/generations，自动重试`)
                         try {
@@ -966,8 +966,7 @@ export class AiClient {
                         }
                     }
                 }
-                const errBody = await res.text().catch(() => '')
-                throw new Error(`HTTP状态码: ${res.status}${errBody ? `，响应: ${errBody.slice(0, 300)}` : ''}`)
+                throw new Error(`HTTP状态码: ${res.status}${errBody ? `，响应: ${errBody.slice(0, 500)}` : '，上游未返回错误正文'}`)
             }
 
             const responseText = await res.text()
@@ -1008,11 +1007,13 @@ export class AiClient {
                 if (!result.error || result.error.length < 5) {
                     logger.warn(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 返回空错误，原始响应: ${responseText.slice(0, 500)}`)
                 }
-                throw new Error(`API业务错误: ${result.error}`)
+                const errorText = String(result.error || '').trim() || `上游返回了无有效内容的响应：${responseText.slice(0, 500)}`
+                throw new Error(`API业务错误: ${errorText}`)
             }
         } catch (err) {
-            logger.error(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 请求失败: ${err.message}`)
-            return { success: false, error: err.message }
+            const errorText = String(err?.message || err || '').trim() || '未知上游错误（异常未提供错误信息）'
+            logger.error(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 请求失败: ${errorText}`)
+            return { success: false, error: errorText }
         }
     }
 

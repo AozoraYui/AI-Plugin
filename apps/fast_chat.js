@@ -13,6 +13,7 @@ import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memory_context.js'
 import { detectToolIntentFamilies, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
+import { relayImagesToVision } from '../tools/vision_relay.js'
 import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } from '../utils/agent_runtime.js'
 import { findPendingWorkspaceVerification, resolvePersistedAgentStatus } from '../utils/agent_completion.js'
@@ -632,6 +633,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}`
 }
 
 async function compactFastChatImageSummaries(client, summaryText) {
+    if (!summaryText) return { text: '', compacted: false, truncated: false }
     if (summaryText.length <= FAST_CHAT_IMAGE_SUMMARY_MAX_CHARS) {
         return { text: summaryText, compacted: false, truncated: false }
     }
@@ -664,6 +666,57 @@ async function compactFastChatImageSummaries(client, summaryText) {
         compacted: false,
         truncated: true
     }
+}
+
+async function buildFastChatVisionRelayFallback(client, imageParts, normalized, reason = '读图失败兜底') {
+    if (!Array.isArray(imageParts) || imageParts.length === 0) return ''
+    if (!client?.enableVisionRelay || !Array.isArray(client.visionModels) || client.visionModels.length === 0) {
+        logger.warn(`[AI-Plugin] [畅聊] ${reason}：Vision Relay 未启用或没有可用模型`)
+        return ''
+    }
+
+    const context = truncateText(normalized?.normalizedText || normalized?.currentText || '', 1200)
+    for (const visionConf of client.visionModels) {
+        const label = `${visionConf.provider_id}/${visionConf.model_id}`
+        try {
+            logger.info(`[AI-Plugin] [畅聊] ${reason}：尝试 Vision Relay ${label}`)
+            const description = await relayImagesToVision(imageParts, context, client, visionConf)
+            if (description) {
+                logger.info(`[AI-Plugin] [畅聊] ${reason}：Vision Relay 成功，摘要=${description.length} 字`)
+                return truncateText(cleanModelText(description), FAST_CHAT_IMAGE_MEMORY_MAX_CHARS)
+            }
+            logger.warn(`[AI-Plugin] [畅聊] ${reason}：Vision Relay ${label} 无有效返回`)
+        } catch (err) {
+            logger.warn(`[AI-Plugin] [畅聊] ${reason}：Vision Relay ${label} 异常: ${err.message}`)
+        }
+    }
+    logger.warn(`[AI-Plugin] [畅聊] ${reason}：所有 Vision Relay 模型均失败`)
+    return ''
+}
+
+async function requestFastChatImageSummary(client, contents, imageParts, normalized, reason) {
+    const result = await client.makeRequest('chat', { contents }, 'flash', 2048)
+    if (result.success && result.data) {
+        return truncateText(cleanModelText(result.data), FAST_CHAT_IMAGE_MEMORY_MAX_CHARS)
+    }
+
+    logger.warn(`[AI-Plugin] [畅聊] ${reason}直接读图失败: ${result.error || '模型无返回'}；启动 Vision Relay 兜底`)
+    return buildFastChatVisionRelayFallback(client, imageParts, normalized, `${reason}兜底`)
+}
+
+function replaceInlineImagesWithVisionDescription(contents, description) {
+    const cloned = (contents || []).map(content => ({
+        ...content,
+        parts: Array.isArray(content?.parts)
+            ? content.parts.filter(part => !part?.inline_data?.data).map(part => ({ ...part }))
+            : content.parts
+    }))
+    const lastUser = [...cloned].reverse().find(content => content?.role === 'user' && Array.isArray(content.parts))
+    if (!lastUser) return cloned
+    lastUser.parts.push({
+        text: `\n\n【Vision Relay 图片摘要】以下内容来自实际附带图片的视觉模型转述，只能据此理解图片，不要声称仍可直接查看图片：\n${description}\n【Vision Relay 图片摘要结束】`
+    })
+    return cloned
 }
 
 async function prepareFastChatImageContext(client, imageReadPlan, normalized) {
@@ -714,24 +767,33 @@ async function prepareFastChatImageContext(client, imageReadPlan, normalized) {
                 parts: [{ text: prompt }, ...imageParts]
             }
         ]
-        const result = await client.makeRequest('chat', { contents }, 'flash', 2048)
-        if (result.success && result.data) {
-            const summary = cleanModelText(result.data)
+        const summary = await requestFastChatImageSummary(
+            client,
+            contents,
+            imageParts,
+            normalized,
+            `分批读图第 ${batchIndex}/${totalBatches} 批`
+        )
+        if (summary) {
             summaries.push(`第 ${batchIndex}/${totalBatches} 批（本轮第 ${start + 1}-${start + batchUrls.length} 张，成功处理 ${imageParts.length} 张）：\n${summary}`)
             logger.info(`[AI-Plugin] [畅聊] 分批读图第 ${batchIndex}/${totalBatches} 批完成: 图片=${imageParts.length}`)
         } else {
-            summaries.push(`第 ${batchIndex}/${totalBatches} 批（本轮第 ${start + 1}-${start + batchUrls.length} 张，成功处理 ${imageParts.length} 张）：模型读图失败：${result.error || '模型无返回'}`)
-            logger.warn(`[AI-Plugin] [畅聊] 分批读图第 ${batchIndex}/${totalBatches} 批模型失败: ${result.error || '模型无返回'}`)
+            logger.warn(`[AI-Plugin] [畅聊] 分批读图第 ${batchIndex}/${totalBatches} 批所有视觉链路均失败`)
         }
     }
 
-    let summaryText = `本轮共有 ${imageUrls.length} 张待读图片，已分 ${totalBatches} 批预读，实际成功处理 ${processedCount} 张。\n\n${summaries.join('\n\n')}`
+    let summaryText = summaries.length > 0
+        ? `本轮共有 ${imageUrls.length} 张待读图片，已分 ${totalBatches} 批预读，实际成功处理 ${processedCount} 张。\n\n${summaries.join('\n\n')}`
+        : ''
     const compacted = await compactFastChatImageSummaries(client, summaryText)
     summaryText = compacted.text
 
     notes.push(`本轮图片数量 ${imageUrls.length} 张超过畅聊读图批大小 ${batchSize}，已先分批读取并注入文字摘要；最终回复请基于“本轮分批读图摘要”回答，不要声称还能看到未处理图片。`)
     if (processedCount < imageUrls.length) {
         notes.push(`本轮有 ${imageUrls.length - processedCount} 张图片处理失败或未能读取，请不要描述这些图片。`)
+    }
+    if (summaries.length === 0) {
+        notes.push('本轮图片已下载但所有视觉模型均未返回有效摘要，请不要描述图片内容。')
     }
     if (compacted.compacted) {
         notes.push('分批读图摘要较长，已额外压缩后再注入最终回复。')
@@ -771,9 +833,7 @@ async function buildDirectImageMemoryFallback(client, imageParts, normalized) {
 原消息：${truncateText(normalized.normalizedText, 800)}`
         }, ...imageParts]
     }]
-    const result = await client.makeRequest('chat', { contents }, 'flash', 2048)
-    if (!result.success || !result.data) return ''
-    return truncateText(cleanModelText(result.data), FAST_CHAT_IMAGE_MEMORY_MAX_CHARS)
+    return requestFastChatImageSummary(client, contents, imageParts, normalized, '图片记忆摘要')
 }
 
 async function persistCurrentMessageImageMemory(client, db, normalized, options = {}) {
@@ -1977,6 +2037,35 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
         }
 
         let result = await this.client.makeRequest('chat', payload, 'flash', 4096)
+        let finalVisionRelayDescription = ''
+        if ((!result.success || !result.data) && (imageParts.length > 0 || localImageInput.imageParts.length > 0 || avatarImageInput.imageParts.length > 0)) {
+            const finalImageParts = [
+                ...imageParts,
+                ...localImageInput.imageParts,
+                ...avatarImageInput.imageParts
+            ]
+            logger.warn(`[AI-Plugin] [畅聊] 含图片的最终回复直接请求失败: ${result.error || '模型无返回'}；尝试 Vision Relay 后重试`)
+            const description = await buildFastChatVisionRelayFallback(
+                this.client,
+                finalImageParts,
+                normalized,
+                '最终回复读图失败'
+            )
+            if (description) {
+                if (imageParts.length > 0 && imageParts.length === normalized.currentImageCount && localImageInput.imageParts.length === 0 && avatarImageInput.imageParts.length === 0) {
+                    finalVisionRelayDescription = description
+                }
+                contents = replaceInlineImagesWithVisionDescription(contents, description)
+                payload = { contents }
+                const relayResult = await this.client.makeRequest('chat', payload, 'flash', 4096)
+                if (relayResult.success && relayResult.data) {
+                    result = relayResult
+                    logger.info('[AI-Plugin] [畅聊] Vision Relay 摘要已替换图片，最终回复重试成功')
+                } else {
+                    logger.warn(`[AI-Plugin] [畅聊] Vision Relay 后最终回复仍失败: ${relayResult.error || '模型无返回'}`)
+                }
+            }
+        }
         if (!result.success || !result.data) {
             if (fastAgentTask?.taskId) {
                 const failText = `畅聊最终回复模型请求失败：${result.error || '模型无返回'}`
@@ -1995,7 +2084,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
 
         let replyText = cleanModelText(result.data)
         let imageMemorySummary = shouldCaptureCurrentImageMemory
-            ? truncateText(imageContext.summaryText || '', FAST_CHAT_IMAGE_MEMORY_MAX_CHARS)
+            ? truncateText(imageContext.summaryText || finalVisionRelayDescription, FAST_CHAT_IMAGE_MEMORY_MAX_CHARS)
             : ''
         let usedSafeFallbackReply = false
         const hasTaskCompletionEvidence = fastAgentCompletionStatus === 'ready' && !fastAgentPendingMandatoryVerification

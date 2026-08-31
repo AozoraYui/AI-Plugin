@@ -6,7 +6,6 @@
 
 import { toolRegistry } from './registry.js'
 import { processImagesInBatches } from '../utils/image.js'
-import { fetchWithProxy } from '../utils/common.js'
 
 /**
  * 将图片发送给 Vision 模型，获取详细描述
@@ -35,12 +34,11 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
             return ''
         }
 
-        const parts = [...validImages]
         const promptText = context
             ? `请按顺序逐一描述以下每张图片。用户附带的消息是：「${context}」。\n\n请按以下格式输出：\n图片#1：[详细描述，包括人物外貌/穿着/表情/动作、场景环境、物体细节、文字内容、颜色、构图等]\n图片#2：[详细描述...]\n...\n\n注意：请严格按照图片的实际顺序，从第一张开始逐一描述，不要跳过任何一张。`
             : `请按顺序逐一描述以下每张图片。\n\n请按以下格式输出：\n图片#1：[详细描述，包括人物外貌/穿着/表情/动作、场景环境、物体细节、文字内容、颜色、构图等]\n图片#2：[详细描述...]\n...\n\n注意：请严格按照图片的实际顺序，从第一张开始逐一描述，不要跳过任何一张。`
 
-        parts.push({ text: promptText })
+        const parts = [{ text: promptText }, ...validImages]
 
         const payload = {
             contents: [
@@ -57,34 +55,28 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
         }
         const statusKey = `${modelConfig.provider_id}-${modelConfig.id || modelConfig.model_id}`
         client._prepareModelStatusKey?.(statusKey)
-
-        // 直接调用 provider API
-        const request = client.buildRequest('chat', payload, provider, modelConfig.model_id, 2048, modelConfig)
-
         logger.info(`[AI-Plugin] Vision Relay: 调用 ${modelConfig.provider_id}/${modelConfig.model_id}`)
 
-        const response = await fetchWithProxy(request.url, request.options)
+        const timeout = client._resolveRequestTimeout?.('chat', 2048, 'flash') || 90000
+        const result = await client.attemptRequest?.(
+            'chat',
+            payload,
+            provider,
+            modelConfig.model_id,
+            2048,
+            timeout,
+            modelConfig
+        )
 
-        if (!response.ok) {
-            const errBody = await response.text().catch(() => '')
-            client._recordModelFail(statusKey)
-            client.saveModelStatus()
-            logger.warn(`[AI-Plugin] Vision Relay: API 返回 ${response.status}: ${errBody.slice(0, 300)}`)
-            return ''
-        }
-
-        const data = await response.json()
-        const description = client.parseResponse(data, 'chat')
-
-        if (description.success && description.data) {
+        if (result?.success && result.data) {
             client._recordModelSuccess(statusKey, Date.now() - startTime)
             client.saveModelStatus()
-            logger.info(`[AI-Plugin] Vision Relay: 转述成功 (${description.data.length} 字符)`)
-            return description.data
+            logger.info(`[AI-Plugin] Vision Relay: 转述成功 (${result.data.length} 字符)`)
+            return result.data
         } else {
             client._recordModelFail(statusKey)
             client.saveModelStatus()
-            logger.warn(`[AI-Plugin] Vision Relay: 解析失败: ${description.error || '未知'}`)
+            logger.warn(`[AI-Plugin] Vision Relay: 请求失败: ${result?.error || '客户端未提供请求结果'}`)
             return ''
         }
     } catch (err) {
