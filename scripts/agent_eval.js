@@ -46,7 +46,7 @@ const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
 const { executePendingShellExec, shellExecTool } = await import('../tools/shell_exec.js')
 const { shellSessionTool } = await import('../tools/shell_session.js')
-const { sanitizeTerminalOutput } = await import('../utils/shell_session.js')
+const { detectShellSessionConnectionState, sanitizeTerminalOutput } = await import('../utils/shell_session.js')
 const { buildShellResultSummaryPrompt, summarizeShellResultForReply } = await import('../utils/shell_result_summary.js')
 const { groupSendMessageTool, parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically, resolveTargetGroup } = await import('../tools/group_send.js')
 await import('../tools/group_admin.js')
@@ -387,6 +387,43 @@ check('询问自己的档案不会误判为第三方主题', !isThirdPartySubjec
 ))
 const dirtyTerminalOutput = '\u001b[31m红色\u001b[0m\r\n下一行   \u0007'
 check('tmux输出会清除ANSI和控制字符', sanitizeTerminalOutput(dirtyTerminalOutput) === '红色\n下一行')
+check('Shell断连输出被识别为结果未知', (() => {
+    const state = detectShellSessionConnectionState('curl https://github.com/AozoraYui/AI-Plugin\nConnection to 192.168.2.35 closed.')
+    const protocol = normalizeToolResult('shell_session', {
+        ok: false,
+        error: '远端 Shell 连接已断开；本次命令的执行结果无法确认。',
+        connectionState: state.state,
+        commandOutcome: 'unknown',
+        needs_user_action: true,
+        recoverable: true,
+        output: 'Connection to 192.168.2.35 closed.'
+    })
+    const decision = deterministicToolDecision([protocol])
+    return state.state === 'disconnected'
+        && protocol.ok === false
+        && protocol.commandOutcome === 'unknown'
+        && protocol.needsUserAction
+        && decision?.completionStatus === 'waiting'
+        && decision.nextHint.includes('重新建立')
+})())
+check('Shell结果提示禁止把断连推断为重启', buildShellResultSummaryPrompt('shell_session', {}, {
+    ok: false,
+    connectionState: 'disconnected',
+    commandOutcome: 'unknown',
+    output: 'Connection to 192.168.2.35 closed.'
+}).includes('不得推断服务器重启'))
+check('Shell摘要把断连归类为结果未知', (await summarizeShellResultForReply(null, 'flash', 'shell_session', {}, {
+    ok: false,
+    connectionState: 'disconnected',
+    commandOutcome: 'unknown',
+    output: 'Connection to 192.168.2.35 closed.'
+})).includes('无法确认命令是否完成')
+    && !(await summarizeShellResultForReply(null, 'flash', 'shell_session', {}, {
+        ok: false,
+        connectionState: 'disconnected',
+        commandOutcome: 'unknown',
+        output: 'Connection to 192.168.2.35 closed.'
+    })).includes('执行失败'))
 let shellSummaryPrompt = ''
 const summarizedShellReply = await summarizeShellResultForReply({
     async makeRequest(type, payload) {

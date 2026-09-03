@@ -2200,6 +2200,9 @@ export class ChatHandler extends plugin {
             let successfulToolResultCount = 0
             let verifiedToolResultCount = 0
             let shellToolExecutionCount = 0
+            let shellConnectionLost = false
+            let shellCommandOutcomeUnknown = false
+            let shellUnknownCommand = ''
             let failedImageSearchAttempts = 0
             let webEvidenceState = {}
             let webEvidenceStagnationState = { fingerprint: '', repeatCount: 0, shouldStop: false }
@@ -2517,6 +2520,18 @@ export class ChatHandler extends plugin {
                         const { call, index: roundCallIndex, key, result, protocol, formattedResult: runtimeFormattedResult, status: runtimeStatus, pending } = execution
                         seenToolCalls.add(key)
                         if (call.name === 'shell_exec' || call.name === 'shell_session') shellToolExecutionCount++
+                        if (call.name === 'shell_session'
+                            && (result.data?.commandOutcome === 'unknown' || result.data?.connectionState === 'disconnected')) {
+                            shellCommandOutcomeUnknown = true
+                            shellConnectionLost = shellConnectionLost || result.data?.connectionState === 'disconnected'
+                            shellUnknownCommand = shellUnknownCommand || String(call.args?.input || '').trim()
+                        } else if (call.name === 'shell_session'
+                            && call.args?.action === 'send'
+                            && result.data?.connectionState === 'connected'
+                            && result.data?.commandOutcome === 'observed') {
+                            shellConnectionLost = false
+                            shellCommandOutcomeUnknown = false
+                        }
                         if (!result.success) {
                             logger.warn(`[AI-Plugin] ${call.name} 失败: ${result.error}`)
                             const failureText = runtimeFormattedResult
@@ -2678,7 +2693,12 @@ export class ChatHandler extends plugin {
                         } else if (call.name === 'shell_session') {
                             suppressAutoFastChatContext = true
                             const formattedResult = toolRegistry.formatToolResult('shell_session', result.data)
-                            userMessage = userMessage + '\n\n【重要指令】以上为持久 tmux Shell 会话的实际操作结果。请严格基于 tmux 窗口输出和动作结果回答，不要编造未执行的结果。' + formattedResult
+                            const connectionInstruction = result.data?.connectionState === 'disconnected'
+                                ? '检测到远端 Shell/SSH 连接已断开。只能说明连接已断开，不能推断服务器重启、命令成功或命令失败；请告诉用户需要重新建立连接后再执行。'
+                                : (result.data?.commandOutcome === 'unknown'
+                                    ? '本次命令结果未知。只能说明输入动作已完成，不能推断命令成功或失败；请告诉用户先读取会话状态再决定下一步。'
+                                    : '')
+                            userMessage = userMessage + '\n\n【重要指令】以上为持久 tmux Shell 会话的实际操作结果。请严格基于 tmux 窗口输出和动作结果回答，不要编造未执行的结果。' + connectionInstruction + formattedResult
                             logger.warn(`[AI-Plugin] shell_session 完成，结果已注入`)
                         } else if (call.name === 'file_send' || call.name === 'file_download') {
                             suppressAutoFastChatContext = true
@@ -3445,6 +3465,12 @@ export class ChatHandler extends plugin {
                     finalResponseText = lowEvidenceOverclaim
                         ? '这次只找到搜索摘要、跳转页或不足以交叉验证的材料，没有拿到足够可靠的原始来源，所以我不能负责任地还原事件经过或断言相关指控。你可以把原帖、视频、截图或更明确的来源发来，我再基于原始材料核对。'
                         : '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。请再试一次；我会先真正调用工具并确认结果，再向你汇报。'
+                    usedSafeFallbackReply = true
+                }
+                if (shellCommandOutcomeUnknown) {
+                    finalResponseText = shellConnectionLost
+                        ? `命令${shellUnknownCommand ? `「${shellUnknownCommand.slice(0, 120)}」` : ''}已经送入 tmux，但执行期间远端 Shell/SSH 连接断开了，所以无法确认命令是否完成，也不能据此判断服务器发生了重启。请先重新建立到目标机器的连接，再决定是否重试。`
+                        : `命令${shellUnknownCommand ? `「${shellUnknownCommand.slice(0, 120)}」` : ''}已经送入 tmux，但没有拿到足以确认完成的结果。请先用读取会话状态的方式确认命令是否仍在运行或已经结束，再决定是否重试；不能把输入动作当作目标任务完成。`
                     usedSafeFallbackReply = true
                 }
                 if (shellToolExecutionCount > 0) {

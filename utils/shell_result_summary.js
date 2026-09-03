@@ -9,6 +9,10 @@ function buildResultData(toolName, result = {}) {
         ok: result?.ok !== false,
         action: result?.actionLabel || result?.action || '',
         session: result?.sessionName || '',
+        connection_state: result?.connectionState || '',
+        connection_error: result?.connectionError || '',
+        command_outcome: result?.commandOutcome || '',
+        operation_ok: result?.operationOk === true,
         current_directory: result?.currentDirectory || result?.cwd || '',
         exit_code: result?.exitCode ?? result?.code ?? null,
         error: result?.error || '',
@@ -33,6 +37,8 @@ ${JSON.stringify(data, null, 2)}
 
 回复要求：
 - 直接说明执行成功或失败，并回答用户真正关心的结果。
+- 如果 connectionState=disconnected、commandOutcome=unknown 或结果中出现 Connection to ... closed，只能说明远端 Shell/SSH 连接断开，命令结果未知；不得推断服务器重启、命令成功或命令失败。
+- 如果命令结果未知，应明确告诉用户需要重新建立远端连接后再执行；不要把“tmux 已接收输入”写成目标任务完成。
 - 提炼关键内容；像 fastfetch、系统信息、日志、列表等输出，要概括最重要的字段或异常。
 - 不要逐字粘贴终端原文，不要输出大段代码块，不要复述 ASCII 图案或控制字符。
 - 只输出适合 QQ 消息的纯文本，严禁使用 Markdown：不要使用 **粗体**、反引号、# 标题、Markdown 列表或表格。
@@ -42,6 +48,14 @@ ${JSON.stringify(data, null, 2)}
 }
 
 export async function summarizeShellResultForReply(client, modelGroupKey, toolName, pending = {}, result = {}) {
+    const resultUnknown = result?.commandOutcome === 'unknown'
+        || result?.connectionState === 'disconnected'
+        || /Connection to [^\s]+ closed\.?/i.test(String(result?.output || ''))
+    if (resultUnknown) {
+        return result?.connectionState === 'disconnected'
+            ? '命令已经送入 tmux，但执行期间远端 Shell/SSH 连接断开了，所以无法确认命令是否完成，也不能据此判断服务器发生了重启。请先重新建立远端连接，再决定是否重试。'
+            : '命令已经送入 tmux，但没有拿到足以确认完成的窗口结果。请先读取 tmux 当前状态，确认命令是否完成后再决定是否重试。'
+    }
     if (result?.ok === false) {
         return `Shell 命令执行失败：${String(result.error || '未知错误').slice(0, 1000)}`
     }

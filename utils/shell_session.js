@@ -5,6 +5,23 @@ import { validateShellDirectorySafety } from './shell_safety.js'
 
 const TMUX_TIMEOUT_MS = 5000
 
+const SHELL_CONNECTION_LOSS_PATTERNS = [
+    /Connection to [^\s]+ closed\.?/i,
+    /Connection closed by remote host/i,
+    /Connection reset by peer/i,
+    /client_loop: send disconnect/i,
+    /(?:packet_write_wait|mux_client_request_session|write):?[^\n]{0,80}broken pipe/i,
+    /ssh_exchange_identification/i
+]
+
+export function detectShellSessionConnectionState(output = '') {
+    const value = String(output || '')
+    const pattern = SHELL_CONNECTION_LOSS_PATTERNS.find(item => item.test(value))
+    if (!pattern) return { state: 'connected', reason: '' }
+    const reason = value.match(pattern)?.[0] || '远端 Shell 连接已断开'
+    return { state: 'disconnected', reason: reason.slice(0, 300) }
+}
+
 export function sanitizeTerminalOutput(text = '') {
     return String(text || '')
         .replace(/\u001B\][\s\S]*?(?:\u0007|\u001B\\)/g, '')
@@ -60,10 +77,10 @@ function normalizePollInterval(ms) {
     return Math.min(Math.max(Math.trunc(value), 250), 5000)
 }
 
-function hasMeaningfulOutputChange(beforeOutput = '', afterOutput = '', input = '') {
+function getMeaningfulOutputDelta(beforeOutput = '', afterOutput = '', input = '') {
     const before = String(beforeOutput || '').trimEnd()
     const after = String(afterOutput || '').trimEnd()
-    if (!after || after === before) return false
+    if (!after || after === before) return ''
 
     let delta = ''
     if (after.startsWith(before)) {
@@ -72,17 +89,17 @@ function hasMeaningfulOutputChange(beforeOutput = '', afterOutput = '', input = 
         // 窗口滚动或截断时无法精确切片，只要末尾发生变化就认为有新内容。
         const beforeTail = before.slice(-2000)
         const afterTail = after.slice(-2000)
-        if (beforeTail === afterTail) return false
+        if (beforeTail === afterTail) return ''
         delta = afterTail
     }
 
     const cleanedDelta = delta.replace(/\r/g, '').trim()
-    if (!cleanedDelta) return false
+    if (!cleanedDelta) return ''
     const cleanedInput = String(input || '').replace(/\r/g, '').trim()
-    if (!cleanedInput) return true
-    if (cleanedDelta === cleanedInput) return false
-    if (cleanedDelta.startsWith(cleanedInput) && !cleanedDelta.slice(cleanedInput.length).trim()) return false
-    return true
+    if (!cleanedInput) return cleanedDelta
+    if (cleanedDelta === cleanedInput) return ''
+    if (cleanedDelta.startsWith(cleanedInput) && !cleanedDelta.slice(cleanedInput.length).trim()) return ''
+    return cleanedDelta
 }
 
 async function waitForShellSessionOutput(options = {}) {
@@ -104,15 +121,16 @@ async function waitForShellSessionOutput(options = {}) {
             lines: options.lines,
             maxOutputChars: options.maxOutputChars
         })
-        if (!snapshot.ok) return { snapshot, attempts, outputChanged: false, waitTimedOut: false, elapsedMs: Date.now() - startedAt }
+        if (!snapshot.ok) return { snapshot, attempts, outputChanged: false, outputDelta: '', waitTimedOut: false, elapsedMs: Date.now() - startedAt }
 
-        if (hasMeaningfulOutputChange(options.beforeOutput, snapshot.output, options.input)) {
-            return { snapshot, attempts, outputChanged: true, waitTimedOut: false, elapsedMs: Date.now() - startedAt }
+        const outputDelta = getMeaningfulOutputDelta(options.beforeOutput, snapshot.output, options.input)
+        if (outputDelta) {
+            return { snapshot, attempts, outputChanged: true, outputDelta, waitTimedOut: false, elapsedMs: Date.now() - startedAt }
         }
 
         const remainingMs = deadline - Date.now()
         if (remainingMs <= 0 || timeoutMs <= 0) {
-            return { snapshot, attempts, outputChanged: false, waitTimedOut: true, elapsedMs: Date.now() - startedAt }
+            return { snapshot, attempts, outputChanged: false, outputDelta: '', waitTimedOut: true, elapsedMs: Date.now() - startedAt }
         }
         await sleep(Math.min(pollMs, remainingMs))
     }
@@ -185,12 +203,15 @@ export async function captureShellSession(options = {}) {
         const cleanedOutput = sanitizeTerminalOutput(stdout)
         const maxChars = Math.max(Number(options.maxOutputChars) || Config.SHELL_SESSION_MAX_OUTPUT_CHARS, 1000)
         const output = cleanedOutput.length > maxChars ? cleanedOutput.slice(-maxChars) : cleanedOutput
+        const connectionState = detectShellSessionConnectionState(output)
         return {
             ok: true,
             sessionName,
             currentDirectory: ensured.currentDirectory || await readPaneCurrentPath(sessionName, ensured.cwd),
             lines,
             output,
+            connectionState: connectionState.state,
+            connectionError: connectionState.reason,
             truncated: cleanedOutput.length > maxChars,
             totalChars: cleanedOutput.length,
             rawTotalChars: stdout.length
@@ -239,7 +260,7 @@ export async function sendToShellSession(options = {}) {
     }
 
     try {
-        const beforeSnapshot = options.readAfterSend !== false && options.enter !== false
+        const beforeSnapshot = options.enter !== false
             ? await captureShellSession({
                 sessionName,
                 cwd: options.cwd,
@@ -247,6 +268,28 @@ export async function sendToShellSession(options = {}) {
                 maxOutputChars: options.maxOutputChars || Config.SHELL_SESSION_MAX_OUTPUT_CHARS
             })
             : null
+        if (beforeSnapshot?.ok && beforeSnapshot.connectionState === 'disconnected') {
+            return {
+                ok: false,
+                operationOk: false,
+                sessionName,
+                input,
+                enter: options.enter !== false,
+                currentDirectory: beforeSnapshot.currentDirectory || pathStatus.currentDirectory,
+                connectionState: 'disconnected',
+                connectionError: beforeSnapshot.connectionError,
+                commandOutcome: 'unknown',
+                recoverable: true,
+                needs_user_action: true,
+                error: '当前 tmux 窗口仍显示远端 Shell/SSH 连接已断开，未发送新命令。请先重新建立连接。',
+                summary: '远端 Shell/SSH 连接尚未恢复，命令没有发送到 tmux',
+                next_hints: ['请先重新建立远端 SSH/Shell 连接，再重新执行目标命令。'],
+                output: beforeSnapshot.output,
+                truncated: beforeSnapshot.truncated,
+                totalChars: beforeSnapshot.totalChars,
+                lines: beforeSnapshot.lines
+            }
+        }
         await execTmux(['send-keys', '-t', sessionName, '-l', '--', input])
         if (options.enter !== false) {
             await execTmux(['send-keys', '-t', sessionName, 'C-m'])
@@ -268,8 +311,14 @@ export async function sendToShellSession(options = {}) {
             })
             snapshot = waitResult.snapshot
         }
+        const observedOutput = [waitResult?.outputDelta, snapshot?.output].filter(Boolean).join('\n')
+        const connectionState = detectShellSessionConnectionState(observedOutput)
+        const connectionLost = connectionState.state === 'disconnected'
+        const readFailed = options.enter !== false && (!shouldReadAfterSend || waitResult?.snapshot?.ok !== true)
+        const outcomeUnknown = connectionLost || waitResult?.waitTimedOut === true || readFailed
         return {
-            ok: true,
+            ok: !outcomeUnknown,
+            operationOk: true,
             sessionName,
             input,
             enter: options.enter !== false,
@@ -284,6 +333,25 @@ export async function sendToShellSession(options = {}) {
             waitElapsedMs: waitResult?.elapsedMs || 0,
             readAttempts: waitResult?.attempts || 0,
             output: snapshot?.ok ? snapshot.output : '',
+            outputDelta: waitResult?.outputDelta || '',
+            connectionState: connectionState.state,
+            connectionError: connectionState.reason,
+            commandOutcome: outcomeUnknown ? 'unknown' : 'observed',
+            recoverable: outcomeUnknown,
+            needs_user_action: outcomeUnknown,
+            error: connectionLost
+                ? '远端 Shell 连接已断开；本次命令的执行结果无法确认。'
+                : (waitResult?.waitTimedOut
+                    ? '等待 tmux 输出超时；本次命令是否完成无法确认。'
+                    : (readFailed ? '命令已发送，但 tmux 窗口回读失败；本次命令是否完成无法确认。' : '')),
+            summary: connectionLost
+                ? 'tmux 已接收命令，但远端 Shell 连接已断开，命令结果无法确认'
+                : (waitResult?.waitTimedOut
+                    ? 'tmux 已接收命令，但等待窗口输出超时，命令结果无法确认'
+                    : (readFailed ? 'tmux 已接收命令，但窗口回读失败，命令结果无法确认' : 'tmux 已接收命令并读取到窗口输出')),
+            next_hints: connectionLost
+                ? ['请先重新建立远端 SSH/Shell 连接，再重新执行目标命令；不能据此判断服务器发生了重启。']
+                : (outcomeUnknown ? ['请用 action=read 查看 tmux 当前状态；确认命令是否完成前不要重复执行可能产生副作用的命令。'] : []),
             truncated: snapshot?.truncated || false,
             totalChars: snapshot?.totalChars || 0,
             lines: snapshot?.lines,

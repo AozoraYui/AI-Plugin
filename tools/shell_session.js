@@ -199,6 +199,13 @@ export const shellSessionTool = {
         }
         if (data.ok === false) {
             let output = `\n\n【Shell会话失败】动作: ${data.actionLabel || data.action || '未知'}\n会话: ${name}\n原因: ${data.error || '未知错误'}`
+            if (data.connectionState === 'disconnected') {
+                output += '\n连接状态: 已断开'
+                output += '\n命令结果: 未确认；仅能确认 tmux 已接收输入，不能据此判断远端主机重启或命令成功。'
+                if (data.connectionError) output += `\n断开信息: ${data.connectionError}`
+            } else if (data.commandOutcome === 'unknown') {
+                output += '\n命令结果: 未确认；请先读取 tmux 当前状态，不要将输入动作当作目标任务完成。'
+            }
             if (data.directorySafety?.safetyBlocked) {
                 output += `\n\n【目录安全检查】已阻止执行，命令没有发送到 tmux。`
                 output += `\n当前目录: ${data.directorySafety.currentDirectory}`
@@ -206,10 +213,13 @@ export const shellSessionTool = {
                 output += `\n期望目录: ${data.directorySafety.expectedDirectory}`
                 output += `\n处理建议: 请反问主人下一步要切换到哪个目录或是否仍要继续。`
             }
+            if (data.output) output += `\n\n--- tmux窗口输出（仅作事实证据） ---\n${data.output}`
+            output += '\n【Shell会话结果结束】\n'
             return output
         }
 
-        let output = `\n\n【Shell会话结果】\n动作: ${data.actionLabel || data.action}\n会话: ${name}\n状态: 成功`
+        const commandStatus = data.commandOutcome === 'unknown' ? '已发送，结果未确认' : '成功'
+        let output = `\n\n【Shell会话结果】\n动作: ${data.actionLabel || data.action}\n会话: ${name}\n状态: ${commandStatus}`
         if (data.created) output += `\n提示: 会话不存在，已自动创建。`
         if (data.directorySafety?.safetyBlocked) {
             output += `\n\n【目录安全检查】已阻止执行，命令没有发送到 tmux。`
@@ -227,6 +237,9 @@ export const shellSessionTool = {
             output += `\n自动回读: 是，先等 ${data.afterSendDelayMs || 0}ms，最多等待 ${data.afterSendTimeoutMs || 0}ms，轮询 ${data.afterSendPollMs || 0}ms`
             output += `\n回读状态: ${data.outputChanged ? '检测到新输出' : (data.waitTimedOut ? '等待超时，返回当前快照' : '已读取快照')}`
             if (data.readAttempts) output += `，检查 ${data.readAttempts} 次，耗时 ${data.waitElapsedMs || 0}ms`
+        }
+        if (data.commandOutcome === 'unknown') {
+            output += '\n提示: 当前只确认输入已送入 tmux，未确认命令是否完成；不要把它当作目标任务成功。'
         }
         if (data.readError) output += `\n回读失败: ${data.readError}`
         if (data.truncated) output += `\n提示: 输出较长，仅显示末尾 ${Config.SHELL_SESSION_MAX_OUTPUT_CHARS} 字符。`

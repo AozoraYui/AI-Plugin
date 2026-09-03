@@ -19,6 +19,10 @@ export function normalizeToolResult(toolName, rawResult, options = {}) {
     const verified = objectResult?.verified === true
     const changed = typeof objectResult?.changed === 'boolean' ? objectResult.changed : undefined
     const recoverable = objectResult?.recoverable === true
+    const needsUserAction = objectResult?.needs_user_action === true || objectResult?.needsUserAction === true
+    const operationOk = objectResult?.operationOk === true || objectResult?.operation_ok === true
+    const connectionState = String(objectResult?.connectionState || objectResult?.connection_state || '').trim().toLowerCase()
+    const commandOutcome = String(objectResult?.commandOutcome || objectResult?.command_outcome || '').trim().toLowerCase()
     const facts = objectResult?.facts && typeof objectResult.facts === 'object' && !Array.isArray(objectResult.facts)
         ? objectResult.facts
         : {}
@@ -41,9 +45,13 @@ export function normalizeToolResult(toolName, rawResult, options = {}) {
         ok,
         pending,
         needsConfirmation: pending,
+        needsUserAction,
+        operationOk,
         verified,
         changed,
         recoverable,
+        connectionState,
+        commandOutcome,
         summary,
         error,
         facts,
@@ -65,6 +73,15 @@ export function deterministicToolDecision(results = []) {
             summary: '任务正在等待用户确认。',
             lastObservation: normalized.filter(result => result.pending || result.needsConfirmation).map(result => result.summary).join('；'),
             nextHint: ''
+        }
+    }
+    const userActionRequired = normalized.find(result => result.needsUserAction || result.connectionState === 'disconnected')
+    if (userActionRequired) {
+        return {
+            completionStatus: 'waiting',
+            summary: '工具已发现会话连接中断，等待用户重新建立连接或补充操作。',
+            lastObservation: userActionRequired.error || userActionRequired.summary,
+            nextHint: userActionRequired.nextHints?.[0] || '请先重新建立远端 Shell/SSH 连接，再继续执行目标命令。'
         }
     }
     const failed = normalized.find(result => !result.ok)

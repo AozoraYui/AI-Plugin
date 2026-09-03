@@ -477,7 +477,8 @@ const TOOL_USAGE_GUIDES = {
             '操作主人专用的持久 tmux Shell 会话（默认 ai-shell）。',
             '可读取 tmux 窗口输出、发送命令或文本、发送 Ctrl-C、清屏、重启或关闭会话。',
             'action=send 默认会在发送并回车后等待窗口出现新输出，最多 64 秒，随后回读窗口快照。',
-            '适合长任务、dev server、tail 日志、交互式排查和需要保留 shell 状态的场景。'
+            '适合长任务、dev server、tail 日志、交互式排查和需要保留 shell 状态的场景。',
+            '如果窗口出现 SSH 连接断开信息，工具会明确标记命令结果未知，并等待重新连接；这不等于服务器重启。'
         ],
         useWhen: [
             '主人明确提到 tmux、ai-shell、shell会话、shell窗口、独立shell，并要求查看、输入、执行、中断或管理该会话时使用。',
@@ -492,6 +493,8 @@ const TOOL_USAGE_GUIDES = {
             'action=send 时 input 必须来自主人明确要求输入/执行的内容。',
             'action=send 中的破坏性命令同样进入待确认，不会直接发送到 tmux；确认时只能执行缓存的原始 input。',
             'action=send 返回的 tmux窗口输出就是发送后等待新输出得到的窗口快照；若等待超时、输出为空或任务仍在运行，再用 action=read 读取。',
+            '“tmux 已接收输入”只证明输入动作成功，不证明命令或用户目标完成；commandOutcome=unknown 时不得声称成功。',
+            '出现 connectionState=disconnected 时，不要把 Connection to ... closed 推断为重启；先说明连接已断开，要求重新建立 SSH/Shell 连接。',
             '用 shell_session 做 nmap/局域网扫描时，input 应先自动推断本机 iface/cidr（ip route/ip addr），再 nmap -sn "$cidr"，不要硬编码猜测网段。',
             '只是查看会话输出用 action=read；确保会话存在用 action=status。',
             '需要停止当前前台任务用 action=interrupt；不要随意 close/restart，除非主人明确要求。',
