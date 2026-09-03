@@ -2203,6 +2203,7 @@ export class ChatHandler extends plugin {
             let shellConnectionLost = false
             let shellCommandOutcomeUnknown = false
             let shellUnknownCommand = ''
+            let shellCommandWasSent = false
             let failedImageSearchAttempts = 0
             let webEvidenceState = {}
             let webEvidenceStagnationState = { fingerprint: '', repeatCount: 0, shouldStop: false }
@@ -2524,6 +2525,7 @@ export class ChatHandler extends plugin {
                             && (result.data?.commandOutcome === 'unknown' || result.data?.connectionState === 'disconnected')) {
                             shellCommandOutcomeUnknown = true
                             shellConnectionLost = shellConnectionLost || result.data?.connectionState === 'disconnected'
+                            shellCommandWasSent = shellCommandWasSent || (call.args?.action === 'send' && result.data?.operationOk !== false)
                             shellUnknownCommand = shellUnknownCommand || String(call.args?.input || '').trim()
                         } else if (call.name === 'shell_session'
                             && call.args?.action === 'send'
@@ -3468,9 +3470,12 @@ export class ChatHandler extends plugin {
                     usedSafeFallbackReply = true
                 }
                 if (shellCommandOutcomeUnknown) {
+                    const shellActionPrefix = shellCommandWasSent
+                        ? `命令${shellUnknownCommand ? `「${shellUnknownCommand.slice(0, 120)}」` : ''}已经送入 tmux`
+                        : '这次只读取到 Shell 会话状态，未发送新的命令'
                     finalResponseText = shellConnectionLost
-                        ? `命令${shellUnknownCommand ? `「${shellUnknownCommand.slice(0, 120)}」` : ''}已经送入 tmux，但执行期间远端 Shell/SSH 连接断开了，所以无法确认命令是否完成，也不能据此判断服务器发生了重启。请先重新建立到目标机器的连接，再决定是否重试。`
-                        : `命令${shellUnknownCommand ? `「${shellUnknownCommand.slice(0, 120)}」` : ''}已经送入 tmux，但没有拿到足以确认完成的结果。请先用读取会话状态的方式确认命令是否仍在运行或已经结束，再决定是否重试；不能把输入动作当作目标任务完成。`
+                        ? `${shellActionPrefix}，但执行期间远端 Shell/SSH 连接断开了，所以无法确认命令是否完成，也不能据此判断服务器发生了重启。请先重新建立到目标机器的连接，再决定是否重试。`
+                        : `${shellActionPrefix}，没有拿到足以确认完成的结果。请先用读取会话状态的方式确认命令是否仍在运行或已经结束，再决定是否重试；不能把输入动作当作目标任务完成。`
                     usedSafeFallbackReply = true
                 }
                 if (shellToolExecutionCount > 0) {
