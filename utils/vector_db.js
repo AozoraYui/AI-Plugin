@@ -16,7 +16,7 @@ const VECTOR_WRITE_TIMEOUT_MS = 300000
 const VECTOR_WRITE_RETRY_COUNT = 3
 const VECTOR_WRITE_RETRY_BASE_MS = 1500
 const VECTOR_WRITE_CHUNK_SIZE = 32
-const VECTOR_SERVER_PROTOCOL_VERSION = '2026-07-25.8'
+const VECTOR_SERVER_PROTOCOL_VERSION = '2026-07-25.9'
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms))

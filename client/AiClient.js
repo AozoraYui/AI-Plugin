@@ -950,6 +950,7 @@ export class AiClient {
             if (bodySize > 10 * 1024 * 1024) { // 10MB 警告阈值
                 logger.warn(`[AI-Plugin] 请求体过大 (${(bodySize / 1024 / 1024).toFixed(2)}MB)，可能导致 413 错误`)
             }
+            options.allowPrivateNetwork = true
             
             const res = await fetchWithProxy(url, options)
 
@@ -1096,6 +1097,7 @@ export class AiClient {
                 body
             }
             if (timeout > 0) options.timeout = timeout
+            options.allowPrivateNetwork = true
 
             logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 使用 /images/edits（${images.length} 张参考图）`)
             const res = await fetchWithProxy(url, options)
@@ -1129,6 +1131,7 @@ export class AiClient {
             body: JSON.stringify({ model: modelId, prompt, n: 1 })
         }
         if (timeout > 0) options.timeout = timeout
+        options.allowPrivateNetwork = true
 
         const res = await fetchWithProxy(url, options)
         if (!res.ok) throw new Error(`HTTP状态码: ${res.status}`)

@@ -1596,7 +1596,7 @@ const keywordMixedImageTrigger = resolveFastChatTrigger({
 check('图文消息提到AI名称时正常回复并读取图片', keywordMixedImageTrigger.triggered
     && keywordMixedImageTrigger.reason === 'keyword'
     && keywordMixedImageTrigger.forceReadCurrentImages === true)
-check('当前图文请求默认聚焦本轮内容', shouldPrioritizeCurrentMultimodalTurn(
+check('当前图文请求默认保留上下文', !shouldPrioritizeCurrentMultimodalTurn(
     '#c给认真科普的老哥点赞',
     { hasDirectImages: true }
 ))
@@ -1606,6 +1606,10 @@ check('明确引用历史的图文请求保留上下文', !shouldPrioritizeCurre
 ))
 check('对比上一张图片时保留历史上下文', !shouldPrioritizeCurrentMultimodalTurn(
     '#c这张图和上一张有什么区别',
+    { hasDirectImages: true }
+))
+check('明确要求只看当前图片时才隔离上下文', shouldPrioritizeCurrentMultimodalTurn(
+    '#c只看这张图，不要结合前面的聊天',
     { hasDirectImages: true }
 ))
 check('没有当前图片时不启用图文聚焦', !shouldPrioritizeCurrentMultimodalTurn(

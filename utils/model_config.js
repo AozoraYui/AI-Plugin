@@ -6,6 +6,15 @@ function asText(value) {
     return value === undefined || value === null ? '' : String(value).trim()
 }
 
+function asBoolean(value, fallback) {
+    if (typeof value === 'boolean') return value
+    if (typeof value === 'string') {
+        if (value.trim().toLowerCase() === 'true') return true
+        if (value.trim().toLowerCase() === 'false') return false
+    }
+    return fallback
+}
+
 /** Normalize one independently configured model. */
 export function normalizeModelDefinition(raw = {}) {
     if (!isRecord(raw)) return null
@@ -21,8 +30,8 @@ export function normalizeModelDefinition(raw = {}) {
         alias: asText(raw.alias) || id,
         model_id: modelId,
         provider_id: providerId,
-        multimodal: raw.multimodal ?? true,
-        per_call: raw.per_call ?? false
+        multimodal: asBoolean(raw.multimodal, true),
+        per_call: asBoolean(raw.per_call, false)
     }
 }
 

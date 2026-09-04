@@ -42,6 +42,14 @@ assert.equal(resolveModelReference('vendor/text', normalized.definitions, 'p2').
 assert.equal(normalized.definitions.find(model => model.id === 'text').multimodal, false)
 assert.equal(normalized.definitions.find(model => model.id === 'duplicate').multimodal, true)
 
+const stringBoolean = normalizeModelConfigDocuments([{
+    providers: [{ id: 'p4', name: 'Provider 4' }],
+    models: [{ id: 'text-4', provider: 'p4', model: 'text-api', multimodal: 'false', per_call: 'true' }],
+    model_groups: { flash: { chat_models: ['text-4'] } }
+}])
+assert.equal(stringBoolean.definitions[0].multimodal, false)
+assert.equal(stringBoolean.definitions[0].per_call, true)
+
 const stringReference = normalizeModelConfigDocuments([{
     providers: [{ id: 'p3', name: 'Provider 3' }],
     models: [{ id: 'vision-3', provider: 'p3', model: 'vision-api' }],

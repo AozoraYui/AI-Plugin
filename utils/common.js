@@ -3,6 +3,7 @@ import http from 'http'
 import fs from 'node:fs'
 import path from 'node:path'
 import net from 'node:net'
+import dns from 'node:dns/promises'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { Config, expandPrompt } from './config.js'
 
@@ -44,8 +45,50 @@ export async function setMsgEmojiLike(e, emojiID) {
 }
 
 const LOCAL_PROXY_PORTS = [7897, 7890, 7891, 10809, 1080]
+const DEFAULT_MAX_RESPONSE_BYTES = 20 * 1024 * 1024
 let autoProxyCache = { url: '', expiresAt: 0 }
 let lastAutoProxyLog = { url: '', at: 0 }
+
+function isPrivateIpv4(value) {
+    const parts = String(value || '').split('.').map(Number)
+    if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return false
+    const [a, b] = parts
+    return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127)
+        || (a === 169 && b === 254) || a === 172 && b >= 16 && b <= 31
+        || a === 192 && b === 168 || a === 198 && (b === 18 || b === 19)
+        || a >= 224
+}
+
+function isPrivateIp(value) {
+    const ip = String(value || '').toLowerCase()
+    if (net.isIPv4(ip)) return isPrivateIpv4(ip)
+    if (!net.isIPv6(ip)) return false
+    if (ip === '::1' || ip === '::' || ip.startsWith('fc') || ip.startsWith('fd') || ip.startsWith('fe8') || ip.startsWith('fe9') || ip.startsWith('fea') || ip.startsWith('feb')) return true
+    const mapped = ip.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/)
+    return Boolean(mapped && isPrivateIpv4(mapped[1]))
+}
+
+function isPrivateHostname(hostname) {
+    const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
+    return host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')
+        || host === 'metadata.google.internal' || host === 'instance-data.ec2.internal'
+        || isPrivateIp(host)
+}
+
+export async function assertPublicUrl(targetUrl, options = {}) {
+    const parsed = new URL(targetUrl)
+    if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error(`不支持的网络协议: ${parsed.protocol}`)
+    if (options.allowPrivateNetwork === true) return parsed
+    if (isPrivateHostname(parsed.hostname)) throw new Error('为避免 SSRF，已阻止访问本机或内网地址')
+    let addresses
+    try {
+        addresses = (await dns.lookup(parsed.hostname, { all: true, verbatim: true })).map(item => item.address)
+    } catch {
+        throw new Error('无法解析目标域名，已阻止网络请求')
+    }
+    if (addresses.some(isPrivateIp)) throw new Error('为避免 SSRF，目标域名解析到了本机或内网地址')
+    return parsed
+}
 
 function normalizeProxyUrl(value = '') {
     const raw = String(value || '').trim()
@@ -120,8 +163,9 @@ export async function fetchWithProxy(url, options = {}) {
     const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : null
     const requestTimeout = options.timeout || 600000
     const maxRedirects = Math.max(0, Math.min(10, Number(options.maxRedirects ?? 5) || 0))
+    const maxResponseBytes = Math.max(1024, Number(options.maxResponseBytes) || DEFAULT_MAX_RESPONSE_BYTES)
     const request = (targetUrl, redirectCount = 0) => new Promise((resolve, reject) => {
-        const urlObj = new URL(targetUrl)
+        assertPublicUrl(targetUrl, options).then(urlObj => {
         const httpModule = urlObj.protocol === 'https:' ? https : http
         const requestOptions = {
             hostname: urlObj.hostname,
@@ -141,7 +185,21 @@ export async function fetchWithProxy(url, options = {}) {
                 return
             }
             const chunks = []
-            res.on('data', chunk => chunks.push(chunk))
+            let totalBytes = 0
+            const declaredLength = Number(res.headers['content-length'])
+            if (Number.isFinite(declaredLength) && declaredLength > maxResponseBytes) {
+                res.resume()
+                reject(new Error(`响应体超过 ${maxResponseBytes} 字节上限`))
+                return
+            }
+            res.on('data', chunk => {
+                totalBytes += chunk.length
+                if (totalBytes > maxResponseBytes) {
+                    req.destroy(new Error(`响应体超过 ${maxResponseBytes} 字节上限`))
+                    return
+                }
+                chunks.push(chunk)
+            })
             res.on('end', () => {
                 const buffer = Buffer.concat(chunks)
                 const data = buffer.toString()
@@ -167,6 +225,7 @@ export async function fetchWithProxy(url, options = {}) {
         req.on('timeout', () => { req.destroy(); reject(new Error('请求超时')) })
         if (options.body) req.write(options.body)
         req.end()
+        }).catch(reject)
     })
     if (proxyUrl && options.autoDetectProxy === true && (lastAutoProxyLog.url !== proxyUrl || Date.now() - lastAutoProxyLog.at > 60_000)) {
         logger.info(`[AI-Plugin] 网络请求自动使用本地代理: ${proxyUrl}`)

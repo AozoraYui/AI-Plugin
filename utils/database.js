@@ -979,9 +979,14 @@ export class AIDatabase {
 
     clearConversationHistory(userId) {
         return new Promise((resolve, reject) => {
-            this.db.run('DELETE FROM user_histories WHERE user_id = ?', [String(userId)], (err) => {
-                if (err) reject(err)
-                else resolve()
+            const normalizedUserId = String(userId)
+            this.db.run('DELETE FROM user_histories WHERE user_id = ?', [normalizedUserId], (err) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                queueDeleteVectorWhere({ source: 'user_history', user_id: normalizedUserId })
+                resolve()
             })
         })
     }

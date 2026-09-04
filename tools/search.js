@@ -9,7 +9,7 @@ import { setDefaultResultOrder } from 'node:dns'
 import net from 'node:net'
 import sharp from 'sharp'
 import { hasExplicitImageSearchIntent } from '../utils/tool_intent.js'
-import { fetchWithProxy } from '../utils/common.js'
+import { assertPublicUrl, fetchWithProxy } from '../utils/common.js'
 import { assessSearchResults, classifyWebUrl } from '../utils/web_evidence.js'
 
 const SEARCH_TIMEOUT_MS = 15000
@@ -223,25 +223,29 @@ async function fetchSearchHtml(url, engineName) {
     }
     let res
     try {
-        res = await fetch(url, {
-            method: 'GET',
+        res = await fetchWithProxy(url, {
             headers,
-            signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-            redirect: 'follow'
+            timeout: SEARCH_TIMEOUT_MS,
+            autoDetectProxy: true,
+            maxResponseBytes: MAX_PREVIEW_PAGE_BYTES
         })
     } catch (err) {
-        logger.warn(`[AI-Plugin] ${engineName} 原生 fetch 失败，强制 IPv4 重试: ${err.message}`)
+        logger.warn(`[AI-Plugin] ${engineName} 代理/HTTP通道失败，切换 IPv4 原生 fetch: ${err.message}`)
+        if (/SSRF|内网|响应体超过|无法解析目标域名|不支持的网络协议/i.test(String(err.message || ''))) throw err
         setDefaultResultOrder('ipv4first')
-        try {
-            res = await fetch(url, {
+        let currentUrl = url
+        for (let redirectCount = 0; redirectCount <= 3; redirectCount++) {
+            await assertPublicUrl(currentUrl)
+            res = await fetch(currentUrl, {
                 method: 'GET',
                 headers,
                 signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-                redirect: 'follow'
+                redirect: 'manual'
             })
-        } catch (retryErr) {
-            logger.warn(`[AI-Plugin] ${engineName} IPv4 fetch 仍失败，切换 Node HTTP/代理通道: ${retryErr.message}`)
-            res = await fetchWithProxy(url, { headers, timeout: SEARCH_TIMEOUT_MS, autoDetectProxy: true })
+            const location = res.headers.get('location')
+            if (!location || res.status < 300 || res.status >= 400) break
+            if (redirectCount >= 3) throw new Error('搜索引擎重定向超过上限')
+            currentUrl = new URL(location, currentUrl).toString()
         }
     }
 
@@ -250,7 +254,14 @@ async function fetchSearchHtml(url, engineName) {
         throw new Error(`${engineName} HTTP ${res.status}: ${body.slice(0, 120)}`)
     }
 
+    const contentLength = Number(res.headers.get('content-length'))
+    if (Number.isFinite(contentLength) && contentLength > MAX_PREVIEW_PAGE_BYTES) {
+        throw new Error(`${engineName} 响应体超过 ${MAX_PREVIEW_PAGE_BYTES} 字节上限`)
+    }
     const html = await res.text()
+    if (Buffer.byteLength(html, 'utf8') > MAX_PREVIEW_PAGE_BYTES) {
+        throw new Error(`${engineName} 响应体超过 ${MAX_PREVIEW_PAGE_BYTES} 字节上限`)
+    }
     logger.info(`[AI-Plugin] ${engineName} 返回HTML长度: ${html.length}`)
     return html
 }

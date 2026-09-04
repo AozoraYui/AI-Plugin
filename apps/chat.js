@@ -1988,7 +1988,7 @@ export class ChatHandler extends plugin {
             const allowPrivateMemoryContext = privateMemorySubject.allowed && !prioritizeCurrentMultimodalTurn
             if (prioritizeCurrentMultimodalTurn) {
                 groupAliasMemoryText = ''
-                logger.info('[AI-Plugin] 当前图文消息启用本轮聚焦：跳过无关历史、个人画像、向量记忆和畅聊流水')
+                logger.info('[AI-Plugin] 当前图文消息按用户要求隔离上下文：仅保留当前文字和图片')
             }
             let history = []
             let incrementalCheckpoint = null

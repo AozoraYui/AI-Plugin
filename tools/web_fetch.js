@@ -5,6 +5,7 @@
 
 import { toolRegistry } from './registry.js'
 import { assessFetchedContent } from '../utils/web_evidence.js'
+import { assertPublicUrl, fetchWithProxy } from '../utils/common.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -162,7 +163,7 @@ function formatSparkReport(data, originalUrl, rawUrl, maxChars) {
 
 async function fetchSparkReport(spark, originalUrl, maxChars = DEFAULT_MAX_CHARS) {
     try {
-        const res = await fetch(spark.rawUrl, {
+        const res = await fetchPublicHttp(spark.rawUrl, {
             method: 'GET',
             headers: {
                 'User-Agent': BROWSER_USER_AGENT,
@@ -170,13 +171,12 @@ async function fetchSparkReport(spark, originalUrl, maxChars = DEFAULT_MAX_CHARS
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.5',
             },
             signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-            redirect: 'follow',
         })
         if (!res.ok) {
             logger.warn(`[AI-Plugin] WebFetch spark raw 返回非200: ${spark.rawUrl} - ${res.status}`)
             return `\n\n【网页抓取失败】spark 报告 raw 接口 HTTP ${res.status}，可能链接已过期或数据不存在。\n`
         }
-        const text = await res.text()
+        const text = await readResponseTextLimited(res)
         let data
         try {
             data = JSON.parse(text)
@@ -277,6 +277,42 @@ function isPrivateOrLocalHostname(hostname = '') {
     return false
 }
 
+async function fetchPublicHttp(url, options = {}, maxRedirects = MAX_CLIENT_REDIRECTS) {
+    let currentUrl = String(url || '').trim()
+    for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount++) {
+        await assertPublicUrl(currentUrl)
+        const rawResponse = await fetchWithProxy(currentUrl, {
+            ...options,
+            redirect: 'manual',
+            timeout: options.timeout || REQUEST_TIMEOUT_MS,
+            maxRedirects: 0,
+            maxResponseBytes: MAX_RESPONSE_SIZE
+        })
+        const response = {
+            ...rawResponse,
+            headers: {
+                ...rawResponse.headers,
+                get(name) { return this[String(name || '').toLowerCase()] || null }
+            }
+        }
+        const location = response.headers.get('location')
+        if (!location || response.status < 300 || response.status >= 400) return response
+        if (redirectCount >= maxRedirects) throw new Error(`网页重定向超过 ${maxRedirects} 次`)
+        currentUrl = new URL(location, currentUrl).toString()
+    }
+    throw new Error('网页重定向失败')
+}
+
+async function readResponseTextLimited(response, maxBytes = MAX_RESPONSE_SIZE) {
+    const declaredLength = Number(response?.headers?.get?.('content-length'))
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+        throw new Error(`响应体超过 ${maxBytes} 字节上限`)
+    }
+    const text = await response.text()
+    if (Buffer.byteLength(text, 'utf8') > maxBytes) throw new Error(`响应体超过 ${maxBytes} 字节上限`)
+    return text
+}
+
 function canUseReaderFallback(rawUrl) {
     try {
         const u = new URL(rawUrl)
@@ -311,11 +347,10 @@ async function fetchWebPageWithReader(url, maxChars = DEFAULT_MAX_CHARS, reason 
 
     try {
         logger.info(`[AI-Plugin] WebFetch: 启用 Reader 文本降级，原因=${reason}，URL=${url}`)
-        const res = await fetch(readerUrl, {
+        const res = await fetchPublicHttp(readerUrl, {
             method: 'GET',
             headers,
             signal: AbortSignal.timeout(READER_TIMEOUT_MS),
-            redirect: 'follow',
         })
         if (res.status === 429) {
             readerUnavailableUntil = Date.now() + 60 * 1000
@@ -324,7 +359,7 @@ async function fetchWebPageWithReader(url, maxChars = DEFAULT_MAX_CHARS, reason 
         if (!res.ok) {
             return { ok: false, error: `Reader 服务 HTTP ${res.status}` }
         }
-        let text = await res.text()
+        let text = await readResponseTextLimited(res)
         text = htmlToText(text)
         if (!text.trim()) {
             return { ok: false, error: 'Reader 服务未返回可读文本' }
@@ -560,12 +595,11 @@ async function resolveBiliShortLink(rawUrl) {
     if (u.hostname !== 'b23.tv' && u.hostname !== 'bili2233.cn') return rawUrl
 
     try {
-        const res = await fetch(rawUrl, {
+        const res = await fetchPublicHttp(rawUrl, {
             method: 'GET',
             headers: {
                 'User-Agent': BROWSER_USER_AGENT
             },
-            redirect: 'follow',
             signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
         })
         // res.url 为跟随重定向后的最终地址；去掉跟踪参数保持干净
@@ -693,11 +727,10 @@ async function fetchGitHubApi(gh, originalUrl, maxChars) {
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             let res
             try {
-                res = await fetch(url, {
+                res = await fetchPublicHttp(url, {
                     method: 'GET',
                     headers,
                     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-                    redirect: 'follow',
                 })
             } catch (err) {
                 logger.warn(`[AI-Plugin] WebFetch GitHub API 请求失败: ${url} - ${err.message}`)
@@ -731,8 +764,7 @@ async function fetchGitHubApi(gh, originalUrl, maxChars) {
 
             let body
             try {
-                body = await res.text()
-                if (body.length > MAX_RESPONSE_SIZE) body = body.slice(0, MAX_RESPONSE_SIZE)
+                body = await readResponseTextLimited(res)
             } catch (err) {
                 return { error: `\n\n【网页抓取失败】读取 GitHub 响应出错: ${err.message}\n` }
             }
@@ -891,6 +923,12 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
         return `\n\n【网页抓取失败】不支持的协议，仅允许 http/https: ${targetUrl}\n`
     }
 
+    try {
+        await assertPublicUrl(targetUrl)
+    } catch (err) {
+        return `\n\n【网页抓取失败】${err.message}\n`
+    }
+
     // B站短链先还原为完整链接，便于后续抓取/识别
     let resolvedUrl = await resolveBiliShortLink(targetUrl)
     if (resolvedUrl !== targetUrl) {
@@ -916,11 +954,10 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
 
     let res
     try {
-        res = await fetch(resolvedUrl, {
+        res = await fetchPublicHttp(resolvedUrl, {
             method: 'GET',
             headers: buildHttpHeaders(resolvedUrl),
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-            redirect: 'follow',
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
         })
     } catch (err) {
         logger.warn(`[AI-Plugin] WebFetch 请求失败: ${targetUrl} - ${err.message}`)
@@ -943,6 +980,11 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
     }
 
     const finalUrl = res.url || resolvedUrl
+    try {
+        await assertPublicUrl(finalUrl)
+    } catch (err) {
+        return `\n\n【网页抓取失败】最终跳转地址不安全：${err.message}\n`
+    }
     const redirectNote = finalUrl !== resolvedUrl
         ? `\n请求地址: ${targetUrl}\n最终地址: ${finalUrl}\n重定向: 是`
         : `\n最终地址: ${finalUrl}\n重定向: 否`
@@ -953,7 +995,7 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
         // 如果是 JSON，尝试返回
         if (contentType.includes('json')) {
             try {
-                const json = await res.text()
+                const json = await readResponseTextLimited(res)
                 const truncated = truncateContent(json, maxChars)
                 logger.info(`[AI-Plugin] WebFetch 成功(JSON): ${targetUrl} -> ${finalUrl} (${truncated.length} 字符)`)
                 return `\n\n【网页内容「${targetUrl}」(JSON, ${json.length} 字符)】${redirectNote}\n${truncated}\n`
@@ -967,12 +1009,7 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
     // 读取响应体（限制大小）
     let html
     try {
-        const bodyText = await res.text()
-        if (bodyText.length > MAX_RESPONSE_SIZE) {
-            html = bodyText.slice(0, MAX_RESPONSE_SIZE)
-        } else {
-            html = bodyText
-        }
+        html = await readResponseTextLimited(res)
     } catch (err) {
         logger.warn(`[AI-Plugin] WebFetch 读取响应失败: ${targetUrl} - ${err.message}`)
         const fallbackResult = await tryBrowserThenReader(resolvedUrl, maxChars, `读取 HTTP 响应失败: ${err.message}`)

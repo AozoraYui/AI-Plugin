@@ -27,7 +27,10 @@ from sentence_transformers import SentenceTransformer
 CHROMA_DB_PATH = sys.argv[1] if len(sys.argv) > 1 else "./chroma_db"
 SERVER_HOST = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1"
 SERVER_PORT = int(sys.argv[3]) if len(sys.argv) > 3 else 9901
-SERVER_VERSION = "2026-07-25.8"
+SERVER_VERSION = "2026-07-25.9"
+MAX_REQUEST_BYTES = 8 * 1024 * 1024
+MAX_DOCUMENTS_PER_REQUEST = 64
+MAX_TEXT_CHARS = 12000
 MODEL_NAME = sys.argv[4] if len(sys.argv) > 4 else os.environ.get(
     "AI_PLUGIN_VECTOR_MODEL",
     "shibing624/text2vec-base-chinese",
@@ -108,6 +111,8 @@ def read_json(handler):
     length = int(handler.headers.get("Content-Length", "0") or "0")
     if length <= 0:
         return {}
+    if length > MAX_REQUEST_BYTES:
+        raise ValueError(f"request body exceeds {MAX_REQUEST_BYTES} bytes")
     raw = handler.rfile.read(length)
     return sanitize_json_value(json.loads(raw.decode("utf-8", errors="replace")))
 
@@ -248,6 +253,11 @@ class VectorDBHandler(BaseHTTPRequestHandler):
                 self.handle_reset()
             else:
                 write_json(self, 404, {"error": "not found"})
+        except ValueError as exc:
+            if "request body exceeds" in str(exc):
+                write_json(self, 413, {"success": False, "error": str(exc)})
+                return
+            self.handle_exception(exc)
         except Exception as exc:
             self.handle_exception(exc)
 
@@ -315,6 +325,9 @@ class VectorDBHandler(BaseHTTPRequestHandler):
         if not doc_id or not text:
             write_json(self, 400, {"error": "id and text are required"})
             return
+        if len(text) > MAX_TEXT_CHARS:
+            write_json(self, 413, {"error": f"text exceeds {MAX_TEXT_CHARS} characters"})
+            return
         metadata = sanitize_metadata(data.get("metadata", {}))
         embedding = get_embedding(text)
         with collection_lock:
@@ -327,6 +340,9 @@ class VectorDBHandler(BaseHTTPRequestHandler):
             return
         data = read_json(self)
         docs = data.get("documents", [])
+        if not isinstance(docs, list) or len(docs) > MAX_DOCUMENTS_PER_REQUEST:
+            write_json(self, 413, {"error": f"documents must contain at most {MAX_DOCUMENTS_PER_REQUEST} items"})
+            return
         ids = []
         texts = []
         metadatas = []
@@ -336,6 +352,8 @@ class VectorDBHandler(BaseHTTPRequestHandler):
             doc_id = coerce_text(item.get("id", ""))
             text = coerce_text(item.get("text", ""))
             if not doc_id or not text:
+                continue
+            if len(text) > MAX_TEXT_CHARS:
                 continue
             ids.append(doc_id)
             texts.append(text)
@@ -375,6 +393,9 @@ class VectorDBHandler(BaseHTTPRequestHandler):
             return
         data = read_json(self)
         query = coerce_text(data.get("query", ""))
+        if len(query) > MAX_TEXT_CHARS:
+            write_json(self, 413, {"error": f"query exceeds {MAX_TEXT_CHARS} characters"})
+            return
         limit = max(1, min(int(data.get("limit", 10) or 10), 80))
         where = data.get("where")
         if not query:

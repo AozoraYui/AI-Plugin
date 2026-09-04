@@ -883,6 +883,16 @@ ${instruction}
             return { success: false, error: `未知工具: ${name}` }
         }
 
+        if (!args || typeof args !== 'object' || Array.isArray(args) || !this._validateArgsAgainstSchema(name, args)) {
+            const error = `工具 ${name} 的参数未通过 Schema 校验`
+            logger.warn(`[AI-Plugin] ${error}: ${JSON.stringify(args)}`)
+            return {
+                success: false,
+                error,
+                protocol: normalizeToolResult(name, { ok: false, error })
+            }
+        }
+
         // 权限检查：permission 为 'master' 的工具仅主人可调用
         if (tool.permission === 'master' && !isMaster) {
             logger.warn(`[AI-Plugin] 工具 ${name} 权限不足：非主人尝试调用`)

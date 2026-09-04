@@ -5,7 +5,7 @@
  * 文件夹会先用系统 tar 打包为 .tar.gz 再发送，避免引入额外依赖。
  */
 
-import { exec } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -24,9 +24,9 @@ function packDirectory(dirPath) {
         // -C 父目录，仅打包目标目录本身，避免把绝对路径写进包里
         const parent = path.dirname(dirPath)
         const base = path.basename(dirPath)
-        const cmd = `tar -czf ${JSON.stringify(tmpFile)} -C ${JSON.stringify(parent)} ${JSON.stringify(base)}`
-        exec(cmd, { timeout: 120000, maxBuffer: 10 * 1024 * 1024 }, (err) => {
+        execFile('tar', ['-czf', tmpFile, '-C', parent, '--', base], { timeout: 120000, maxBuffer: 10 * 1024 * 1024 }, (err) => {
             if (err) {
+                fs.rmSync(tmpFile, { force: true })
                 reject(new Error(`打包文件夹失败: ${err.message}`))
                 return
             }

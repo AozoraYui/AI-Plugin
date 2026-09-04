@@ -83,9 +83,9 @@ const incidents = [
         }
     },
     {
-        id: 'current-image-turn-does-not-inherit-unrelated-history',
+        id: 'current-image-turn-keeps-relevant-context',
         input: '#c给认真科普的老哥点赞',
-        pass: text => shouldPrioritizeCurrentMultimodalTurn(text, { hasDirectImages: true })
+        pass: text => !shouldPrioritizeCurrentMultimodalTurn(text, { hasDirectImages: true })
     },
     {
         id: 'referential-ai-name-does-not-trigger-fast-chat',
