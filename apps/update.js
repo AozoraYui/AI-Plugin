@@ -60,6 +60,46 @@ export class UpdateHandler extends plugin {
         return 'origin/main'
     }
 
+    async _getOriginUrl() {
+        const result = await this._runGit(['config', '--get', 'remote.origin.url'])
+        return result.success ? result.output.trim() : ''
+    }
+
+    _getCanonicalGitHubUrl(remoteUrl = '') {
+        const value = String(remoteUrl || '').trim()
+        const match = value.match(/^https?:\/\/[^/]+\/github\/(.+)$/i)
+        if (!match) return ''
+        const repository = match[1].replace(/^\/+|\/+$/g, '')
+        if (!/^[\w.-]+\/[\w.-]+(?:\.git)?$/.test(repository)) return ''
+        return `https://github.com/${repository}`
+    }
+
+    async _fetchOrigin() {
+        const direct = await this._runGit(['fetch', '--prune', 'origin'])
+        if (direct.success) return direct
+
+        const originUrl = await this._getOriginUrl()
+        const canonicalUrl = this._getCanonicalGitHubUrl(originUrl)
+        if (!canonicalUrl || !/(?:authentication|credential|username|could not read|401|403|terminal prompts)/i.test(direct.output)) {
+            return direct
+        }
+
+        logger.warn(`[AI-Plugin] origin 认证失败，尝试 canonical GitHub 地址；不修改 remote.origin.url: ${canonicalUrl}`)
+        const fallback = await this._runGit([
+            'fetch', '--prune', canonicalUrl, '+refs/heads/*:refs/remotes/origin/*'
+        ])
+        if (fallback.success) {
+            return {
+                ...fallback,
+                output: `${fallback.output}\n（已从 canonical GitHub 地址获取，未修改远程配置）`
+            }
+        }
+        return {
+            success: false,
+            output: `${direct.output}\n\ncanonical GitHub 回退也失败:\n${fallback.output}`
+        }
+    }
+
     /** 获取 HEAD..远端分支的提交日志 */
     async _getChangelog(remoteRef) {
         const result = await this._runGit([
@@ -78,7 +118,7 @@ export class UpdateHandler extends plugin {
         updateInProgress = true
         await e.reply('🔄 正在检查更新...')
         try {
-            const fetchResult = await this._runGit(['fetch', '--prune', 'origin'])
+            const fetchResult = await this._fetchOrigin()
             if (!fetchResult.success) return e.reply(`❌ git fetch 失败:\n${fetchResult.output}`)
 
             const remoteRef = await this._getRemoteBranch()
@@ -117,7 +157,7 @@ export class UpdateHandler extends plugin {
         updateInProgress = true
         await e.reply('⚠️ 正在强制更新（将丢弃本地修改）...')
         try {
-            const fetchResult = await this._runGit(['fetch', '--prune', 'origin'])
+            const fetchResult = await this._fetchOrigin()
             if (!fetchResult.success) return e.reply(`❌ git fetch 失败:\n${fetchResult.output}`)
             const remoteRef = await this._getRemoteBranch()
             const changelog = await this._getChangelog(remoteRef)
