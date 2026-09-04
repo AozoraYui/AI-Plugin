@@ -36,7 +36,7 @@ const {
 const { classifyAgentRisk, classifyToolCallRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } = await import('../utils/agent_policy.js')
 const { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } = await import('../utils/model_output.js')
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
-const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldPrioritizeCurrentMultimodalTurn } = await import('../utils/message_context.js')
+const { buildParticipantIdentityHint, expandInlineContent, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldPrioritizeCurrentMultimodalTurn } = await import('../utils/message_context.js')
 const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq_face.js')
 const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
@@ -417,13 +417,35 @@ check('Shell摘要把断连归类为结果未知', (await summarizeShellResultFo
     connectionState: 'disconnected',
     commandOutcome: 'unknown',
     output: 'Connection to 192.168.2.35 closed.'
-})).includes('无法确认命令是否完成')
+    })).includes('无法确认命令是否完成')
     && !(await summarizeShellResultForReply(null, 'flash', 'shell_session', {}, {
         ok: false,
         connectionState: 'disconnected',
         commandOutcome: 'unknown',
         output: 'Connection to 192.168.2.35 closed.'
     })).includes('执行失败'))
+check('合并转发内的回复段会展开正文和图片', (await (async () => {
+    const expanded = await expandInlineContent({
+        async sendApi(action, params) {
+            if (action !== 'get_msg' || String(params.message_id) !== 'reply-42') throw new Error('unexpected API call')
+            return {
+                data: {
+                    nickname: '原消息作者',
+                    message: [
+                        { type: 'text', data: { text: '被回复的完整正文' } },
+                        { type: 'image', data: { url: 'https://example.com/replied-image.jpg' } }
+                    ]
+                }
+            }
+        }
+    }, [
+        { type: 'reply', data: { id: 'reply-42' } },
+        { type: 'at', data: { qq: '12345' } }
+    ], '转发者')
+    return expanded.text.includes('被回复的完整正文')
+        && expanded.text.includes('[@12345]')
+        && expanded.images.includes('https://example.com/replied-image.jpg')
+})()))
 let shellSummaryPrompt = ''
 const summarizedShellReply = await summarizeShellResultForReply({
     async makeRequest(type, payload) {

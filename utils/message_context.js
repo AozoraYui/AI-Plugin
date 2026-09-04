@@ -89,13 +89,55 @@ export function extractCardInfo(data = {}) {
     return lines.length > 0 ? lines.join('\n') : ''
 }
 
-export async function expandForwardMsg(bot, resid, depth = 0, maxDepth = Config.FORWARD_MSG_MAX_DEPTH) {
+function createForwardExpansionState() {
+    return {
+        forwardStack: new Set(),
+        replyStack: new Set(),
+        replyResolved: 0,
+        replyFailed: 0,
+        replyUnresolved: 0
+    }
+}
+
+async function getReferencedMessage(bot, messageId) {
+    let response
+    let primaryError
+    if (bot?.sendApi) {
+        try {
+            response = await bot.sendApi('get_msg', { message_id: messageId })
+        } catch (err) {
+            primaryError = err
+        }
+    }
+    if (!response && typeof bot?.getMsg === 'function') {
+        try {
+            response = await bot.getMsg(messageId)
+        } catch (err) {
+            primaryError = primaryError || err
+        }
+    }
+    if (!response) throw new Error(primaryError?.message || '机器人不支持读取被回复消息')
+    if (response?.status === 'failed' || (Number.isFinite(Number(response?.retcode)) && Number(response.retcode) !== 0)) {
+        throw new Error(response?.wording || response?.message || '读取被回复消息失败')
+    }
+    const message = response?.data || response
+    if (!message || typeof message !== 'object') throw new Error('get_msg 返回内容无效')
+    return message
+}
+
+export async function expandForwardMsg(bot, resid, depth = 0, maxDepth = Config.FORWARD_MSG_MAX_DEPTH, state = createForwardExpansionState()) {
     const textParts = []
     const images = []
 
     if (depth >= maxDepth) {
         return { text: '【嵌套层级过深，停止展开】', images: [] }
     }
+
+    const forwardId = String(resid || '').trim()
+    if (forwardId && state.forwardStack.has(forwardId)) {
+        return { text: `【检测到循环合并转发 ${forwardId}，停止展开】`, images: [] }
+    }
+    if (forwardId) state.forwardStack.add(forwardId)
 
     try {
         const res = await bot.sendApi('get_forward_msg', { message_id: resid })
@@ -113,7 +155,7 @@ export async function expandForwardMsg(bot, resid, depth = 0, maxDepth = Config.
             const msgArray = subMsg.content || subMsg.message
 
             if (Array.isArray(msgArray)) {
-                const expanded = await expandInlineContent(bot, msgArray, sender, depth, maxDepth)
+                const expanded = await expandInlineContent(bot, msgArray, sender, depth, maxDepth, state)
                 textParts.push(expanded.text)
                 images.push(...expanded.images)
             } else if (typeof msgArray === 'string') {
@@ -128,13 +170,16 @@ export async function expandForwardMsg(bot, resid, depth = 0, maxDepth = Config.
         textParts.push(`【合并转发消息${layerTag} 结束】`)
     } catch (err) {
         logger.warn(`[AI-Plugin] 展开合并转发失败 (深度${depth}):`, err)
+        if (forwardId) state.forwardStack.delete(forwardId)
         return { text: `【展开失败: ${err.message}】`, images: [] }
     }
+
+    if (forwardId) state.forwardStack.delete(forwardId)
 
     return { text: textParts.join('\n'), images }
 }
 
-export async function expandInlineContent(bot, msgArray, sender = '发送者', depth = 0, maxDepth = Config.FORWARD_MSG_MAX_DEPTH) {
+export async function expandInlineContent(bot, msgArray, sender = '发送者', depth = 0, maxDepth = Config.FORWARD_MSG_MAX_DEPTH, state = createForwardExpansionState()) {
     const textParts = []
     const images = []
 
@@ -167,7 +212,7 @@ export async function expandInlineContent(bot, msgArray, sender = '发送者', d
                     const nestedSender = nestedMsg.nickname || nestedMsg.sender?.nickname || '未知用户'
                     const nestedMsgArray = nestedMsg.content || nestedMsg.message
                     if (Array.isArray(nestedMsgArray)) {
-                        const nested = await expandInlineContent(bot, nestedMsgArray, nestedSender, depth + 1, maxDepth)
+                        const nested = await expandInlineContent(bot, nestedMsgArray, nestedSender, depth + 1, maxDepth, state)
                         textParts.push(nested.text)
                         images.push(...nested.images)
                     }
@@ -179,7 +224,7 @@ export async function expandInlineContent(bot, msgArray, sender = '发送者', d
                 }
             } else if (nestedId) {
                 logger.info(`[AI-Plugin] 发现嵌套合并消息 (type=forward, id=${nestedId})，开始递归展开 (深度${depth + 1})`)
-                const nested = await expandForwardMsg(bot, nestedId, depth + 1, maxDepth)
+                const nested = await expandForwardMsg(bot, nestedId, depth + 1, maxDepth, state)
                 if (subText.trim()) {
                     textParts.push(`[${sender}]: ${subText}`)
                     subText = ''
@@ -187,6 +232,50 @@ export async function expandInlineContent(bot, msgArray, sender = '发送者', d
                 textParts.push(nested.text)
                 images.push(...nested.images)
             }
+        } else if (seg.type === 'reply') {
+            const replyId = String(seg.data?.id || seg.data?.message_id || seg.id || '').trim()
+            if (!replyId) {
+                subText += ' [回复消息] '
+                continue
+            }
+            if (state.replyStack.has(replyId)) {
+                textParts.push(`【检测到循环回复 ${replyId}，停止展开】`)
+                continue
+            }
+            if (subText.trim()) {
+                textParts.push(`[${sender}]: ${subText}`)
+                subText = ''
+            }
+            state.replyStack.add(replyId)
+            try {
+                const referenced = await getReferencedMessage(bot, replyId)
+                const referencedSender = referenced.nickname || referenced.sender?.nickname || sender || '未知用户'
+                const referencedContent = referenced.content || referenced.message
+                let referencedText = ''
+                let referencedImages = []
+                if (Array.isArray(referencedContent)) {
+                    const expanded = await expandInlineContent(bot, referencedContent, referencedSender, depth + 1, maxDepth, state)
+                    referencedText = expanded.text
+                    referencedImages = expanded.images
+                } else if (typeof referencedContent === 'string') {
+                    referencedText = `[${referencedSender}]: ${referencedContent}`
+                }
+                textParts.push(`【${sender}引用的消息 ${replyId} 开始】`)
+                textParts.push(referencedText || '【引用消息没有可读取的正文】')
+                textParts.push(`【${sender}引用的消息 ${replyId} 结束】`)
+                images.push(...referencedImages)
+                state.replyResolved++
+            } catch (err) {
+                state.replyFailed++
+                state.replyUnresolved++
+                textParts.push(`【回复消息 ${replyId} 展开失败：${err.message}】`)
+                logger.warn(`[AI-Plugin] 展开回复消息失败 (id=${replyId}, 深度${depth}): ${err.message}`)
+            } finally {
+                state.replyStack.delete(replyId)
+            }
+        } else if (seg.type === 'at') {
+            const target = seg.data?.qq || seg.qq
+            if (target) subText += ` [@${target}] `
         } else if ((seg.type === 'json' || seg.type === 'xml') && seg.data) {
             let cardData = seg.data
             if (typeof cardData === 'object' && typeof cardData.data === 'string') {
@@ -201,7 +290,7 @@ export async function expandInlineContent(bot, msgArray, sender = '发送者', d
                 if (residMatch) {
                     const nestedResid = residMatch[1]
                     logger.info(`[AI-Plugin] 从 JSON/XML 中发现嵌套 resid: ${nestedResid}，开始递归展开 (深度${depth + 1})`)
-                    const nested = await expandForwardMsg(bot, nestedResid, depth + 1, maxDepth)
+                    const nested = await expandForwardMsg(bot, nestedResid, depth + 1, maxDepth, state)
                     if (subText.trim()) {
                         textParts.push(`[${sender}]: ${subText}`)
                         subText = ''

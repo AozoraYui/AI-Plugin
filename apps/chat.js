@@ -1897,6 +1897,10 @@ export class ChatHandler extends plugin {
                         allImages = allImages.concat(forwardImages)
                     }
 
+                    if (replyText.trim() || forwardImages.length > 0) {
+                        logger.info(`[AI-Plugin] 引用消息展开完成: 文本字符=${replyText.length}, 图片=${forwardImages.length}`)
+                    }
+
                     if (replyText.trim()) {
                         const sourceSender = sourceMsg.nickname || sourceMsg.sender?.nickname || "未知用户"
                         const separator = `\n=== 引用${sourceSender}的消息 ===\n`
