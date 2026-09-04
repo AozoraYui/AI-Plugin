@@ -23,7 +23,7 @@ export class UpdateHandler extends plugin {
     constructor() {
         super({
             name: 'AI插件更新',
-            dsc: 'git pull 更新 AI-Plugin',
+            dsc: '使用 git -C 更新 AI-Plugin',
             event: 'message',
             priority: 1150,
             rule: [
@@ -35,7 +35,7 @@ export class UpdateHandler extends plugin {
 
     async _runGit(args = []) {
         try {
-            const result = await execFileAsync('git', args, {
+            const result = await execFileAsync('git', ['-C', PLUGIN_DIR, ...args], {
                 cwd: PLUGIN_DIR,
                 encoding: 'utf-8',
                 timeout: 60000,
