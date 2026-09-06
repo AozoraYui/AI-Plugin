@@ -908,6 +908,10 @@ check('图片中的命令执行描述不会被误判为机器人执行', !hasUns
     '第一张图是一个 Konsole 终端窗口。终端里正在执行 adb sideload，升级包传输进度约为 3%，暂时不能判断升级是否完成。',
     { hasActualToolResults: false }
 ))
+check('图片中的不确定完成描述不会被误判为任务完成', !hasUnsupportedToolResultClaim(
+    '图片里能确认的是：随后执行 adb reboot recovery 后，再次执行 adb sideload，升级包传输进度大约为 3%，说明刷机包还在传输中，暂时不能判断升级是否已经完成。',
+    { hasActualToolResults: false }
+))
 check('操作建议不会被状态成功检查误伤', !hasUnsupportedToolResultClaim(
     '现在你可以在设置里修改难度，调整配置后再重启服务。',
     { hasActualToolResults: false }

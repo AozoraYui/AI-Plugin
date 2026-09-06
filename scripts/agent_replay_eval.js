@@ -465,5 +465,16 @@ if (!hasUnsupportedToolResultClaim(
     console.error('✗ replay visual-command-description-not-blocked')
 }
 
+if (!hasUnsupportedToolResultClaim(
+    '图片里能确认的是：随后执行 adb reboot recovery 后，再次执行 adb sideload，升级包传输进度大约为 3%，说明刷机包还在传输中，暂时不能判断升级是否已经完成。',
+    { hasActualToolResults: false }
+)) {
+    passed++
+    console.log('✓ replay visual-uncertain-completion-not-blocked')
+} else {
+    failures.push('visual-uncertain-completion-not-blocked')
+    console.error('✗ replay visual-uncertain-completion-not-blocked')
+}
+
 console.log(`\nAgent replay eval: ${passed}/${passed + failures.length} passed`)
 if (failures.length > 0) process.exit(1)
