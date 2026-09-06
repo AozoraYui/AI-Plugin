@@ -904,6 +904,10 @@ check('无工具结果会拦截虚构游戏指令执行', hasUnsupportedToolResu
     '正在执行指令：/difficulty hard\n完成啦！现在服务器难度已经成功修改为困难模式。',
     { hasActualToolResults: false }
 ))
+check('图片中的命令执行描述不会被误判为机器人执行', !hasUnsupportedToolResultClaim(
+    '第一张图是一个 Konsole 终端窗口。终端里正在执行 adb sideload，升级包传输进度约为 3%，暂时不能判断升级是否完成。',
+    { hasActualToolResults: false }
+))
 check('操作建议不会被状态成功检查误伤', !hasUnsupportedToolResultClaim(
     '现在你可以在设置里修改难度，调整配置后再重启服务。',
     { hasActualToolResults: false }

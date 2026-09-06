@@ -454,5 +454,16 @@ if (hasUnsupportedToolResultClaim(
     console.error('✗ replay unsupported-game-command-claim')
 }
 
+if (!hasUnsupportedToolResultClaim(
+    '截图中的终端正在执行 adb sideload，升级包传输进度约为 3%，暂时不能判断升级是否完成。',
+    { hasActualToolResults: false }
+)) {
+    passed++
+    console.log('✓ replay visual-command-description-not-blocked')
+} else {
+    failures.push('visual-command-description-not-blocked')
+    console.error('✗ replay visual-command-description-not-blocked')
+}
+
 console.log(`\nAgent replay eval: ${passed}/${passed + failures.length} passed`)
 if (failures.length > 0) process.exit(1)
