@@ -2541,8 +2541,23 @@ export class ChatHandler extends plugin {
                         if (!result.success) {
                             logger.warn(`[AI-Plugin] ${call.name} 失败: ${result.error}`)
                             const failureText = runtimeFormattedResult
+                            if (call.name === 'web_search') {
+                                webResearchUsed = true
+                                suppressAutoFastChatContext = true
+                                webEvidenceState = updateWebEvidenceState(webEvidenceState, 'web_search', {
+                                    searchUnavailable: true,
+                                    transportFailure: true
+                                })
+                            }
                             userMessage = userMessage + `\n\n【工具执行失败：${call.name}】${result.error || '未知错误'}`
-                            roundObservations.push({ tool: call.name, args: call.args, status: runtimeStatus, text: failureText, protocol })
+                            roundObservations.push({
+                                tool: call.name,
+                                args: call.args,
+                                status: runtimeStatus,
+                                text: failureText,
+                                data: call.name === 'web_search' ? { searchUnavailable: true, transportFailure: true } : undefined,
+                                protocol
+                            })
                             await recordAgentStep(this.conversationManager.db, agentTask, {
                                 stepIndex: agentRound * 100 + roundCallIndex,
                                 stepType: 'tool',
@@ -2617,6 +2632,9 @@ export class ChatHandler extends plugin {
                         } else if (call.name === 'web_search') {
                             // 搜索：将结果注入提示词
                             const searchData = result.data || []
+                            if (!Array.isArray(searchData) && searchData.searchUnavailable === true) {
+                                userMessage += '\n\n【联网搜索硬门控】本轮所有搜索源均失败或处于熔断冷却，没有获得任何搜索证据。搜索失败不等于目标不存在，禁止据此生成“未发生、从未存在、纯属虚构、从未报道”等确定性结论。只能说明当前无法核实。'
+                            }
                             if (isUnfulfilledImageSearch(call, searchData)) {
                                 failedImageSearchAttempts++
                                 roundHadUnfulfilledImageSearch = true
@@ -2785,6 +2803,24 @@ export class ChatHandler extends plugin {
                     }
 
                     agentObservationHistory.push(...roundObservations)
+
+                    const unavailableSearchObservation = roundObservations.find(item => item.tool === 'web_search'
+                        && item.data?.searchUnavailable === true
+                        && !(Array.isArray(item.data?.sentImages) && item.data.sentImages.length > 0))
+                    if (unavailableSearchObservation) {
+                        agentTaskLatestObservation = `${agentTaskLatestObservation}\n联网搜索所有引擎均不可用，未获得任何搜索证据；已停止继续把失败结果当作事实。`.trim()
+                        agentTaskFinalStatus = 'blocked'
+                        userMessage += '\n\n【联网检索停止条件】所有搜索源本轮均不可用或处于熔断冷却。停止继续规划搜索；最终回答必须明确说明无法核实，绝不能把搜索失败解释为目标不存在或事件未发生。'
+                        if (agentTask) {
+                            agentTask = await updateAgentTaskProgress(this.conversationManager.db, agentTask, {
+                                status: 'blocked',
+                                summary: agentTaskLatestSummary,
+                                lastObservation: agentTaskLatestObservation
+                            }, { logger, logPrefix: '[AI-Plugin] Agent任务' })
+                        }
+                        logger.warn('[AI-Plugin] 联网搜索所有引擎不可用，停止 Agent 继续规划')
+                        break
+                    }
 
                     if (roundToolCalls.some(call => call.name === 'web_search' || call.name === 'web_fetch')) {
                         const webFingerprint = buildWebEvidenceFingerprint(webEvidenceState)
@@ -3149,7 +3185,7 @@ export class ChatHandler extends plugin {
             }
             if (webResearchUsed) {
                 const domains = (webEvidenceState.domains || []).join('、') || '无'
-                userMessage += `\n\n【联网证据账本】证据质量=${webEvidenceState.quality || 'low'}；可用正文抓取=${webEvidenceState.usableFetchCount || 0}；独立直接来源=${(webEvidenceState.domains || []).length}（${domains}）；低质量/失败页面=${webEvidenceState.lowQualityCount || 0}。搜索摘要只是线索，不等于原文。若证据质量不足，必须明确说无法核实，并禁止自行补全具体日期、金额、动机、违法性质、因果关系、他人反应和事件后续。`
+                userMessage += `\n\n【联网证据账本】证据质量=${webEvidenceState.quality || 'low'}；可用正文抓取=${webEvidenceState.usableFetchCount || 0}；独立直接来源=${(webEvidenceState.domains || []).length}（${domains}）；低质量/失败页面=${webEvidenceState.lowQualityCount || 0}；搜索不可用次数=${webEvidenceState.searchUnavailableCount || 0}。搜索摘要只是线索，不等于原文。若证据质量不足或搜索链路不可用，必须明确说无法核实；不得把失败、熔断或零结果解释为目标不存在、事件未发生、从未报道或纯属虚构，也不得自行补全具体日期、金额、动机、违法性质、因果关系、他人反应和事件后续。`
             }
 
             avatarImageInput = await buildAvatarImageInputContext(e, currentToolInstruction || originalUserMessage || userMessage, {
@@ -3447,7 +3483,7 @@ export class ChatHandler extends plugin {
                                         hasTaskCompletionEvidence,
                                         unsupportedToolClaim
                                     }) + (lowEvidenceOverclaim
-                                        ? '\n本轮涉及可识别个人或组织的争议性联网调查，但证据质量不足。请重写：只列出能够由直接来源支持的内容；搜索摘要、转述和网传必须明确标注；若没找到原始材料就直接说无法核实。不得断言具体日期、金额、违法违规、动机、因果、他人反应或后续影响。'
+                                        ? '\n本轮联网证据不足或搜索链路不可用。请重写：只列出能够由直接来源支持的内容；搜索摘要、转述和网传必须明确标注；若没有足够原始材料就直接说无法核实。不得把搜索失败、熔断或零结果解释为目标不存在、事件未发生、从未报道或纯属虚构，也不得断言具体日期、金额、违法违规、动机、因果、他人反应或后续影响。'
                                         : '')
                                 }]
                             }
@@ -3469,7 +3505,7 @@ export class ChatHandler extends plugin {
                 if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || lowEvidenceOverclaim) {
                     logger.warn('[AI-Plugin] 最终回复纠正失败，使用安全提示替代无依据的完成声明')
                     finalResponseText = lowEvidenceOverclaim
-                        ? '这次只找到搜索摘要、跳转页或不足以交叉验证的材料，没有拿到足够可靠的原始来源，所以我不能负责任地还原事件经过或断言相关指控。你可以把原帖、视频、截图或更明确的来源发来，我再基于原始材料核对。'
+                        ? '这次联网没有拿到足够可靠的直接来源，或搜索链路当前不可用，所以我不能把“没搜到/搜索失败”解释成目标不存在或事件未发生。你可以稍后重试，或把原帖、视频、截图和明确来源发来，我再基于原始材料核对。'
                         : '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。请再试一次；我会先真正调用工具并确认结果，再向你汇报。'
                     usedSafeFallbackReply = true
                 }

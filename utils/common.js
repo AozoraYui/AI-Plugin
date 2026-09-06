@@ -116,6 +116,26 @@ function canConnect(host, port, timeout = 180) {
     })
 }
 
+export function createHeadersLike(headers = {}) {
+    if (headers && typeof headers.get === 'function') return headers
+    const source = headers && typeof headers === 'object' ? headers : {}
+    const normalized = {}
+    for (const [name, value] of Object.entries(source)) {
+        normalized[String(name).toLowerCase()] = Array.isArray(value) ? value.join(', ') : String(value)
+    }
+    return {
+        ...source,
+        ...normalized,
+        get(name) {
+            const key = String(name || '').toLowerCase()
+            return Object.prototype.hasOwnProperty.call(normalized, key) ? normalized[key] : null
+        },
+        has(name) {
+            return Object.prototype.hasOwnProperty.call(normalized, String(name || '').toLowerCase())
+        }
+    }
+}
+
 export function getProxyCandidates(options = {}) {
     const values = [
         options.proxyUrl,
@@ -214,7 +234,7 @@ export async function fetchWithProxy(url, options = {}) {
                     ok: res.statusCode >= 200 && res.statusCode < 300,
                     status: res.statusCode,
                     url: targetUrl,
-                    headers: res.headers,
+                    headers: createHeadersLike(res.headers),
                     text: () => Promise.resolve(data),
                     json: jsonResponse,
                     arrayBuffer: () => Promise.resolve(buffer)

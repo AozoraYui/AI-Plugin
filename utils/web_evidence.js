@@ -204,13 +204,21 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
         usableFetchCount: Math.max(0, Number(state.usableFetchCount) || 0),
         lowQualityCount: Math.max(0, Number(state.lowQualityCount) || 0),
         searchCount: Math.max(0, Number(state.searchCount) || 0),
-        fetchCount: Math.max(0, Number(state.fetchCount) || 0)
+        fetchCount: Math.max(0, Number(state.fetchCount) || 0),
+        searchUnavailableCount: Math.max(0, Number(state.searchUnavailableCount) || 0),
+        searchFailureCount: Math.max(0, Number(state.searchFailureCount) || 0),
+        searchSuccessCount: Math.max(0, Number(state.searchSuccessCount) || 0),
+        searchUnavailable: state.searchUnavailable === true
     }
     const keys = new Set(current.evidenceKeys)
     const fetchedKeys = new Set(current.fetchedEvidenceKeys)
     const domains = new Set(current.domains)
     if (toolName === 'web_search') {
         current.searchCount++
+        if (data?.searchUnavailable === true) current.searchUnavailableCount++
+        if (data?.transportFailure === true || data?.searchUnavailable === true) current.searchFailureCount++
+        if (data?.searchUnavailable !== true && data?.transportFailure !== true) current.searchSuccessCount++
+        current.searchUnavailable = data?.searchUnavailable === true
         for (const key of data?.evidenceKeys || []) if (key) keys.add(String(key))
         for (const domain of data?.independentDomains || []) if (domain) domains.add(String(domain))
         if (!data?.usableEvidenceCount) current.lowQualityCount++
@@ -245,7 +253,8 @@ export function buildWebEvidenceFingerprint(state = {}) {
         fetchedEvidenceKeys: [...new Set(state.fetchedEvidenceKeys || [])].sort(),
         domains: [...new Set(state.domains || [])].sort(),
         usableFetchCount: Math.max(0, Number(state.usableFetchCount) || 0),
-        quality: state.quality || 'low'
+        quality: state.quality || 'low',
+        searchUnavailable: state.searchUnavailable === true
     })
 }
 
@@ -256,10 +265,23 @@ export function isSensitivePersonResearch(text = '') {
     return person && dispute
 }
 
+function isPublicFactCheckRequest(text = '') {
+    return /(?:是否发生|有没有发生|有沒有发生|真实|现实中|从未|根本没有|官方报道|央视|战争|空战|军事|武器|战果|冲突|事故|灾害|政治|公共事件|历史事件|事实核查|核查|真假|谣言)/i.test(String(text || ''))
+}
+
+function hasDefinitivePublicFactDenial(text = '') {
+    return /(?:不存在|没有发生|没发生过|从未发生|根本没发生|完全是虚构|纯属虚构|现实中不存在|没有任何真实记录|从未报道|没有报道过|确定是谣言|必然是假的|事实不存在|不可能发生)/i.test(String(text || ''))
+}
+
 export function hasOverconfidentLowEvidenceAnswer(answer = '', instruction = '', evidenceState = {}) {
-    if (!isSensitivePersonResearch(instruction) || evidenceState?.sufficientForSensitiveClaims === true) return false
+    const hasEvidenceAttempt = Number(evidenceState?.searchCount || 0) > 0 || Number(evidenceState?.fetchCount || 0) > 0
+    if (evidenceState?.sufficientForSensitiveClaims === true) return false
     const value = String(answer || '')
     const uncertainty = /(?:未能核实|无法核实|尚未找到|没有找到|只能确认|搜索摘要|网传|据称|有人声称|暂不能确定|证据不足|原始材料缺失|可靠来源不足)/i.test(value)
-    const definitive = /(?:违法|违规|犯罪|卖血|诈骗|造假|收取.{0,12}\d+|在20\d{2}年|事件发酵后|成为.{0,12}外号|引发.{0,20}讨论|事实是|可以确认)/i.test(value)
-    return definitive && !uncertainty
+    const sensitivePersonClaim = isSensitivePersonResearch(instruction)
+        && /(?:违法|违规|犯罪|卖血|诈骗|造假|收取.{0,12}\d+|在20\d{2}年|事件发酵后|成为.{0,12}外号|引发.{0,20}讨论|事实是|可以确认)/i.test(value)
+    const publicFactClaim = hasEvidenceAttempt && isPublicFactCheckRequest(instruction) && hasDefinitivePublicFactDenial(value)
+    const unavailableClaim = evidenceState?.searchUnavailable === true
+        && /(?:搜索失败|搜索源|网络搜索|联网|没有搜到|未找到结果|查不到)/i.test(value)
+    return (sensitivePersonClaim || publicFactClaim || unavailableClaim) && !uncertainty
 }

@@ -40,8 +40,8 @@ const { buildParticipantIdentityHint, expandInlineContent, isThirdPartySubjectQu
 const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq_face.js')
 const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
-const { buildBingImageSearchUrl, extractPageImageUrls, filterRelevantSearchResults, parseSo360ImageResults, parseYahooSearchResults, prepareSearchResults, scoreSearchResultRelevance, scoreSearchSourceAuthority } = await import('../tools/search.js')
-const { getProxyCandidates } = await import('../utils/common.js')
+const { buildBingImageSearchUrl, extractPageImageUrls, filterRelevantSearchResults, parseSo360ImageResults, parseYahooSearchResults, prepareSearchResults, scoreSearchResultRelevance, scoreSearchSourceAuthority, webSearchTool } = await import('../tools/search.js')
+const { createHeadersLike, getProxyCandidates } = await import('../utils/common.js')
 const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
 const { executePendingShellExec, shellExecTool } = await import('../tools/shell_exec.js')
@@ -80,6 +80,48 @@ function check(name, condition, detail = '') {
     failures.push({ name, detail })
     console.error(`✗ ${name}${detail ? `: ${detail}` : ''}`)
 }
+
+check('Node 响应头兼容 Fetch Headers 的 get 接口', (() => {
+    const headers = createHeadersLike({ 'content-type': 'text/html', 'set-cookie': ['a=1', 'b=2'] })
+    return headers.get('Content-Type') === 'text/html'
+        && headers.get('set-cookie') === 'a=1, b=2'
+        && headers.get('missing') === null
+        && headers.has('CONTENT-TYPE')
+})())
+
+check('搜索所有引擎不可用时不会伪装成普通无结果', (() => {
+    const data = {
+        results: [],
+        searchUnavailable: true,
+        engineStatus: [{ name: 'Bing', status: 'failed' }, { name: '百度', status: 'skipped' }]
+    }
+    const formatted = webSearchTool.formatResult(data)
+    return formatted.includes('网络搜索不可用') && formatted.includes('不代表目标不存在')
+})())
+
+check('搜索失败会进入不可用证据账本', (() => {
+    const state = updateWebEvidenceState({}, 'web_search', {
+        searchUnavailable: true,
+        transportFailure: true
+    })
+    return state.searchCount === 1
+        && state.searchUnavailable === true
+        && state.searchUnavailableCount === 1
+        && state.searchFailureCount === 1
+        && state.searchSuccessCount === 0
+})())
+
+check('低证据军事事实核查禁止断言事件不存在', hasOverconfidentLowEvidenceAnswer(
+    '2025年5月7日印巴空战在现实里根本没有发生过。',
+    '搜索一下2025年5月7日印巴空战是否真实发生过',
+    { searchCount: 1, searchUnavailable: true, sufficientForSensitiveClaims: false }
+))
+
+check('搜索失败时允许明确说明无法核实', !hasOverconfidentLowEvidenceAnswer(
+    '当前搜索源不可用，暂时无法核实这场空战是否发生。',
+    '搜索一下2025年5月7日印巴空战是否真实发生过',
+    { searchCount: 1, searchUnavailable: true, sufficientForSensitiveClaims: false }
+))
 
 check('QQNT faceText 会转换为模型可读语义', formatQQFaceSegment({
     type: 'face',
