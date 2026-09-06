@@ -40,7 +40,7 @@ const { buildParticipantIdentityHint, expandInlineContent, isThirdPartySubjectQu
 const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq_face.js')
 const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
-const { buildBingImageSearchUrl, extractPageImageUrls, filterRelevantSearchResults, parseSo360ImageResults, parseYahooSearchResults, prepareSearchResults, scoreSearchResultRelevance, scoreSearchSourceAuthority, webSearchTool } = await import('../tools/search.js')
+const { buildBingImageSearchUrl, extractPageImageUrls, filterRelevantSearchResults, parseSo360ImageResults, parseSogouSearchResults, parseYahooSearchResults, prepareSearchResults, scoreSearchResultRelevance, scoreSearchSourceAuthority, webSearchTool } = await import('../tools/search.js')
 const { createHeadersLike, getProxyCandidates } = await import('../utils/common.js')
 const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
@@ -238,6 +238,30 @@ check('Bing图片搜索使用中国区原生 images 入口并保留原查询', (
         && url.searchParams.get('form') === 'HDRSC2'
         && url.searchParams.get('first') === '1'
         && !url.searchParams.has('safeSearch')
+})())
+check('百度和 Bing 图片结果页不会被识别为正文来源', (() => {
+    const baidu = classifyWebUrl('https://image.baidu.com/search/index?word=57%E7%A9%BA%E6%88%98')
+    const bing = classifyWebUrl('https://cn.bing.com/images/search?q=57%E7%A9%BA%E6%88%98')
+    return baidu.category === 'search_page'
+        && baidu.autoFetchEligible === false
+        && bing.category === 'search_page'
+        && bing.autoFetchEligible === false
+})())
+check('搜狗结果页解析保留标题、直链和摘要', (() => {
+    const html = '<h3><a href="https://example.com/article">目标事件报道</a></h3><p class="str_info">这是一段足够长的搜索结果摘要，用于验证搜狗备用解析路径。</p>'
+    const results = parseSogouSearchResults(html, 5)
+    return results.length === 1
+        && results[0].url === 'https://example.com/article'
+        && results[0].title === '目标事件报道'
+        && results[0].snippet.includes('足够长')
+})())
+check('Yahoo 通用结果卡片结构可以解析', (() => {
+    const html = '<div class="algo-sr"><h3><a href="https://example.com/yahoo">目标搜索结果</a></h3><div class="compText">这是一段 Yahoo 备用结果摘要。</div></div>'
+    const results = parseYahooSearchResults(html, 5)
+    return results.length === 1
+        && results[0].url === 'https://example.com/yahoo'
+        && results[0].title === '目标搜索结果'
+        && results[0].snippet.includes('备用结果摘要')
 })())
 check('过目整个目录会解析为递归工作区调查', (() => {
     const request = parseWorkspaceSurveyRequest('#c测试时间到啦，诺亚你把/root/Yunzai目录下的文件先过目一遍吧')

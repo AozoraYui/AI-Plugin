@@ -221,49 +221,64 @@ async function fetchSearchHtml(url, engineName) {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.7'
     }
-    let res
-    try {
-        res = await fetchWithProxy(url, {
-            headers,
-            timeout: SEARCH_TIMEOUT_MS,
-            autoDetectProxy: true,
-            maxResponseBytes: MAX_PREVIEW_PAGE_BYTES
-        })
-    } catch (err) {
-        logger.warn(`[AI-Plugin] ${engineName} 代理/HTTP通道失败，切换 IPv4 原生 fetch: ${err.message}`)
-        if (/SSRF|内网|响应体超过|无法解析目标域名|不支持的网络协议/i.test(String(err.message || ''))) throw err
-        setDefaultResultOrder('ipv4first')
-        let currentUrl = url
-        for (let redirectCount = 0; redirectCount <= 3; redirectCount++) {
-            await assertPublicUrl(currentUrl)
-            res = await fetch(currentUrl, {
-                method: 'GET',
+    const targets = Array.isArray(url) ? url.filter(Boolean) : [url]
+    let lastError = null
+    for (const targetUrl of targets) {
+        let res
+        try {
+            res = await fetchWithProxy(targetUrl, {
                 headers,
-                signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-                redirect: 'manual'
+                timeout: SEARCH_TIMEOUT_MS,
+                autoDetectProxy: true,
+                maxResponseBytes: MAX_PREVIEW_PAGE_BYTES
             })
-            const location = res.headers.get('location')
-            if (!location || res.status < 300 || res.status >= 400) break
-            if (redirectCount >= 3) throw new Error('搜索引擎重定向超过上限')
-            currentUrl = new URL(location, currentUrl).toString()
+        } catch (proxyError) {
+            const proxyMessage = proxyError?.message || proxyError?.cause?.message || String(proxyError) || '未知网络错误'
+            logger.warn(`[AI-Plugin] ${engineName} 代理/HTTP通道失败，切换 IPv4 原生 fetch: ${proxyMessage}`)
+            if (/SSRF|内网|响应体超过|无法解析目标域名|不支持的网络协议/i.test(proxyMessage)) throw proxyError
+            try {
+                setDefaultResultOrder('ipv4first')
+                let currentUrl = targetUrl
+                for (let redirectCount = 0; redirectCount <= 3; redirectCount++) {
+                    await assertPublicUrl(currentUrl)
+                    res = await fetch(currentUrl, {
+                        method: 'GET',
+                        headers,
+                        signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+                        redirect: 'manual'
+                    })
+                    const location = res.headers.get('location')
+                    if (!location || res.status < 300 || res.status >= 400) break
+                    if (redirectCount >= 3) throw new Error('搜索引擎重定向超过上限')
+                    currentUrl = new URL(location, currentUrl).toString()
+                }
+            } catch (directError) {
+                const directMessage = directError?.message || directError?.cause?.message || String(directError) || '未知网络错误'
+                lastError = new Error(`${engineName} 网络请求失败: ${directMessage}`)
+                continue
+            }
         }
-    }
 
-    if (!res.ok) {
-        const body = await res.text().catch(() => '')
-        throw new Error(`${engineName} HTTP ${res.status}: ${body.slice(0, 120)}`)
-    }
+        if (!res.ok) {
+            const body = await res.text().catch(() => '')
+            lastError = new Error(`${engineName} HTTP ${res.status}: ${body.slice(0, 120)}`)
+            continue
+        }
 
-    const contentLength = Number(res.headers.get('content-length'))
-    if (Number.isFinite(contentLength) && contentLength > MAX_PREVIEW_PAGE_BYTES) {
-        throw new Error(`${engineName} 响应体超过 ${MAX_PREVIEW_PAGE_BYTES} 字节上限`)
+        const contentLength = Number(res.headers.get('content-length'))
+        if (Number.isFinite(contentLength) && contentLength > MAX_PREVIEW_PAGE_BYTES) {
+            lastError = new Error(`${engineName} 响应体超过 ${MAX_PREVIEW_PAGE_BYTES} 字节上限`)
+            continue
+        }
+        const html = await res.text()
+        if (Buffer.byteLength(html, 'utf8') > MAX_PREVIEW_PAGE_BYTES) {
+            lastError = new Error(`${engineName} 响应体超过 ${MAX_PREVIEW_PAGE_BYTES} 字节上限`)
+            continue
+        }
+        logger.info(`[AI-Plugin] ${engineName} 返回HTML长度: ${html.length}`)
+        return html
     }
-    const html = await res.text()
-    if (Buffer.byteLength(html, 'utf8') > MAX_PREVIEW_PAGE_BYTES) {
-        throw new Error(`${engineName} 响应体超过 ${MAX_PREVIEW_PAGE_BYTES} 字节上限`)
-    }
-    logger.info(`[AI-Plugin] ${engineName} 返回HTML长度: ${html.length}`)
-    return html
+    throw lastError || new Error(`${engineName} 没有可用搜索入口`)
 }
 
 async function searchBing(query, count) {
@@ -713,8 +728,13 @@ async function searchBaidu(query, count) {
 }
 
 async function searchDuckDuckGo(query, count) {
-    const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`
-    const html = await fetchSearchHtml(url, 'DuckDuckGo')
+    const encodedQuery = encodeURIComponent(query)
+    const urls = [
+        `https://html.duckduckgo.com/html/?q=${encodedQuery}`,
+        `https://duckduckgo.com/html/?q=${encodedQuery}`,
+        `https://lite.duckduckgo.com/lite/?q=${encodedQuery}`
+    ]
+    const html = await fetchSearchHtml(urls, 'DuckDuckGo')
     const results = []
     const itemRegex = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?=<a[^>]*class="[^"]*result__a|<\/body>|$)/gi
     let match
@@ -735,6 +755,21 @@ async function searchDuckDuckGo(query, count) {
 
         if (isValidResult(title, url)) {
             results.push({ title, url, snippet, source: 'DuckDuckGo' })
+        }
+    }
+
+    if (results.length === 0) {
+        const liteRegex = /<a[^>]+(?:class="[^"]*result-link[^"]*"|rel="nofollow")[^>]+href="((?:https?:)?\/\/[^"#]+)"[^>]*>([\s\S]*?)<\/a>/gi
+        while ((match = liteRegex.exec(html)) !== null && results.length < count) {
+            let url = normalizeUrl(match[1])
+            try { url = new URL(url, 'https://duckduckgo.com').toString() } catch {}
+            const title = cleanText(match[2])
+            if (url.includes('duckduckgo.com') || title.length < 2) continue
+            if (isValidResult(title, url) && !results.some(item => item.url === url)) {
+                const itemHtml = match[0]
+                const snippetMatch = itemHtml.match(/<(?:td|div|span)[^>]*class="[^"]*result-snippet[^"]*"[^>]*>([\s\S]*?)<\/(?:td|div|span)>/i)
+                results.push({ title, url, snippet: snippetMatch ? cleanText(snippetMatch[1]) : '无摘要', source: 'DuckDuckGo' })
+            }
         }
     }
 
@@ -761,12 +796,33 @@ export function parseYahooSearchResults(html = '', count = 10) {
         }
     }
 
+    if (results.length === 0) {
+        const genericRegex = /<div[^>]+class="[^"]*\balgo-sr\b[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]+class="[^"]*\balgo-sr\b|<\/main>|$)/gi
+        while ((match = genericRegex.exec(html)) !== null && results.length < count) {
+            const itemHtml = match[1]
+            const titleMatch = itemHtml.match(/<h[2-4][^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i)
+                || itemHtml.match(/<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i)
+            if (!titleMatch) continue
+            const url = normalizeUrl(titleMatch[1])
+            const title = cleanText(titleMatch[2])
+            const snippetMatch = itemHtml.match(/<(?:p|div)[^>]*class="[^"]*(?:compText|summary|snippet)[^"]*"[^>]*>([\s\S]*?)<\/(?:p|div)>/i)
+            const snippet = snippetMatch ? cleanText(snippetMatch[1]) : cleanText(itemHtml).replace(title, '').slice(0, 180) || '无摘要'
+            if (isValidResult(title, url) && !results.some(item => item.url === url)) {
+                results.push({ title, url, snippet, source: 'Yahoo' })
+            }
+        }
+    }
+
     return results
 }
 
 async function searchYahoo(query, count) {
-    const url = `https://search.yahoo.co.jp/search?p=${encodeURIComponent(query)}&ei=UTF-8`
-    const html = await fetchSearchHtml(url, 'Yahoo')
+    const encodedQuery = encodeURIComponent(query)
+    const urls = [
+        `https://search.yahoo.co.jp/search?p=${encodedQuery}&ei=UTF-8`,
+        `https://search.yahoo.com/search?p=${encodedQuery}`
+    ]
+    const html = await fetchSearchHtml(urls, 'Yahoo')
     const results = parseYahooSearchResults(html, count)
 
     logger.info(`[AI-Plugin] Yahoo 搜索返回 ${results.length} 条结果`)
@@ -807,6 +863,34 @@ async function searchSo360(query, count) {
     }
 
     logger.info(`[AI-Plugin] 360搜索返回 ${results.length} 条结果`)
+    return results
+}
+
+export function parseSogouSearchResults(html = '', count = 10, baseUrl = 'https://www.sogou.com/web') {
+    const results = []
+    const itemRegex = /<h3[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?=<h3|<\/body>|$)/gi
+    let match
+    while ((match = itemRegex.exec(html)) !== null && results.length < count) {
+        const title = cleanText(match[2])
+        const itemHtml = match[0]
+        const snippetMatch = itemHtml.match(/<(?:p|div)[^>]*class="[^"]*(?:text|fz-mid|str_info|str-box)[^"]*"[^>]*>([\s\S]*?)<\/(?:p|div)>/i)
+        const snippet = snippetMatch ? cleanText(snippetMatch[1]) : cleanText(itemHtml).replace(title, '').slice(0, 180) || '无摘要'
+        let resultUrl = normalizeUrl(match[1])
+        try {
+            resultUrl = new URL(resultUrl, baseUrl).toString()
+        } catch {}
+        if (isValidResult(title, resultUrl)) {
+            results.push({ title, url: resultUrl, snippet, source: '搜狗' })
+        }
+    }
+    return results
+}
+
+async function searchSogou(query, count) {
+    const url = `https://www.sogou.com/web?query=${encodeURIComponent(query)}`
+    const html = await fetchSearchHtml(url, '搜狗')
+    const results = parseSogouSearchResults(html, count, url)
+    logger.info(`[AI-Plugin] 搜狗搜索返回 ${results.length} 条结果`)
     return results
 }
 
@@ -859,7 +943,8 @@ async function searchWeb(query, count = 5) {
         const fallbackRuns = await Promise.all([
             runSearchEngine('DuckDuckGo', () => searchDuckDuckGo(query, candidateCount)),
             runSearchEngine('Yahoo', () => searchYahoo(query, candidateCount)),
-            runSearchEngine('360搜索', () => searchSo360(query, candidateCount))
+            runSearchEngine('360搜索', () => searchSo360(query, candidateCount)),
+            runSearchEngine('搜狗', () => searchSogou(query, candidateCount))
         ])
         fallbackGroups = fallbackRuns.map(run => run.results)
         engineRuns.push(...fallbackRuns)

@@ -7,8 +7,8 @@ const SEARCH_REDIRECT_RULES = [
 ]
 
 const SEARCH_PAGE_RULES = [
-    ['baidu.com', /^\/s(?:\/|$)/i],
-    ['bing.com', /^\/search/i],
+    ['baidu.com', /^\/(?:s|search)(?:\/|$)/i],
+    ['bing.com', /^\/(?:search|images)(?:\/|$)/i],
     ['so.com', /^\/s(?:\/|$)/i],
     ['image.so.com', /^\/i/i],
     ['sogou.com', /^\/web/i],
