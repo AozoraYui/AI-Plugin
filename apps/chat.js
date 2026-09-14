@@ -2415,6 +2415,7 @@ export class ChatHandler extends plugin {
                         }
                     }
                 }
+                let suppressAutoFastChatContext = false
                 let currentToolIntent = toolAnalysis?.intent || ''
                 let currentAgentPlan = toolAnalysis?.plan || {}
                 let currentPlanMetadata = normalizeAgentPlan(currentAgentPlan)
@@ -2514,7 +2515,6 @@ export class ChatHandler extends plugin {
                 const executedShellCommands = []
                 let groupChatContextToolUsed = false
                 let memorySearchToolUsed = false
-                let suppressAutoFastChatContext = false
                 let shellFollowupConsideredByAgent = false
                 for (let agentRound = 1; agentRound <= AGENT_LOOP_MAX_ROUNDS; agentRound++) {
                     if (toolCalls.length === 0) {
