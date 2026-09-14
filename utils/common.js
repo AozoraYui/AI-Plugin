@@ -6,6 +6,7 @@ import net from 'node:net'
 import dns from 'node:dns/promises'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { Config, expandPrompt } from './config.js'
+import { hydrateCachedForwardMessage } from './outbound_message.js'
 
 const AI_ERROR_PATTERNS = [
     'AI Studio 过滤了你的请求内容',
@@ -367,6 +368,8 @@ export async function getAvatarUrl(qq) {
 
 export async function takeSourceMsg(e, { img } = {}) {
     let source = null
+    const replySeg = e.message?.find(m => m.type === 'reply')
+    const replyMessageId = replySeg?.data?.id || replySeg?.data?.message_id || replySeg?.id || ''
     if (typeof e.getReply === 'function') {
         source = await e.getReply()
         logger.info(`[AI-Plugin] takeSourceMsg: getReply() -> ${!!source}, msgCount=${source?.message?.length}`)
@@ -382,15 +385,15 @@ export async function takeSourceMsg(e, { img } = {}) {
         }
     }
     if (!source) {
-        const replySeg = e.message?.find(m => m.type === 'reply')
-        if (replySeg?.id && e.group?.getChatHistory) {
-            source = (await e.group.getChatHistory(replySeg.id, 1))?.pop()
-            logger.info(`[AI-Plugin] takeSourceMsg: replySeg fallback(id=${replySeg.id}) -> ${!!source}, msgCount=${source?.message?.length}`)
+        if (replyMessageId && e.group?.getChatHistory) {
+            source = (await e.group.getChatHistory(replyMessageId, 1))?.pop()
+            logger.info(`[AI-Plugin] takeSourceMsg: replySeg fallback(id=${replyMessageId}) -> ${!!source}, msgCount=${source?.message?.length}`)
         } else {
-            logger.info(`[AI-Plugin] takeSourceMsg: all methods failed, replySeg=${!!replySeg}, replySegId=${replySeg?.id}, hasGroup=${!!e.group?.getChatHistory}`)
+            logger.info(`[AI-Plugin] takeSourceMsg: all methods failed, replySeg=${!!replySeg}, replySegId=${replyMessageId || undefined}, hasGroup=${!!e.group?.getChatHistory}`)
         }
     }
     if (!source) return false
+    source = await hydrateCachedForwardMessage(source, e.group_id, replyMessageId)
     if (img) {
         const imgArr = source.message?.filter(s => s.type === "image" && s.url).map(s => s.url) || []
         return imgArr.length > 0 ? imgArr : false

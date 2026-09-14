@@ -164,6 +164,24 @@ export class AIDatabase {
                 CREATE INDEX IF NOT EXISTS idx_group_logs_group_recent
                 ON group_message_logs(group_id, id);
 
+                -- 机器人主动发送的合并转发原文，避免 OneBot 无法回读临时 resid
+                CREATE TABLE IF NOT EXISTS outbound_forward_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    nodes_json TEXT NOT NULL,
+                    normalized_text TEXT,
+                    image_meta TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(group_id, message_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_outbound_forward_group_message
+                ON outbound_forward_messages(group_id, message_id);
+
+                CREATE INDEX IF NOT EXISTS idx_outbound_forward_created
+                ON outbound_forward_messages(created_at);
+
                 -- 群成员称呼/外号记忆（来自本群公开聊天，不作为事实断言）
                 CREATE TABLE IF NOT EXISTS group_member_aliases (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -511,6 +529,67 @@ export class AIDatabase {
                     queueGroupMessageVectorIndex({ ...log, id: this.lastID, createdAt })
                 }
                 resolve(changes)
+            })
+        })
+    }
+
+    saveOutboundForwardMessage(record = {}) {
+        return new Promise((resolve, reject) => {
+            const groupId = String(record.groupId || '').trim()
+            const messageId = String(record.messageId || '').trim()
+            const nodesJson = typeof record.nodesJson === 'string'
+                ? record.nodesJson
+                : JSON.stringify(record.nodes || [])
+            if (!groupId || !messageId || !nodesJson || nodesJson === '[]') {
+                resolve(false)
+                return
+            }
+            this.db.run(`
+                INSERT INTO outbound_forward_messages
+                    (group_id, message_id, nodes_json, normalized_text, image_meta, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(group_id, message_id) DO UPDATE SET
+                    nodes_json = excluded.nodes_json,
+                    normalized_text = excluded.normalized_text,
+                    image_meta = excluded.image_meta
+            `, [
+                groupId,
+                messageId,
+                nodesJson,
+                String(record.normalizedText || ''),
+                JSON.stringify(record.imageMeta || []),
+                record.createdAt || getDBTimestamp()
+            ], err => {
+                if (err) reject(err)
+                else resolve(true)
+            })
+        })
+    }
+
+    getOutboundForwardMessage({ groupId = '', messageId = '' } = {}) {
+        return new Promise((resolve, reject) => {
+            const normalizedMessageId = String(messageId || '').trim()
+            if (!normalizedMessageId) {
+                resolve(null)
+                return
+            }
+            const params = [normalizedMessageId]
+            let query = `
+                SELECT group_id, message_id, nodes_json, normalized_text, image_meta, created_at
+                FROM outbound_forward_messages
+                WHERE message_id = ?
+            `
+            if (groupId) {
+                query += ' AND group_id = ?'
+                params.push(String(groupId))
+            }
+            query += ' ORDER BY id DESC LIMIT 1'
+            this.db.get(query, params, (err, row) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(row || null)
             })
         })
     }
