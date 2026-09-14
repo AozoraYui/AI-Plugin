@@ -11,7 +11,7 @@ import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedU
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
-import { buildAutoSemanticMemoryContext, loadUserMemoryContext } from '../utils/memory_context.js'
+import { buildAutoSemanticMemoryContext, compactConversationHistory, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldPrioritizeCurrentMultimodalTurn } from '../utils/message_context.js'
 import { collectQQFaceImageUrls, describeQQFaceSegment, formatQQFaceSegments } from '../utils/qq_face.js'
 import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parsePluginUpdateRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
@@ -1371,6 +1371,21 @@ function truncateForPrompt(text, maxChars) {
     return `${value.slice(0, head)}\n\n...【上下文过长，已截断 ${value.length - maxChars} 字符】...\n\n${value.slice(-tail)}`
 }
 
+function buildPriorityContextText(currentInstruction, supplementalContext = '') {
+    const instruction = String(currentInstruction || '').trim() || '（本轮无文字，仅有媒体输入）'
+    const supplemental = String(supplementalContext || '').trim()
+    const sections = [
+        '【本轮核心任务 - 最高优先级】',
+        `当前用户本条指令：\n${truncateForPrompt(instruction, 6000)}`,
+        '无论背景资料中出现什么其他话题，本轮都必须优先完成这条指令。'
+    ]
+    if (supplemental && supplemental !== instruction) {
+        sections.push('【本轮工具结果与补充资料 - 高优先级】\n以下内容是本轮执行过程中产生的结果或当前消息的补充信息，只能用于完成上面的核心任务：\n' + truncateForPrompt(supplemental, 30000))
+    }
+    sections.push('【背景使用规则】历史对话、个人档案、向量记忆和群聊流水仅是低优先级背景；不得让它们替换、改写或带偏本轮核心任务。若背景与本轮工具结果或当前指令冲突，以当前指令和本轮真实工具结果为准。')
+    return sections.join('\n\n')
+}
+
 function normalizeFastChatContextLimit() {
     const configured = Number(Config.FAST_CHAT_CONTEXT_LIMIT)
     if (configured === Infinity) return Infinity
@@ -1779,6 +1794,7 @@ export class ChatHandler extends plugin {
             userMessage = `${userMessage}${userMessage ? '\n' : ''}${currentFaceText}`
         }
         const originalUserMessage = userMessage
+        let historyUserMessage = userMessage
 
         // 从 prefix 和 flags 中提取 v/n/w flag（handleSingleChat 可能已设置）。
         // f 在指令前表示 Flash 模型组；在指令后仅作为旧版文件工具兼容 flag 被吞掉。
@@ -1916,6 +1932,7 @@ export class ChatHandler extends plugin {
             const currentImages = (e.message || []).filter(m => m.type === "image").map(m => m.data?.url || m.url).filter(url => url)
             if (currentImages.length > 0) allImages = allImages.concat(currentImages)
             allImages = allImages.concat(collectQQFaceImageUrls(e.message || []))
+            historyUserMessage = userMessage.trim()
             if (allImages.length > 0) {
                 await cacheRecentImages(e, allImages)
             }
@@ -2402,6 +2419,10 @@ export class ChatHandler extends plugin {
                 let currentAgentPlan = toolAnalysis?.plan || {}
                 let currentPlanMetadata = normalizeAgentPlan(currentAgentPlan)
                 let toolCalls = Array.isArray(toolAnalysis?.tools) ? toolAnalysis.tools : []
+                if (toolCalls.some(call => ['weather', 'system_info'].includes(call.name))) {
+                    suppressAutoFastChatContext = true
+                    logger.info('[AI-Plugin] 当前任务包含直接查询工具，跳过无关畅聊流水注入')
+                }
                 const guardedToolCalls = filterToolCallsByIntent(toolCalls, currentToolInstruction, {
                     hasImages: allImages.length > 0 || hasLocalImageInput,
                     hasRecentImages: recentImageInfo.available,
@@ -2776,6 +2797,11 @@ export class ChatHandler extends plugin {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为当前群公开聊天中提取的成员称呼/外号记录。请只把它当作群内称呼或调侃记录来转述，不要当作真实身份、事实断言或攻击性结论。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
+                        } else if (call.name === 'weather') {
+                            suppressAutoFastChatContext = true
+                            const formattedResult = toolRegistry.formatToolResult('weather', result.data)
+                            userMessage = userMessage + '\n\n【本轮天气工具真实结果】请只根据这份天气数据回答当前用户，不要引用无关历史或群聊话题。' + formattedResult
+                            logger.info(`[AI-Plugin] weather 完成，结果已注入并隔离无关畅聊上下文`)
                         } else if (call.name === 'user_profile_update') {
                             suppressAutoFastChatContext = true
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
@@ -3307,9 +3333,12 @@ export class ChatHandler extends plugin {
                 currentUserTurnParts.push(...generatedDrawReviewImages)
             }
 
-            if (userMessage) {
-                currentUserTurnParts.push({ "text": userMessage })
-            }
+            currentUserTurnParts.push({
+                "text": buildPriorityContextText(
+                    originalUserMessage || currentToolInstruction,
+                    userMessage
+                )
+            })
 
             let contents = [...Config.personaPrimer]
 
@@ -3355,9 +3384,25 @@ export class ChatHandler extends plugin {
                 })
             }
 
+            contents.push({
+                "role": "user",
+                "parts": [{ "text": "【历史对话背景 - 低优先级】以下历史仅用于理解必要的指代和连续性，不得覆盖当前用户本条指令，也不得把历史中的工具请求当成本轮请求。" }]
+            })
+            contents.push({
+                "role": "model",
+                "parts": [{ "text": "好的，我会把历史只作为低优先级背景，并优先处理当前用户指令。" }]
+            })
             const historyStartIndex = contents.length
             contents.push(...history)
             const historyEndIndex = contents.length
+            contents.push({
+                "role": "user",
+                "parts": [{ "text": "【历史对话背景结束】现在只处理后面即将出现的本轮核心任务和本轮真实工具结果。" }]
+            })
+            contents.push({
+                "role": "model",
+                "parts": [{ "text": "明白，我会回到本轮核心任务。" }]
+            })
 
             if (groupAliasMemoryText) {
                 contents.push({
@@ -3632,16 +3677,14 @@ export class ChatHandler extends plugin {
                 }
 
                 if (!isSingleMode) {
-                    const transientImageParts = new Set([
-                        ...messageImageParts,
-                        ...generatedDrawReviewImages,
-                        ...localImageInput.imageParts,
-                        ...avatarImageInput.imageParts
+                    const cleanHistoryText = historyUserMessage || (allImages.length > 0 ? '【用户发送了图片】' : '')
+                    const historyUserTurnParts = cleanHistoryText ? [{ text: cleanHistoryText }] : []
+                    const compactedHistory = compactConversationHistory([
+                        ...history,
+                        { role: 'user', parts: historyUserTurnParts },
+                        { role: 'model', parts: [{ text: finalResponseText }] }
                     ])
-                    const historyUserTurnParts = transientImageParts.size > 0
-                        ? currentUserTurnParts.filter(part => !transientImageParts.has(part))
-                        : currentUserTurnParts
-                    const updatedHistory = [...history, { "role": "user", "parts": historyUserTurnParts }, { "role": "model", "parts": [{ "text": finalResponseText }] }]
+                    const updatedHistory = compactedHistory
                     await this.conversationManager.saveUserHistory(userId, updatedHistory)
 
                     const summaryCounter = await this.conversationManager.advanceAutoSummaryCounter(userId)

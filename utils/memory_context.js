@@ -51,6 +51,53 @@ export function stripMediaPartsFromHistory(history = []) {
     return { history: cleaned, removed }
 }
 
+const GENERATED_HISTORY_MARKERS = [
+    '【畅聊自动上下文：',
+    '【Agent证据账本】',
+    '【联网证据账本】',
+    '【工具规划',
+    '【工具执行失败：',
+    '【本轮天气工具真实结果】',
+    '【天气工具真实结果】',
+    '【重要指令】'
+]
+
+function compactGeneratedHistoryText(text, maxChars) {
+    let value = sanitizeMemoryText(text).trim()
+    const markerIndexes = GENERATED_HISTORY_MARKERS
+        .map(marker => value.indexOf(marker))
+        .filter(index => index >= 0)
+    if (markerIndexes.length > 0) {
+        value = value.slice(0, Math.min(...markerIndexes)).trim()
+    }
+    if (value.length > maxChars) {
+        value = `${value.slice(0, maxChars)}\n【历史消息过长，已截断】`
+    }
+    return value
+}
+
+export function compactConversationHistory(history = [], options = {}) {
+    const userMaxChars = Math.max(500, Number(options.userMaxChars) || 6000)
+    const modelMaxChars = Math.max(500, Number(options.modelMaxChars) || 6000)
+    if (!Array.isArray(history)) return []
+
+    return history.map(turn => {
+        const role = turn?.role === 'model' ? 'model' : 'user'
+        const maxChars = role === 'model' ? modelMaxChars : userMaxChars
+        const parts = Array.isArray(turn?.parts) ? turn.parts : []
+        const text = parts
+            .filter(part => part?.text !== undefined)
+            .map(part => compactGeneratedHistoryText(part.text, maxChars))
+            .filter(Boolean)
+            .join('\n')
+        return {
+            ...turn,
+            role,
+            parts: text ? [{ text }] : []
+        }
+    }).filter(turn => turn.parts.length > 0)
+}
+
 function truncateHeadText(text, maxChars = Infinity) {
     const value = sanitizeMemoryText(text).trim()
     if (maxChars === Infinity || value.length <= maxChars) return value
@@ -151,6 +198,8 @@ export async function loadUserMemoryContext(conversationManager, userId, options
                 logger.info(`${logPrefix} ${logLabel} 已从历史上下文移除 ${stripped.removed} 个历史图片/媒体输入，避免重复消耗多模态 token`)
             }
         }
+
+        history = compactConversationHistory(history)
 
         const historyLimit = normalizeHistoryLimit(maxHistoryTurns)
         if (historyLimit !== Infinity && history.length > historyLimit) {
