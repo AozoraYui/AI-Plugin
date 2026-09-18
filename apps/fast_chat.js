@@ -4,7 +4,7 @@ import { Config } from '../utils/config.js'
 import { checkAccess, getAccessConfig } from '../utils/access.js'
 import { formatDBTimestampToBeijing, getBeijingTimeStr, getTodayDateStr, takeSourceMsg } from '../utils/common.js'
 import { processImagesInBatches, trimInlineImagesToPayloadLimit } from '../utils/image.js'
-import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject } from '../utils/message_context.js'
+import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject } from '../utils/message_context.js'
 import { describeQQFaceSegment } from '../utils/qq_face.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedUserIds } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, isExpiredGroupContextImageUrl, isGroupContextImageQuestion, shouldReadGroupContextImages } from '../utils/group_context_images.js'
@@ -303,9 +303,12 @@ async function normalizeSegments(e, segments = [], source = 'message') {
         }
 
         const resid = getForwardResid(seg)
-        if (resid) {
+        const inlineContent = seg.data?.content || seg.content
+        if (resid || Array.isArray(inlineContent)) {
             try {
-                const expanded = await expandForwardMsg(e.bot, resid)
+                const expanded = Array.isArray(inlineContent)
+                    ? await expandInlineContent(e.bot, [{ type: 'forward', content: inlineContent }], '合并转发')
+                    : await expandForwardMsg(e.bot, resid)
                 if (expanded.text) textParts.push(`[合并转发]\n${expanded.text}`)
                 for (const url of expanded.images || []) {
                     imageMeta.push(imageMetaFromUrl(url, 'forward'))
@@ -2164,20 +2167,6 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
         }
         await this.saveFastChatToPersonalHistory(e, normalized, contextText, replyText, memoryContext?.history)
 
-        try {
-            await this.conversationManager.db.saveGroupMessageLog({
-                groupId: String(e.group_id),
-                messageId: `fast_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-                userId: getBotUin(e) || 'bot',
-                nickname: Config.AI_NAME,
-                normalizedText: replyText,
-                imageMeta: [],
-                isCommand: false,
-                isBot: true
-            })
-        } catch (err) {
-            logger.warn(`[AI-Plugin] [畅聊] 保存 AI 回复到群流水失败: ${err.message}`)
-        }
     }
 
     async saveFastChatToPersonalHistory(e, normalized, contextText, replyText, existingHistory = null) {
