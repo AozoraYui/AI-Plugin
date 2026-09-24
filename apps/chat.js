@@ -32,6 +32,7 @@ import { executePendingShellSession } from '../tools/shell_session.js'
 import { summarizeShellResultForReply } from '../utils/shell_result_summary.js'
 import { selectWorkspaceSurveyFiles } from '../utils/workspace_survey.js'
 import { buildWebEvidenceFingerprint, hasOverconfidentLowEvidenceAnswer, updateWebEvidenceState } from '../utils/web_evidence.js'
+import { extractMessageSendError, isContentModerationSendError, rewriteRejectedReply } from '../utils/message_delivery.js'
 import yaml from 'yaml'
 
 function saveMainConfigSwitch(key, value) {
@@ -3583,40 +3584,40 @@ export class ChatHandler extends plugin {
                 const footerInfo = `⏱️ 耗时: ${elapsed}s${tokenInfo} @${result.platform}${footerSuffix}`
                 const reasoningText = Config.show_thinking && result.reasoning ? String(result.reasoning).trim() : ''
 
-                if (reasoningText) {
-                    const forwardMsgNodes = []
-                    const pushChunks = (title, text, footer = '') => {
-                        let content = text || ''
-                        let part = 1
-                        while (content.length > 0) {
-                            let splitIndex = Math.min(MAX_LENGTH, content.length)
-                            if (content.length > MAX_LENGTH) {
-                                const lastNewLine = content.lastIndexOf('\n', MAX_LENGTH)
-                                if (lastNewLine > MAX_LENGTH * 0.8) splitIndex = lastNewLine + 1
+                const sendFinalReply = async (responseText, responseReasoning = '') => {
+                    if (responseReasoning) {
+                        const forwardMsgNodes = []
+                        const pushChunks = (title, text, footer = '') => {
+                            let content = text || ''
+                            let part = 1
+                            while (content.length > 0) {
+                                let splitIndex = Math.min(MAX_LENGTH, content.length)
+                                if (content.length > MAX_LENGTH) {
+                                    const lastNewLine = content.lastIndexOf('\n', MAX_LENGTH)
+                                    if (lastNewLine > MAX_LENGTH * 0.8) splitIndex = lastNewLine + 1
+                                }
+                                const chunk = content.slice(0, splitIndex)
+                                content = content.slice(splitIndex)
+                                const suffix = content.length === 0 && footer ? `\n\n${footer}` : ''
+                                forwardMsgNodes.push({
+                                    user_id: Bot.uin,
+                                    nickname: `${Config.AI_NAME} ${title}${part > 1 ? ` ${part}` : ''}`,
+                                    message: `${chunk}${suffix}`
+                                })
+                                part++
                             }
-                            const chunk = content.slice(0, splitIndex)
-                            content = content.slice(splitIndex)
-                            const suffix = content.length === 0 && footer ? `\n\n${footer}` : ''
-                            forwardMsgNodes.push({
-                                user_id: Bot.uin,
-                                nickname: `${Config.AI_NAME} ${title}${part > 1 ? ` ${part}` : ''}`,
-                                message: `${chunk}${suffix}`
-                            })
-                            part++
                         }
+                        pushChunks('思考过程', `🧠 思考过程\n\n${responseReasoning}`)
+                        pushChunks('最终回复', `💬 最终回复\n\n${responseText}`, footerInfo)
+                        const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
+                        return e.reply(forwardMsg)
                     }
-                    pushChunks('思考过程', `🧠 思考过程\n\n${reasoningText}`)
-                    pushChunks('最终回复', `💬 最终回复\n\n${finalResponseText}`, footerInfo)
-                    const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
-                    await e.reply(forwardMsg)
-                } else if (finalResponseText.length <= MAX_LENGTH) {
-                    await e.reply(`${finalResponseText}\n\n${footerInfo}`, true)
-                } else {
+                    if (responseText.length <= MAX_LENGTH) {
+                        return e.reply(`${responseText}\n\n${footerInfo}`, true)
+                    }
                     const forwardMsgNodes = []
-                    let content = finalResponseText
+                    let content = responseText
                     let part = 1
-
-                    // 第一段包含回复内容
                     while (content.length > 0) {
                         let splitIndex = MAX_LENGTH
                         if (content.length > MAX_LENGTH) {
@@ -3625,26 +3626,47 @@ export class ChatHandler extends plugin {
                         }
                         const chunk = content.slice(0, splitIndex)
                         content = content.slice(splitIndex)
-
-                        if (content.length === 0) {
-                            // 最后一段，加上耗时信息
-                            forwardMsgNodes.push({
-                                user_id: Bot.uin,
-                                nickname: `${Config.AI_NAME} (Part ${part})`,
-                                message: `${chunk}\n\n${footerInfo}`
-                            })
-                        } else {
-                            forwardMsgNodes.push({
-                                user_id: Bot.uin,
-                                nickname: `${Config.AI_NAME} (Part ${part})`,
-                                message: chunk
-                            })
-                        }
+                        forwardMsgNodes.push({
+                            user_id: Bot.uin,
+                            nickname: `${Config.AI_NAME} (Part ${part})`,
+                            message: content.length === 0 ? `${chunk}\n\n${footerInfo}` : chunk
+                        })
                         part++
                     }
-
                     const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
-                    await e.reply(forwardMsg)
+                    return e.reply(forwardMsg)
+                }
+
+                let sendResult = await sendFinalReply(finalResponseText, reasoningText)
+                let sendError = extractMessageSendError(sendResult)
+                if (sendError) {
+                    logger.warn(`[AI-Plugin] 最终回复发送失败: ${sendError}`)
+                    if (isContentModerationSendError(sendError)) {
+                        const rewritten = await rewriteRejectedReply(this.client, finalResponseText, modelGroupKey, 4096)
+                        if (rewritten) {
+                            const retryResult = await sendFinalReply(rewritten)
+                            const retryError = extractMessageSendError(retryResult)
+                            if (!retryError) {
+                                finalResponseText = rewritten
+                                sendError = ''
+                                logger.info('[AI-Plugin] 最终回复经中性改写后发送成功')
+                            } else {
+                                sendError = retryError
+                                logger.warn(`[AI-Plugin] 中性改写回复仍发送失败: ${retryError}`)
+                            }
+                        }
+                        if (sendError) {
+                            finalResponseText = '刚才生成的答复被消息发送过滤器拦截，自动改写后仍未能发送。你可以换一种说法再问，或让我只做简短、客观的概括。'
+                            usedSafeFallbackReply = true
+                            const fallbackResult = await e.reply(finalResponseText, true)
+                            sendError = extractMessageSendError(fallbackResult)
+                        }
+                    }
+                    if (sendError) {
+                        logger.error(`[AI-Plugin] 最终回复确认发送失败，停止写入成功历史: ${sendError}`)
+                        await setMsgEmojiLike(e, 10)
+                        return true
+                    }
                 }
 
                 await setMsgEmojiLike(e, 144)

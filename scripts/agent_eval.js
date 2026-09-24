@@ -67,6 +67,7 @@ const { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resolv
 const { trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
 const { getPureImageReplyPolicy, isReferentialBotKeywordMention, resolveFastChatImageDelivery, resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
 const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, classifyWebUrl, hasOverconfidentLowEvidenceAnswer, updateWebEvidenceState } = await import('../utils/web_evidence.js')
+const { extractMessageSendError, isContentModerationSendError } = await import('../utils/message_delivery.js')
 
 const failures = []
 let passed = 0
@@ -87,6 +88,16 @@ check('Node 响应头兼容 Fetch Headers 的 get 接口', (() => {
         && headers.get('set-cookie') === 'a=1, b=2'
         && headers.get('missing') === null
         && headers.has('CONTENT-TYPE')
+})())
+
+check('本地插件返回 false 会被识别为消息发送失败', (() => {
+    const error = extractMessageSendError(false)
+    return error.includes('发送接口返回 false') && isContentModerationSendError(error)
+})())
+
+check('适配器违禁词异常会被识别为内容拦截', (() => {
+    const error = extractMessageSendError({ error: [new Error('包含违禁词')] })
+    return error.includes('包含违禁词') && isContentModerationSendError(error)
 })())
 
 check('搜索所有引擎不可用时不会伪装成普通无结果', (() => {
