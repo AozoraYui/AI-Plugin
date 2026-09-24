@@ -594,6 +594,38 @@ export class AIDatabase {
         })
     }
 
+    getLatestOutboundForwardMessage({ groupId = '', maxAgeSeconds = 900 } = {}) {
+        return new Promise((resolve, reject) => {
+            const normalizedGroupId = String(groupId || '').trim()
+            if (!normalizedGroupId) {
+                resolve(null)
+                return
+            }
+            const age = Number(maxAgeSeconds)
+            const cutoff = Number.isFinite(age) && age > 0
+                ? new Date(Date.now() - age * 1000).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '')
+                : null
+            const params = [normalizedGroupId]
+            let query = `
+                SELECT group_id, message_id, nodes_json, normalized_text, image_meta, created_at
+                FROM outbound_forward_messages
+                WHERE group_id = ?
+            `
+            if (cutoff) {
+                query += ' AND created_at >= ?'
+                params.push(cutoff)
+            }
+            query += ' ORDER BY id DESC LIMIT 1'
+            this.db.get(query, params, (err, row) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(row || null)
+            })
+        })
+    }
+
     updateGroupMessageImageSummary(groupId, messageId, imageSummary) {
         return new Promise((resolve, reject) => {
             const summary = String(imageSummary || '').trim()

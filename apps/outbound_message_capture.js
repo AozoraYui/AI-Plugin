@@ -60,7 +60,8 @@ async function persistOutboundMessage(e, message, response) {
     if (!normalized.normalizedText && normalized.imageMeta.length === 0 && normalized.forwardNodes.length === 0) return
 
     const createdAt = getDBTimestamp()
-    const messageId = getReplyMessageIds(response)[0]
+    const messageIds = getReplyMessageIds(response)
+    const messageId = messageIds[0]
     const userId = getBotUserId(e)
     await db.saveGroupMessageLog({
         groupId: String(e.group_id),
@@ -74,16 +75,26 @@ async function persistOutboundMessage(e, message, response) {
         isBot: true
     })
 
-    if (normalized.forwardNodes.length > 0 && db.saveOutboundForwardMessage && !String(messageId).startsWith('outbound_')) {
-        await db.saveOutboundForwardMessage({
-            groupId: String(e.group_id),
-            messageId,
-            nodes: normalized.forwardNodes,
-            normalizedText: normalized.normalizedText,
-            imageMeta: normalized.imageMeta,
-            createdAt
-        })
+    if (normalized.forwardNodes.length > 0 && db.saveOutboundForwardMessage) {
+        for (const forwardMessageId of messageIds) {
+            await db.saveOutboundForwardMessage({
+                groupId: String(e.group_id),
+                messageId: forwardMessageId,
+                nodes: normalized.forwardNodes,
+                normalizedText: normalized.normalizedText,
+                imageMeta: normalized.imageMeta,
+                createdAt
+            })
+        }
+        logger.info(`[AI-Plugin] 已缓存机器人合并转发: 群=${e.group_id}, message_id=${messageIds.join(',')}, 节点=${normalized.forwardNodes.length}`)
+    } else if (normalized.forwardNodes.length === 0 && isForwardMessage(message)) {
+        logger.warn(`[AI-Plugin] 机器人合并转发未提取到节点: 群=${e.group_id}, 返回ID=${messageIds.join(',') || '无'}`)
     }
+}
+
+function isForwardMessage(message) {
+    const parts = Array.isArray(message) ? message : [message]
+    return parts.some(part => ['node', 'forward'].includes(String(part?.type || '').toLowerCase()))
 }
 
 export class OutboundMessageCapture extends plugin {

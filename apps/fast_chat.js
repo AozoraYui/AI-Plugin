@@ -253,7 +253,7 @@ function imageMetaFromUrl(url, source = 'message') {
 }
 
 function getForwardResid(seg) {
-    if (seg.type === 'forward') return seg.data?.id || seg.id || ''
+    if (seg.type === 'forward' || seg.type === 'node') return seg.data?.id || seg.id || ''
     if ((seg.type === 'json' || seg.type === 'xml') && seg.data) {
         const raw = typeof seg.data === 'string' ? seg.data : JSON.stringify(seg.data)
         return raw.match(/resid"?\s*:\s*"?([a-zA-Z0-9_\-]+)"?/)?.[1]

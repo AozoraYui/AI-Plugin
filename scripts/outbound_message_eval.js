@@ -59,7 +59,40 @@ async function testCachedHydration() {
     assert.equal(source.message[0].content[0].message[0].text, '帮助内容')
 }
 
+async function testCachedHydrationByRecentGroupFallback() {
+    let exactLookups = 0
+    global.AIPluginConversationManager = {
+        db: {
+            async getOutboundForwardMessage() {
+                exactLookups += 1
+                return null
+            },
+            async getLatestOutboundForwardMessage({ groupId, maxAgeSeconds }) {
+                assert.equal(groupId, '100')
+                assert.equal(maxAgeSeconds, 900)
+                return {
+                    message_id: 'recent-forward-id',
+                    nodes_json: JSON.stringify([{
+                        user_id: 'bot',
+                        nickname: '诺亚',
+                        message: [{ type: 'text', text: '最近帮助内容' }]
+                    }])
+                }
+            }
+        }
+    }
+    const source = await hydrateCachedForwardMessage(
+        { message: [{ type: 'forward', data: { id: 'temporary-resid' } }] },
+        '100',
+        'outer-message-id',
+        { botUserId: 'bot' }
+    )
+    assert.equal(exactLookups, 2)
+    assert.equal(source.message[0].content[0].message[0].text, '最近帮助内容')
+}
+
 testOutboundNormalization()
 testMessageIdExtraction()
 await testCachedHydration()
-console.log('Outbound message eval: 3 passed, 0 failed')
+await testCachedHydrationByRecentGroupFallback()
+console.log('Outbound message eval: 4 passed, 0 failed')

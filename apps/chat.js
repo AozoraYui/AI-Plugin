@@ -1823,7 +1823,7 @@ export class ChatHandler extends plugin {
                     for (const m of sourceMsg.message) {
                         const face = describeQQFaceSegment(m)
                         let resid = null
-                        if (m.type === 'forward' && m.id) {
+                        if (m.type === 'forward' || m.type === 'node') {
                             const forwardContentArr = m.content || m.data?.content
                             if (Array.isArray(forwardContentArr)) {
                                 logger.info(`[AI-Plugin] sourceMsg 中发现内联合并消息 (type=forward, 内联content)，开始递归展开`)
@@ -1839,7 +1839,7 @@ export class ChatHandler extends plugin {
                                     }
                                 }
                             } else {
-                                resid = m.id
+                                resid = m.id || m.data?.id
                             }
                         } else if ((m.type === 'json' || m.type === 'xml') && m.data) {
                             let cardData = m.data

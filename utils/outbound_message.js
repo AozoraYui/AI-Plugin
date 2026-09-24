@@ -169,6 +169,28 @@ export function extractMessageIds(response) {
     return [...new Set(ids)]
 }
 
+export function extractSourceMessageIds(source, fallbackMessageId = '') {
+    const ids = []
+    const add = value => {
+        if (value === undefined || value === null || value === '') return
+        const normalized = String(value).trim()
+        if (normalized && !ids.includes(normalized)) ids.push(normalized)
+    }
+    const visit = value => {
+        if (!value || typeof value !== 'object') return
+        if (Array.isArray(value)) {
+            value.forEach(visit)
+            return
+        }
+        for (const key of ['message_id', 'messageId', 'id']) add(value[key])
+        if (value.data && value.data !== value) visit(value.data)
+        if (value.message && value.message !== value) visit(value.message)
+    }
+    visit(source)
+    add(fallbackMessageId)
+    return ids
+}
+
 export function getOutboundForwardNodes(cached) {
     if (!cached) return []
     try {
@@ -191,11 +213,54 @@ export async function loadCachedOutboundForward(messageId, groupId = '') {
     }
 }
 
-export async function hydrateCachedForwardMessage(source, groupId = '', fallbackMessageId = '') {
+export async function loadLatestCachedOutboundForward(groupId = '', maxAgeSeconds = 900) {
+    const db = global.AIPluginConversationManager?.db
+    if (!db?.getLatestOutboundForwardMessage || !groupId) return null
+    try {
+        return await db.getLatestOutboundForwardMessage({ groupId, maxAgeSeconds })
+    } catch (err) {
+        logger.warn(`[AI-Plugin] 读取最近合并消息缓存失败: ${err.message}`)
+        return null
+    }
+}
+
+export async function hydrateCachedForwardMessage(source, groupId = '', fallbackMessageId = '', options = {}) {
     if (!source || !Array.isArray(source.message)) return source
-    const messageId = source.message_id || source.messageId || fallbackMessageId || source.id
-    if (!messageId) return source
-    const cached = await loadCachedOutboundForward(String(messageId), groupId)
+    const sourceIds = extractSourceMessageIds(source, fallbackMessageId)
+    let cached = null
+    let matchedMessageId = ''
+    for (const messageId of sourceIds) {
+        cached = await loadCachedOutboundForward(messageId, groupId)
+        if (cached) {
+            matchedMessageId = messageId
+            break
+        }
+    }
+
+    const hasUnexpandedForward = source.message.some(segment => {
+        const type = getSegmentType(segment)
+        if (type !== 'forward' && type !== 'node') return false
+        const content = segment?.data?.content || segment?.content
+        return !Array.isArray(content) || content.length === 0
+    })
+    const sourceUserId = String(
+        source.user_id
+        || source.userId
+        || source.sender?.user_id
+        || source.sender?.userId
+        || source.sender?.uin
+        || ''
+    ).trim()
+    const botUserId = String(options.botUserId || '').trim()
+    const sourceMayBeBot = !sourceUserId || !botUserId || sourceUserId === botUserId
+    if (!cached && hasUnexpandedForward && sourceMayBeBot) {
+        cached = await loadLatestCachedOutboundForward(groupId)
+        if (cached) {
+            matchedMessageId = String(cached.message_id || '')
+            logger.info(`[AI-Plugin] 未按引用 ID 命中合并消息，回退同群最近缓存: message_id=${matchedMessageId}`)
+        }
+    }
+
     const nodes = getOutboundForwardNodes(cached)
     if (nodes.length === 0) return source
 
@@ -213,6 +278,6 @@ export async function hydrateCachedForwardMessage(source, groupId = '', fallback
         }
     })
     if (!injected) return source
-    logger.info(`[AI-Plugin] 已从本地缓存恢复合并转发内容: message_id=${messageId}, 节点=${nodes.length}`)
+    logger.info(`[AI-Plugin] 已从本地缓存恢复合并转发内容: message_id=${matchedMessageId || sourceIds[0] || 'unknown'}, 节点=${nodes.length}`)
     return { ...source, message }
 }
