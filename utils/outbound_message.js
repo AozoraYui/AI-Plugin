@@ -2,6 +2,8 @@ import crypto from 'node:crypto'
 
 const MAX_FORWARD_NODES = 200
 const MAX_OUTBOUND_TEXT = 120000
+const OUTBOUND_MEMORY_CACHE_TTL_MS = 30 * 60 * 1000
+const outboundForwardMemoryCache = new Map()
 
 function getSegmentType(segment) {
     return String(segment?.type || '').trim().toLowerCase()
@@ -202,11 +204,53 @@ export function getOutboundForwardNodes(cached) {
     }
 }
 
+function pruneOutboundForwardMemoryCache(now = Date.now()) {
+    for (const [key, value] of outboundForwardMemoryCache) {
+        if (now - value.createdAt > OUTBOUND_MEMORY_CACHE_TTL_MS) {
+            outboundForwardMemoryCache.delete(key)
+        }
+    }
+    while (outboundForwardMemoryCache.size > 256) {
+        const oldestKey = outboundForwardMemoryCache.keys().next().value
+        if (oldestKey === undefined) break
+        outboundForwardMemoryCache.delete(oldestKey)
+    }
+}
+
+export function rememberOutboundForwardMessage({ groupId = '', messageId = '', nodes = [], createdAt = Date.now() } = {}) {
+    const normalizedGroupId = String(groupId || '').trim()
+    const normalizedMessageId = String(messageId || '').trim()
+    if (!normalizedGroupId || !normalizedMessageId || !Array.isArray(nodes) || nodes.length === 0) return
+    const now = Date.now()
+    pruneOutboundForwardMemoryCache(now)
+    outboundForwardMemoryCache.set(`${normalizedGroupId}:${normalizedMessageId}`, {
+        groupId: normalizedGroupId,
+        messageId: normalizedMessageId,
+        nodes,
+        createdAt: now,
+        sourceCreatedAt: createdAt
+    })
+}
+
 export async function loadCachedOutboundForward(messageId, groupId = '') {
+    const normalizedGroupId = String(groupId || '').trim()
+    const normalizedMessageId = String(messageId || '').trim()
+    if (!normalizedMessageId) return null
+    pruneOutboundForwardMemoryCache()
+    const memoryCached = outboundForwardMemoryCache.get(`${normalizedGroupId}:${normalizedMessageId}`)
+    if (memoryCached) {
+        return {
+            group_id: memoryCached.groupId,
+            message_id: memoryCached.messageId,
+            nodes_json: JSON.stringify(memoryCached.nodes),
+            created_at: memoryCached.sourceCreatedAt
+        }
+    }
+
     const db = global.AIPluginConversationManager?.db
-    if (!db?.getOutboundForwardMessage || !messageId) return null
+    if (!db?.getOutboundForwardMessage) return null
     try {
-        return await db.getOutboundForwardMessage({ messageId, groupId })
+        return await db.getOutboundForwardMessage({ messageId: normalizedMessageId, groupId: normalizedGroupId })
     } catch (err) {
         logger.warn(`[AI-Plugin] 读取本地合并消息缓存失败: ${err.message}`)
         return null
@@ -214,10 +258,26 @@ export async function loadCachedOutboundForward(messageId, groupId = '') {
 }
 
 export async function loadLatestCachedOutboundForward(groupId = '', maxAgeSeconds = 900) {
+    const normalizedGroupId = String(groupId || '').trim()
+    const maxAgeMs = Number(maxAgeSeconds) > 0 ? Number(maxAgeSeconds) * 1000 : Infinity
+    pruneOutboundForwardMemoryCache()
+    const memoryCandidates = [...outboundForwardMemoryCache.values()]
+        .filter(item => item.groupId === normalizedGroupId && Date.now() - item.createdAt <= maxAgeMs)
+        .sort((left, right) => right.createdAt - left.createdAt)
+    if (memoryCandidates.length > 0) {
+        const item = memoryCandidates[0]
+        return {
+            group_id: item.groupId,
+            message_id: item.messageId,
+            nodes_json: JSON.stringify(item.nodes),
+            created_at: item.sourceCreatedAt
+        }
+    }
+
     const db = global.AIPluginConversationManager?.db
-    if (!db?.getLatestOutboundForwardMessage || !groupId) return null
+    if (!db?.getLatestOutboundForwardMessage || !normalizedGroupId) return null
     try {
-        return await db.getLatestOutboundForwardMessage({ groupId, maxAgeSeconds })
+        return await db.getLatestOutboundForwardMessage({ groupId: normalizedGroupId, maxAgeSeconds })
     } catch (err) {
         logger.warn(`[AI-Plugin] 读取最近合并消息缓存失败: ${err.message}`)
         return null

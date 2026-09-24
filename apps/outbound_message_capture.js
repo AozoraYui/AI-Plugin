@@ -2,7 +2,7 @@ import plugin from '../../../lib/plugins/plugin.js'
 import { Config } from '../utils/config.js'
 import { getAccessConfig } from '../utils/access.js'
 import { getDBTimestamp } from '../utils/common.js'
-import { extractMessageIds, normalizeOutboundMessage } from '../utils/outbound_message.js'
+import { extractMessageIds, normalizeOutboundMessage, rememberOutboundForwardMessage } from '../utils/outbound_message.js'
 
 const REPLY_WRAPPED = Symbol('aiPluginOutboundReplyWrapped')
 let syntheticMessageSequence = 0
@@ -83,6 +83,12 @@ async function persistOutboundMessage(e, message, response) {
                 nodes: normalized.forwardNodes,
                 normalizedText: normalized.normalizedText,
                 imageMeta: normalized.imageMeta,
+                createdAt
+            })
+            rememberOutboundForwardMessage({
+                groupId: String(e.group_id),
+                messageId: forwardMessageId,
+                nodes: normalized.forwardNodes,
                 createdAt
             })
         }

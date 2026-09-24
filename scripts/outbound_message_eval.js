@@ -5,7 +5,8 @@ global.logger = { info() {}, warn() {} }
 const {
     extractMessageIds,
     hydrateCachedForwardMessage,
-    normalizeOutboundMessage
+    normalizeOutboundMessage,
+    rememberOutboundForwardMessage
 } = await import('../utils/outbound_message.js')
 
 function testOutboundNormalization() {
@@ -91,8 +92,35 @@ async function testCachedHydrationByRecentGroupFallback() {
     assert.equal(source.message[0].content[0].message[0].text, '最近帮助内容')
 }
 
+async function testSameProcessMemoryHydration() {
+    rememberOutboundForwardMessage({
+        groupId: '200',
+        messageId: 'memory-forward-id',
+        nodes: [{
+            user_id: 'bot',
+            nickname: '诺亚',
+            message: [{ type: 'text', text: '内存缓存内容' }]
+        }]
+    })
+    global.AIPluginConversationManager = {
+        db: {
+            async getOutboundForwardMessage() {
+                throw new Error('不应回读数据库')
+            }
+        }
+    }
+    const source = await hydrateCachedForwardMessage(
+        { message: [{ type: 'forward', data: { id: 'memory-forward-id' } }] },
+        '200',
+        '',
+        { botUserId: 'bot' }
+    )
+    assert.equal(source.message[0].content[0].message[0].text, '内存缓存内容')
+}
+
 testOutboundNormalization()
 testMessageIdExtraction()
 await testCachedHydration()
 await testCachedHydrationByRecentGroupFallback()
-console.log('Outbound message eval: 4 passed, 0 failed')
+await testSameProcessMemoryHydration()
+console.log('Outbound message eval: 5 passed, 0 failed')
