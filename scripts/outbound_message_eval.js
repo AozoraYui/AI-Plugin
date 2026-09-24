@@ -118,9 +118,34 @@ async function testSameProcessMemoryHydration() {
     assert.equal(source.message[0].content[0].message[0].text, '内存缓存内容')
 }
 
+async function testCardForwardHydrationReplacesRemoteResid() {
+    rememberOutboundForwardMessage({
+        groupId: '300',
+        messageId: 'card-message-id',
+        nodes: [{
+            user_id: 'bot',
+            nickname: '诺亚',
+            message: [{ type: 'text', text: '卡片里的本地内容' }]
+        }]
+    })
+    const source = await hydrateCachedForwardMessage(
+        {
+            message_id: 'card-message-id',
+            message: [{ type: 'json', data: '{"resid":"temporary-resid"}' }]
+        },
+        '300',
+        '',
+        { botUserId: 'bot' }
+    )
+    assert.equal(source.message.length, 1)
+    assert.equal(source.message[0].type, 'forward')
+    assert.equal(source.message[0].content[0].message[0].text, '卡片里的本地内容')
+}
+
 testOutboundNormalization()
 testMessageIdExtraction()
 await testCachedHydration()
 await testCachedHydrationByRecentGroupFallback()
 await testSameProcessMemoryHydration()
-console.log('Outbound message eval: 5 passed, 0 failed')
+await testCardForwardHydrationReplacesRemoteResid()
+console.log('Outbound message eval: 6 passed, 0 failed')

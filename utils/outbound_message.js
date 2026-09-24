@@ -333,17 +333,29 @@ export async function hydrateCachedForwardMessage(source, groupId = '', fallback
     let injected = false
     const message = source.message.map(segment => {
         const type = getSegmentType(segment)
-        if (type !== 'forward' && type !== 'node') return segment
-        const existing = segment?.data?.content || segment?.content
-        if (Array.isArray(existing) && existing.length > 0) return segment
-        injected = true
-        return {
-            ...segment,
-            content: nodes,
-            data: { ...(segment.data || {}), content: nodes }
+        if (type === 'forward' || type === 'node') {
+            const existing = segment?.data?.content || segment?.content
+            if (Array.isArray(existing) && existing.length > 0) return segment
+            injected = true
+            return {
+                ...segment,
+                content: nodes,
+                data: { ...(segment.data || {}), content: nodes }
+            }
         }
+        if (type === 'json' || type === 'xml') {
+            injected = true
+            return {
+                type: 'forward',
+                content: nodes,
+                data: { content: nodes }
+            }
+        }
+        return segment
     })
-    if (!injected) return source
+    if (!injected) {
+        message.push({ type: 'forward', content: nodes, data: { content: nodes } })
+    }
     logger.info(`[AI-Plugin] 已从本地缓存恢复合并转发内容: message_id=${matchedMessageId || sourceIds[0] || 'unknown'}, 节点=${nodes.length}`)
     return { ...source, message }
 }
