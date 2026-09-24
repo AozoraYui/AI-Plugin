@@ -10,6 +10,15 @@ import { normalizeModelConfigDocuments, resolveModelReference } from '../utils/m
 // 熔断常量
 const CONSECUTIVE_FAILS_THRESHOLD = 3    // 连续失败 N 次后熔断
 const COOLDOWN_DURATION_MS = 30000        // 熔断冷却 30 秒
+const PROVIDER_FAILS_THRESHOLD = 2        // 供应商连续失败 N 次后熔断
+const PROVIDER_COOLDOWN_DURATION_MS = 60000
+const PROVIDER_PERMANENT_COOLDOWN_DURATION_MS = 10 * 60 * 1000
+const MODEL_PERMANENT_COOLDOWN_DURATION_MS = 10 * 60 * 1000
+const MAX_REQUEST_ATTEMPTS = 4
+const MAX_ATTEMPTS_PER_PROVIDER = 2
+const MAX_INTENT_ATTEMPTS = 3
+const RETRY_BACKOFF_BASE_MS = 150
+const RETRY_BACKOFF_MAX_MS = 1200
 const LATENCY_SAMPLE_WEIGHT = 0.3         // 新延迟占 30% 加权（平滑指数）
 const ULTRA_CHAT_REQUEST_TIMEOUT_MS = 600000 // Ultra 长思考模型固定等待 10 分钟
 
@@ -18,6 +27,7 @@ export class AiClient {
         this.modelsConfig = []
         this.modelDefinitions = []
         this.modelStatus = {}
+        this.providerStatus = {}
         this.disabledModels = new Set()
         this.activeModelPools = {}
         this.commandConfig = {}
@@ -99,19 +109,42 @@ export class AiClient {
         const intentModels = this.webSearchIntentModels
         if (intentModels.length === 0) return null
 
+        let attempts = 0
+        const providerAttemptCounts = new Map()
+        const failedProviders = new Set()
         for (const modelConfig of intentModels) {
+            if (attempts >= MAX_INTENT_ATTEMPTS) break
             const provider = this.modelsConfig.find(p => p.id === modelConfig.provider_id)
             if (!provider) {
                 logger.warn(`[AI-Plugin] 意图分析模型供应商不存在: ${modelConfig.provider_id}`)
                 continue
             }
+            if (failedProviders.has(provider.id)) continue
+            if (this._isProviderInCooldown(provider.id)) {
+                logger.debug(`[AI-Plugin] 意图分析跳过供应商熔断: ${provider.name}`)
+                continue
+            }
+            const providerAttempts = providerAttemptCounts.get(provider.id) || 0
+            if (providerAttempts >= MAX_ATTEMPTS_PER_PROVIDER) continue
+            providerAttemptCounts.set(provider.id, providerAttempts + 1)
+            attempts += 1
             const startTime = Date.now()
             const result = await this.attemptRequest('chat', payload, provider, modelConfig.model_id, 1024, 30000, modelConfig)
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
+            const elapsedMs = Date.now() - startTime
+            const elapsed = (elapsedMs / 1000).toFixed(2)
+            const statusKey = `${provider.id}-${modelConfig.id || modelConfig.model_id}`
             if (result.success) {
+                this._recordModelSuccess(statusKey, elapsedMs)
+                this._recordProviderSuccess(provider.id)
+                this.scheduleModelStatusSave()
                 logger.info(`[AI-Plugin] 意图分析成功: ${provider.name}/${modelConfig.model_id}, 耗时 ${elapsed}s`)
                 return result
             }
+            const failure = this._classifyRequestError(result.error)
+            this._recordModelFail(statusKey, failure)
+            this._recordProviderFail(provider.id, failure)
+            this.scheduleModelStatusSave()
+            if (failure.scope === 'provider') failedProviders.add(provider.id)
             logger.warn(`[AI-Plugin] 意图分析失败: ${provider.name}/${modelConfig.model_id}, 耗时 ${elapsed}s, 错误: ${result.error}`)
         }
         return null
@@ -253,8 +286,8 @@ export class AiClient {
 
     /** 记录模型请求成功 */
     _recordModelSuccess(key, elapsedMs) {
+        this._initModelStatusEntry(key)
         const entry = this.modelStatus[key]
-        if (!entry) return
         entry.success_count = (entry.success_count || 0) + 1
         entry.consecutive_fails = 0
         entry.cooldown_until = 0
@@ -270,16 +303,128 @@ export class AiClient {
     }
 
     /** 记录模型请求失败，超过阈值触发熔断 */
-    _recordModelFail(key) {
+    _recordModelFail(key, failure = {}) {
+        this._initModelStatusEntry(key)
         const entry = this.modelStatus[key]
-        if (!entry) return
         entry.fail_count = (entry.fail_count || 0) + 1
         entry.consecutive_fails = (entry.consecutive_fails || 0) + 1
         entry.last_used = Date.now()
-        if (entry.consecutive_fails >= CONSECUTIVE_FAILS_THRESHOLD) {
-            entry.cooldown_until = Date.now() + COOLDOWN_DURATION_MS
-            logger.warn(`[AI-Plugin] 模型 ${key} 连续失败 ${entry.consecutive_fails} 次，进入 ${COOLDOWN_DURATION_MS / 1000}s 熔断`)
+        if (failure.retryable === false || entry.consecutive_fails >= CONSECUTIVE_FAILS_THRESHOLD) {
+            const duration = failure.cooldownMs || COOLDOWN_DURATION_MS
+            entry.cooldown_until = Date.now() + duration
+            logger.warn(`[AI-Plugin] 模型 ${key} ${failure.reason || `连续失败 ${entry.consecutive_fails} 次`}，进入 ${duration / 1000}s 熔断`)
         }
+    }
+
+    _initProviderStatusEntry(providerId) {
+        const key = String(providerId || '').trim()
+        if (!key) return null
+        if (!this.providerStatus[key]) {
+            this.providerStatus[key] = {
+                success_count: 0,
+                fail_count: 0,
+                consecutive_fails: 0,
+                cooldown_until: 0,
+                last_error: '',
+                last_used: 0
+            }
+        }
+        const entry = this.providerStatus[key]
+        if (entry.success_count === undefined) entry.success_count = 0
+        if (entry.fail_count === undefined) entry.fail_count = 0
+        if (entry.consecutive_fails === undefined) entry.consecutive_fails = 0
+        if (entry.cooldown_until === undefined) entry.cooldown_until = 0
+        if (entry.last_error === undefined) entry.last_error = ''
+        if (entry.last_used === undefined) entry.last_used = 0
+        return entry
+    }
+
+    _recordProviderSuccess(providerId) {
+        const entry = this._initProviderStatusEntry(providerId)
+        if (!entry) return
+        entry.success_count += 1
+        entry.consecutive_fails = 0
+        entry.cooldown_until = 0
+        entry.last_error = ''
+        entry.last_used = Date.now()
+    }
+
+    _recordProviderFail(providerId, failure = {}) {
+        const entry = this._initProviderStatusEntry(providerId)
+        if (!entry) return
+        entry.fail_count += 1
+        entry.last_error = String(failure.error || failure.reason || '').slice(0, 500)
+        entry.last_used = Date.now()
+        const providerFailure = failure.scope === 'provider'
+        if (!providerFailure) return
+        entry.consecutive_fails += 1
+        if (failure.retryable === false || entry.consecutive_fails >= PROVIDER_FAILS_THRESHOLD) {
+            const duration = failure.cooldownMs || PROVIDER_COOLDOWN_DURATION_MS
+            entry.cooldown_until = Date.now() + duration
+            logger.warn(`[AI-Plugin] 供应商 ${providerId} ${failure.reason || `连续失败 ${entry.consecutive_fails} 次`}，进入 ${duration / 1000}s 熔断`)
+        }
+    }
+
+    _isProviderInCooldown(providerId) {
+        const entry = this._initProviderStatusEntry(providerId)
+        return Boolean(entry?.cooldown_until && Date.now() < entry.cooldown_until)
+    }
+
+    _classifyRequestError(error) {
+        const text = String(error || '').trim()
+        const lower = text.toLowerCase()
+        const status = Number(lower.match(/(?:http(?:\s*状态码)?|status(?:\s*code)?)[：:\s]*(\d{3})/)?.[1] || 0)
+        const isBillingOrAuth = status === 401 || status === 402 || status === 403
+            || /insufficient balance|invalid api key|unauthorized|forbidden|quota|余额不足|认证失败|未授权/.test(lower)
+        if (isBillingOrAuth) {
+            return {
+                retryable: false,
+                scope: 'provider',
+                cooldownMs: PROVIDER_PERMANENT_COOLDOWN_DURATION_MS,
+                reason: '认证、权限或余额异常',
+                error: text
+            }
+        }
+
+        const isModelUnavailable = status === 404
+            || /model[_ -]?not[_ -]?found|no available channel|模型不存在|模型不可用|unknown model/.test(lower)
+        if (isModelUnavailable) {
+            return {
+                retryable: false,
+                scope: 'model',
+                cooldownMs: MODEL_PERMANENT_COOLDOWN_DURATION_MS,
+                reason: '模型不可用',
+                error: text
+            }
+        }
+
+        const isContentOrParameterError = status === 400
+            || /content policy|safety|安全策略|参数错误|invalid request|bad request/.test(lower)
+        if (isContentOrParameterError) {
+            return {
+                retryable: false,
+                scope: 'model',
+                cooldownMs: MODEL_PERMANENT_COOLDOWN_DURATION_MS,
+                reason: '请求内容或参数不可用',
+                error: text
+            }
+        }
+
+        const isTransient = status === 408 || status === 409 || status === 425 || status === 429 || status >= 500
+            || /aggregateerror|fetch failed|econn|etimedout|enotfound|socket|timeout|timed out|连接|网络|代理|网关/.test(lower)
+        return {
+            retryable: true,
+            scope: isTransient ? 'provider' : 'model',
+            cooldownMs: isTransient ? PROVIDER_COOLDOWN_DURATION_MS : COOLDOWN_DURATION_MS,
+            reason: isTransient ? '网络或上游暂时不可用' : '未知请求错误',
+            error: text
+        }
+    }
+
+    async _waitBeforeFailover(attempt) {
+        const delay = Math.min(RETRY_BACKOFF_MAX_MS, RETRY_BACKOFF_BASE_MS * (2 ** Math.max(0, attempt - 1)))
+            + Math.floor(Math.random() * 100)
+        await new Promise(resolve => setTimeout(resolve, delay))
     }
 
     /** 检查模型是否在熔断期 */
@@ -560,6 +705,7 @@ export class AiClient {
             try {
                 const data = fs.readFileSync(MODEL_STATUS_FILE, 'utf8')
                 this.modelStatus = JSON.parse(data)
+                this.providerStatus = this.modelStatus._provider_status || {}
                 // 迁移：删除旧格式中的 status 字段
                 let migrated = false
                 for (const key of Object.keys(this.modelStatus)) {
@@ -569,6 +715,7 @@ export class AiClient {
                         migrated = true
                     }
                 }
+                delete this.modelStatus._provider_status
                 if (migrated) {
                     logger.info('[AI-Plugin] 已迁移旧格式模型状态，删除 status 字段')
                     this.saveModelStatus()
@@ -592,7 +739,8 @@ export class AiClient {
     saveModelStatus() {
         try {
             const tmpFile = MODEL_STATUS_FILE + '.tmp'
-            fs.writeFileSync(tmpFile, JSON.stringify(this.modelStatus, null, 2), 'utf8')
+            const data = { ...this.modelStatus, _provider_status: this.providerStatus }
+            fs.writeFileSync(tmpFile, JSON.stringify(data, null, 2), 'utf8')
             fs.renameSync(tmpFile, MODEL_STATUS_FILE)
         } catch (error) {
             logger.error('[AI-Plugin] 保存模型状态文件失败:', error)
@@ -1012,10 +1160,23 @@ export class AiClient {
                 throw new Error(`API业务错误: ${errorText}`)
             }
         } catch (err) {
-            const errorText = String(err?.message || err || '').trim() || '未知上游错误（异常未提供错误信息）'
+            const errorText = this._formatRequestError(err)
             logger.error(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 请求失败: ${errorText}`)
             return { success: false, error: errorText }
         }
+    }
+
+    _formatRequestError(error) {
+        const messages = []
+        const visit = (value, depth = 0) => {
+            if (!value || depth > 2) return
+            const message = String(value?.message || value || '').trim()
+            if (message && !messages.includes(message)) messages.push(message)
+            if (Array.isArray(value?.errors)) value.errors.forEach(item => visit(item, depth + 1))
+            if (value?.cause) visit(value.cause, depth + 1)
+        }
+        visit(error)
+        return messages.join(' | ').slice(0, 1200) || '未知上游错误（异常未提供错误信息）'
     }
 
     _resolveRequestTimeout(type, maxTokens = 8192, modelGroupKey = 'flash') {
@@ -1175,36 +1336,67 @@ export class AiClient {
 
             const cooldownCount = sortedPool.filter(s => s.score < 0).length
             const availableCount = sortedPool.filter(s => s.score >= 0).length
-            logger.debug(`[AI-Plugin] 模型池: 共 ${sortedPool.length} 个, 可用 ${availableCount} 个, 熔断 ${cooldownCount} 个`)
+            const providerAvailable = sortedPool.filter(s => !this._isProviderInCooldown(s.provider.id))
+            logger.debug(`[AI-Plugin] 模型池: 共 ${sortedPool.length} 个, 可用 ${availableCount} 个, 熔断 ${cooldownCount} 个, 供应商可用 ${new Set(providerAvailable.map(s => s.provider.id)).size} 个`)
 
-            // 如果全部熔断，强行全部放出来
-            const poolToTry = availableCount > 0
-                ? sortedPool.filter(s => s.score >= 0)
-                : sortedPool.map(s => ({ ...s, score: 0 }))
+            let poolToTry = sortedPool.filter(s => s.score >= 0 && !this._isProviderInCooldown(s.provider.id))
+            if (poolToTry.length === 0) {
+                const halfOpen = sortedPool
+                    .filter(s => s.score >= 0)
+                    .slice()
+                    .sort((left, right) => {
+                        const leftUntil = this.providerStatus[left.provider.id]?.cooldown_until || 0
+                        const rightUntil = this.providerStatus[right.provider.id]?.cooldown_until || 0
+                        return leftUntil - rightUntil
+                    })[0]
+                if (halfOpen) {
+                    poolToTry = [halfOpen]
+                    logger.warn(`[AI-Plugin] 模型组 [${modelGroupKey}] 全部供应商处于熔断，仅进行一次半开探测: ${halfOpen.provider.name}`)
+                }
+            }
+
+            const providerQueues = new Map()
+            for (const candidate of poolToTry) {
+                const providerId = candidate.provider.id
+                if (!providerQueues.has(providerId)) providerQueues.set(providerId, [])
+                const queue = providerQueues.get(providerId)
+                if (queue.length < MAX_ATTEMPTS_PER_PROVIDER) queue.push(candidate)
+            }
 
             lastError = ''
             const requestTimeout = this._resolveRequestTimeout(type, maxTokens, modelGroupKey)
-            for (const { provider, modelId, modelKey, modelConfig, statusKey: poolStatusKey, score } of poolToTry) {
-                const statusKey = poolStatusKey || `${provider.id}-${modelKey || modelId}`
-                const startTime = Date.now()
-                const result = await this.attemptRequest(type, payload, provider, modelId, maxTokens, requestTimeout, modelConfig)
-                const elapsedMs = Date.now() - startTime
-                const elapsed = (elapsedMs / 1000).toFixed(2)
+            let attempt = 0
+            providerLoop:
+            for (const queue of providerQueues.values()) {
+                for (const { provider, modelId, modelKey, modelConfig, statusKey: poolStatusKey, score } of queue) {
+                    if (attempt >= MAX_REQUEST_ATTEMPTS) break providerLoop
+                    if (attempt > 0) await this._waitBeforeFailover(attempt)
+                    attempt += 1
+                    const statusKey = poolStatusKey || `${provider.id}-${modelKey || modelId}`
+                    const startTime = Date.now()
+                    const result = await this.attemptRequest(type, payload, provider, modelId, maxTokens, requestTimeout, modelConfig)
+                    const elapsedMs = Date.now() - startTime
+                    const elapsed = (elapsedMs / 1000).toFixed(2)
 
-                if (result.success) {
-                    this._recordModelSuccess(statusKey, elapsedMs)
+                    if (result.success) {
+                        this._recordModelSuccess(statusKey, elapsedMs)
+                        this._recordProviderSuccess(provider.id)
+                        this.scheduleModelStatusSave()
+                        logger.debug(`[AI-Plugin] 请求成功: ${provider.name} (${modelId})，耗时 ${elapsed}s, 得分:${score?.toFixed(2)}`)
+                        return result
+                    }
+
+                    const failure = this._classifyRequestError(result.error)
+                    this._recordModelFail(statusKey, failure)
+                    this._recordProviderFail(provider.id, failure)
                     this.scheduleModelStatusSave()
-                    logger.debug(`[AI-Plugin] 请求成功: ${provider.name} (${modelId})，耗时 ${elapsed}s, 得分:${score?.toFixed(2)}`)
-                    return result
+                    logger.debug(`[AI-Plugin] 请求失败: ${provider.name} (${modelId})，耗时 ${elapsed}s，得分:${score?.toFixed(2)}, 错误: ${result.error}`)
+                    lastError += `[${provider.name}-${modelId}]: ${result.error}\n`
+                    if (failure.scope === 'provider') break
                 }
-
-                this._recordModelFail(statusKey)
-                this.scheduleModelStatusSave()
-                logger.debug(`[AI-Plugin] 请求失败: ${provider.name} (${modelId})，耗时 ${elapsed}s，得分:${score?.toFixed(2)}, 错误: ${result.error}`)
-                lastError += `[${provider.name}-${modelId}]: ${result.error}\n`
             }
 
-            const errorMessage = `模型组 [${modelGroupKey}] 中的所有可用模型均尝试失败。\n具体错误:\n${lastError.trim()}`
+            const errorMessage = `模型组 [${modelGroupKey}] 中的容灾候选均尝试失败。\n具体错误:\n${lastError.trim() || '没有可用的健康供应商，已避免继续重试。'}`
             logger.error(`[AI-Plugin] ${errorMessage}`)
             return { success: false, error: `${errorMessage}` }
         } else {
