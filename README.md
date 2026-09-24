@@ -462,7 +462,7 @@ AI-Plugin/
 | `ai_prompt.yaml` | AI 提示词与人设配置（可选，自定义 AI 行为与风格） |
 | `trusted_groups.yaml` | 信任群聊列表（通过 `#ai信任群添加` 命令自动管理） |
 | `models_config.yaml` | 模型供应商配置（含 Vision Relay、指令关键词、联网搜索、网页抓取等） |
-| `model_status.json` | 模型运行统计（成功率/延迟/熔断等） |
+| `model_status.json` | 模型与供应商运行统计（成功率/延迟/模型熔断/供应商熔断等，由插件自动维护） |
 | `disabled_models.json` | 禁用的模型列表 |
 | `draw_presets.yaml` | 作图预设配置 |
 | `access_control.yaml` | 权限控制配置 |

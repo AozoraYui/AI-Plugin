@@ -111,7 +111,7 @@ function testModelFailuresDoNotPoisonProviderCircuit() {
     assert.ok(client.providerStatus.qianye.cooldown_until > Date.now())
 }
 
-async function testAllCooldownUsesSingleHalfOpenProbe() {
+async function testAllCooldownFailsFastWithoutProbe() {
     const client = createClient([
         model('first', 'model-a'),
         model('second', 'model-b'),
@@ -129,7 +129,29 @@ async function testAllCooldownUsesSingleHalfOpenProbe() {
     }
     const result = await client.makeRequest('chat', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] })
     assert.equal(result.success, false)
-    assert.deepEqual(calls, ['first'])
+    assert.deepEqual(calls, [])
+}
+
+function testVersionedStatusMigrationAndPruning() {
+    const client = createClient([])
+    client.modelsConfig = [{ id: 'qianye' }]
+    client.modelDefinitions = [{ id: 'gemini', provider_id: 'qianye' }]
+    const parsed = client._parseModelStatusDocument({
+        'qianye-gemini': { success_count: 2, fail_count: 1, status: 'available' },
+        'removed-old': { success_count: 9 },
+        _provider_status: {
+            qianye: { success_count: 3, fail_count: 1, last_error: 'timeout' },
+            removed: { success_count: 1 }
+        }
+    })
+    assert.equal(parsed.migrated, true)
+    assert.equal(parsed.models['qianye-gemini'].success_count, 2)
+    assert.equal(parsed.models['qianye-gemini'].status, undefined)
+    client.modelStatus = parsed.models
+    client.providerStatus = parsed.providers
+    client._pruneStatusMaps()
+    assert.deepEqual(Object.keys(client.modelStatus), ['qianye-gemini'])
+    assert.deepEqual(Object.keys(client.providerStatus), ['qianye'])
 }
 
 async function testLaterProviderIsNotStarvedByEarlierQueues() {
@@ -156,6 +178,7 @@ await testProviderFailoverBudget()
 await testModelFailureUsesSameProviderBackup()
 testErrorClassification()
 testModelFailuresDoNotPoisonProviderCircuit()
-await testAllCooldownUsesSingleHalfOpenProbe()
+await testAllCooldownFailsFastWithoutProbe()
+testVersionedStatusMigrationAndPruning()
 await testLaterProviderIsNotStarvedByEarlierQueues()
-console.log('Resilience eval: 6 passed, 0 failed')
+console.log('Resilience eval: 7 passed, 0 failed')

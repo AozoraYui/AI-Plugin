@@ -19,6 +19,7 @@ const MAX_ATTEMPTS_PER_PROVIDER = 2
 const MAX_INTENT_ATTEMPTS = 3
 const RETRY_BACKOFF_BASE_MS = 150
 const RETRY_BACKOFF_MAX_MS = 1200
+const MODEL_STATUS_FORMAT_VERSION = 2
 const LATENCY_SAMPLE_WEIGHT = 0.3         // 新延迟占 30% 加权（平滑指数）
 const ULTRA_CHAT_REQUEST_TIMEOUT_MS = 600000 // Ultra 长思考模型固定等待 10 分钟
 
@@ -703,26 +704,19 @@ export class AiClient {
     loadModelStatus() {
         if (fs.existsSync(MODEL_STATUS_FILE)) {
             try {
-                const data = fs.readFileSync(MODEL_STATUS_FILE, 'utf8')
-                this.modelStatus = JSON.parse(data)
-                this.providerStatus = this.modelStatus._provider_status || {}
-                // 迁移：删除旧格式中的 status 字段
-                let migrated = false
-                for (const key of Object.keys(this.modelStatus)) {
-                    if (key.startsWith('_')) continue
-                    if (this.modelStatus[key]?.status !== undefined) {
-                        delete this.modelStatus[key].status
-                        migrated = true
-                    }
-                }
-                delete this.modelStatus._provider_status
+                const parsed = JSON.parse(fs.readFileSync(MODEL_STATUS_FILE, 'utf8'))
+                const normalized = this._parseModelStatusDocument(parsed)
+                this.modelStatus = normalized.models
+                this.providerStatus = normalized.providers
+                const migrated = normalized.migrated
                 if (migrated) {
-                    logger.info('[AI-Plugin] 已迁移旧格式模型状态，删除 status 字段')
+                    logger.info('[AI-Plugin] 已迁移旧版模型状态为版本化 models/providers 格式')
                     this.saveModelStatus()
                 }
             } catch (error) {
                 logger.error('[AI-Plugin] 加载模型状态文件失败:', error)
                 this.modelStatus = {}
+                this.providerStatus = {}
             }
         } else {
             logger.info(`[AI-Plugin] 未找到模型状态文件，将从模板创建。`)
@@ -736,10 +730,58 @@ export class AiClient {
         }
     }
 
+    _parseModelStatusDocument(parsed) {
+        const isStructured = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            && parsed.models && typeof parsed.models === 'object' && !Array.isArray(parsed.models)
+        const rawModels = isStructured
+            ? parsed.models
+            : Object.fromEntries(Object.entries(parsed || {}).filter(([key]) => !key.startsWith('_')))
+        const rawProviders = isStructured ? parsed.providers : parsed?._provider_status
+        return {
+            models: this._normalizeStatusMap(rawModels, 'model'),
+            providers: this._normalizeStatusMap(rawProviders, 'provider'),
+            migrated: !isStructured || Number(parsed?._meta?.format) !== MODEL_STATUS_FORMAT_VERSION
+        }
+    }
+
+    _normalizeStatusMap(value, type = 'model') {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+        const result = {}
+        for (const [key, entry] of Object.entries(value)) {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+            const normalized = {}
+            const fields = type === 'provider'
+                ? ['success_count', 'fail_count', 'consecutive_fails', 'cooldown_until', 'last_used']
+                : ['success_count', 'fail_count', 'avg_latency_ms', 'consecutive_fails', 'cooldown_until', 'last_used']
+            for (const field of fields) {
+                const number = Number(entry[field])
+                normalized[field] = Number.isFinite(number) && number >= 0 ? number : 0
+            }
+            if (type === 'provider') normalized.last_error = String(entry.last_error || '').slice(0, 500)
+            result[key] = normalized
+        }
+        return result
+    }
+
+    _pruneStatusMaps() {
+        const modelKeys = new Set(this.modelDefinitions.map(model => `${model.provider_id}-${model.id}`))
+        const providerKeys = new Set(this.modelsConfig.map(provider => provider.id))
+        this.modelStatus = Object.fromEntries(Object.entries(this.modelStatus).filter(([key]) => modelKeys.has(key)))
+        this.providerStatus = Object.fromEntries(Object.entries(this.providerStatus).filter(([key]) => providerKeys.has(key)))
+    }
+
     saveModelStatus() {
         try {
+            this._pruneStatusMaps()
             const tmpFile = MODEL_STATUS_FILE + '.tmp'
-            const data = { ...this.modelStatus, _provider_status: this.providerStatus }
+            const data = {
+                _meta: {
+                    format: MODEL_STATUS_FORMAT_VERSION,
+                    updated_at: new Date().toISOString()
+                },
+                models: this._normalizeStatusMap(this.modelStatus, 'model'),
+                providers: this._normalizeStatusMap(this.providerStatus, 'provider')
+            }
             fs.writeFileSync(tmpFile, JSON.stringify(data, null, 2), 'utf8')
             fs.renameSync(tmpFile, MODEL_STATUS_FILE)
         } catch (error) {
@@ -1341,18 +1383,7 @@ export class AiClient {
 
             let poolToTry = sortedPool.filter(s => s.score >= 0 && !this._isProviderInCooldown(s.provider.id))
             if (poolToTry.length === 0) {
-                const halfOpen = sortedPool
-                    .filter(s => s.score >= 0)
-                    .slice()
-                    .sort((left, right) => {
-                        const leftUntil = this.providerStatus[left.provider.id]?.cooldown_until || 0
-                        const rightUntil = this.providerStatus[right.provider.id]?.cooldown_until || 0
-                        return leftUntil - rightUntil
-                    })[0]
-                if (halfOpen) {
-                    poolToTry = [halfOpen]
-                    logger.warn(`[AI-Plugin] 模型组 [${modelGroupKey}] 全部供应商处于熔断，仅进行一次半开探测: ${halfOpen.provider.name}`)
-                }
+                logger.warn(`[AI-Plugin] 模型组 [${modelGroupKey}] 暂无已结束冷却的模型或供应商，跳过本轮上游请求`)
             }
 
             const providerQueues = new Map()

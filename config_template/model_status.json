@@ -1,4 +1,8 @@
 {
-  "_comment": "模型运行统计文件，由插件自动管理",
-  "_format": "键名格式: 供应商ID-模型ID, 值包含 success_count(成功次数), fail_count(失败次数), avg_latency_ms(平均延迟), consecutive_fails(连续失败), cooldown_until(熔断时间)"
+  "_meta": {
+    "format": 2,
+    "description": "模型运行状态文件，由插件自动维护；不要手动编辑 models/providers 内的统计值。"
+  },
+  "models": {},
+  "providers": {}
 }
