@@ -11,6 +11,13 @@ function getBotUserId(e) {
     return String(e?.self_id || e?.bot?.uin || e?.bot?.self_id || (typeof Bot !== 'undefined' ? Bot.uin : '') || 'bot')
 }
 
+function getMessageScope(e) {
+    const groupId = String(e?.group_id || '').trim()
+    if (groupId) return groupId
+    const userId = String(e?.user_id || '').trim()
+    return userId ? `private:${userId}` : ''
+}
+
 function getReplyMessageIds(response) {
     const ids = extractMessageIds(response)
     if (ids.length > 0) return ids
@@ -52,7 +59,8 @@ async function persistInboundCommand(e) {
 }
 
 async function persistOutboundMessage(e, message, response) {
-    if (!e?.group_id || replyFailed(response)) return
+    const messageScope = getMessageScope(e)
+    if (!messageScope || replyFailed(response)) return
     const db = global.AIPluginConversationManager?.db
     if (!db?.saveGroupMessageLog) return
 
@@ -64,7 +72,7 @@ async function persistOutboundMessage(e, message, response) {
     const messageId = messageIds[0]
     const userId = getBotUserId(e)
     await db.saveGroupMessageLog({
-        groupId: String(e.group_id),
+        groupId: messageScope,
         messageId,
         userId,
         nickname: Config.AI_NAME,
@@ -78,7 +86,7 @@ async function persistOutboundMessage(e, message, response) {
     if (normalized.forwardNodes.length > 0 && db.saveOutboundForwardMessage) {
         for (const forwardMessageId of messageIds) {
             await db.saveOutboundForwardMessage({
-                groupId: String(e.group_id),
+                groupId: messageScope,
                 messageId: forwardMessageId,
                 nodes: normalized.forwardNodes,
                 normalizedText: normalized.normalizedText,
@@ -86,15 +94,15 @@ async function persistOutboundMessage(e, message, response) {
                 createdAt
             })
             rememberOutboundForwardMessage({
-                groupId: String(e.group_id),
+                groupId: messageScope,
                 messageId: forwardMessageId,
                 nodes: normalized.forwardNodes,
                 createdAt
             })
         }
-        logger.info(`[AI-Plugin] 已缓存机器人合并转发: 群=${e.group_id}, message_id=${messageIds.join(',')}, 节点=${normalized.forwardNodes.length}`)
+        logger.info(`[AI-Plugin] 已缓存机器人合并转发: 作用域=${messageScope}, message_id=${messageIds.join(',')}, 节点=${normalized.forwardNodes.length}`)
     } else if (normalized.forwardNodes.length === 0 && isForwardMessage(message)) {
-        logger.warn(`[AI-Plugin] 机器人合并转发未提取到节点: 群=${e.group_id}, 返回ID=${messageIds.join(',') || '无'}`)
+        logger.warn(`[AI-Plugin] 机器人合并转发未提取到节点: 作用域=${messageScope}, 返回ID=${messageIds.join(',') || '无'}`)
     }
 }
 

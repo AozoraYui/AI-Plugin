@@ -142,10 +142,30 @@ async function testCardForwardHydrationReplacesRemoteResid() {
     assert.equal(source.message[0].content[0].message[0].text, '卡片里的本地内容')
 }
 
+async function testPrivateForwardScopeHydration() {
+    rememberOutboundForwardMessage({
+        groupId: 'private:956753394',
+        messageId: 'private-forward-id',
+        nodes: [{
+            user_id: 'bot',
+            nickname: '诺亚',
+            message: [{ type: 'text', text: '私聊帮助内容' }]
+        }]
+    })
+    const source = await hydrateCachedForwardMessage(
+        { message_id: 'private-forward-id', message: [{ type: 'forward', data: { id: 'temporary-resid' } }] },
+        'private:956753394',
+        '',
+        { botUserId: 'bot' }
+    )
+    assert.equal(source.message[0].content[0].message[0].text, '私聊帮助内容')
+}
+
 testOutboundNormalization()
 testMessageIdExtraction()
 await testCachedHydration()
 await testCachedHydrationByRecentGroupFallback()
 await testSameProcessMemoryHydration()
 await testCardForwardHydrationReplacesRemoteResid()
-console.log('Outbound message eval: 6 passed, 0 failed')
+await testPrivateForwardScopeHydration()
+console.log('Outbound message eval: 7 passed, 0 failed')

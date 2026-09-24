@@ -393,7 +393,10 @@ export async function takeSourceMsg(e, { img } = {}) {
         }
     }
     if (!source) return false
-    source = await hydrateCachedForwardMessage(source, e.group_id, replyMessageId, {
+    const messageScope = e.group_id
+        ? String(e.group_id)
+        : (e.user_id ? `private:${e.user_id}` : '')
+    source = await hydrateCachedForwardMessage(source, messageScope, replyMessageId, {
         botUserId: e.self_id || e.bot?.uin || e.bot?.self_id || (typeof Bot !== 'undefined' ? Bot.uin : '')
     })
     if (img) {
