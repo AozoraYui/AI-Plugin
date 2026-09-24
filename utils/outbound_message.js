@@ -3,7 +3,10 @@ import crypto from 'node:crypto'
 const MAX_FORWARD_NODES = 200
 const MAX_OUTBOUND_TEXT = 120000
 const OUTBOUND_MEMORY_CACHE_TTL_MS = 30 * 60 * 1000
-const outboundForwardMemoryCache = new Map()
+const OUTBOUND_MEMORY_CACHE_KEY = '__AI_PLUGIN_OUTBOUND_FORWARD_MEMORY_CACHE__'
+const outboundForwardMemoryCache = global[OUTBOUND_MEMORY_CACHE_KEY] instanceof Map
+    ? global[OUTBOUND_MEMORY_CACHE_KEY]
+    : (global[OUTBOUND_MEMORY_CACHE_KEY] = new Map())
 
 function getSegmentType(segment) {
     return String(segment?.type || '').trim().toLowerCase()
@@ -230,6 +233,7 @@ export function rememberOutboundForwardMessage({ groupId = '', messageId = '', n
         createdAt: now,
         sourceCreatedAt: createdAt
     })
+    logger.info(`[AI-Plugin] 已写入进程共享合并消息缓存: 群=${normalizedGroupId}, message_id=${normalizedMessageId}, 节点=${nodes.length}`)
 }
 
 export async function loadCachedOutboundForward(messageId, groupId = '') {
@@ -239,6 +243,7 @@ export async function loadCachedOutboundForward(messageId, groupId = '') {
     pruneOutboundForwardMemoryCache()
     const memoryCached = outboundForwardMemoryCache.get(`${normalizedGroupId}:${normalizedMessageId}`)
     if (memoryCached) {
+        logger.info(`[AI-Plugin] 命中进程共享合并消息缓存: 群=${normalizedGroupId}, message_id=${normalizedMessageId}, 节点=${memoryCached.nodes.length}`)
         return {
             group_id: memoryCached.groupId,
             message_id: memoryCached.messageId,
@@ -287,6 +292,7 @@ export async function loadLatestCachedOutboundForward(groupId = '', maxAgeSecond
 export async function hydrateCachedForwardMessage(source, groupId = '', fallbackMessageId = '', options = {}) {
     if (!source || !Array.isArray(source.message)) return source
     const sourceIds = extractSourceMessageIds(source, fallbackMessageId)
+    logger.info(`[AI-Plugin] 合并消息缓存候选 ID: 群=${groupId || 'unknown'}, ids=${sourceIds.join(',') || '无'}`)
     let cached = null
     let matchedMessageId = ''
     for (const messageId of sourceIds) {
