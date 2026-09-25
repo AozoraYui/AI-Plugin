@@ -151,6 +151,124 @@ export class AiClient {
         return null
     }
 
+    findModelCandidates(reference = '') {
+        const value = String(reference || '').trim().toLowerCase()
+        if (!value) return []
+        return this.modelDefinitions.filter(model => {
+            const refs = [
+                model.id,
+                model.alias,
+                model.model_id,
+                `${model.provider_id}/${model.id}`,
+                `${model.provider_id}:${model.id}`,
+                `${model.provider_id}/${model.model_id}`,
+                `${model.provider_id}:${model.model_id}`
+            ]
+            return refs.some(item => String(item || '').trim().toLowerCase() === value)
+        })
+    }
+
+    getModelTestTargets() {
+        const targetMap = new Map()
+        const addTarget = (model, type) => {
+            if (!model) return
+            const key = `${model.provider_id}-${model.id}`
+            if (!targetMap.has(key)) targetMap.set(key, { model, types: new Set() })
+            targetMap.get(key).types.add(type)
+        }
+
+        for (const provider of this.modelsConfig) {
+            for (const group of Object.values(provider.model_groups || {})) {
+                for (const reference of group?.chat_models || []) addTarget(this.resolveModelConfig(reference, provider.id), 'chat')
+                for (const reference of group?.draw_models || []) addTarget(this.resolveModelConfig(reference, provider.id), 'image')
+            }
+        }
+        for (const model of this.modelDefinitions) {
+            const key = `${model.provider_id}-${model.id}`
+            if (!targetMap.has(key)) addTarget(model, 'chat')
+        }
+        return [...targetMap.values()].flatMap(({ model, types }) => [...types].map(type => ({ model, type })))
+    }
+
+    async testModel(reference, { type = 'auto', prompt = '', timeout = 0 } = {}) {
+        const candidates = this.findModelCandidates(reference)
+        if (candidates.length === 0) {
+            return { success: false, error: `未找到模型「${reference}」` }
+        }
+        if (candidates.length > 1) {
+            return {
+                success: false,
+                ambiguous: true,
+                error: `模型「${reference}」对应多个配置，请使用 provider/model 或 provider:model 指定来源。`,
+                candidates
+            }
+        }
+
+        const modelConfig = candidates[0]
+        const provider = this.modelsConfig.find(item => item.id === modelConfig.provider_id)
+        if (!provider) return { success: false, error: `模型供应商「${modelConfig.provider_id}」不存在` }
+
+        const inferredType = type === 'auto'
+            ? this.getModelTestTargets().find(target => target.model.provider_id === modelConfig.provider_id && target.model.id === modelConfig.id)?.type || 'chat'
+            : type
+        const requestType = inferredType === 'image' ? 'image' : 'chat'
+        const statusKey = `${provider.id}-${modelConfig.id}`
+        const requestTimeout = Number(timeout) > 0
+            ? Number(timeout)
+            : this._resolveRequestTimeout(requestType, 256, 'flash')
+        const testPrompt = prompt || (requestType === 'image'
+            ? '连通性测试：请生成一张简洁的抽象几何图，不要包含文字。'
+            : '请只回复：模型测试通过。')
+        const payload = { contents: [{ role: 'user', parts: [{ text: String(testPrompt) }] }] }
+        const startTime = Date.now()
+        const result = await this.attemptRequest(requestType, payload, provider, modelConfig.model_id, 256, requestTimeout, modelConfig)
+        const elapsedMs = Date.now() - startTime
+
+        if (result.success) {
+            this._recordModelSuccess(statusKey, elapsedMs)
+            this._recordProviderSuccess(provider.id)
+        } else {
+            const failure = this._classifyRequestError(result.error)
+            this._recordModelFail(statusKey, failure)
+            this._recordProviderFail(provider.id, failure)
+            result.failure = failure
+        }
+        this.scheduleModelStatusSave()
+        return {
+            ...result,
+            provider: provider.name,
+            providerId: provider.id,
+            modelId: modelConfig.model_id,
+            modelKey: modelConfig.id,
+            alias: modelConfig.alias,
+            type: requestType,
+            elapsedMs,
+            multimodal: modelConfig.multimodal !== false
+        }
+    }
+
+    async testAllModels() {
+        const targets = this.getModelTestTargets()
+        const results = []
+        for (const { model, type } of targets) {
+            try {
+                const result = await this.testModel(`${model.provider_id}/${model.id}`, { type })
+                results.push(result)
+            } catch (error) {
+                results.push({
+                    success: false,
+                    error: error.message || String(error),
+                    providerId: model.provider_id,
+                    modelKey: model.id,
+                    modelId: model.model_id,
+                    alias: model.alias,
+                    type
+                })
+            }
+        }
+        return results
+    }
+
     /** 对话指令关键词 */
     get chatCommand() {
         return this.commandConfig?.CHAT_COMMAND || 'chat'

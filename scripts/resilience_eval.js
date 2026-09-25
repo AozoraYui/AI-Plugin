@@ -174,6 +174,85 @@ async function testLaterProviderIsNotStarvedByEarlierQueues() {
     assert.deepEqual(calls, ['first', 'second', 'third'])
 }
 
+async function testDirectModelProbe() {
+    const client = createClient([])
+    client.modelsConfig = [
+        { id: 'p1', name: 'Provider 1' },
+        { id: 'p2', name: 'Provider 2' }
+    ]
+    client.modelDefinitions = [
+        { id: 'vision', alias: 'same-name', provider_id: 'p1', model_id: 'vendor/vision', multimodal: true },
+        { id: 'vision', alias: 'same-name', provider_id: 'p2', model_id: 'vendor/vision', multimodal: true }
+    ]
+    const ambiguous = await client.testModel('same-name')
+    assert.equal(ambiguous.ambiguous, true)
+
+    const calls = []
+    client.attemptRequest = async (type, payload, provider, modelId, maxTokens, timeout, modelConfig) => {
+        calls.push({ type, prompt: payload.contents[0].parts[0].text, provider: provider.id, modelId, maxTokens, timeout, modelKey: modelConfig.id })
+        return { success: true, data: '模型测试通过。', usage: { total_tokens: 9 } }
+    }
+    const result = await client.testModel('p1/vision')
+    assert.equal(result.success, true)
+    assert.equal(result.providerId, 'p1')
+    assert.equal(result.modelId, 'vendor/vision')
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].type, 'chat')
+    assert.equal(calls[0].maxTokens, 256)
+    assert.equal(client.modelStatus['p1-vision'].success_count, 1)
+    assert.equal(client.providerStatus.p1.success_count, 1)
+}
+
+async function testAllModelTargetsCoverChatAndImage() {
+    const client = createClient([])
+    client.modelsConfig = [{
+        id: 'p1',
+        name: 'Provider 1',
+        model_groups: {
+            flash: { chat_models: ['chat'], draw_models: ['draw'] }
+        }
+    }]
+    client.modelDefinitions = [
+        { id: 'chat', alias: 'chat', provider_id: 'p1', model_id: 'chat-api', multimodal: true },
+        { id: 'draw', alias: 'draw', provider_id: 'p1', model_id: 'draw-api', multimodal: true }
+    ]
+    const targets = client.getModelTestTargets()
+    assert.deepEqual(targets.map(target => `${target.model.id}/${target.type}`), ['chat/chat', 'draw/image'])
+
+    const calls = []
+    client.attemptRequest = async (type, _payload, _provider, modelId) => {
+        calls.push({ type, modelId })
+        return { success: true, data: type === 'image' ? 'https://image.test/result.png' : '模型测试通过。' }
+    }
+    const results = await client.testAllModels()
+    assert.equal(results.length, 2)
+    assert.deepEqual(calls, [
+        { type: 'chat', modelId: 'chat-api' },
+        { type: 'image', modelId: 'draw-api' }
+    ])
+}
+
+async function testAllModelProbeContinuesAfterUnexpectedFailure() {
+    const client = createClient([])
+    client.modelsConfig = [{
+        id: 'p1',
+        name: 'Provider 1',
+        model_groups: { flash: { chat_models: ['first', 'second'] } }
+    }]
+    client.modelDefinitions = [
+        { id: 'first', provider_id: 'p1', model_id: 'first-api' },
+        { id: 'second', provider_id: 'p1', model_id: 'second-api' }
+    ]
+    client.attemptRequest = async (_type, _payload, _provider, modelId) => {
+        if (modelId === 'first-api') throw new Error('模拟测试异常')
+        return { success: true, data: '模型测试通过。' }
+    }
+    const results = await client.testAllModels()
+    assert.equal(results.length, 2)
+    assert.equal(results[0].success, false)
+    assert.equal(results[1].success, true)
+}
+
 await testProviderFailoverBudget()
 await testModelFailureUsesSameProviderBackup()
 testErrorClassification()
@@ -181,4 +260,7 @@ testModelFailuresDoNotPoisonProviderCircuit()
 await testAllCooldownFailsFastWithoutProbe()
 testVersionedStatusMigrationAndPruning()
 await testLaterProviderIsNotStarvedByEarlierQueues()
-console.log('Resilience eval: 7 passed, 0 failed')
+await testDirectModelProbe()
+await testAllModelTargetsCoverChatAndImage()
+await testAllModelProbeContinuesAfterUnexpectedFailure()
+console.log('Resilience eval: 10 passed, 0 failed')

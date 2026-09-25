@@ -50,6 +50,7 @@ export class ManagementHandler extends plugin {
             priority: 1140,
             rule: [
                 { reg: /^#ai模型列表$/i, fnc: 'listModels', permission: 'master' },
+                { reg: /^#ai模型测试(?:\s+(.+))?$/i, fnc: 'testModel', permission: 'master' },
                 { reg: /^#ai(禁用|启用)\s*(.+)$/i, fnc: 'toggleModelDisabledState', permission: 'master' },
                 { reg: /^#ai权限模式\s*(whitelist|blacklist)$/i, fnc: 'switchAccessMode', permission: 'master' },
                 { reg: /^#ai权限(添加|删除)\s*(白名单群|黑名单群|白名单用户|黑名单用户)\s*(\d+)$/i, fnc: 'modifyAccess', permission: 'master' },
@@ -173,6 +174,47 @@ export class ManagementHandler extends plugin {
         const forwardMsg = await this._buildModelListForwardMsg()
         await e.reply(forwardMsg)
         
+        return true
+    }
+
+    async testModel(e) {
+        const reference = e.msg.match(/^#ai模型测试(?:\s+(.+))?$/i)?.[1]?.trim()
+        const runAll = !reference || /^(?:全部|所有|all)$/i.test(reference)
+        await e.reply(runAll
+            ? '🧪 开始逐个直连测试全部配置模型；不会使用其他模型兜底，绘图模型会真实调用图片生成接口。'
+            : `🧪 正在直连测试模型「${reference}」，本次不会使用其他模型兜底…`, true)
+        try {
+            const results = runAll ? await this.client.testAllModels() : [await this.client.testModel(reference)]
+            if (results.length === 0) {
+                await e.reply('❌ 当前没有可测试的模型配置。', true)
+                return true
+            }
+            const successCount = results.filter(result => result.success).length
+            const failureCount = results.length - successCount
+            const lines = [
+                runAll ? '🧪 全量模型测试完成' : '🧪 单模型测试完成',
+                `测试项: ${results.length} | 成功: ${successCount} | 失败: ${failureCount}`,
+                ''
+            ]
+            for (const result of results) {
+                const typeLabel = result.type === 'image' ? '绘图' : '对话'
+                const name = result.providerId && result.modelKey
+                    ? `${result.providerId}/${result.modelKey}`
+                    : '未知模型'
+                if (result.success) {
+                    const usage = result.usage?.total_tokens !== undefined ? `, token=${result.usage.total_tokens}` : ''
+                    lines.push(`✅ [${typeLabel}] ${name} | ${(result.elapsedMs / 1000).toFixed(2)}s${usage}`)
+                } else if (result.ambiguous) {
+                    lines.push(`⚠️ [${typeLabel}] ${name} | ${result.error}`)
+                } else {
+                    lines.push(`❌ [${typeLabel}] ${name} | ${String(result.error || '未知错误').replace(/\s+/g, ' ').slice(0, 240)}`)
+                }
+            }
+            await e.reply(lines.join('\n').slice(0, 12000), true)
+        } catch (err) {
+            logger.error('[AI-Plugin] 单模型测试异常:', err)
+            await e.reply(`❌ 模型测试异常: ${err.message}`, true)
+        }
         return true
     }
 
