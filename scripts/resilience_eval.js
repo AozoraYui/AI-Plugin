@@ -47,9 +47,8 @@ async function testProviderFailoverBudget() {
 
     const result = await client.makeRequest('chat', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] })
     assert.equal(result.success, true)
-    assert.deepEqual(calls, ['qianye', 'backup'])
-    assert.equal(client.providerStatus.qianye.consecutive_fails, 1)
-    assert.equal(client.providerStatus.qianye.cooldown_until, 0)
+    assert.deepEqual(calls, ['qianye', 'qianye', 'backup'])
+    assert.equal(client.providerStatus.qianye.fail_count, 2)
 }
 
 async function testConfiguredOrderBeatsHealthScore() {
@@ -62,15 +61,11 @@ async function testConfiguredOrderBeatsHealthScore() {
         success_count: 1,
         fail_count: 0,
         avg_latency_ms: 30000,
-        consecutive_fails: 0,
-        cooldown_until: 0
     }
     client.modelStatus['qianye-configured-second'] = {
         success_count: 10,
         fail_count: 0,
         avg_latency_ms: 1000,
-        consecutive_fails: 0,
-        cooldown_until: 0
     }
     client.attemptRequest = async (_type, _payload, _provider, modelId) => {
         calls.push(modelId)
@@ -118,7 +113,6 @@ async function testModelFailureUsesSameProviderBackup() {
     const result = await client.makeRequest('chat', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] })
     assert.equal(result.success, true)
     assert.deepEqual(calls, ['qianye/missing-model', 'qianye/working-model'])
-    assert.equal(client.providerStatus.qianye.cooldown_until, 0)
 }
 
 function testErrorClassification() {
@@ -126,7 +120,6 @@ function testErrorClassification() {
     const billing = client._classifyRequestError('HTTP状态码: 402，Insufficient Balance')
     assert.equal(billing.retryable, false)
     assert.equal(billing.scope, 'provider')
-    assert.ok(billing.cooldownMs >= 10 * 60 * 1000)
 
     const missingModel = client._classifyRequestError('HTTP状态码: 503，No available channel for model')
     assert.equal(missingModel.retryable, false)
@@ -144,33 +137,26 @@ function testErrorClassification() {
     assert.match(formatted, /ECONNRESET/)
 }
 
-function testModelFailuresDoNotPoisonProviderCircuit() {
+function testProviderStatsRecordFailuresWithoutCircuit() {
     const client = createClient([])
     const missingModel = client._classifyRequestError('HTTP 503: No available channel for model')
     client._recordProviderFail('qianye', missingModel)
     client._recordProviderFail('qianye', missingModel)
     assert.equal(client.providerStatus.qianye.fail_count, 2)
-    assert.equal(client.providerStatus.qianye.consecutive_fails, 0)
-    assert.equal(client.providerStatus.qianye.cooldown_until, 0)
 
     const network = client._classifyRequestError('AggregateError: connect ECONNRESET')
     client._recordProviderFail('qianye', network)
     client._recordProviderFail('qianye', network)
-    assert.equal(client.providerStatus.qianye.consecutive_fails, 2)
-    assert.ok(client.providerStatus.qianye.cooldown_until > Date.now())
+    assert.equal(client.providerStatus.qianye.fail_count, 4)
+    assert.equal(client.providerStatus.qianye.cooldown_until, undefined)
 }
 
-async function testAllCooldownFailsFastWithoutProbe() {
+async function testFailuresDoNotSkipCandidates() {
     const client = createClient([
         model('first', 'model-a'),
         model('second', 'model-b'),
         model('second', 'model-c', 1)
     ])
-    const now = Date.now()
-    client.providerStatus = {
-        first: { cooldown_until: now + 30000 },
-        second: { cooldown_until: now + 60000 }
-    }
     const calls = []
     client.attemptRequest = async (_type, _payload, provider) => {
         calls.push(provider.id)
@@ -178,7 +164,7 @@ async function testAllCooldownFailsFastWithoutProbe() {
     }
     const result = await client.makeRequest('chat', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] })
     assert.equal(result.success, false)
-    assert.deepEqual(calls, [])
+    assert.deepEqual(calls, ['first', 'second', 'second'])
 }
 
 function testVersionedStatusMigrationAndPruning() {
@@ -196,6 +182,7 @@ function testVersionedStatusMigrationAndPruning() {
     assert.equal(parsed.migrated, true)
     assert.equal(parsed.models['qianye-gemini'].success_count, 2)
     assert.equal(parsed.models['qianye-gemini'].status, undefined)
+    assert.equal(parsed.models['qianye-gemini'].cooldown_until, undefined)
     client.modelStatus = parsed.models
     client.providerStatus = parsed.providers
     client._pruneStatusMaps()
@@ -203,12 +190,11 @@ function testVersionedStatusMigrationAndPruning() {
     assert.deepEqual(Object.keys(client.providerStatus), ['qianye'])
 }
 
-async function testLaterProviderIsNotStarvedByEarlierQueues() {
+async function testLaterProviderRemainsReachableWithinAttemptBudget() {
     const client = createClient([
         model('first', 'first-a'),
         model('first', 'first-b', 1),
         model('second', 'second-a'),
-        model('second', 'second-b', 1),
         model('third', 'third-a')
     ])
     const calls = []
@@ -220,7 +206,7 @@ async function testLaterProviderIsNotStarvedByEarlierQueues() {
     }
     const result = await client.makeRequest('chat', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] })
     assert.equal(result.success, true)
-    assert.deepEqual(calls, ['first', 'second', 'third'])
+    assert.deepEqual(calls, ['first', 'first', 'second', 'third'])
 }
 
 async function testDirectModelProbe() {
@@ -302,15 +288,10 @@ async function testAllModelProbeContinuesAfterUnexpectedFailure() {
     assert.equal(results[1].success, true)
 }
 
-async function testCooldownMultimodalPoolTriggersVisionRelay() {
+async function testMultimodalVisionRelayDependsOnConfiguration() {
     const client = createClient([model('qianye', 'vision-model')])
-    client.providerStatus.qianye = {
-        success_count: 0,
-        fail_count: 2,
-        consecutive_fails: 2,
-        cooldown_until: Date.now() + 60000
-    }
-
+    assert.equal(client._checkModelGroupNeedsVisionRelay('flash'), false)
+    client.activeModelPools.flash.chat[0].modelConfig.multimodal = false
     assert.equal(client._checkModelGroupNeedsVisionRelay('flash'), true)
 }
 
@@ -344,13 +325,13 @@ await testConfiguredOrderBeatsHealthScore()
 await testInterleavedProvidersFollowConfiguredOrder()
 await testModelFailureUsesSameProviderBackup()
 testErrorClassification()
-testModelFailuresDoNotPoisonProviderCircuit()
-await testAllCooldownFailsFastWithoutProbe()
+testProviderStatsRecordFailuresWithoutCircuit()
+await testFailuresDoNotSkipCandidates()
 testVersionedStatusMigrationAndPruning()
-await testLaterProviderIsNotStarvedByEarlierQueues()
+await testLaterProviderRemainsReachableWithinAttemptBudget()
 await testDirectModelProbe()
 await testAllModelTargetsCoverChatAndImage()
 await testAllModelProbeContinuesAfterUnexpectedFailure()
-await testCooldownMultimodalPoolTriggersVisionRelay()
+await testMultimodalVisionRelayDependsOnConfiguration()
 await testVisionRelayAutoDiscoversUnlistedChatFallback()
-console.log('Resilience eval: 13 passed, 0 failed')
+console.log('Resilience eval: 12 passed, 0 failed')

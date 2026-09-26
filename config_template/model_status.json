@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "format": 2,
+    "format": 3,
     "description": "模型运行状态文件，由插件自动维护；不要手动编辑 models/providers 内的统计值。"
   },
   "models": {},

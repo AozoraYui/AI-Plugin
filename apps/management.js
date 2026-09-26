@@ -411,10 +411,7 @@ export class ManagementHandler extends plugin {
             const rate = Math.round((status.success_count || 0) / total * 100)
             let extraInfo = `成功率${rate}%`
             if (status.avg_latency_ms) extraInfo += ` | 延迟${Math.round(status.avg_latency_ms / 1000)}s`
-            const inCooldown = this.client._isInCooldown(status)
-            if (inCooldown) extraInfo += ` | 熔断`
-            
-            const icon = inCooldown || rate < 50 ? '❌' : '✅'
+            const icon = rate < 50 ? '❌' : '✅'
             return ` ${icon} ${extraInfo}`
         }
 
@@ -536,7 +533,7 @@ export class ManagementHandler extends plugin {
                 '可用模型池',
                 `  - 对话模型: ${activeChatModels} 个可用`,
                 `  - 绘图模型: ${activeImageModels} 个可用`,
-                '  (模型配置后直接可用，异常模型由熔断机制自动处理)',
+                '  (模型配置后直接可用，失败时按配置顺序继续尝试其他模型)',
                 '',
                 '权限与模式',
                 `  - 权限控制: ${accessMode}`,

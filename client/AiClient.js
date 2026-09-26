@@ -7,19 +7,11 @@ import { ensureShellSession } from '../utils/shell_session.js'
 import { toolRegistry } from '../tools/index.js'
 import { normalizeModelConfigDocuments, resolveModelReference } from '../utils/model_config.js'
 
-// 熔断常量
-const CONSECUTIVE_FAILS_THRESHOLD = 3    // 连续失败 N 次后熔断
-const COOLDOWN_DURATION_MS = 30000        // 熔断冷却 30 秒
-const PROVIDER_FAILS_THRESHOLD = 2        // 供应商连续失败 N 次后熔断
-const PROVIDER_COOLDOWN_DURATION_MS = 60000
-const PROVIDER_PERMANENT_COOLDOWN_DURATION_MS = 10 * 60 * 1000
-const MODEL_PERMANENT_COOLDOWN_DURATION_MS = 10 * 60 * 1000
 const MAX_REQUEST_ATTEMPTS = 4
-const MAX_ATTEMPTS_PER_PROVIDER = 2
 const MAX_INTENT_ATTEMPTS = 3
 const RETRY_BACKOFF_BASE_MS = 150
 const RETRY_BACKOFF_MAX_MS = 1200
-const MODEL_STATUS_FORMAT_VERSION = 2
+const MODEL_STATUS_FORMAT_VERSION = 3
 const LATENCY_SAMPLE_WEIGHT = 0.3         // 新延迟占 30% 加权（平滑指数）
 const ULTRA_CHAT_REQUEST_TIMEOUT_MS = 600000 // Ultra 长思考模型固定等待 10 分钟
 
@@ -97,11 +89,7 @@ export class AiClient {
     _checkModelGroupNeedsVisionRelay(modelGroupKey) {
         const pool = this.activeModelPools[modelGroupKey]?.chat
         if (!pool || pool.length === 0) return true  // 无模型，保守启用
-        return !pool.some(item => {
-            if (item.modelConfig?.multimodal === false) return false
-            const statusKey = item.statusKey || `${item.provider.id}-${item.modelKey || item.modelId}`
-            return !this._isProviderInCooldown(item.provider.id) && !this._isInCooldown(this.modelStatus?.[statusKey])
-        })
+        return !pool.some(item => item.modelConfig?.multimodal !== false)
     }
 
     /**
@@ -145,8 +133,6 @@ export class AiClient {
         if (intentModels.length === 0) return null
 
         let attempts = 0
-        const providerAttemptCounts = new Map()
-        const failedProviders = new Set()
         for (const modelConfig of intentModels) {
             if (attempts >= MAX_INTENT_ATTEMPTS) break
             const provider = this.modelsConfig.find(p => p.id === modelConfig.provider_id)
@@ -154,14 +140,6 @@ export class AiClient {
                 logger.warn(`[AI-Plugin] 意图分析模型供应商不存在: ${modelConfig.provider_id}`)
                 continue
             }
-            if (failedProviders.has(provider.id)) continue
-            if (this._isProviderInCooldown(provider.id)) {
-                logger.debug(`[AI-Plugin] 意图分析跳过供应商熔断: ${provider.name}`)
-                continue
-            }
-            const providerAttempts = providerAttemptCounts.get(provider.id) || 0
-            if (providerAttempts >= MAX_ATTEMPTS_PER_PROVIDER) continue
-            providerAttemptCounts.set(provider.id, providerAttempts + 1)
             attempts += 1
             const startTime = Date.now()
             const result = await this.attemptRequest('chat', payload, provider, modelConfig.model_id, 1024, 30000, modelConfig)
@@ -179,7 +157,6 @@ export class AiClient {
             this._recordModelFail(statusKey, failure)
             this._recordProviderFail(provider.id, failure)
             this.scheduleModelStatusSave()
-            if (failure.scope === 'provider') failedProviders.add(provider.id)
             logger.warn(`[AI-Plugin] 意图分析失败: ${provider.name}/${modelConfig.model_id}, 耗时 ${elapsed}s, 错误: ${result.error}`)
         }
         return null
@@ -422,9 +399,7 @@ export class AiClient {
                 success_count: 0,
                 fail_count: 0,
                 avg_latency_ms: 0,
-                last_used: 0,
-                consecutive_fails: 0,
-                cooldown_until: 0
+                last_used: 0
             }
             return
         }
@@ -433,8 +408,6 @@ export class AiClient {
         if (entry.fail_count === undefined) entry.fail_count = 0
         if (entry.avg_latency_ms === undefined) entry.avg_latency_ms = 0
         if (entry.last_used === undefined) entry.last_used = 0
-        if (entry.consecutive_fails === undefined) entry.consecutive_fails = 0
-        if (entry.cooldown_until === undefined) entry.cooldown_until = 0
     }
 
     /** 记录模型请求成功 */
@@ -442,8 +415,6 @@ export class AiClient {
         this._initModelStatusEntry(key)
         const entry = this.modelStatus[key]
         entry.success_count = (entry.success_count || 0) + 1
-        entry.consecutive_fails = 0
-        entry.cooldown_until = 0
         entry.last_used = Date.now()
         // 平滑加权计算平均延迟
         if (entry.avg_latency_ms) {
@@ -455,18 +426,12 @@ export class AiClient {
         }
     }
 
-    /** 记录模型请求失败，超过阈值触发熔断 */
-    _recordModelFail(key, failure = {}) {
+    /** 记录模型请求失败，不改变后续请求资格。 */
+    _recordModelFail(key) {
         this._initModelStatusEntry(key)
         const entry = this.modelStatus[key]
         entry.fail_count = (entry.fail_count || 0) + 1
-        entry.consecutive_fails = (entry.consecutive_fails || 0) + 1
         entry.last_used = Date.now()
-        if (failure.retryable === false || entry.consecutive_fails >= CONSECUTIVE_FAILS_THRESHOLD) {
-            const duration = failure.cooldownMs || COOLDOWN_DURATION_MS
-            entry.cooldown_until = Date.now() + duration
-            logger.warn(`[AI-Plugin] 模型 ${key} ${failure.reason || `连续失败 ${entry.consecutive_fails} 次`}，进入 ${duration / 1000}s 熔断`)
-        }
     }
 
     _initProviderStatusEntry(providerId) {
@@ -476,8 +441,6 @@ export class AiClient {
             this.providerStatus[key] = {
                 success_count: 0,
                 fail_count: 0,
-                consecutive_fails: 0,
-                cooldown_until: 0,
                 last_error: '',
                 last_used: 0
             }
@@ -485,8 +448,6 @@ export class AiClient {
         const entry = this.providerStatus[key]
         if (entry.success_count === undefined) entry.success_count = 0
         if (entry.fail_count === undefined) entry.fail_count = 0
-        if (entry.consecutive_fails === undefined) entry.consecutive_fails = 0
-        if (entry.cooldown_until === undefined) entry.cooldown_until = 0
         if (entry.last_error === undefined) entry.last_error = ''
         if (entry.last_used === undefined) entry.last_used = 0
         return entry
@@ -496,8 +457,6 @@ export class AiClient {
         const entry = this._initProviderStatusEntry(providerId)
         if (!entry) return
         entry.success_count += 1
-        entry.consecutive_fails = 0
-        entry.cooldown_until = 0
         entry.last_error = ''
         entry.last_used = Date.now()
     }
@@ -508,19 +467,6 @@ export class AiClient {
         entry.fail_count += 1
         entry.last_error = String(failure.error || failure.reason || '').slice(0, 500)
         entry.last_used = Date.now()
-        const providerFailure = failure.scope === 'provider'
-        if (!providerFailure) return
-        entry.consecutive_fails += 1
-        if (failure.retryable === false || entry.consecutive_fails >= PROVIDER_FAILS_THRESHOLD) {
-            const duration = failure.cooldownMs || PROVIDER_COOLDOWN_DURATION_MS
-            entry.cooldown_until = Date.now() + duration
-            logger.warn(`[AI-Plugin] 供应商 ${providerId} ${failure.reason || `连续失败 ${entry.consecutive_fails} 次`}，进入 ${duration / 1000}s 熔断`)
-        }
-    }
-
-    _isProviderInCooldown(providerId) {
-        const entry = this._initProviderStatusEntry(providerId)
-        return Boolean(entry?.cooldown_until && Date.now() < entry.cooldown_until)
     }
 
     _classifyRequestError(error) {
@@ -533,7 +479,6 @@ export class AiClient {
             return {
                 retryable: false,
                 scope: 'provider',
-                cooldownMs: PROVIDER_PERMANENT_COOLDOWN_DURATION_MS,
                 reason: '认证、权限或余额异常',
                 error: text
             }
@@ -545,7 +490,6 @@ export class AiClient {
             return {
                 retryable: false,
                 scope: 'model',
-                cooldownMs: MODEL_PERMANENT_COOLDOWN_DURATION_MS,
                 reason: '模型不可用',
                 error: text
             }
@@ -557,7 +501,6 @@ export class AiClient {
             return {
                 retryable: false,
                 scope: 'model',
-                cooldownMs: MODEL_PERMANENT_COOLDOWN_DURATION_MS,
                 reason: '请求内容或参数不可用',
                 error: text
             }
@@ -568,7 +511,6 @@ export class AiClient {
         return {
             retryable: true,
             scope: isTransient ? 'provider' : 'model',
-            cooldownMs: isTransient ? PROVIDER_COOLDOWN_DURATION_MS : COOLDOWN_DURATION_MS,
             reason: isTransient ? '网络或上游暂时不可用' : '未知请求错误',
             error: text
         }
@@ -580,17 +522,8 @@ export class AiClient {
         await new Promise(resolve => setTimeout(resolve, delay))
     }
 
-    /** 检查模型是否在熔断期 */
-    _isInCooldown(entry) {
-        if (!entry?.cooldown_until) return false
-        return Date.now() < entry.cooldown_until
-    }
-
     /** 计算模型得分（越高越好） */
     _getModelScore(entry) {
-        // 在熔断期直接返回 -1（排除）
-        if (this._isInCooldown(entry)) return -1
-
         const total = (entry.success_count || 0) + (entry.fail_count || 0)
         if (total === 0) return 0 // 新模型，放中间
 
@@ -602,7 +535,7 @@ export class AiClient {
         return successRate * 0.7 + latencyScore * 0.3
     }
 
-    /** 排序模型池：保持配置顺序，仅将熔断模型沉底 */
+    /** 排序模型池：始终保持配置顺序，统计数据只用于展示。 */
     _sortModelPool(pool) {
         const ordered = pool.map((item, index) => {
             const key = item.statusKey || `${item.provider.id}-${item.modelKey || item.modelId}`
@@ -611,18 +544,10 @@ export class AiClient {
             return { ...item, score, configOrder: index }
         })
 
-        // 配置顺序决定首选模型；健康统计只用于展示和熔断，不改变首选顺序。
-        // 处于模型熔断期的候选沉底，避免阻塞健康模型。
-        ordered.sort((a, b) => {
-            // 熔断模型（score < 0）统一沉底，不参与成本/得分比较
-            const aDown = a.score < 0
-            const bDown = b.score < 0
-            if (aDown !== bDown) return aDown ? 1 : -1
-            return a.configOrder - b.configOrder
-        })
+        ordered.sort((a, b) => a.configOrder - b.configOrder)
 
         const logging = ordered.map(s =>
-            `${s.provider.name}(${s.modelId})${s.score < 0 ? '[熔断]' : ''} 得分:${s.score.toFixed(2)}`
+            `${s.provider.name}(${s.modelId}) 得分:${s.score.toFixed(2)}`
         ).join(', ')
         logger.debug(`[AI-Plugin] 模型排序: ${logging}`)
 
@@ -900,8 +825,8 @@ export class AiClient {
             if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
             const normalized = {}
             const fields = type === 'provider'
-                ? ['success_count', 'fail_count', 'consecutive_fails', 'cooldown_until', 'last_used']
-                : ['success_count', 'fail_count', 'avg_latency_ms', 'consecutive_fails', 'cooldown_until', 'last_used']
+                ? ['success_count', 'fail_count', 'last_used']
+                : ['success_count', 'fail_count', 'avg_latency_ms', 'last_used']
             for (const field of fields) {
                 const number = Number(entry[field])
                 normalized[field] = Number.isFinite(number) && number >= 0 ? number : 0
@@ -1525,27 +1450,15 @@ export class AiClient {
             // 智能排序模型池
             const sortedPool = this._sortModelPool(modelPool)
 
-            const cooldownCount = sortedPool.filter(s => s.score < 0).length
-            const availableCount = sortedPool.filter(s => s.score >= 0).length
-            const providerAvailable = sortedPool.filter(s => !this._isProviderInCooldown(s.provider.id))
-            logger.debug(`[AI-Plugin] 模型池: 共 ${sortedPool.length} 个, 可用 ${availableCount} 个, 熔断 ${cooldownCount} 个, 供应商可用 ${new Set(providerAvailable.map(s => s.provider.id)).size} 个`)
+            logger.debug(`[AI-Plugin] 模型池: 共 ${sortedPool.length} 个，按配置顺序尝试，供应商故障不会进入全局冷却`)
 
-            let poolToTry = sortedPool.filter(s => s.score >= 0 && !this._isProviderInCooldown(s.provider.id))
-            if (poolToTry.length === 0) {
-                logger.warn(`[AI-Plugin] 模型组 [${modelGroupKey}] 暂无已结束冷却的模型或供应商，跳过本轮上游请求`)
-            }
+            const poolToTry = sortedPool
 
             lastError = ''
             const requestTimeout = this._resolveRequestTimeout(type, maxTokens, modelGroupKey)
             let attempt = 0
-            const providerAttemptCounts = new Map()
-            const blockedProviders = new Set()
             for (const { provider, modelId, modelKey, modelConfig, statusKey: poolStatusKey, score } of poolToTry) {
                 if (attempt >= MAX_REQUEST_ATTEMPTS) break
-                if (blockedProviders.has(provider.id)) continue
-                const providerAttempts = providerAttemptCounts.get(provider.id) || 0
-                if (providerAttempts >= MAX_ATTEMPTS_PER_PROVIDER) continue
-                providerAttemptCounts.set(provider.id, providerAttempts + 1)
                 if (attempt > 0) await this._waitBeforeFailover(attempt)
                 attempt += 1
                 const statusKey = poolStatusKey || `${provider.id}-${modelKey || modelId}`
@@ -1563,12 +1476,11 @@ export class AiClient {
                 }
 
                 const failure = this._classifyRequestError(result.error)
-                this._recordModelFail(statusKey, failure)
+                this._recordModelFail(statusKey)
                 this._recordProviderFail(provider.id, failure)
                 this.scheduleModelStatusSave()
                 logger.debug(`[AI-Plugin] 请求失败: ${provider.name} (${modelId})，耗时 ${elapsed}s，得分:${score?.toFixed(2)}, 错误: ${result.error}`)
                 lastError += `[${provider.name}-${modelId}]: ${result.error}\n`
-                if (failure.scope === 'provider') blockedProviders.add(provider.id)
             }
 
             const errorMessage = `模型组 [${modelGroupKey}] 中的容灾候选均尝试失败。\n具体错误:\n${lastError.trim() || '没有可用的健康供应商，已避免继续重试。'}`

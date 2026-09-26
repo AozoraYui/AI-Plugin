@@ -18,11 +18,6 @@ import { processImagesInBatches } from '../utils/image.js'
 async function relayImagesToVision(imageUrls, context, client, visionModelConfig) {
     if (!imageUrls?.length) return ''
     if (!visionModelConfig?.provider_id || !visionModelConfig?.model_id) return ''
-    if (client._isProviderInCooldown?.(visionModelConfig.provider_id)) {
-        logger.debug(`[AI-Plugin] Vision Relay: 供应商 ${visionModelConfig.provider_id} 处于熔断期，跳过`)
-        return ''
-    }
-
     logger.info(`[AI-Plugin] Vision Relay: 开始转述 ${imageUrls.length} 张图片`)
     const startTime = Date.now()
 
@@ -80,7 +75,7 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
             return result.data
         } else {
             const failure = client._classifyRequestError?.(result?.error) || { error: result?.error || 'Vision Relay 请求失败' }
-            client._recordModelFail(statusKey, failure)
+            client._recordModelFail(statusKey)
             client._recordProviderFail?.(modelConfig.provider_id, failure)
             client.saveModelStatus()
             logger.warn(`[AI-Plugin] Vision Relay: 请求失败: ${result?.error || '客户端未提供请求结果'}`)
@@ -88,7 +83,7 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
         }
     } catch (err) {
         const failure = client._classifyRequestError?.(err.message) || { error: err.message }
-        client._recordModelFail?.(`${visionModelConfig.provider_id}-${visionModelConfig.model_id}`, failure)
+        client._recordModelFail?.(`${visionModelConfig.provider_id}-${visionModelConfig.model_id}`)
         client._recordProviderFail?.(visionModelConfig.provider_id, failure)
         client.scheduleModelStatusSave?.()
         logger.error('[AI-Plugin] Vision Relay 异常:', err)
