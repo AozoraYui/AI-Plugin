@@ -92,9 +92,9 @@ export class ManagementHandler extends plugin {
         
         msg += `\n\n- - - - - - - - - - - - -\n`
 
-        msg += `\n🚫 黑名单群聊 (${config.blacklist_groups.length}个):\n`
+        msg += `\n黑名单群聊 (${config.blacklist_groups.length}个):\n`
         msg += config.blacklist_groups.length > 0 ? config.blacklist_groups.join('\n') : '暂无'
-        msg += `\n\n🚫 黑名单用户 (${config.blacklist_users.length}个):\n`
+        msg += `\n\n黑名单用户 (${config.blacklist_users.length}个):\n`
         msg += config.blacklist_users.length > 0 ? config.blacklist_users.join('\n') : '暂无'
 
         await e.reply(msg)
@@ -141,7 +141,7 @@ export class ManagementHandler extends plugin {
                 saveAccessConfig(config)
                 await e.reply(`✅ 已将${entityType} ${id} 添加到${typeKeyword}。`)
             } else {
-                await e.reply(`⚠️ ${entityType} ${id} 已在${typeKeyword}中。`)
+                await e.reply(`${entityType} ${id} 已在${typeKeyword}中。`)
             }
         } else {
             const index = config[targetListKey].indexOf(id)
@@ -150,7 +150,7 @@ export class ManagementHandler extends plugin {
                 saveAccessConfig(config)
                 await e.reply(`✅ 已将${entityType} ${id} 从${typeKeyword}中删除。`)
             } else {
-                await e.reply(`⚠️ ${entityType} ${id} 不在${typeKeyword}中。`)
+                await e.reply(`${entityType} ${id} 不在${typeKeyword}中。`)
             }
         }
     }
@@ -181,8 +181,8 @@ export class ManagementHandler extends plugin {
         const reference = e.msg.match(/^#ai模型测试(?:\s+(.+))?$/i)?.[1]?.trim()
         const runAll = !reference || /^(?:全部|所有|all)$/i.test(reference)
         await e.reply(runAll
-            ? '🧪 开始逐个直连测试全部配置模型；不会使用其他模型兜底，绘图模型会真实调用图片生成接口。'
-            : `🧪 正在直连测试模型「${reference}」，本次不会使用其他模型兜底…`, true)
+            ? '开始逐个直连测试全部配置模型；不会使用其他模型兜底，绘图模型会真实调用图片生成接口。'
+            : `正在直连测试模型「${reference}」，本次不会使用其他模型兜底…`, true)
         try {
             const results = runAll ? await this.client.testAllModels() : [await this.client.testModel(reference)]
             if (results.length === 0) {
@@ -192,7 +192,7 @@ export class ManagementHandler extends plugin {
             const successCount = results.filter(result => result.success).length
             const failureCount = results.length - successCount
             const lines = [
-                runAll ? '🧪 全量模型测试完成' : '🧪 单模型测试完成',
+                runAll ? '全量模型测试完成' : '单模型测试完成',
                 `测试项: ${results.length} | 成功: ${successCount} | 失败: ${failureCount}`,
                 ''
             ]
@@ -205,7 +205,7 @@ export class ManagementHandler extends plugin {
                     const usage = result.usage?.total_tokens !== undefined ? `, token=${result.usage.total_tokens}` : ''
                     lines.push(`✅ [${typeLabel}] ${name} | ${(result.elapsedMs / 1000).toFixed(2)}s${usage}`)
                 } else if (result.ambiguous) {
-                    lines.push(`⚠️ [${typeLabel}] ${name} | ${result.error}`)
+                    lines.push(`[${typeLabel}] ${name} | ${result.error}`)
                 } else {
                     lines.push(`❌ [${typeLabel}] ${name} | ${String(result.error || '未知错误').replace(/\s+/g, ' ').slice(0, 240)}`)
                 }
@@ -265,7 +265,7 @@ export class ManagementHandler extends plugin {
                 ? (status.vectorStats?.busy ? '已就绪（忙碌中）' : '已就绪')
                 : '未就绪'
             const lines = [
-                '🧠 本地向量记忆状态',
+                '本地向量记忆状态',
                 `开关: ${status.enabled ? '已开启' : '已关闭'}`,
                 `服务: ${serviceText}`,
                 `模型: ${status.modelName}`,
@@ -287,8 +287,8 @@ export class ManagementHandler extends plugin {
 
         const rebuild = action.includes('重建')
         await e.reply(rebuild
-            ? '🧠 开始重建向量索引：会清空本地向量 collection，然后从 SQLite 全量生成。SQLite 原始数据不会被修改。'
-            : '🧠 开始迁移向量索引：会从 SQLite 增量补齐缺失的向量片段。', true)
+            ? '开始重建向量索引：会清空本地向量 collection，然后从 SQLite 全量生成。SQLite 原始数据不会被修改。'
+            : '开始迁移向量索引：会从 SQLite 增量补齐缺失的向量片段。', true)
 
         let lastProgressAt = 0
         const result = await vectorMemory.migrateFromSQLite(this.conversationManager.db, {
@@ -298,9 +298,9 @@ export class ManagementHandler extends plugin {
                 if (progress.phase === 'reset' || progress.phase === 'source_done' || now - lastProgressAt > 20000) {
                     lastProgressAt = now
                     if (progress.phase === 'reset') {
-                        await e.reply('🧹 正在清空向量索引...', true)
+                        await e.reply('正在清空向量索引...', true)
                     } else {
-                        await e.reply(`🧠 ${progress.label}: 已处理 ${progress.processedRows || 0}/${progress.totalCount ?? '?'} 行，生成 ${progress.processedDocs || 0} 个向量片段`, true)
+                        await e.reply(`${progress.label}: 已处理 ${progress.processedRows || 0}/${progress.totalCount ?? '?'} 行，生成 ${progress.processedDocs || 0} 个向量片段`, true)
                     }
                 }
             }
@@ -317,7 +317,7 @@ export class ManagementHandler extends plugin {
             logger.info(`[AI-Plugin] 群管理开关已${isTurnOn ? '开启' : '关闭'}（运行时立即生效）`)
             await e.reply(isTurnOn
                 ? '✅ 已开启群管理工具。群聊中主人或群管理员可让 AI 查询群成员、禁言/解禁、踢人、改名片、精华消息和处理入群申请。'
-                : '🚫 已关闭群管理工具。AI 不会再把群管理能力加入可用工具列表。')
+                : '已关闭群管理工具。AI 不会再把群管理能力加入可用工具列表。')
         } catch (err) {
             logger.error('[AI-Plugin] 切换群管理开关失败:', err)
             await e.reply(`❌ 切换失败: ${err.message}`)
@@ -334,7 +334,7 @@ export class ManagementHandler extends plugin {
             logger.info(`[AI-Plugin] 畅聊模式已${isTurnOn ? '开启' : '关闭'}（运行时立即生效）`)
             await e.reply(isTurnOn
                 ? '✅ 已开启畅聊模式。群消息会被捕获；有人在当前消息里提到诺亚/noa 或 @我 时，我会基于最近群上下文自然回复。'
-                : '🚫 已关闭畅聊模式。群消息捕获和触发词回复已停止。')
+                : '已关闭畅聊模式。群消息捕获和触发词回复已停止。')
         } catch (err) {
             logger.error('[AI-Plugin] 切换畅聊模式失败:', err)
             await e.reply(`❌ 切换失败: ${err.message}`)
@@ -351,7 +351,7 @@ export class ManagementHandler extends plugin {
             logger.info(`[AI-Plugin] 群消息代发开关已${isTurnOn ? '开启' : '关闭'}（运行时立即生效）`)
             await e.reply(isTurnOn
                 ? '✅ 已开启群消息代发工具。主人可让 AI 创建跨群代发待确认操作；显式列出多个目标时可批量，默认加“【主人转达】”前缀。'
-                : '🚫 已关闭群消息代发工具。AI 不会再把跨群代发能力加入可用工具列表。')
+                : '已关闭群消息代发工具。AI 不会再把跨群代发能力加入可用工具列表。')
         } catch (err) {
             logger.error('[AI-Plugin] 切换群消息代发开关失败:', err)
             await e.reply(`❌ 切换失败: ${err.message}`)
@@ -377,12 +377,12 @@ export class ManagementHandler extends plugin {
     }
 
     async _buildModelListForwardMsg() {
-        const thinkingStatus = Config.show_thinking ? "✅ 开启 (显示思考过程)" : "🚫 关闭 (自动过滤思考)"
+        const thinkingStatus = Config.show_thinking ? "✅ 开启 (显示思考过程)" : "关闭 (自动过滤思考)"
         
         const forwardMsgNodes = [{ 
             user_id: Bot.uin, 
             nickname: Config.AI_NAME, 
-            message: `🧠 思考过程显示: ${thinkingStatus}`
+            message: `思考过程显示: ${thinkingStatus}`
         }]
         
         const providers = [...this.client.modelsConfig]
@@ -400,32 +400,32 @@ export class ManagementHandler extends plugin {
         
         const buildStatusText = (status, statusKey) => {
             if (this.client.disabledModels.has(statusKey)) {
-                return " (⚪️ 已禁用)"
+                return " (已禁用)"
             }
 
-            if (!status) return " (🆕 未使用)"
+            if (!status) return " (未使用)"
             
             const total = (status.success_count || 0) + (status.fail_count || 0)
-            if (total === 0) return " (🆕 未使用)"
+            if (total === 0) return " (未使用)"
 
             const rate = Math.round((status.success_count || 0) / total * 100)
             let extraInfo = `成功率${rate}%`
             if (status.avg_latency_ms) extraInfo += ` | 延迟${Math.round(status.avg_latency_ms / 1000)}s`
             const inCooldown = this.client._isInCooldown(status)
-            if (inCooldown) extraInfo += ` | 🔥熔断`
+            if (inCooldown) extraInfo += ` | 熔断`
             
-            const icon = inCooldown ? '❌' : (rate >= 50 ? '✅' : '⚠️')
+            const icon = inCooldown || rate < 50 ? '❌' : '✅'
             return ` ${icon} ${extraInfo}`
         }
 
         const groupDisplay = (groupName) => {
             const key = String(groupName).toLowerCase()
             const map = {
-                flash: '⚡ FLASH 快速组',
-                pro: '🚀 PRO 专业组',
-                ultra: '💎 ULTRA 旗舰组'
+                flash: 'FLASH 快速组',
+                pro: 'PRO 专业组',
+                ultra: 'ULTRA 旗舰组'
             }
-            const title = map[key] || `🔧 ${String(groupName).toUpperCase()}`
+            const title = map[key] || String(groupName).toUpperCase()
             return `━━ ${title} ━━`
         }
 
@@ -468,12 +468,13 @@ export class ManagementHandler extends plugin {
                     .filter(name => allModels.filter(item => (item.alias || item.modelId) === name).length > 1)
             )
             let groupMessage = `${groupDisplay(groupName)}\n`
-            for (const [type, label] of [['chat', '💬 chat'], ['draw', '🎨 draw']]) {
+            for (const [type, label] of [['chat', 'chat'], ['draw', 'draw']]) {
                 const models = groupModels[type]
                 if (models.length === 0) continue
+                if (type === 'draw' && groupModels.chat.length > 0) groupMessage += '\n'
                 groupMessage += `  ${label}\n`
                 for (const model of models) {
-                    const costTag = model.perCall ? ' 💰按次' : ''
+                    const costTag = model.perCall ? ' 按次' : ''
                     const name = model.alias && model.alias !== model.modelId ? `${model.alias} (${model.modelId})` : model.modelId
                     const sourceTag = duplicateNames.has(model.alias || model.modelId) ? ` [${model.providerName}]` : ''
                     groupMessage += `    • ${name}${sourceTag}${costTag}${buildStatusText(model.status, model.statusKey)}\n`
@@ -488,7 +489,7 @@ export class ManagementHandler extends plugin {
         const relayModels = (this.client.visionModels || [])
             .filter(model => !listedStatusKeys.has(`${model.provider_id}-${model.model_key || model.id || model.model_id}`))
         if (relayModels.length > 0) {
-            let relayMessage = `━━ 👁 Vision Relay${this.client.enableVisionRelay ? '' : '（未启用）'} ━━\n`
+            let relayMessage = `━━ Vision Relay${this.client.enableVisionRelay ? '' : '（未启用）'} ━━\n`
             for (const model of relayModels) {
                 const modelKey = model.model_key || model.id || model.model_id
                 const statusKey = `${model.provider_id}-${modelKey}`
@@ -516,28 +517,28 @@ export class ManagementHandler extends plugin {
 
             const accessConfig = getAccessConfig()
             const accessMode = accessConfig.mode === 'whitelist' ? '白名单模式' : '黑名单模式'
-            const thinkingMode = Config.show_thinking ? '✅ 开启 (Raw模式)' : '🚫 关闭 (自动清洗)'
-            const shellSessionMode = this.client.enableShellSession ? `✅ 开启 (${Config.SHELL_SESSION_NAME})` : '🚫 关闭'
-            const groupAdminMode = this.client.enableGroupAdmin ? '✅ 开启' : '🚫 关闭'
-            const groupSendMode = this.client.enableGroupSend ? '✅ 开启' : '🚫 关闭'
-            const groupLeaveMode = this.client.enableGroupLeave ? '✅ 开启' : '🚫 关闭'
-            const fastChatMode = (this.client.enableFastChat || Config.enable_fast_chat) ? '✅ 开启' : '🚫 关闭'
+            const thinkingMode = Config.show_thinking ? '✅ 开启 (Raw模式)' : '关闭 (自动清洗)'
+            const shellSessionMode = this.client.enableShellSession ? `✅ 开启 (${Config.SHELL_SESSION_NAME})` : '关闭'
+            const groupAdminMode = this.client.enableGroupAdmin ? '✅ 开启' : '关闭'
+            const groupSendMode = this.client.enableGroupSend ? '✅ 开启' : '关闭'
+            const groupLeaveMode = this.client.enableGroupLeave ? '✅ 开启' : '关闭'
+            const fastChatMode = (this.client.enableFastChat || Config.enable_fast_chat) ? '✅ 开启' : '关闭'
 
             const trustedGroups = Config.trustedGroups
             const trustedGroupCount = trustedGroups.length
 
             const statusPanel = [
-                `====== 🐾 ${Config.AI_NAME}状态面板 🐾 ======`,
-                '🔧 核心配置',
+                `====== ${Config.AI_NAME}状态面板 ======`,
+                '核心配置',
                 `  - API供应商: ${providerCount} 个`,
                 `  - 作图预设: ${presetCount} 个`,
                 '',
-                '🔮 可用模型池',
+                '可用模型池',
                 `  - 对话模型: ${activeChatModels} 个可用`,
                 `  - 绘图模型: ${activeImageModels} 个可用`,
                 '  (模型配置后直接可用，异常模型由熔断机制自动处理)',
                 '',
-                '🔑 权限与模式',
+                '权限与模式',
                 `  - 权限控制: ${accessMode}`,
                 `  - AI思考过程: ${thinkingMode}`,
                 `  - 持久Shell会话: ${shellSessionMode}`,
@@ -578,7 +579,7 @@ export class ManagementHandler extends plugin {
                 Config.trustedGroups = trustedGroups
                 await e.reply(`✅ 已将群 ${groupId} 添加到信任群列表`)
             } else {
-                await e.reply(`⚠️ 群 ${groupId} 已在信任群列表中`)
+                await e.reply(`群 ${groupId} 已在信任群列表中`)
             }
         } else {
             const index = trustedGroups.indexOf(groupId)
@@ -587,7 +588,7 @@ export class ManagementHandler extends plugin {
                 Config.trustedGroups = trustedGroups
                 await e.reply(`✅ 已从信任群列表删除群 ${groupId}`)
             } else {
-                await e.reply(`⚠️ 群 ${groupId} 不在信任群列表中`)
+                await e.reply(`群 ${groupId} 不在信任群列表中`)
             }
         }
     }

@@ -301,7 +301,7 @@ export const imageGenTool = {
         try {
             await setMsgEmojiLike(event, 282)
             const modelDisplay = resolveModelDisplay(modelGroupKey)
-            await event.reply(`🎨 正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
+            await event.reply(`正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
 
             const parts = []
             // 角色图库参考图优先放最前，锁定目标角色形象

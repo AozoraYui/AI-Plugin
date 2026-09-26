@@ -674,13 +674,14 @@ async function compactFastChatImageSummaries(client, summaryText) {
 
 async function buildFastChatVisionRelayFallback(client, imageParts, normalized, reason = '读图失败兜底') {
     if (!Array.isArray(imageParts) || imageParts.length === 0) return ''
-    if (!client?.enableVisionRelay || !Array.isArray(client.visionModels) || client.visionModels.length === 0) {
+    const visionModels = client?.getVisionRelayModels?.() || client?.visionModels || []
+    if (!client?.enableVisionRelay || !Array.isArray(visionModels) || visionModels.length === 0) {
         logger.warn(`[AI-Plugin] [畅聊] ${reason}：Vision Relay 未启用或没有可用模型`)
         return ''
     }
 
     const context = truncateText(normalized?.normalizedText || normalized?.currentText || '', 1200)
-    for (const visionConf of client.visionModels) {
+    for (const visionConf of visionModels) {
         const label = `${visionConf.provider_id}/${visionConf.model_id}`
         try {
             logger.info(`[AI-Plugin] [畅聊] ${reason}：尝试 Vision Relay ${label}`)

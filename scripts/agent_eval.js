@@ -75,11 +75,11 @@ let passed = 0
 function check(name, condition, detail = '') {
     if (condition) {
         passed++
-        console.log(`✓ ${name}`)
+        console.log(`PASS ${name}`)
         return
     }
     failures.push({ name, detail })
-    console.error(`✗ ${name}${detail ? `: ${detail}` : ''}`)
+    console.error(`FAIL ${name}${detail ? `: ${detail}` : ''}`)
 }
 
 check('Node 响应头兼容 Fetch Headers 的 get 接口', (() => {

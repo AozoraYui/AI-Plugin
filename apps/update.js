@@ -69,7 +69,7 @@ export class UpdateHandler extends plugin {
     async gitPull(e) {
         if (!await checkAccess(e)) return true
 
-        await e.reply('🔄 正在检查更新...')
+        await e.reply('正在检查更新...')
 
         const fetchResult = this._runGit('git fetch origin')
         if (!fetchResult.success) {
@@ -95,14 +95,14 @@ export class UpdateHandler extends plugin {
         if (this._isAncestor(localHash.output, remoteHash.output)) {
             updateResult = this._runGit('git merge --ff-only origin/main')
         } else if (this._isAncestor(remoteHash.output, localHash.output)) {
-            return e.reply(`⚠️ 本地版本领先于远程版本，普通更新不会覆盖本地提交。\n${this._formatHashes(localHash.output, remoteHash.output)}\n如需放弃本地提交并完全同步远程，请发送：\n#ai插件强制更新 确认`)
+            return e.reply(`本地版本领先于远程版本，普通更新不会覆盖本地提交。\n${this._formatHashes(localHash.output, remoteHash.output)}\n如需放弃本地提交并完全同步远程，请发送：\n#ai插件强制更新 确认`)
         } else {
             const workingTree = this._getWorkingTreeStatus()
             if (!workingTree.success) {
                 return e.reply(`❌ 无法确认工作区状态，已停止更新以保护本地文件。\n${workingTree.output}`)
             }
             if (workingTree.output) {
-                return e.reply(`⚠️ 检测到本地分支与远程分支已分叉，且工作区存在未提交改动，已停止更新以保护本地文件。\n${this._formatHashes(localHash.output, remoteHash.output)}\n请先手动处理本地改动，或确认丢弃本地改动后发送：\n#ai插件强制更新 确认`)
+                return e.reply(`检测到本地分支与远程分支已分叉，且工作区存在未提交改动，已停止更新以保护本地文件。\n${this._formatHashes(localHash.output, remoteHash.output)}\n请先手动处理本地改动，或确认丢弃本地改动后发送：\n#ai插件强制更新 确认`)
             }
 
             const backupBranch = this._createDivergenceBackup()
@@ -139,10 +139,10 @@ export class UpdateHandler extends plugin {
         const confirmParam = match ? match[1].trim() : ''
 
         if (confirmParam !== '确认') {
-            return e.reply('⚠️ 强制更新将丢弃所有本地修改！\n\n如需继续，请发送：\n#ai插件强制更新 确认')
+            return e.reply('强制更新将丢弃所有本地修改！\n\n如需继续，请发送：\n#ai插件强制更新 确认')
         }
 
-        await e.reply('⚠️ 正在强制更新（将丢弃本地修改）...')
+        await e.reply('正在强制更新（将丢弃本地修改）...')
 
         // 先 fetch 获取远程信息
         const fetchResult = this._runGit('git fetch origin')

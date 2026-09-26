@@ -29,12 +29,12 @@ async function queryOpenWeatherMap(city, apiKey) {
         }
 
         let text = `\n\n【以下是从 OpenWeatherMap 获取的天气数据：】\n\n`
-        text += `📍 城市：${currData.name}（${currData.sys?.country || ''}）\n`
-        text += `   🌡️ 温度：${Math.round(currData.main.temp)}℃（体感 ${Math.round(currData.main.feels_like)}℃）\n`
-        text += `   💧 湿度：${currData.main.humidity}%\n`
-        text += `   🌤️ 天气：${currData.weather[0].description}\n`
-        text += `   💨 风速：${currData.wind.speed} m/s\n`
-        text += `   📊 气压：${currData.main.pressure} hPa\n`
+        text += `城市：${currData.name}（${currData.sys?.country || ''}）\n`
+        text += `   温度：${Math.round(currData.main.temp)}℃（体感 ${Math.round(currData.main.feels_like)}℃）\n`
+        text += `   湿度：${currData.main.humidity}%\n`
+        text += `   天气：${currData.weather[0].description}\n`
+        text += `   风速：${currData.wind.speed} m/s\n`
+        text += `   气压：${currData.main.pressure} hPa\n`
 
         // 预报（5天/3小时）
         try {
@@ -43,7 +43,7 @@ async function queryOpenWeatherMap(city, apiKey) {
             const fcData = await fcRes.json()
 
             if (fcData.cod === '200' && fcData.list) {
-                text += `\n📅 未来预报（每3小时）：\n`
+                text += `\n未来预报（每3小时）：\n`
                 for (const item of fcData.list) {
                     const dt = item.dt_txt.replace(' ', ' ') // 2026-06-19 12:00:00 → 2026-06-19 12:00
                     text += `   ${dt} | ${item.weather[0].description} | ${Math.round(item.main.temp)}℃\n`
@@ -90,11 +90,11 @@ async function queryWeather(city, amapKey, owmKey = null) {
                 const forecasts = data.forecasts[0]
                 const casts = forecasts.casts || []
                 if (casts.length > 0) {
-                    let text = `\n\n【以下是从高德地图获取的天气预报数据：】\n\n📍 城市：${forecasts.city}（${forecasts.province}）\n`
+                    let text = `\n\n【以下是从高德地图获取的天气预报数据：】\n\n城市：${forecasts.city}（${forecasts.province}）\n`
                     for (const day of casts) {
-                        text += `\n📅 ${day.date} 星期${day.week}\n`
-                        text += `   ☀️ 白天：${day.dayweather}，${day.daytemp}℃，${day.daywind}风 ${day.daypower}级\n`
-                        text += `   🌙 夜间：${day.nightweather}，${day.nighttemp}℃，${day.nightwind}风 ${day.nightpower}级\n`
+                        text += `\n${day.date} 星期${day.week}\n`
+                        text += `   白天：${day.dayweather}，${day.daytemp}℃，${day.daywind}风 ${day.daypower}级\n`
+                        text += `   夜间：${day.nightweather}，${day.nighttemp}℃，${day.nightwind}风 ${day.nightpower}级\n`
                     }
                     text += `\n【天气数据结束】\n`
                     return text
@@ -107,11 +107,11 @@ async function queryWeather(city, amapKey, owmKey = null) {
                 if (baseData.status === '1' && baseData.lives && baseData.lives.length > 0) {
                     const live = baseData.lives[0]
                     let text2 = `\n\n【以下是从高德地图获取的实时天气数据：】\n\n`
-                    text2 += `📍 城市：${live.city}（${live.province}）\n`
-                    text2 += `   🌡️ 温度：${live.temperature}℃（湿度 ${live.humidity}%）\n`
-                    text2 += `   🌤️ 天气：${live.weather}\n`
-                    text2 += `   💨 风向风力：${live.winddirection}风 ${live.windpower}级\n`
-                    text2 += `   🕐 更新时间：${live.reporttime}\n`
+                    text2 += `城市：${live.city}（${live.province}）\n`
+                    text2 += `   温度：${live.temperature}℃（湿度 ${live.humidity}%）\n`
+                    text2 += `   天气：${live.weather}\n`
+                    text2 += `   风向风力：${live.winddirection}风 ${live.windpower}级\n`
+                    text2 += `   更新时间：${live.reporttime}\n`
                     text2 += `\n【天气数据结束】\n`
                     return text2
                 }
@@ -134,11 +134,11 @@ async function queryWeather(city, amapKey, owmKey = null) {
                     const forecasts = retryData.forecasts[0]
                     const casts = forecasts.casts || []
                     if (casts.length > 0) {
-                        let text = `\n\n【以下是从高德地图获取的天气预报数据：】\n\n📍 城市：${forecasts.city}（${forecasts.province}）\n`
+                        let text = `\n\n【以下是从高德地图获取的天气预报数据：】\n\n城市：${forecasts.city}（${forecasts.province}）\n`
                         for (const day of casts) {
-                            text += `\n📅 ${day.date} 星期${day.week}\n`
-                            text += `   ☀️ 白天：${day.dayweather}，${day.daytemp}℃，${day.daywind}风 ${day.daypower}级\n`
-                            text += `   🌙 夜间：${day.nightweather}，${day.nighttemp}℃，${day.nightwind}风 ${day.nightpower}级\n`
+                            text += `\n${day.date} 星期${day.week}\n`
+                            text += `   白天：${day.dayweather}，${day.daytemp}℃，${day.daywind}风 ${day.daypower}级\n`
+                            text += `   夜间：${day.nightweather}，${day.nighttemp}℃，${day.nightwind}风 ${day.nightpower}级\n`
                         }
                         text += `\n【天气数据结束】\n`
                         return text
@@ -155,11 +155,11 @@ async function queryWeather(city, amapKey, owmKey = null) {
             if (baseData.status === '1' && baseData.lives && baseData.lives.length > 0) {
                 const live = baseData.lives[0]
                 let text = `\n\n【以下是从高德地图获取的实时天气数据：】\n\n`
-                text += `📍 城市：${live.city}（${live.province}）\n`
-                text += `   🌡️ 温度：${live.temperature}℃（湿度 ${live.humidity}%）\n`
-                text += `   🌤️ 天气：${live.weather}\n`
-                text += `   💨 风向风力：${live.winddirection}风 ${live.windpower}级\n`
-                text += `   🕐 更新时间：${live.reporttime}\n`
+                text += `城市：${live.city}（${live.province}）\n`
+                text += `   温度：${live.temperature}℃（湿度 ${live.humidity}%）\n`
+                text += `   天气：${live.weather}\n`
+                text += `   风向风力：${live.winddirection}风 ${live.windpower}级\n`
+                text += `   更新时间：${live.reporttime}\n`
                 text += `\n【天气数据结束】\n`
                 return text
             }

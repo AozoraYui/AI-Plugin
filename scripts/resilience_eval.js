@@ -302,6 +302,43 @@ async function testAllModelProbeContinuesAfterUnexpectedFailure() {
     assert.equal(results[1].success, true)
 }
 
+async function testCooldownMultimodalPoolTriggersVisionRelay() {
+    const client = createClient([model('qianye', 'vision-model')])
+    client.providerStatus.qianye = {
+        success_count: 0,
+        fail_count: 2,
+        consecutive_fails: 2,
+        cooldown_until: Date.now() + 60000
+    }
+
+    assert.equal(client._checkModelGroupNeedsVisionRelay('flash'), true)
+}
+
+async function testVisionRelayAutoDiscoversUnlistedChatFallback() {
+    const client = createClient([])
+    client.modelsConfig = [
+        {
+            id: 'qianye',
+            name: 'qianye',
+            model_groups: { flash: { draw_models: ['draw-only'] } }
+        },
+        {
+            id: 'backup',
+            name: 'backup',
+            model_groups: {}
+        }
+    ]
+    client.modelDefinitions = [
+        { id: 'configured', alias: 'configured', provider_id: 'qianye', model_id: 'configured-api', multimodal: true },
+        { id: 'draw-only', alias: 'draw-only', provider_id: 'qianye', model_id: 'draw-api', multimodal: true },
+        { id: 'unlisted-vision', alias: 'unlisted-vision', provider_id: 'backup', model_id: 'vision-api', multimodal: true }
+    ]
+    client.visionRelayConfig = { vision_model: [{ model: 'configured' }] }
+
+    const candidates = client.getVisionRelayModels()
+    assert.deepEqual(candidates.map(candidate => candidate.id), ['configured', 'unlisted-vision'])
+}
+
 await testProviderFailoverBudget()
 await testConfiguredOrderBeatsHealthScore()
 await testInterleavedProvidersFollowConfiguredOrder()
@@ -314,4 +351,6 @@ await testLaterProviderIsNotStarvedByEarlierQueues()
 await testDirectModelProbe()
 await testAllModelTargetsCoverChatAndImage()
 await testAllModelProbeContinuesAfterUnexpectedFailure()
-console.log('Resilience eval: 11 passed, 0 failed')
+await testCooldownMultimodalPoolTriggersVisionRelay()
+await testVisionRelayAutoDiscoversUnlistedChatFallback()
+console.log('Resilience eval: 13 passed, 0 failed')

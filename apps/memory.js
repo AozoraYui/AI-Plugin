@@ -61,10 +61,10 @@ export class MemoryHandler extends plugin {
         const modelGroupKey = resolveModelGroup(prefix, Config.DEFAULT_MODEL_GROUP)
         const modelDisplay = resolveModelDisplay(modelGroupKey) + '模型组'
 
-        let statusMsg = `📚 正在启动记忆归档 [${modelDisplay}]...`
+        let statusMsg = `正在启动记忆归档 [${modelDisplay}]...`
         statusMsg += isFullRebuild
-            ? `\n🔥 全量模式: 读取所有原始对话记录，整合成一份完整记忆存档`
-            : `\n🔗 增量模式: 读取 ${dateStr} 对话 + 最近全量总结，生成摘要`
+            ? `\n全量模式: 读取所有原始对话记录，整合成一份完整记忆存档`
+            : `\n增量模式: 读取 ${dateStr} 对话 + 最近全量总结，生成摘要`
 
         await e.reply(statusMsg, true)
 
@@ -102,7 +102,7 @@ export class MemoryHandler extends plugin {
 
         if (allHistory.length <= chunkSize) {
             const historyText = buildHistoryText(allHistory, aiName)
-            await e.reply(`📖 正在整合 ${allHistory.length} 条对话记录...`, true)
+            await e.reply(`正在整合 ${allHistory.length} 条对话记录...`, true)
             const result = await summarizeSingleChunk(historyText, modelGroupKey, this.client)
             if (!result) {
                 return e.reply(`❌ 全量总结生成失败`)
@@ -121,13 +121,13 @@ export class MemoryHandler extends plugin {
         for (let i = 0; i < allHistory.length; i += chunkSize) {
             chunks.push(allHistory.slice(i, i + chunkSize))
         }
-        await e.reply(`📚 共 ${allHistory.length} 条对话，分 ${chunks.length} 块总结 (每块${chunkSize}条)...`, true)
+        await e.reply(`共 ${allHistory.length} 条对话，分 ${chunks.length} 块总结 (每块${chunkSize}条)...`, true)
 
         const chunkSummaries = []
         for (let i = 0; i < chunks.length; i++) {
             const chunkText = buildHistoryText(chunks[i], aiName)
             if (!chunkText.trim()) continue
-            await e.reply(`📝 正在总结第 ${i + 1}/${chunks.length} 块 (${chunks[i].length}条)...`, true)
+            await e.reply(`正在总结第 ${i + 1}/${chunks.length} 块 (${chunks[i].length}条)...`, true)
             const result = await summarizeChunk(chunkText, i + 1, chunks.length, modelGroupKey, this.client)
             if (result) {
                 chunkSummaries.push(result.summary)
@@ -142,7 +142,7 @@ export class MemoryHandler extends plugin {
             return e.reply(`❌ 所有分块总结均失败`)
         }
 
-        await e.reply(`🔗 正在合并 ${chunkSummaries.length} 个分块总结...`, true)
+        await e.reply(`正在合并 ${chunkSummaries.length} 个分块总结...`, true)
 
         const mergeTemplate = Config.Prompts?.full_checkpoint?.merge
             || `请将以下 {chunk_count} 个分段的对话摘要整合成一份完整的、精炼的核心记忆存档。\n要求：\n1. 保留所有重要的用户信息（性格、偏好、技术能力、重要经历等）\n2. 按主题分类整理（如：个人信息、技术兴趣、重要对话、情感偏好等）\n3. 去除重复的内容，保留核心内容\n4. 字数不限，尽可能写好各处细节\n5. 直接输出整合后的记忆存档，不要加"好的"等客套话，严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本\n\n以下是各分段摘要：`
@@ -172,30 +172,30 @@ export class MemoryHandler extends plugin {
     async _sendFullCheckpointResult(e, newSummary, totalMessages, totalChunks, startTime, modelGroupKey, chunkUsage, mergeUsage) {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
 
-        const modelInfo = '\n🔮 模型组: ' + resolveModelDisplay(modelGroupKey)
+        const modelInfo = '\n模型组: ' + resolveModelDisplay(modelGroupKey)
 
         let tokenInfo = ''
         if (chunkUsage) {
             const hasChunkTokens = chunkUsage.prompt_tokens > 0 || chunkUsage.completion_tokens > 0
             if (hasChunkTokens) {
-                tokenInfo += `\n📊 分段总结 Token: 入 ${chunkUsage.prompt_tokens} | 出 ${chunkUsage.completion_tokens}`
+                tokenInfo += `\n分段总结 Token: 入 ${chunkUsage.prompt_tokens} | 出 ${chunkUsage.completion_tokens}`
             }
         }
         if (mergeUsage) {
             const hasMergeTokens = mergeUsage.prompt_tokens > 0 || mergeUsage.completion_tokens > 0
             if (hasMergeTokens) {
-                tokenInfo += `\n🔗 合并总结 Token: 入 ${mergeUsage.prompt_tokens} | 出 ${mergeUsage.completion_tokens}`
+                tokenInfo += `\n合并总结 Token: 入 ${mergeUsage.prompt_tokens} | 出 ${mergeUsage.completion_tokens}`
             }
         }
         if (chunkUsage && mergeUsage) {
             const totalIn = chunkUsage.prompt_tokens + mergeUsage.prompt_tokens
             const totalOut = chunkUsage.completion_tokens + mergeUsage.completion_tokens
             if (totalIn > 0 || totalOut > 0) {
-                tokenInfo += `\n📊 合计 Token: 入 ${totalIn} | 出 ${totalOut}`
+                tokenInfo += `\n合计 Token: 入 ${totalIn} | 出 ${totalOut}`
             }
         } else if (chunkUsage && !mergeUsage) {
             if (chunkUsage.prompt_tokens > 0 || chunkUsage.completion_tokens > 0) {
-                tokenInfo += `\n📊 合计 Token: 入 ${chunkUsage.prompt_tokens} | 出 ${chunkUsage.completion_tokens}`
+                tokenInfo += `\n合计 Token: 入 ${chunkUsage.prompt_tokens} | 出 ${chunkUsage.completion_tokens}`
             }
         }
 
@@ -203,7 +203,7 @@ export class MemoryHandler extends plugin {
             {
                 user_id: e.self_id,
                 nickname: Config.AI_NAME,
-                message: `✅ 全量锚点创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s\n📚 整合了 ${totalMessages} 条对话记录${totalChunks > 0 ? ` (${totalChunks}块分组合并)` : ''}${tokenInfo}`
+                message: `✅ 全量锚点创建成功！${modelInfo}\n耗时: ${elapsed}s\n整合了 ${totalMessages} 条对话记录${totalChunks > 0 ? ` (${totalChunks}块分组合并)` : ''}${tokenInfo}`
             }
         ]
 
@@ -256,7 +256,7 @@ export class MemoryHandler extends plugin {
         let summaryPrompt = ""
         if (latestFullCheckpoint) {
             const template = Config.Prompts?.incremental_checkpoint?.with_context
-                || `你是一位专业的档案管理员。现在是【{current_time}】。\n请将以下这段发生在【{date}】的对话概括为一个简短的摘要（{summary_max_length}字以内）。\n重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。\n直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。\n\n以下是之前的核心记忆存档，供你参考上下文（不需要重复总结这些内容）：\n=== 📜 【核心记忆存档 (截止于 {checkpoint_date})】 ===`
+            || `你是一位专业的档案管理员。现在是【{current_time}】。\n请将以下这段发生在【{date}】的对话概括为一个简短的摘要（{summary_max_length}字以内）。\n重点记录：用户做了什么、讨论了什么话题、用户的情绪或重要偏好。\n直接输出摘要内容，不要加"好的"等客套话。请使用纯文本，严禁使用 Markdown 格式（如 **粗体**、# 标题等）。\n\n以下是之前的核心记忆存档，供你参考上下文（不需要重复总结这些内容）：\n=== 【核心记忆存档 (截止于 {checkpoint_date})】 ===`
             summaryPrompt = expandPrompt(template, {
                 current_time: new Date().toLocaleString('zh-CN', { hour12: false }),
                 date: dateStr,
@@ -273,7 +273,7 @@ export class MemoryHandler extends plugin {
             }) + `\n${targetContent}`
         }
 
-        await e.reply(`📖 正在为 ${dateStr} 生成增量总结...`, true)
+        await e.reply(`正在为 ${dateStr} 生成增量总结...`, true)
 
         const payload = { "contents": [{ "role": "user", "parts": [{ "text": summaryPrompt }] }] }
         const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)
@@ -295,7 +295,7 @@ export class MemoryHandler extends plugin {
             }
         }
 
-        const modelInfo = result.platform ? `\n🔮 模型: ${result.platform}` : ''
+        const modelInfo = result.platform ? `\n模型: ${result.platform}` : ''
 
         await this.conversationManager.db.saveSummaryCache(e.user_id, newSummary, dateStr, latestFullCheckpoint?.dateStr)
         await updateUserProfileFromSummary(this.conversationManager.db, this.client, userIdStr, newSummary, {
@@ -308,7 +308,7 @@ export class MemoryHandler extends plugin {
             {
                 user_id: e.self_id,
                 nickname: Config.AI_NAME,
-                message: `✅ 增量总结创建成功！${modelInfo}\n⏱️ 耗时: ${elapsed}s${tokenInfo}\n🔗 基于全量总结: ${latestFullCheckpoint ? latestFullCheckpoint.dateStr : '无'}\n📅 目标日期: ${dateStr}`
+                message: `✅ 增量总结创建成功！${modelInfo}\n耗时: ${elapsed}s${tokenInfo}\n基于全量总结: ${latestFullCheckpoint ? latestFullCheckpoint.dateStr : '无'}\n目标日期: ${dateStr}`
             },
             {
                 user_id: e.self_id,
@@ -365,22 +365,22 @@ export class MemoryHandler extends plugin {
             let statusText = ""
 
             if (date === todayStr) {
-                statusIcon = "📝"
+                statusIcon = ""
                 statusText = "(记录中)"
             } else if (dbCheckpoint && dbCheckpoint.checkpointType === 'full') {
-                statusIcon = "💾"
+                statusIcon = ""
                 statusText = "(全量总结)"
                 fullCheckpointCount++
                 if (dbSummary) {
-                    statusText += " + 🔗增量"
+                    statusText += " + 增量"
                     incrementalCheckpointCount++
                 }
             } else if (dbSummary) {
-                statusIcon = "🔗"
+                statusIcon = ""
                 statusText = "(增量总结)"
                 incrementalCheckpointCount++
             } else {
-                statusIcon = "☁️"
+                statusIcon = ""
                 statusText = "(未总结)"
             }
 
@@ -393,7 +393,7 @@ export class MemoryHandler extends plugin {
 
         listContent.reverse()
 
-        const header = `📜 记忆档案列表 (共${totalDays}天)\n💾 全量总结: ${fullCheckpointCount}个\n🔗 增量总结: ${incrementalCheckpointCount}个\n- - - - - - - - - -`
+        const header = `记忆档案列表 (共${totalDays}天)\n全量总结: ${fullCheckpointCount}个\n增量总结: ${incrementalCheckpointCount}个\n- - - - - - - - - -`
 
         const forwardMsgNodes = [
             {
@@ -404,7 +404,7 @@ export class MemoryHandler extends plugin {
             {
                 user_id: Bot.uin,
                 nickname: "图例说明",
-                message: "💾 全量总结：包含该日期之前的所有核心记忆 (里程碑)。\n🔗 增量总结：基于上一个总结的接力存档 (每天23:50自动创建)。\n☁️ 未总结：原始对话尚未处理。\n📝 记录中：今天的实时对话。"
+                message: "全量总结：包含该日期之前的所有核心记忆 (里程碑)。\n增量总结：基于上一个总结的接力存档 (每天23:50自动创建)。\n未总结：原始对话尚未处理。\n记录中：今天的实时对话。"
             }
         ]
 
@@ -412,7 +412,7 @@ export class MemoryHandler extends plugin {
             forwardMsgNodes.push({
                 user_id: Bot.uin,
                 nickname: "提示",
-                message: "💡 建议使用 #ai全量总结 来生成你的第一个记忆里程碑哦！"
+                message: "建议使用 #ai全量总结 来生成你的第一个记忆里程碑。"
             })
         }
 
@@ -430,11 +430,11 @@ export class MemoryHandler extends plugin {
         try {
             const checkpoint = await this.conversationManager.db.getCheckpoint(userIdStr, targetDate, 'full')
             if (checkpoint) {
-                const content = `📖 ${targetDate} 全量总结\n- - - - - - - - - -\n${checkpoint.content}`
+                const content = `${targetDate} 全量总结\n- - - - - - - - - -\n${checkpoint.content}`
                 return this._sendMemoryContent(e, content, targetDate)
             }
 
-            return e.reply(`📅 没有找到 ${targetDate} 的全量总结哦。\n该日期可能尚未创建全量总结，请使用 #ai全量总结 创建。`)
+            return e.reply(`没有找到 ${targetDate} 的全量总结哦。\n该日期可能尚未创建全量总结，请使用 #ai全量总结 创建。`)
         } catch (err) {
             logger.error(`[AI-Plugin] 读取全量总结失败 (用户: ${userIdStr}, 日期: ${targetDate}):`, err)
             await e.reply(`❌ 读取全量总结失败: ${err.message}`)
@@ -455,14 +455,14 @@ export class MemoryHandler extends plugin {
                 if (summaryCache.baseCheckpointDate) {
                     const baseCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, summaryCache.baseCheckpointDate, 'full')
                     if (baseCheckpoint) {
-                        displayText = `=== 📜 【核心记忆存档 (截止于 ${summaryCache.baseCheckpointDate})】 ===\n${baseCheckpoint.content}\n\n=== 🔗 【增量记忆 (${targetDate})】 ===\n${summaryCache.content}`
+                        displayText = `=== 【核心记忆存档 (截止于 ${summaryCache.baseCheckpointDate})】 ===\n${baseCheckpoint.content}\n\n=== 【增量记忆 (${targetDate})】 ===\n${summaryCache.content}`
                     }
                 }
-                const content = `📖 ${targetDate} 增量总结\n- - - - - - - - - -\n${displayText}`
+                const content = `${targetDate} 增量总结\n- - - - - - - - - -\n${displayText}`
                 return this._sendMemoryContent(e, content, targetDate)
             }
 
-            return e.reply(`📅 没有找到 ${targetDate} 的增量总结哦。\n该日期可能尚未创建增量总结。`)
+            return e.reply(`没有找到 ${targetDate} 的增量总结哦。\n该日期可能尚未创建增量总结。`)
         } catch (err) {
             logger.error(`[AI-Plugin] 读取增量总结失败:`, err)
             await e.reply(`❌ 读取增量总结失败: ${err.message}`)
@@ -479,7 +479,7 @@ export class MemoryHandler extends plugin {
         try {
             const checkpoint = await this.conversationManager.db.getCheckpoint(userIdStr, targetDate, 'full')
             if (checkpoint) {
-                const content = `📖 ${targetDate} 全量总结\n- - - - - - - - - -\n${checkpoint.content}`
+                const content = `${targetDate} 全量总结\n- - - - - - - - - -\n${checkpoint.content}`
                 return this._sendMemoryContent(e, content, targetDate)
             }
 
@@ -489,14 +489,14 @@ export class MemoryHandler extends plugin {
                 if (summaryCache.baseCheckpointDate) {
                     const baseCheckpoint = await this.conversationManager.db.getCheckpoint(userIdStr, summaryCache.baseCheckpointDate, 'full')
                     if (baseCheckpoint) {
-                        displayText = `=== 📜 【核心记忆存档 (截止于 ${summaryCache.baseCheckpointDate})】 ===\n${baseCheckpoint.content}\n\n=== 🔗 【增量记忆 (${targetDate})】 ===\n${summaryCache.content}`
+                        displayText = `=== 【核心记忆存档 (截止于 ${summaryCache.baseCheckpointDate})】 ===\n${baseCheckpoint.content}\n\n=== 【增量记忆 (${targetDate})】 ===\n${summaryCache.content}`
                     }
                 }
-                const content = `📖 ${targetDate} 增量总结\n- - - - - - - - - -\n${displayText}`
+                const content = `${targetDate} 增量总结\n- - - - - - - - - -\n${displayText}`
                 return this._sendMemoryContent(e, content, targetDate)
             }
 
-            return e.reply(`📅 没有找到 ${targetDate} 的记忆记录哦。\n该日期可能尚未进行总结，或者记录不存在。`)
+            return e.reply(`没有找到 ${targetDate} 的记忆记录哦。\n该日期可能尚未进行总结，或者记录不存在。`)
         } catch (err) {
             logger.error(`[AI-Plugin] 读取记忆失败 (用户: ${userIdStr}, 日期: ${targetDate}):`, err)
             await e.reply(`❌ 读取记忆失败: ${err.message}`)
@@ -510,7 +510,7 @@ export class MemoryHandler extends plugin {
                 {
                     user_id: e.self_id,
                     nickname: Config.AI_NAME,
-                    message: `📖 ${targetDate} 记忆记录`
+                    message: `${targetDate} 记忆记录`
                 }
             ]
 
@@ -570,10 +570,10 @@ export class MemoryHandler extends plugin {
         }
 
         if (unsummarizedDates.length === 0) {
-            return e.reply(`✨ 所有日期都已经总结过啦！没有需要批量处理的日期哦。`)
+            return e.reply(`所有日期都已经总结过啦！没有需要批量处理的日期。`)
         }
 
-        await e.reply(`📚 开始批量增量总结 [${modelDisplay}]...\n共找到 ${unsummarizedDates.length} 个未总结的日期，正在逐个处理...`, true)
+        await e.reply(`开始批量增量总结 [${modelDisplay}]...\n共找到 ${unsummarizedDates.length} 个未总结的日期，正在逐个处理...`, true)
 
         const startTime = Date.now()
         let successCount = 0
@@ -608,19 +608,19 @@ export class MemoryHandler extends plugin {
                 // 构建增量总结内容
                 let finalContext = ""
                 if (baseCheckpointDate && baseCheckpointContent) {
-                    finalContext += `\n=== 📜 【核心记忆存档 (截止于 ${baseCheckpointDate})】 ===\n${baseCheckpointContent}\n`
+                    finalContext += `\n=== 【核心记忆存档 (截止于 ${baseCheckpointDate})】 ===\n${baseCheckpointContent}\n`
                 }
-                finalContext += `\n=== ➕ 【增量记忆 (${dateDir})】 ===\n${cleanSummary}\n`
+                finalContext += `\n=== 【增量记忆 (${dateDir})】 ===\n${cleanSummary}\n`
 
                 const currentTime = new Date().toLocaleString('zh-CN', { hour12: false })
                 let finalPrompt = ""
                 if (baseCheckpointDate) {
                     const template = Config.Prompts?.batch_incremental?.with_base
-                        || `你是一位专业的传记作家和档案管理员。现在是【{current_time}】。\n这是一次【记忆存档接力 (Update)】操作。请基于旧的【核心记忆存档】，合并后续的【增量记忆】，生成一份**最新的**人生总结报告。**关键要求**：旧存档中的核心设定（背景、性格、长期经历）非常重要，请务必继承和保留，不要丢失细节。\n输出要求：\n1. 报告将作为**新的存档文件**保存，供未来使用，请确保信息密度高。\n2. 请用第三人称叙述。\n3. 重点关注：用户的性格变化、核心人际关系、重要事件的时间线。\n4. 严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本。\n\n--- 🗂️ 待处理数据 ---`
+                        || `你是一位专业的传记作家和档案管理员。现在是【{current_time}】。\n这是一次【记忆存档接力 (Update)】操作。请基于旧的【核心记忆存档】，合并后续的【增量记忆】，生成一份**最新的**人生总结报告。**关键要求**：旧存档中的核心设定（背景、性格、长期经历）非常重要，请务必继承和保留，不要丢失细节。\n输出要求：\n1. 报告将作为**新的存档文件**保存，供未来使用，请确保信息密度高。\n2. 请用第三人称叙述。\n3. 重点关注：用户的性格变化、核心人际关系、重要事件的时间线。\n4. 严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本。\n\n--- 待处理数据 ---`
                     finalPrompt = expandPrompt(template, { current_time: currentTime })
                 } else {
                     const template = Config.Prompts?.batch_incremental?.no_base
-                        || `你是一位专业的传记作家和档案管理员。现在是【{current_time}】。\n这是一次【记忆存档重构 (Rebuild)】操作。请阅读以下用户的【每日摘要】，将这些碎片化的信息整合成一份**完整的、连贯的**人生总结报告。\n输出要求：\n1. 报告将作为**新的存档文件**保存，供未来使用，请确保信息密度高。\n2. 请用第三人称叙述。\n3. 重点关注：用户的性格变化、核心人际关系、重要事件的时间线。\n4. 严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本。\n\n--- 🗂️ 待处理数据 ---`
+                        || `你是一位专业的传记作家和档案管理员。现在是【{current_time}】。\n这是一次【记忆存档重构 (Rebuild)】操作。请阅读以下用户的【每日摘要】，将这些碎片化的信息整合成一份**完整的、连贯的**人生总结报告。\n输出要求：\n1. 报告将作为**新的存档文件**保存，供未来使用，请确保信息密度高。\n2. 请用第三人称叙述。\n3. 重点关注：用户的性格变化、核心人际关系、重要事件的时间线。\n4. 严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本。\n\n--- 待处理数据 ---`
                     finalPrompt = expandPrompt(template, { current_time: currentTime })
                 }
                 finalPrompt += `\n${finalContext}\n--- 数据结束 ---`
@@ -652,7 +652,7 @@ export class MemoryHandler extends plugin {
 
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
 
-        const resultMsg = `✅ 批量增量总结完成！\n⏱️ 总耗时: ${elapsed}s\n📊 成功: ${successCount}个 | 失败: ${failCount}个\n📅 处理日期: ${processedDates.slice(-5).join(', ')}${processedDates.length > 5 ? ` 等${processedDates.length}个` : ''}`
+        const resultMsg = `✅ 批量增量总结完成！\n总耗时: ${elapsed}s\n成功: ${successCount}个 | 失败: ${failCount}个\n处理日期: ${processedDates.slice(-5).join(', ')}${processedDates.length > 5 ? ` 等${processedDates.length}个` : ''}`
 
         await e.reply(resultMsg)
     }

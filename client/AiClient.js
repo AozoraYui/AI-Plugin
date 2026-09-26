@@ -93,11 +93,45 @@ export class AiClient {
         return pool.some(item => item.modelConfig?.multimodal !== false)
     }
 
-    /** 检查当前模型组是否所有对话模型都来自非多模态 provider（需要 Vision Relay） */
+    /** 检查当前模型组是否没有健康的多模态对话模型（需要 Vision Relay） */
     _checkModelGroupNeedsVisionRelay(modelGroupKey) {
         const pool = this.activeModelPools[modelGroupKey]?.chat
         if (!pool || pool.length === 0) return true  // 无模型，保守启用
-        return pool.every(item => item.modelConfig?.multimodal === false)
+        return !pool.some(item => {
+            if (item.modelConfig?.multimodal === false) return false
+            const statusKey = item.statusKey || `${item.provider.id}-${item.modelKey || item.modelId}`
+            return !this._isProviderInCooldown(item.provider.id) && !this._isInCooldown(this.modelStatus?.[statusKey])
+        })
+    }
+
+    /**
+     * 返回 Vision Relay 候选。
+     * 显式配置优先；未显式列出的多模态聊天模型作为灾备候选，绘图专用模型排除。
+     */
+    getVisionRelayModels() {
+        const candidates = []
+        const seen = new Set()
+        const add = model => {
+            if (!model?.provider_id || !model?.model_id) return
+            const key = `${model.provider_id}-${model.id || model.model_id}`
+            if (seen.has(key)) return
+            seen.add(key)
+            candidates.push(model)
+        }
+
+        for (const model of this.visionModels) add(model)
+
+        const imageOnlyKeys = new Set(
+            this.getModelTestTargets()
+                .filter(target => target.type === 'image')
+                .map(target => `${target.model.provider_id}-${target.model.id}`)
+        )
+        for (const model of this.modelDefinitions || []) {
+            const key = `${model.provider_id}-${model.id}`
+            if (model.multimodal !== false && !imageOnlyKeys.has(key)) add(model)
+        }
+
+        return candidates
     }
 
     /**

@@ -67,7 +67,7 @@ function buildDockerNapcatHint(sendPath) {
     const dirOfFile = path.dirname(sendPath)
     return [
         '',
-        '⚠ 文件发送失败，疑似 NapCat 部署在 Docker 容器内、读取不到宿主机文件路径导致。',
+        '文件发送失败，疑似 NapCat 部署在 Docker 容器内、读取不到宿主机文件路径导致。',
         `本次尝试发送的服务器路径为：${sendPath}`,
         '',
         '━━━━━━━━━━ 原因说明 ━━━━━━━━━━',

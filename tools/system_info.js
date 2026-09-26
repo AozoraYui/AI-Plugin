@@ -69,24 +69,24 @@ async function getSystemInfo() {
         text += `\n\`\`\`\n${info.fastfetch}\n\`\`\`\n`
         // 补充 fastfetch 没有覆盖的信息
         if (info.temperature && !info.temperature.includes('不可用')) {
-            text += `\n🌡️ 温度:\n${info.temperature}\n`
+            text += `\n温度:\n${info.temperature}\n`
         }
         if (info.processes && info.processes !== 'N/A') {
-            text += `\n🔢 进程数: ${info.processes}`
+            text += `\n进程数: ${info.processes}`
         }
     } else {
         // 降级：传统格式
-        text += `\n🖥️ 主机名: ${info.hostname}`
-        text += `\n📋 系统版本: ${info.os_version}`
-        text += `\n\n⏱️ 运行时间与负载:\n${info.uptime}`
+        text += `\n主机名: ${info.hostname}`
+        text += `\n系统版本: ${info.os_version}`
+        text += `\n\n运行时间与负载:\n${info.uptime}`
         text += `\n负载: ${info.loadavg}`
-        text += `\n\n🧠 CPU: ${info.cpu_model}`
+        text += `\n\nCPU: ${info.cpu_model}`
         text += `\n核心数: ${info.cpu_cores}`
         text += `\n频率: ${info.cpu_freq}`
-        text += `\n\n🌡️ 温度:\n${info.temperature}`
-        text += `\n\n💾 内存:\n${info.memory}`
-        text += `\n📀 磁盘:\n${info.disk}`
-        text += `\n🔢 进程数: ${info.processes}`
+        text += `\n\n温度:\n${info.temperature}`
+        text += `\n\n内存:\n${info.memory}`
+        text += `\n磁盘:\n${info.disk}`
+        text += `\n进程数: ${info.processes}`
     }
     text += `\n【系统信息结束】\n`
 

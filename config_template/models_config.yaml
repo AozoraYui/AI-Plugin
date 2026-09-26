@@ -152,7 +152,7 @@ enable_web_fetch: false
 # Shell 工具配置
 # ------------------------------------------------
 # enable_shell_exec: 是否允许 AI 执行服务器 Shell 命令（默认 false）
-#   ⚠ 高危能力：等同把服务器命令行交给 AI，请慎重开启
+#   高危能力：等同把服务器命令行交给 AI，请慎重开启
 #   仅主人可用；非主人无论如何都无法触发
 #   开启后同时启用结构化工作区 list/search/read/patch/verify；工作区工具受 file_roots.yaml 白名单约束
 #   patch 成功后 Agent 会强制执行语言语法检查与 git diff --check；静态校验不等于项目测试通过
@@ -162,7 +162,7 @@ enable_web_fetch: false
 #   若当前/生效目录不符合“机器人根目录/当前插件根目录/所有插件目录”等目标，会停止执行并要求确认
 #
 # enable_shell_session: 是否启用持久 tmux Shell 会话（默认 false）
-#   ⚠ 高危能力，主人专用；用于让 AI 操作一个独立 tmux 窗口
+#   高危能力，主人专用；用于让 AI 操作一个独立 tmux 窗口
 #   机器人启动时会检查 SHELL_SESSION_NAME 指定的会话；不存在则自动创建
 #   普通一次性命令仍走 shell_exec；只有明确提到 tmux/ai-shell/shell会话时才走持久会话
 #   SHELL_SESSION_NAME: tmux 会话名（默认 ai-shell）

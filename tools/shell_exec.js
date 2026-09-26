@@ -220,7 +220,7 @@ export const shellExecTool = {
             const shownEnd = Math.min(p.offset + p.pageSize, Math.max(p.stdoutTotal, p.stderrTotal))
             output += `\n分页: 已显示第 ${p.offset}~${shownEnd} 字符 / 共 ${Math.max(p.stdoutTotal, p.stderrTotal)} 字符`
             if (p.hasMore) {
-                output += `\n⚠ 输出未读完，如需后续内容，再次调用 shell_exec 并传入相同 command 与 offset_chars=${p.nextOffset}（建议优先用 jq/grep/awk/sed 精确过滤减少数据量）`
+                output += `\n输出未读完，如需后续内容，再次调用 shell_exec 并传入相同 command 与 offset_chars=${p.nextOffset}（建议优先用 jq/grep/awk/sed 精确过滤减少数据量）`
             } else {
                 output += `（已读完）`
             }

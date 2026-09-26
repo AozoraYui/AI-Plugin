@@ -387,10 +387,10 @@ const failures = []
 for (const incident of incidents) {
     if (await incident.pass(incident.input)) {
         passed++
-        console.log(`✓ replay ${incident.id}`)
+        console.log(`PASS replay ${incident.id}`)
     } else {
         failures.push(incident.id)
-        console.error(`✗ replay ${incident.id}: ${incident.input}`)
+        console.error(`FAIL replay ${incident.id}: ${incident.input}`)
     }
 }
 
@@ -406,10 +406,10 @@ const guardedConfig = filterToolCallsByIntent([{
 }], '#c把“[无用插件]发送图片”写到/root/Yunzai/config/config/group.yaml里710024443的disable里面')
 if (guardedConfig.tools.length === 1) {
     passed++
-    console.log('✓ replay config-update-security-guard')
+    console.log('PASS replay config-update-security-guard')
 } else {
     failures.push('config-update-security-guard')
-    console.error('✗ replay config-update-security-guard')
+    console.error('FAIL replay config-update-security-guard')
 }
 
 const staleUrlSkipped = isExpiredGroupContextImageUrl(
@@ -419,28 +419,28 @@ const staleUrlSkipped = isExpiredGroupContextImageUrl(
 )
 if (staleUrlSkipped) {
     passed++
-    console.log('✓ replay stale-qq-image-url')
+    console.log('PASS replay stale-qq-image-url')
 } else {
     failures.push('stale-qq-image-url')
-    console.error('✗ replay stale-qq-image-url')
+    console.error('FAIL replay stale-qq-image-url')
 }
 
 const sanitized = sanitizeModelOutput('Analysis:\n先调用工具读取文件\n\nFinal Answer:\n实际字段是 image')
 if (sanitized === '实际字段是 image' && isPlanOnlyResponse('【工具规划】先读取文件')) {
     passed++
-    console.log('✓ replay internal-plan-sanitization')
+    console.log('PASS replay internal-plan-sanitization')
 } else {
     failures.push('internal-plan-sanitization')
-    console.error(`✗ replay internal-plan-sanitization: ${sanitized}`)
+    console.error(`FAIL replay internal-plan-sanitization: ${sanitized}`)
 }
 
 if (hasUnsupportedToolResultClaim('我已经完成 pnpm install，并成功重新编译 nodejieba。', { hasActualToolResults: false })
     && !hasUnsupportedToolResultClaim('我已经完成 pnpm install，并成功重新编译 nodejieba。', { hasActualToolResults: true })) {
     passed++
-    console.log('✓ replay unsupported-tool-success-claim')
+    console.log('PASS replay unsupported-tool-success-claim')
 } else {
     failures.push('unsupported-tool-success-claim')
-    console.error('✗ replay unsupported-tool-success-claim')
+    console.error('FAIL replay unsupported-tool-success-claim')
 }
 
 if (hasUnsupportedToolResultClaim(
@@ -448,10 +448,10 @@ if (hasUnsupportedToolResultClaim(
     { hasActualToolResults: false }
 )) {
     passed++
-    console.log('✓ replay unsupported-game-command-claim')
+    console.log('PASS replay unsupported-game-command-claim')
 } else {
     failures.push('unsupported-game-command-claim')
-    console.error('✗ replay unsupported-game-command-claim')
+    console.error('FAIL replay unsupported-game-command-claim')
 }
 
 if (!hasUnsupportedToolResultClaim(
@@ -459,10 +459,10 @@ if (!hasUnsupportedToolResultClaim(
     { hasActualToolResults: false }
 )) {
     passed++
-    console.log('✓ replay visual-command-description-not-blocked')
+    console.log('PASS replay visual-command-description-not-blocked')
 } else {
     failures.push('visual-command-description-not-blocked')
-    console.error('✗ replay visual-command-description-not-blocked')
+    console.error('FAIL replay visual-command-description-not-blocked')
 }
 
 if (!hasUnsupportedToolResultClaim(
@@ -470,10 +470,10 @@ if (!hasUnsupportedToolResultClaim(
     { hasActualToolResults: false }
 )) {
     passed++
-    console.log('✓ replay visual-uncertain-completion-not-blocked')
+    console.log('PASS replay visual-uncertain-completion-not-blocked')
 } else {
     failures.push('visual-uncertain-completion-not-blocked')
-    console.error('✗ replay visual-uncertain-completion-not-blocked')
+    console.error('FAIL replay visual-uncertain-completion-not-blocked')
 }
 
 console.log(`\nAgent replay eval: ${passed}/${passed + failures.length} passed`)

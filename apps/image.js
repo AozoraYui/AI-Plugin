@@ -116,7 +116,7 @@ export class ImageHandler extends plugin {
 
         await setMsgEmojiLike(e, 282)
         const modelDisplay = resolveModelDisplay(modelGroupKey)
-        await e.reply(`🎨 正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
+        await e.reply(`正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
 
         let parts = []
         let presetName = '自定义'
@@ -206,7 +206,7 @@ export class ImageHandler extends plugin {
 
                 } else {
                     const cleanResponseText = result.data.trim()
-                    await e.reply(`${cleanResponseText}\n\n⏱️ 耗时: ${elapsed}s${tokenInfo} @${result.platform}`, true)
+                    await e.reply(`${cleanResponseText}\n\n耗时: ${elapsed}s${tokenInfo} @${result.platform}`, true)
                     await setMsgEmojiLike(e, 144)
                 }
             } else {
@@ -232,7 +232,7 @@ export class ImageHandler extends plugin {
         for (let i = 0; i < Config.presets.length; i += batchSize) {
             const page = Math.floor(i / batchSize) + 1
             const batch = Config.presets.slice(i, i + batchSize)
-            let msg = `🎨 AI 作图预设 (第${page}页/共${totalPages}页)\n- - - - - - - - - - - - - - - -\n`
+            let msg = `AI 作图预设 (第${page}页/共${totalPages}页)\n- - - - - - - - - - - - - - - -\n`
 
             msg += batch.map((p, index) => {
                 let entry = `${i + index + 1}. #${p.command}`
@@ -273,7 +273,7 @@ export class ImageHandler extends plugin {
                 forwardMsgNodes.push({
                     user_id: Bot.uin,
                     nickname: Config.AI_NAME,
-                    message: `🎨 AI 作图预设 (Pro - 详细版)\n(第 ${page} 页 / 共 ${totalPages} 页)`
+                    message: `AI 作图预设 (Pro - 详细版)\n(第 ${page} 页 / 共 ${totalPages} 页)`
                 })
 
                 for (let j = 0; j < batch.length; j++) {
@@ -454,7 +454,7 @@ export class ImageHandler extends plugin {
                 if (addedCount > 0) replyMsg += `✅ 成功为 #${targetCommand} 添加了 ${addedCount} 个新别名！新别名已即时生效！`
                 if (skippedAliases.length > 0) replyMsg += `\n- 跳过了 ${skippedAliases.length} 个已存在或冲突的别名: ${skippedAliases.join(', ')}`
                 
-                await e.reply(replyMsg || '🤔 没有添加任何新的别名。')
+                await e.reply(replyMsg || '没有添加任何新的别名。')
 
             } else if (session.type === 'deleteAlias') {
                 const { command: targetCommand, availableAliases } = session.data
@@ -488,7 +488,7 @@ export class ImageHandler extends plugin {
                     this.updateDynamicRule()
                     await e.reply(`✅ 成功从 #${targetCommand} 中删除了 ${deletedAliases.size} 个别名: ${Array.from(deletedAliases).join(', ')}\n变更已即时生效。`)
                 } else {
-                    await e.reply("🤔 没有找到与你输入匹配的可删除别名。")
+                    await e.reply("没有找到与你输入匹配的可删除别名。")
                 }
             }
 

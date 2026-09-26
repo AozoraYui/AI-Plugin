@@ -290,7 +290,7 @@ export const groupFileListTool = {
             else if (f.uploaderId) meta.push(`上传者 QQ:${f.uploaderId}`)
             const t = fmtTime(f.uploadTime)
             if (t) meta.push(`上传于 ${t}`)
-            return `${indent}📄 ${f.name}（${meta.join('，')}）\n`
+            return `${indent}${f.name}（${meta.join('，')}）\n`
         }
 
         let out = `\n\n【群文件列表 - ${data.layerName}${data.recursive ? '（含子文件夹）' : ''}】\n`
@@ -303,7 +303,7 @@ export const groupFileListTool = {
                 for (const f of data.files) out += fileLine(f, '  ')
             }
             for (const d of data.subFolders) {
-                out += `📁 ${d.name}（${d.fileCount} 个文件）\n`
+                out += `${d.name}（${d.fileCount} 个文件）\n`
                 if (d.error) { out += `  （展开失败：${d.error}）\n`; continue }
                 if (d.files.length === 0) { out += '  （空）\n'; continue }
                 for (const f of d.files) out += fileLine(f, '  ')
@@ -318,7 +318,7 @@ export const groupFileListTool = {
         }
         if (data.folders.length > 0) {
             out += '文件夹：\n'
-            for (const d of data.folders) out += `  📁 ${d.name}（${d.fileCount} 个文件）\n`
+            for (const d of data.folders) out += `  ${d.name}（${d.fileCount} 个文件）\n`
         }
         if (data.files.length > 0) {
             out += '文件：\n'

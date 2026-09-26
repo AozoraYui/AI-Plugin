@@ -35,6 +35,32 @@ import { buildWebEvidenceFingerprint, hasOverconfidentLowEvidenceAnswer, updateW
 import { extractMessageSendError, isContentModerationSendError, rewriteRejectedReply } from '../utils/message_delivery.js'
 import yaml from 'yaml'
 
+function replaceInlineImagesWithVisionDescription(contents, description) {
+    const cloned = (contents || []).map(content => ({
+        ...content,
+        parts: Array.isArray(content?.parts)
+            ? content.parts.map(part => ({ ...part }))
+            : content.parts
+    }))
+    const lastUser = [...cloned].reverse().find(content => content?.role === 'user' && Array.isArray(content.parts))
+    if (!lastUser) return cloned
+    lastUser.parts = lastUser.parts.filter(part => !part?.inline_data?.data)
+    lastUser.parts.push({
+        text: `\n\n【Vision Relay 图片摘要】以下内容来自实际附带图片的视觉模型转述，只能据此理解图片，不要声称仍可直接查看图片：\n${description}\n【Vision Relay 图片摘要结束】`
+    })
+    return cloned
+}
+
+async function requestVisionRelayFallback(client, imageParts, context, reason) {
+    const visionModels = client.getVisionRelayModels?.() || client.visionModels || []
+    for (const visionConf of visionModels) {
+        const description = await relayImagesToVision(imageParts, context, client, visionConf)
+        if (description) return description
+        logger.warn(`[AI-Plugin] ${reason}: ${visionConf.provider_id}/${visionConf.model_id} 不可用，尝试下一个 Vision 模型`)
+    }
+    return ''
+}
+
 function saveMainConfigSwitch(key, value) {
     const fileContent = fs.readFileSync(MODELS_CONFIG_FILE, 'utf8')
     const docs = yaml.parseAllDocuments(fileContent)
@@ -2112,7 +2138,7 @@ export class ChatHandler extends plugin {
             }
             const hasLocalImageInput = localImageInput.imageParts.length > 0
             let avatarImageInput = { imageParts: [], noteText: '', targets: [], failures: [] }
-            // drawImageAttempted：本轮是否调用过画图工具（无论成败，工具内已发过"🎨正在生成"进度提示），
+            // drawImageAttempted：本轮是否调用过画图工具（无论成败，工具内已发过生成进度提示），
             // 用于跳过后续"思考中"占位，避免重复刷屏。
             let drawImageAttempted = false
             let generatedDrawReviewImages = []
@@ -2625,7 +2651,7 @@ export class ChatHandler extends plugin {
                             content: agentFormattedResult
                         })
                         if (call.name === 'draw_image') {
-                            // 无论成败，画图工具内部都已发过"🎨正在生成"进度提示，
+                            // 无论成败，画图工具内部都已发过生成进度提示，
                             // 故标记 attempted 以跳过后续"思考中"占位，避免重复刷屏。
                             drawImageAttempted = true
                             // 画图工具成功时返回对象 {ok:true,...}；失败/模型返回文本时返回字符串。
@@ -2633,7 +2659,7 @@ export class ChatHandler extends plugin {
                             // 否则如实告知失败，避免明明没画出来却谎称已发送。
                             const drawSucceeded = result.data && typeof result.data === 'object' && result.data.ok === true
                             if (drawSucceeded) {
-                                // 画图工具已把图片直接发到会话并显示了"🎨正在生成"进度，无需再发"思考中"占位；
+                                // 画图工具已把图片直接发到会话并显示了生成进度，无需再发"思考中"占位；
                                 // 默认只让主模型收尾；开启画图审图时，把刚生成的图也交给主模型看一眼再短评。
                                 const formattedResult = toolRegistry.formatToolResult('draw_image', result.data)
                                 const drawReviewEnabled = Config.draw_review_after_generate === true
@@ -3236,7 +3262,7 @@ export class ChatHandler extends plugin {
                 })
             }
             if (allImages.length > 0 && useVisionRelay) {
-                const visionModels = this.client.visionModels
+                const visionModels = this.client.getVisionRelayModels?.() || this.client.visionModels
                 logger.info(`[AI-Plugin] Vision Relay: 检测到 ${allImages.length} 张图片，开始转述，共 ${visionModels.length} 个 Vision 模型`)
                 let description = ''
                 for (const visionConf of visionModels) {
@@ -3254,7 +3280,7 @@ export class ChatHandler extends plugin {
                 }
             }
             if (localImageInput.imageParts.length > 0 && useVisionRelay) {
-                const visionModels = this.client.visionModels
+                const visionModels = this.client.getVisionRelayModels?.() || this.client.visionModels
                 logger.info(`[AI-Plugin] Vision Relay: 检测到 ${localImageInput.imageParts.length} 张本地图片输入，开始转述`)
                 let description = ''
                 for (const visionConf of visionModels) {
@@ -3271,7 +3297,7 @@ export class ChatHandler extends plugin {
                 }
             }
             if (avatarImageInput.imageParts.length > 0 && useVisionRelay) {
-                const visionModels = this.client.visionModels
+                const visionModels = this.client.getVisionRelayModels?.() || this.client.visionModels
                 logger.info(`[AI-Plugin] Vision Relay: 检测到 ${avatarImageInput.imageParts.length} 张头像图片输入，开始转述`)
                 let description = ''
                 for (const visionConf of visionModels) {
@@ -3288,7 +3314,7 @@ export class ChatHandler extends plugin {
                 }
             }
 
-            // 画图场景工具已发过"🎨正在生成"进度提示（无论成败），跳过"思考中"占位避免重复；
+            // 画图场景工具已发过生成进度提示（无论成败），跳过"思考中"占位避免重复；
             // 普通思考占位由主人命令「#ai开启/关闭思考提示」控制，默认关闭。
             if (Config.show_thinking_notice === true && !drawImageAttempted) {
                 if (!isSingleMode) {
@@ -3302,7 +3328,7 @@ export class ChatHandler extends plugin {
             const currentUserTurnParts = []
 
             if (generatedDrawReviewImages.length > 0 && useVisionRelay) {
-                const visionModels = this.client.visionModels
+                const visionModels = this.client.getVisionRelayModels?.() || this.client.visionModels
                 logger.info(`[AI-Plugin] Vision Relay: 目标模型为纯文本，开始转述 ${generatedDrawReviewImages.length} 张生成图审图图片`)
                 let reviewDescription = ''
                 for (const visionConf of visionModels) {
@@ -3505,6 +3531,30 @@ export class ChatHandler extends plugin {
             
             let result = await this.client.makeRequest('chat', currentPayload, modelGroupKey, 8192)
 
+            // 直读失败时再降级：先用健康的 Vision Relay 把图片转成摘要，再让纯文本模型接管。
+            // 这条路径专门处理“模型组存在多模态模型，但它们所在供应商临时不可用”的情况。
+            const currentImageParts = currentUserTurnParts.filter(part => part?.inline_data?.data)
+            if ((!result.success || !result.data) && currentImageParts.length > 0 && !useVisionRelay && this.client.enableVisionRelay) {
+                logger.warn(`[AI-Plugin] 多模态直读失败，启动 Vision Relay 灾备：${result.error || '模型无返回'}`)
+                const description = await requestVisionRelayFallback(
+                    this.client,
+                    currentImageParts,
+                    userMessage,
+                    'Vision Relay 灾备'
+                )
+                if (description) {
+                    const relayContents = replaceInlineImagesWithVisionDescription(contents, description)
+                    const relayResult = await this.client.makeRequest('chat', { contents: relayContents }, modelGroupKey, 8192)
+                    if (relayResult.success && relayResult.data) {
+                        result = relayResult
+                        contents = relayContents
+                        logger.info('[AI-Plugin] Vision Relay 灾备成功，已切换到文本模型完成回复')
+                    } else {
+                        logger.warn(`[AI-Plugin] Vision Relay 灾备后的文本模型请求仍失败: ${relayResult.error || '模型无返回'}`)
+                    }
+                }
+            }
+
             if (result.success) {
                 let rawResponseText = String(result.data || '').trim()
                 let finalResponseText = sanitizeModelOutput(rawResponseText, { showThinking: Config.show_thinking })
@@ -3581,7 +3631,7 @@ export class ChatHandler extends plugin {
                 // 分段处理：如果回复内容过长，使用合并消息发送
                 const MAX_LENGTH = Config.CHECKPOINT_DISPLAY_MAX_LENGTH
                 const footerSuffix = isSingleMode ? ' (单次对话)' : ''
-                const footerInfo = `⏱️ 耗时: ${elapsed}s${tokenInfo} @${result.platform}${footerSuffix}`
+                const footerInfo = `耗时: ${elapsed}s${tokenInfo} @${result.platform}${footerSuffix}`
                 const reasoningText = Config.show_thinking && result.reasoning ? String(result.reasoning).trim() : ''
 
                 const sendFinalReply = async (responseText, responseReasoning = '') => {
@@ -3607,8 +3657,8 @@ export class ChatHandler extends plugin {
                                 part++
                             }
                         }
-                        pushChunks('思考过程', `🧠 思考过程\n\n${responseReasoning}`)
-                        pushChunks('最终回复', `💬 最终回复\n\n${responseText}`, footerInfo)
+                        pushChunks('思考过程', `思考过程\n\n${responseReasoning}`)
+                        pushChunks('最终回复', `最终回复\n\n${responseText}`, footerInfo)
                         const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
                         return e.reply(forwardMsg)
                     }
@@ -3759,7 +3809,7 @@ export class ChatHandler extends plugin {
     }
 
     async exportMyMemory(e) {
-        await e.reply("收到指令，正在打包你的专属记忆… 请稍等片刻喵~ ⏳")
+        await e.reply("收到指令，正在打包你的专属记忆… 请稍等片刻。")
         try {
             const userId = String(e.user_id)
             const result = await this.conversationManager.exportMemory(e, userId, 'single')
@@ -3777,7 +3827,7 @@ export class ChatHandler extends plugin {
     async exportMemoryByDate(e) {
         const dateMatch = e.msg.match(new RegExp(`^#导出${Config.AI_NAME}记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'))
         const targetDate = dateMatch[1]
-        await e.reply(`收到指令，正在打包 ${targetDate} 的记忆… 请稍等片刻喵~ ⏳`)
+        await e.reply(`收到指令，正在打包 ${targetDate} 的记忆… 请稍等片刻。`)
         try {
             const userId = String(e.user_id)
             const result = await this.conversationManager.exportMemory(e, userId, 'single', targetDate)
@@ -3793,7 +3843,7 @@ export class ChatHandler extends plugin {
     }
 
     async exportAllMemory(e) {
-        await e.reply(`收到最高权限指令，开始导出${Config.AI_NAME}的全部记忆… 这可能需要一点时间喵~ ⏳`)
+        await e.reply(`收到最高权限指令，开始导出${Config.AI_NAME}的全部记忆… 这可能需要一点时间。`)
         try {
             const result = await this.conversationManager.exportMemory(e, null, 'all')
             if (result.success) {
@@ -3810,7 +3860,7 @@ export class ChatHandler extends plugin {
     async exportAllMemoryByDate(e) {
         const dateMatch = e.msg.match(new RegExp(`^#导出${Config.AI_NAME}全部记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'))
         const targetDate = dateMatch[1]
-        await e.reply(`收到最高权限指令，开始导出 ${targetDate} 的全部记忆… 这可能需要一点时间喵~ ⏳`)
+        await e.reply(`收到最高权限指令，开始导出 ${targetDate} 的全部记忆… 这可能需要一点时间。`)
         try {
             const result = await this.conversationManager.exportMemory(e, null, 'all', targetDate)
             if (result.success) {
@@ -3851,7 +3901,7 @@ export class ChatHandler extends plugin {
         if (isTurnOn) {
             await e.reply("✅ 设置成功：已开启思考过程显示 (Raw模式)。")
         } else {
-            await e.reply("🚫 设置成功：已关闭思考过程显示 (自动清洗模式)。")
+            await e.reply("设置成功：已关闭思考过程显示 (自动清洗模式)。")
         }
     }
 
@@ -3862,7 +3912,7 @@ export class ChatHandler extends plugin {
         if (isTurnOn) {
             await e.reply(`✅ 设置成功：已开启${Config.AI_NAME}思考提示。普通对话会发送“${Config.AI_NAME}思考中…”占位提示。`)
         } else {
-            await e.reply(`🚫 设置成功：已关闭${Config.AI_NAME}思考提示。普通对话将不再发送“${Config.AI_NAME}思考中…”占位提示。`)
+            await e.reply(`设置成功：已关闭${Config.AI_NAME}思考提示。普通对话将不再发送“${Config.AI_NAME}思考中…”占位提示。`)
         }
     }
 
@@ -3873,7 +3923,7 @@ export class ChatHandler extends plugin {
         if (isTurnOn) {
             await e.reply(`✅ 设置成功：已开启画图审图。画图成功后，${Config.AI_NAME}会看一眼生成图再用一句话短评。`)
         } else {
-            await e.reply(`🚫 设置成功：已关闭画图审图。画图成功后只发送图片并进行普通收尾回复。`)
+            await e.reply(`设置成功：已关闭画图审图。画图成功后只发送图片并进行普通收尾回复。`)
         }
     }
 }

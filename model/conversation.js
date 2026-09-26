@@ -272,7 +272,7 @@ export class ConversationManager {
             if (latestSummary.baseCheckpointDate) {
                 const baseCheckpoint = await this.db.getCheckpoint(userIdStr, latestSummary.baseCheckpointDate, 'full')
                 if (baseCheckpoint) {
-                    incrementalContent = `=== 📜 【核心记忆存档 (截止于 ${latestSummary.baseCheckpointDate})】 ===\n${baseCheckpoint.content}\n\n=== 🔗 【增量记忆 (${latestSummary.dateStr})】 ===\n${latestSummary.content}`
+                    incrementalContent = `=== 【核心记忆存档 (截止于 ${latestSummary.baseCheckpointDate})】 ===\n${baseCheckpoint.content}\n\n=== 【增量记忆 (${latestSummary.dateStr})】 ===\n${latestSummary.content}`
                 } else {
                     incrementalContent = latestSummary.content
                 }
