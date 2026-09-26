@@ -568,34 +568,31 @@ export class AiClient {
         return successRate * 0.7 + latencyScore * 0.3
     }
 
-    /** 智能排序模型池：按可用性、成本档和健康得分排序 */
+    /** 排序模型池：保持配置顺序，仅将熔断模型沉底 */
     _sortModelPool(pool) {
-        const scored = pool.map(item => {
+        const ordered = pool.map((item, index) => {
             const key = item.statusKey || `${item.provider.id}-${item.modelKey || item.modelId}`
             if (!this.modelStatus[key]) this._initModelStatusEntry(key)
             const score = this._getModelScore(this.modelStatus[key])
-            // 成本档：0=按量计费（优先），1=按次扣费（尽量避开）
-            const costTier = item.perCall ? 1 : 0
-            return { ...item, score, costTier }
+            return { ...item, score, configOrder: index }
         })
 
-        // 熔断模型排末尾，随后优先使用按量模型，再按健康得分排序。
-        // 得分相同时保留配置中的供应商和模型顺序。
-        scored.sort((a, b) => {
+        // 配置顺序决定首选模型；健康统计只用于展示和熔断，不改变首选顺序。
+        // 处于模型熔断期的候选沉底，避免阻塞健康模型。
+        ordered.sort((a, b) => {
             // 熔断模型（score < 0）统一沉底，不参与成本/得分比较
             const aDown = a.score < 0
             const bDown = b.score < 0
             if (aDown !== bDown) return aDown ? 1 : -1
-            if (!aDown && a.costTier !== b.costTier) return a.costTier - b.costTier
-            return b.score - a.score
+            return a.configOrder - b.configOrder
         })
 
-        const logging = scored.map(s =>
-            `${s.provider.name}(${s.modelId})${s.costTier ? '[按次]' : ''} 得分:${s.score.toFixed(2)}`
+        const logging = ordered.map(s =>
+            `${s.provider.name}(${s.modelId})${s.score < 0 ? '[熔断]' : ''} 得分:${s.score.toFixed(2)}`
         ).join(', ')
         logger.debug(`[AI-Plugin] 模型排序: ${logging}`)
 
-        return scored
+        return ordered
     }
 
     loadModelsConfig() {
@@ -1504,45 +1501,40 @@ export class AiClient {
                 logger.warn(`[AI-Plugin] 模型组 [${modelGroupKey}] 暂无已结束冷却的模型或供应商，跳过本轮上游请求`)
             }
 
-            const providerQueues = new Map()
-            for (const candidate of poolToTry) {
-                const providerId = candidate.provider.id
-                if (!providerQueues.has(providerId)) providerQueues.set(providerId, [])
-                const queue = providerQueues.get(providerId)
-                if (queue.length < MAX_ATTEMPTS_PER_PROVIDER) queue.push(candidate)
-            }
-
             lastError = ''
             const requestTimeout = this._resolveRequestTimeout(type, maxTokens, modelGroupKey)
             let attempt = 0
-            providerLoop:
-            for (const queue of providerQueues.values()) {
-                for (const { provider, modelId, modelKey, modelConfig, statusKey: poolStatusKey, score } of queue) {
-                    if (attempt >= MAX_REQUEST_ATTEMPTS) break providerLoop
-                    if (attempt > 0) await this._waitBeforeFailover(attempt)
-                    attempt += 1
-                    const statusKey = poolStatusKey || `${provider.id}-${modelKey || modelId}`
-                    const startTime = Date.now()
-                    const result = await this.attemptRequest(type, payload, provider, modelId, maxTokens, requestTimeout, modelConfig)
-                    const elapsedMs = Date.now() - startTime
-                    const elapsed = (elapsedMs / 1000).toFixed(2)
+            const providerAttemptCounts = new Map()
+            const blockedProviders = new Set()
+            for (const { provider, modelId, modelKey, modelConfig, statusKey: poolStatusKey, score } of poolToTry) {
+                if (attempt >= MAX_REQUEST_ATTEMPTS) break
+                if (blockedProviders.has(provider.id)) continue
+                const providerAttempts = providerAttemptCounts.get(provider.id) || 0
+                if (providerAttempts >= MAX_ATTEMPTS_PER_PROVIDER) continue
+                providerAttemptCounts.set(provider.id, providerAttempts + 1)
+                if (attempt > 0) await this._waitBeforeFailover(attempt)
+                attempt += 1
+                const statusKey = poolStatusKey || `${provider.id}-${modelKey || modelId}`
+                const startTime = Date.now()
+                const result = await this.attemptRequest(type, payload, provider, modelId, maxTokens, requestTimeout, modelConfig)
+                const elapsedMs = Date.now() - startTime
+                const elapsed = (elapsedMs / 1000).toFixed(2)
 
-                    if (result.success) {
-                        this._recordModelSuccess(statusKey, elapsedMs)
-                        this._recordProviderSuccess(provider.id)
-                        this.scheduleModelStatusSave()
-                        logger.debug(`[AI-Plugin] 请求成功: ${provider.name} (${modelId})，耗时 ${elapsed}s, 得分:${score?.toFixed(2)}`)
-                        return result
-                    }
-
-                    const failure = this._classifyRequestError(result.error)
-                    this._recordModelFail(statusKey, failure)
-                    this._recordProviderFail(provider.id, failure)
+                if (result.success) {
+                    this._recordModelSuccess(statusKey, elapsedMs)
+                    this._recordProviderSuccess(provider.id)
                     this.scheduleModelStatusSave()
-                    logger.debug(`[AI-Plugin] 请求失败: ${provider.name} (${modelId})，耗时 ${elapsed}s，得分:${score?.toFixed(2)}, 错误: ${result.error}`)
-                    lastError += `[${provider.name}-${modelId}]: ${result.error}\n`
-                    if (failure.scope === 'provider') break
+                    logger.debug(`[AI-Plugin] 请求成功: ${provider.name} (${modelId})，耗时 ${elapsed}s, 得分:${score?.toFixed(2)}`)
+                    return result
                 }
+
+                const failure = this._classifyRequestError(result.error)
+                this._recordModelFail(statusKey, failure)
+                this._recordProviderFail(provider.id, failure)
+                this.scheduleModelStatusSave()
+                logger.debug(`[AI-Plugin] 请求失败: ${provider.name} (${modelId})，耗时 ${elapsed}s，得分:${score?.toFixed(2)}, 错误: ${result.error}`)
+                lastError += `[${provider.name}-${modelId}]: ${result.error}\n`
+                if (failure.scope === 'provider') blockedProviders.add(provider.id)
             }
 
             const errorMessage = `模型组 [${modelGroupKey}] 中的容灾候选均尝试失败。\n具体错误:\n${lastError.trim() || '没有可用的健康供应商，已避免继续重试。'}`

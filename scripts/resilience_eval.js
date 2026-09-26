@@ -52,6 +52,55 @@ async function testProviderFailoverBudget() {
     assert.equal(client.providerStatus.qianye.cooldown_until, 0)
 }
 
+async function testConfiguredOrderBeatsHealthScore() {
+    const calls = []
+    const client = createClient([
+        model('qianye', 'configured-first'),
+        model('qianye', 'configured-second', 1)
+    ])
+    client.modelStatus['qianye-configured-first'] = {
+        success_count: 1,
+        fail_count: 0,
+        avg_latency_ms: 30000,
+        consecutive_fails: 0,
+        cooldown_until: 0
+    }
+    client.modelStatus['qianye-configured-second'] = {
+        success_count: 10,
+        fail_count: 0,
+        avg_latency_ms: 1000,
+        consecutive_fails: 0,
+        cooldown_until: 0
+    }
+    client.attemptRequest = async (_type, _payload, _provider, modelId) => {
+        calls.push(modelId)
+        return { success: true, data: 'ok' }
+    }
+
+    const result = await client.makeRequest('chat', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] })
+    assert.equal(result.success, true)
+    assert.deepEqual(calls, ['configured-first'])
+}
+
+async function testInterleavedProvidersFollowConfiguredOrder() {
+    const calls = []
+    const client = createClient([
+        model('first-provider', 'first-model'),
+        model('second-provider', 'second-model', 1),
+        model('first-provider', 'first-backup', 2)
+    ])
+    client.attemptRequest = async (_type, _payload, provider, modelId) => {
+        calls.push(`${provider.id}/${modelId}`)
+        return modelId === 'second-model'
+            ? { success: true, data: 'ok' }
+            : { success: false, error: 'HTTP状态码: 404，model not found' }
+    }
+
+    const result = await client.makeRequest('chat', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] })
+    assert.equal(result.success, true)
+    assert.deepEqual(calls, ['first-provider/first-model', 'second-provider/second-model'])
+}
+
 async function testModelFailureUsesSameProviderBackup() {
     const calls = []
     const client = createClient([
@@ -254,6 +303,8 @@ async function testAllModelProbeContinuesAfterUnexpectedFailure() {
 }
 
 await testProviderFailoverBudget()
+await testConfiguredOrderBeatsHealthScore()
+await testInterleavedProvidersFollowConfiguredOrder()
 await testModelFailureUsesSameProviderBackup()
 testErrorClassification()
 testModelFailuresDoNotPoisonProviderCircuit()
@@ -263,4 +314,4 @@ await testLaterProviderIsNotStarvedByEarlierQueues()
 await testDirectModelProbe()
 await testAllModelTargetsCoverChatAndImage()
 await testAllModelProbeContinuesAfterUnexpectedFailure()
-console.log('Resilience eval: 10 passed, 0 failed')
+console.log('Resilience eval: 11 passed, 0 failed')
