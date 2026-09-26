@@ -55,7 +55,7 @@
 - 有图片输入时会优先使用 `multimodal: true` 的对话模型，避免纯文本模型直接接收图片
 
 ### 模型管理
-- 独立模型配置，模型可分别声明 `alias`、供应商、实际 API 模型名与 `multimodal`
+- 独立模型配置，模型可分别声明上游模型名 `id`、本地别名 `alias`、供应商与 `multimodal`
 - 模型池智能排序（基于可用性、成功率、响应速度与计费方式）
 - 成本感知调度：可标记按次扣费模型，模型池优先使用按量计费模型，按量模型全部不可用时才降级
 - 模型失败容灾：严格按模型组配置顺序逐个尝试，单个模型或供应商失败不会永久屏蔽后续请求
@@ -96,7 +96,7 @@ pnpm install
 
 ```yaml
 # 新版推荐：供应商只保存连接信息，模型单独声明来源与能力。
-# 模型组可引用模型 id、alias 或实际 API 模型名。
+# id 是上游 API 的真实模型名，alias 是插件本地别名；模型组可引用 id 或 alias。
 providers:
   - id: "provider1"
     name: "供应商名称"
@@ -104,20 +104,18 @@ providers:
     api_key: "your-api-key-here"
 
 models:
-  - id: "gemini-flash"
+  - id: "gemini-2.5-flash"
     alias: "flash"
     provider: "provider1"
-    model: "gemini-2.5-flash"
     multimodal: true
-  - id: "text-model"
+  - id: "deepseek-chat"
     alias: "text"
     provider: "provider1"
-    model: "deepseek-chat"
     multimodal: false
 
 model_groups:
   flash:
-    chat_models: ["gemini-flash", "text-model"]
+    chat_models: ["flash", "text"]
     draw_models: []
 
 ---
@@ -134,13 +132,13 @@ DRAW_COMMAND: draw
 # 当当前模型组没有可用多模态对话模型时，Vision 模型先描述图片再喂给主模型
 # 如果模型池中存在 multimodal: true 的对话模型，图片会优先直接交给多模态模型
 # 默认关闭，可使用 #cv 临时强制启用图文转述
-# vision_model 使用独立模型 id，支持按顺序故障转移：
+# vision_model 的 model 字段填写独立模型的 id 或 alias，支持按顺序故障转移：
 #   vision_model:
-#     - model: "gemini-flash"
+#     - model: "flash"
 enable_vision_relay: false
 
 vision_model:
-  - model: "gemini-flash"
+  - model: "flash"
 
 ---
 # 联网搜索配置（可选）
@@ -148,15 +146,16 @@ vision_model:
 # intent_model: 搜索意图分析专用模型（可选，不配则用 Flash 组）
 #   配置独立模型可大幅加快分析速度，推荐使用轻量模型
 #   注意：intent_model 必须与 enable_web_search 平级（不要缩进！）
-#   例:
+#   例（model 填独立模型的 id 或 alias）:
 #   intent_model:
-#     - model: "gemini-flash"
+#     - model: "flash"
 enable_web_search: false
 # intent_model: []
 enable_web_fetch: false
 # MODEL_CHAT_REQUEST_TIMEOUT_MS: 90000  # 普通对话/工具规划/最终回复的单模型超时
 # MODEL_IMAGE_REQUEST_TIMEOUT_MS: 180000 # 绘图请求的单模型超时
 # MODEL_LONG_REQUEST_TIMEOUT_MS: 240000  # 长摘要/大输出请求的单模型超时
+# MODEL_MAX_ATTEMPTS: 4                  # 单轮最多尝试的候选模型数，范围 1-32
 # enable_shell_exec: false # 默认关闭；开启后允许主人让 AI 执行 Shell
 # enable_shell_session: false # 默认关闭；持久 tmux Shell 会话，主人专用，默认会话名 ai-shell
 # SHELL_SESSION_AFTER_SEND_DELAY_MS: 1200 # send 后自动回读窗口快照前等待多久
@@ -494,15 +493,14 @@ AI-Plugin/
 
 ```yaml
 models:
-  - id: "gemini-flash"
+  - id: "c-gemini-2.5-flash"
     alias: "flash"
     provider: "provider1"
-    model: "c-gemini-2.5-flash"
     multimodal: true
     per_call: true
 ```
 
-调度规则：模型池按配置顺序调用；按量计费模型仍优先于按次扣费模型，只有前面的候选请求失败后才继续尝试后续模型。`#ai模型列表` 中按次模型会标注“按次”。不同中转站的按次模型名各异，按各自实际名称填写即可。
+调度规则：模型池按配置顺序调用；按量计费模型仍优先于按次扣费模型，只有前面的候选请求失败后才继续尝试后续模型。单轮最多尝试 `MODEL_MAX_ATTEMPTS` 个候选模型（默认 4，范围 1-32）。`#ai模型列表` 中按次模型会标注“按次”。不同中转站的按次模型名各异，按各自实际名称填写即可。
 
 ## 注意事项
 

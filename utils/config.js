@@ -117,6 +117,8 @@ const defaultConfig = {
     MODEL_IMAGE_REQUEST_TIMEOUT_MS: 180000,
     // 模型请求默认超时（毫秒）：长摘要/大输出请求
     MODEL_LONG_REQUEST_TIMEOUT_MS: 240000,
+    // 单轮模型组最多尝试的候选模型数量
+    MODEL_MAX_ATTEMPTS: 4,
     // tmux 持久 Shell 会话开关（默认关闭，主人专用）
     enable_shell_session: false,
     // tmux 持久 Shell 会话名称
@@ -494,6 +496,14 @@ export const Config = {
     set MODEL_LONG_REQUEST_TIMEOUT_MS(val) {
         const num = Number(val)
         config.MODEL_LONG_REQUEST_TIMEOUT_MS = Number.isFinite(num) && num > 0 ? Math.floor(num) : defaultConfig.MODEL_LONG_REQUEST_TIMEOUT_MS
+    },
+    get MODEL_MAX_ATTEMPTS() {
+        const num = Number(config.MODEL_MAX_ATTEMPTS ?? defaultConfig.MODEL_MAX_ATTEMPTS)
+        return Number.isFinite(num) ? Math.max(1, Math.min(32, Math.floor(num))) : defaultConfig.MODEL_MAX_ATTEMPTS
+    },
+    set MODEL_MAX_ATTEMPTS(val) {
+        const num = Number(val)
+        config.MODEL_MAX_ATTEMPTS = Number.isFinite(num) ? Math.max(1, Math.min(32, Math.floor(num))) : defaultConfig.MODEL_MAX_ATTEMPTS
     },
     get enable_shell_session() { return config.enable_shell_session ?? defaultConfig.enable_shell_session },
     set enable_shell_session(val) { config.enable_shell_session = val === true },

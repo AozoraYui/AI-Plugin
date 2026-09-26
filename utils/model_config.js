@@ -19,16 +19,18 @@ function asBoolean(value, fallback) {
 export function normalizeModelDefinition(raw = {}) {
     if (!isRecord(raw)) return null
 
-    const modelId = asText(raw.model)
     const id = asText(raw.id)
     const providerId = asText(raw.provider)
-    if (!id || !modelId || !providerId) return null
+    if (!id || !providerId || raw.model !== undefined) return null
+
+    const normalized = { ...raw }
+    delete normalized.model
 
     return {
-        ...raw,
+        ...normalized,
         id,
         alias: asText(raw.alias) || id,
-        model_id: modelId,
+        model_id: id,
         provider_id: providerId,
         multimodal: asBoolean(raw.multimodal, true),
         per_call: asBoolean(raw.per_call, false)
@@ -38,7 +40,7 @@ export function normalizeModelDefinition(raw = {}) {
 export function modelReferenceId(reference) {
     if (typeof reference === 'string' || typeof reference === 'number') return asText(reference)
     if (!isRecord(reference)) return ''
-    return asText(reference.id)
+    return asText(reference.alias) || asText(reference.model) || asText(reference.id)
 }
 
 export function resolveModelReference(reference, definitions = [], providerId = '') {

@@ -7,7 +7,6 @@ import { ensureShellSession } from '../utils/shell_session.js'
 import { toolRegistry } from '../tools/index.js'
 import { normalizeModelConfigDocuments, resolveModelReference } from '../utils/model_config.js'
 
-const MAX_REQUEST_ATTEMPTS = 4
 const MAX_INTENT_ATTEMPTS = 3
 const RETRY_BACKOFF_BASE_MS = 150
 const RETRY_BACKOFF_MAX_MS = 1200
@@ -603,6 +602,7 @@ export class AiClient {
                 value.MODEL_CHAT_REQUEST_TIMEOUT_MS !== undefined ||
                 value.MODEL_IMAGE_REQUEST_TIMEOUT_MS !== undefined ||
                 value.MODEL_LONG_REQUEST_TIMEOUT_MS !== undefined ||
+                value.MODEL_MAX_ATTEMPTS !== undefined ||
                 value.enable_file_transfer !== undefined ||
                 value.enable_ai_draw !== undefined ||
                 value.enable_group_admin !== undefined ||
@@ -723,7 +723,7 @@ export class AiClient {
                 if (Array.isArray(rawConfig.FAST_CHAT_TRIGGER_KEYWORDS)) {
                     Config.FAST_CHAT_TRIGGER_KEYWORDS = rawConfig.FAST_CHAT_TRIGGER_KEYWORDS
                 }
-                for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_FOLLOWUP_MAX_ROUNDS', 'SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS', 'SHELL_EXEC_MAX_BUFFER', 'SHELL_SESSION_NAME', 'SHELL_SESSION_CAPTURE_LINES', 'SHELL_SESSION_MAX_OUTPUT_CHARS', 'SHELL_SESSION_AFTER_SEND_DELAY_MS', 'SHELL_SESSION_AFTER_SEND_TIMEOUT_MS', 'SHELL_SESSION_AFTER_SEND_POLL_MS', 'MODEL_CHAT_REQUEST_TIMEOUT_MS', 'MODEL_IMAGE_REQUEST_TIMEOUT_MS', 'MODEL_LONG_REQUEST_TIMEOUT_MS']) {
+                for (const key of ['SHELL_EXEC_TIMEOUT_MS', 'SHELL_EXEC_MAX_TIMEOUT_MS', 'SHELL_EXEC_MAX_OUTPUT_CHARS', 'SHELL_EXEC_FOLLOWUP_MAX_ROUNDS', 'SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS', 'SHELL_EXEC_MAX_BUFFER', 'SHELL_SESSION_NAME', 'SHELL_SESSION_CAPTURE_LINES', 'SHELL_SESSION_MAX_OUTPUT_CHARS', 'SHELL_SESSION_AFTER_SEND_DELAY_MS', 'SHELL_SESSION_AFTER_SEND_TIMEOUT_MS', 'SHELL_SESSION_AFTER_SEND_POLL_MS', 'MODEL_CHAT_REQUEST_TIMEOUT_MS', 'MODEL_IMAGE_REQUEST_TIMEOUT_MS', 'MODEL_LONG_REQUEST_TIMEOUT_MS', 'MODEL_MAX_ATTEMPTS']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
                 for (const key of ['VECTOR_MODEL', 'VECTOR_SERVER_PORT', 'VECTOR_AUTO_CONTEXT_MAX_CHARS']) {
@@ -1456,9 +1456,10 @@ export class AiClient {
 
             lastError = ''
             const requestTimeout = this._resolveRequestTimeout(type, maxTokens, modelGroupKey)
+            const maxAttempts = Config.MODEL_MAX_ATTEMPTS
             let attempt = 0
             for (const { provider, modelId, modelKey, modelConfig, statusKey: poolStatusKey, score } of poolToTry) {
-                if (attempt >= MAX_REQUEST_ATTEMPTS) break
+                if (attempt >= maxAttempts) break
                 if (attempt > 0) await this._waitBeforeFailover(attempt)
                 attempt += 1
                 const statusKey = poolStatusKey || `${provider.id}-${modelKey || modelId}`

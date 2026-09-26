@@ -14,9 +14,8 @@
 #   api_key     API 密钥
 #
 # 独立模型字段说明：
-#   id          模型内部唯一 ID，模型组、intent_model、vision_model 可引用
-#   alias       给人看的别名，可用于管理命令和模型展示
-#   model       实际发送给 API 的模型名
+#   id          上游 API 的真实模型名，请求时直接发送；也是配置中的稳定唯一键
+#   alias       插件本地别名，可用于模型组、管理命令和模型展示
 #   provider    所属供应商 ID
 #   multimodal  是否支持图片输入，默认 true
 #   per_call    是否按次扣费，默认 false
@@ -29,7 +28,7 @@
 #     每组含：
 #       chat_models  对话模型列表（严格按配置顺序调用；失败后继续尝试后续模型）
 #       draw_models  绘图模型列表（不支持绘图填 [] 即可）
-#       填独立模型 id，也可填 alias 或实际 API 模型名
+#       填独立模型 id 或 alias；id 就是实际 API 模型名
 # ================================================================
 
 providers:
@@ -39,34 +38,31 @@ providers:
     api_key: "your-api-key-here"
 
 models:
-  - id: "gemini-flash"
+  - id: "gemini-2.5-flash"
     alias: "flash"
     provider: "your-provider-id"
-    model: "gemini-2.5-flash"
     multimodal: true
     per_call: false
 
-  - id: "gemini-flash-image"
+  - id: "gemini-2.5-flash-image"
     alias: "flash-image"
     provider: "your-provider-id"
-    model: "gemini-2.5-flash-image"
     multimodal: true
 
-  - id: "gemini-pro"
+  - id: "gemini-2.5-pro"
     alias: "pro"
     provider: "your-provider-id"
-    model: "gemini-2.5-pro"
     multimodal: true
 
 model_groups:
   flash:
     chat_models:
-      - "gemini-flash"
+      - "flash"
     draw_models:
-      - "gemini-flash-image"
+      - "flash-image"
   pro:
     chat_models:
-      - "gemini-pro"
+      - "pro"
     draw_models: []
   ultra:
     chat_models: []
@@ -100,14 +96,14 @@ model_groups:
 # 默认关闭，可使用 #cv 临时强制启用图文转述
 #
 # vision_model: 支持配置多个 Vision 模型，按顺序依次尝试
-#   每个条目通过 model 引用独立模型 id:
+#   每个条目的 model 字段填写独立模型的 id 或 alias：
 #     vision_model:
-#       - model: "gemini-flash"
+#       - model: "flash"
 # ================================================
 enable_vision_relay: false
 
 vision_model:
-  - model: "gemini-flash"
+  - model: "flash"
 
 ---
 # ================================================
@@ -117,9 +113,9 @@ vision_model:
 #   如果不配置 intent_model，则使用 Flash 模型组做意图分析
 #   配置独立模型可大幅加快分析速度，推荐使用轻量模型
 #   注意：intent_model 必须与 enable_web_search 平级（不要缩进！）
-#   例:
+#   例（model 填独立模型的 id 或 alias）:
 #   intent_model:
-#     - model: "gemini-flash"
+#     - model: "flash"
 # ================================================
 enable_web_search: false
 # intent_model: []
@@ -147,6 +143,8 @@ enable_web_fetch: false
 # MODEL_CHAT_REQUEST_TIMEOUT_MS: 90000
 # MODEL_IMAGE_REQUEST_TIMEOUT_MS: 180000
 # MODEL_LONG_REQUEST_TIMEOUT_MS: 240000
+# MODEL_MAX_ATTEMPTS: 4
+#   单轮模型组最多按配置顺序尝试多少个候选模型，范围 1-32
 
 # ================================================
 # Shell 工具配置
