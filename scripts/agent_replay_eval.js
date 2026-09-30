@@ -28,7 +28,7 @@ const replayEnabledTools = [
 ]
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput } = await import('../utils/model_output.js')
-const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldPrioritizeCurrentMultimodalTurn } = await import('../utils/message_context.js')
+const { buildParticipantIdentityHint, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldLoadPrivateMemoryContext, shouldPrioritizeCurrentMultimodalTurn } = await import('../utils/message_context.js')
 const { resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
 const { summarizeShellResultForReply } = await import('../utils/shell_result_summary.js')
 const { parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically } = await import('../tools/group_send.js')
@@ -225,6 +225,12 @@ const incidents = [
         id: 'config-edit-not-file-send',
         input: '#c把“[无用插件]发送图片”加入710024443群配置的disable',
         pass: text => hasExplicitLocalFileMutationIntent(text) && !hasExplicitFileSendIntent(text)
+    },
+    {
+        id: 'single-mode-mentioned-user-profile-context',
+        input: '#uc全面评价一下[@2830995401]',
+        pass: text => isThirdPartySubjectQuery(text, '956753394', ['2830995401'])
+            && shouldLoadPrivateMemoryContext({ allowed: true, singleMode: true, targetUserId: '2830995401' })
     },
     {
         id: 'profile-question-not-update',

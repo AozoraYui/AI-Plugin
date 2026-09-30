@@ -36,7 +36,7 @@ const {
 const { classifyAgentRisk, classifyToolCallRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } = await import('../utils/agent_policy.js')
 const { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } = await import('../utils/model_output.js')
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
-const { buildParticipantIdentityHint, expandInlineContent, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldPrioritizeCurrentMultimodalTurn } = await import('../utils/message_context.js')
+const { buildParticipantIdentityHint, expandInlineContent, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldLoadPrivateMemoryContext, shouldPrioritizeCurrentMultimodalTurn } = await import('../utils/message_context.js')
 const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq_face.js')
 const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
@@ -434,6 +434,27 @@ check('询问被@成员印象会识别为第三方主题', isThirdPartySubjectQu
     '956753394',
     ['2830995401']
 ))
+check('“全面评价”会识别为被@成员主题', isThirdPartySubjectQuery(
+    '#c全面评价一下[@2830995401]',
+    '956753394',
+    ['2830995401']
+))
+check('单聊模式明确评价被@成员时加载目标上下文', shouldLoadPrivateMemoryContext({
+    allowed: true,
+    singleMode: true,
+    targetUserId: '2830995401'
+}))
+check('单聊模式不会加载触发者私有上下文', !shouldLoadPrivateMemoryContext({
+    allowed: true,
+    singleMode: true,
+    targetUserId: ''
+}))
+check('当前图文隔离要求优先于目标上下文', !shouldLoadPrivateMemoryContext({
+    allowed: true,
+    singleMode: true,
+    targetUserId: '2830995401',
+    prioritizeCurrentMultimodalTurn: true
+}))
 check('主人询问单个被@成员时将私有记忆主体切换到目标用户', (() => {
     const subject = resolvePrivateMemorySubject('956753394', ['2830995401'], {
         thirdPartyFocused: true,

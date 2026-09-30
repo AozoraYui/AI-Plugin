@@ -12,7 +12,7 @@ import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldRe
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, compactConversationHistory, loadUserMemoryContext } from '../utils/memory_context.js'
-import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldPrioritizeCurrentMultimodalTurn } from '../utils/message_context.js'
+import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldLoadPrivateMemoryContext, shouldPrioritizeCurrentMultimodalTurn } from '../utils/message_context.js'
 import { collectQQFaceImageUrls, describeQQFaceSegment, formatQQFaceSegments } from '../utils/qq_face.js'
 import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parsePluginUpdateRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } from '../utils/pending_actions.js'
@@ -2032,7 +2032,12 @@ export class ChatHandler extends plugin {
             const prioritizeCurrentMultimodalTurn = shouldPrioritizeCurrentMultimodalTurn(originalUserMessage || userMessage, {
                 hasDirectImages: allImages.length > 0
             })
-            const allowPrivateMemoryContext = privateMemorySubject.allowed && !prioritizeCurrentMultimodalTurn
+            const allowPrivateMemoryContext = shouldLoadPrivateMemoryContext({
+                allowed: privateMemorySubject.allowed,
+                singleMode: isSingleMode,
+                targetUserId: targetSubjectUserId,
+                prioritizeCurrentMultimodalTurn
+            })
             if (prioritizeCurrentMultimodalTurn) {
                 groupAliasMemoryText = ''
                 logger.info('[AI-Plugin] 当前图文消息按用户要求隔离上下文：仅保留当前文字和图片')
@@ -2041,7 +2046,7 @@ export class ChatHandler extends plugin {
             let incrementalCheckpoint = null
             let userProfileText = ''
 
-            if (!isSingleMode && allowPrivateMemoryContext) {
+            if (allowPrivateMemoryContext) {
                 const memoryContext = await loadUserMemoryContext(this.conversationManager, memorySubjectUserId, {
                     includeHistory: !thirdPartyFocusedQuery,
                     includeCheckpoint: allowPrivateMemoryContext,

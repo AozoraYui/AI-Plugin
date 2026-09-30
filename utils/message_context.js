@@ -16,6 +16,12 @@ export function isThirdPartySubjectQuery(text = '', actorUserId = '', mentionedU
     return /(?:印象|看法|评价|怎么看|如何看|觉得.{0,8}(?:怎样|怎么样|如何)|是什么样(?:的)?人|性格|人品|了解多少|认识多久|熟悉吗|档案|画像|资料|个人信息|住哪|所在地|城市)/i.test(value)
 }
 
+export function shouldLoadPrivateMemoryContext(options = {}) {
+    if (options.allowed !== true || options.prioritizeCurrentMultimodalTurn === true) return false
+    if (options.singleMode !== true) return true
+    return Boolean(String(options.targetUserId || '').trim())
+}
+
 export function resolvePrivateMemorySubject(actorUserId = '', mentionedUserIds = [], options = {}) {
     const actor = String(actorUserId || '').trim()
     const mentions = normalizeParticipantIds(mentionedUserIds, actor)
