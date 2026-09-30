@@ -23,6 +23,7 @@ tools:
   - group_file_list
   - group_file_download
 priority: 84
+audience: master
 ---
 先区分来源和方向：服务器已有文件发给当前会话用 file_send；当前消息或引用消息里的图片、视频、语音、文件保存到服务器用 file_download；浏览 QQ 群文件区用 group_file_list；把群文件区的指定文件保存到服务器用 group_file_download。群文件区不是聊天消息附件，不能混用工具。
 

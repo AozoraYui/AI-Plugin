@@ -33,7 +33,7 @@ check('所有注册工具至少有一个 Skill 说明', registeredTools.every(na
 
 const maintenance = await selectNames('请读取这个插件的代码，修改配置后运行测试', [
     'workspace_read', 'workspace_patch', 'workspace_verify', 'config_manage', 'shell_exec'
-])
+], { isMaster: true })
 check('代码维护请求命中项目维护技能', maintenance.includes('project-maintenance'))
 
 const research = await selectNames('搜索最新版本并打开官方来源核实', ['web_search', 'web_fetch'])
@@ -57,17 +57,24 @@ check('群聊前情请求命中群上下文技能', groupContext.includes('group
 const groupAction = await selectNames('同意这条入群申请', ['group_request_list', 'group_request_handle'])
 check('群管理动作命中群操作技能', groupAction.includes('group-operations'))
 
-const fileTransfer = await selectNames('把这个日志文件发给我', ['file_send', 'file_download', 'group_file_list', 'group_file_download'])
+const fileTransfer = await selectNames('把这个日志文件发给我', ['file_send', 'file_download', 'group_file_list', 'group_file_download'], { isMaster: true })
 check('服务器文件发送请求命中文件媒体技能', fileTransfer.includes('file-media'))
 
-const groupFile = await selectNames('列一下群文件并包括子文件夹', ['group_file_list', 'group_file_download'])
+const groupFile = await selectNames('列一下群文件并包括子文件夹', ['group_file_list', 'group_file_download'], { isMaster: true })
 check('群文件请求命中文件媒体技能', groupFile.includes('file-media'))
 
-const system = await selectNames('查看服务器 CPU、内存和磁盘状态', ['system_info', 'shell_exec', 'shell_session'])
+const system = await selectNames('查看服务器 CPU、内存和磁盘状态', ['system_info', 'shell_exec', 'shell_session'], { isMaster: true })
 check('服务器状态请求命中系统操作技能', system.includes('system-operations'))
 
-const tmux = await selectNames('读取 ai-shell 的 tmux 输出', ['system_info', 'shell_exec', 'shell_session'])
+const tmux = await selectNames('读取 ai-shell 的 tmux 输出', ['system_info', 'shell_exec', 'shell_session'], { isMaster: true })
 check('持久 Shell 请求命中系统操作技能', tmux.includes('system-operations'))
+
+const nonMasterAdminTool = await selectNames('查看服务器 CPU 和日志', ['shell_exec'], { isMaster: false })
+check('非主人不会注入主人专用系统 Skill', !nonMasterAdminTool.includes('system-operations'))
+const nonMasterFileTool = await selectNames('把这个日志文件发给我', ['file_send'], { isMaster: false })
+check('非主人不会注入主人专用文件 Skill', !nonMasterFileTool.includes('file-media'))
+const inaccessibleTool = await selectNames('把这个日志文件发给我', ['weather'], { isMaster: false })
+check('无可用工具时不注入主人专用 Skill', inaccessibleTool.length === 0)
 
 const unrelated = await selectNames('你好，今天过得怎么样？', ['weather'])
 check('普通寒暄不会误加载技能', unrelated.length === 0, JSON.stringify(unrelated))

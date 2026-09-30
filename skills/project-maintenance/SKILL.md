@@ -23,6 +23,7 @@ tools:
   - config_manage
   - shell_exec
 priority: 95
+audience: master
 ---
 适用范围：用户要阅读、定位、修改、验证插件代码或 YAML/JSON 配置，或者明确要求查看仓库、日志和测试结果。先判断目标属于工作区文件、结构化配置、普通 Shell/仓库操作还是运行时状态；不要为了“查一个文件”直接编造命令。
 

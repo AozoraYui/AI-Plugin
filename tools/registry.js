@@ -659,6 +659,16 @@ class ToolRegistry {
         return [...this.tools.keys()]
     }
 
+    /** 根据操作者身份过滤工具；执行层仍会再次校验 permission。 */
+    getToolsForActor(enabledTools = [], isMaster = false) {
+        const names = [...new Set(Array.isArray(enabledTools) ? enabledTools : [])]
+        if (isMaster === true) return names.filter(name => this.tools.has(name))
+        return names.filter(name => {
+            const tool = this.tools.get(name)
+            return tool && tool.permission !== 'master'
+        })
+    }
+
     /** 生成 Function Calling schema（给支持 FC 的模型用） */
     getFunctionSchemas() {
         return [...this.tools.values()]

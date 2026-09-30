@@ -27,6 +27,7 @@ tools:
   - shell_exec
   - shell_session
 priority: 92
+audience: master
 ---
 选择工具：只查 CPU、内存、负载、磁盘、温度和运行环境用 system_info；短时、一次性且命令明确的服务器命令、日志读取、git 查询用 shell_exec；用户明确提到 tmux/ai-shell/持久会话，或命令需要持续输出、保留状态、交互输入时用 shell_session。不要用 system_info 读取业务日志，也不要为了普通文件内容绕过 workspace 工具。
 

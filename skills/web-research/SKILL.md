@@ -29,7 +29,7 @@ tools:
 
 web_search 参数：query 只保留实体、地点、时间和问题关键词，count 只在用户要求数量时调整；image_count 只有用户明确说“带图/发图片/搜图给我看”才填 1-3，否则必须为 0。不要把搜索摘要当作已核验原文，关键结论需要再用 web_fetch 打开最权威或原始来源。
 
-web_fetch 参数：url 必须来自用户消息或 web_search 返回的真实 URL，不要凭空拼接；max_chars 按所需篇幅设置。HTTP、浏览器渲染和公开 Reader 降级失败时，不要编造正文；登录、验证码、私有页面无法读取时明确说明限制。不要把带敏感 token 的链接交给第三方 Reader，也不要抓取 localhost、私有 IP 或内网 URL。
+web_fetch 当前是主人专用工具；非主人不能因为 Skill 建议而触发它，只能使用当前实际启用的公开工具。参数 url 必须来自用户消息或 web_search 返回的真实 URL，不要凭空拼接；max_chars 按所需篇幅设置。HTTP、浏览器渲染和公开 Reader 降级失败时，不要编造正文；登录、验证码、私有页面无法读取时明确说明限制。不要把带敏感 token 的链接交给第三方 Reader，也不要抓取 localhost、私有 IP 或内网 URL。
 
 weather 参数：city 必须来自用户明确地点，或上下文中明确且可靠的所在地；没有城市时先追问，不要猜“北京/上海”。国际城市优先使用英文名，例如 New York、Tokyo、London。天气工具结果只是查询结果，穿衣和出行建议要标明是基于结果的推断。
 

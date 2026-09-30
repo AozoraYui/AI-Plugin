@@ -2237,9 +2237,16 @@ export class ChatHandler extends plugin {
                 }
             }
 
+            const actorEnabledTools = toolRegistry.getToolsForActor(enabledTools, e.isMaster === true)
+            if (actorEnabledTools.length !== enabledTools.length) {
+                logger.warn('[AI-Plugin] 已按操作者身份过滤不可用工具: ' + enabledTools.filter(name => !actorEnabledTools.includes(name)).join(', '))
+            }
+            enabledTools.splice(0, enabledTools.length, ...actorEnabledTools)
+
             try {
                 const selectedSkills = await selectRelevantSkills(currentToolInstruction || userMessage, {
                     enabledTools,
+                    isMaster: e.isMaster === true,
                     hasImages: allImages.length > 0 || hasLocalImageInput,
                     candidateUrls: extractUrlsFromText(userMessage, 10),
                     maxSkills: 3

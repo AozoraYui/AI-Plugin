@@ -39,12 +39,14 @@ function parseSkillFile(content, filePath) {
     if (!name || !description || !body) return null
 
     const priority = Number(metadata.priority)
+    const audience = normalizeString(metadata.audience, 80).toLowerCase() || 'any'
     return {
         name,
         description,
         triggers: normalizeList(metadata.triggers),
         tools: normalizeList(metadata.tools),
         priority: Number.isFinite(priority) ? Math.max(0, Math.min(100, priority)) : 50,
+        audience,
         body,
         filePath
     }
@@ -95,6 +97,13 @@ export function clearSkillCatalogCache() {
 function scoreSkill(skill, instruction, options = {}) {
     const text = normalizeString(instruction, 12000).toLowerCase()
     if (!text) return { score: 0, matches: [], overlappingTools: [] }
+    if (skill.audience === 'master' && options.isMaster !== true) {
+        return { score: 0, matches: [], overlappingTools: [] }
+    }
+
+    const enabledTools = new Set(Array.isArray(options.enabledTools) ? options.enabledTools : [])
+    const overlappingTools = skill.tools.filter(tool => enabledTools.has(tool))
+    if (overlappingTools.length === 0) return { score: 0, matches: [], overlappingTools: [] }
 
     let score = 0
     const matches = []
@@ -106,8 +115,6 @@ function scoreSkill(skill, instruction, options = {}) {
     }
     if (matches.length === 0) return { score: 0, matches, overlappingTools: [] }
 
-    const enabledTools = new Set(Array.isArray(options.enabledTools) ? options.enabledTools : [])
-    const overlappingTools = skill.tools.filter(tool => enabledTools.has(tool))
     if (overlappingTools.length > 0) score += Math.min(6, overlappingTools.length * 2)
     if (options.hasImages === true && skill.tools.includes('draw_image')) score += 3
     if (Array.isArray(options.candidateUrls) && options.candidateUrls.length > 0 && skill.tools.includes('web_fetch')) score += 2
