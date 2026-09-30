@@ -1,5 +1,9 @@
 import { clearSkillCatalogCache, formatSkillGuidance, getSkillCatalogPath, loadSkillCatalog, selectRelevantSkills } from '../utils/skill_runtime.js'
 
+globalThis.logger = globalThis.logger || { info() {}, warn() {}, error() {}, debug() {} }
+globalThis.Config = globalThis.Config || {}
+const { toolRegistry } = await import('../tools/index.js')
+
 const failures = []
 let passed = 0
 
@@ -13,39 +17,66 @@ function check(name, condition, detail = '') {
     console.error(`FAIL ${name}${detail ? `: ${detail}` : ''}`)
 }
 
+async function selectNames(instruction, enabledTools, options = {}) {
+    const skills = await selectRelevantSkills(instruction, { enabledTools, ...options })
+    return skills.map(skill => skill.name)
+}
+
 clearSkillCatalogCache()
 const catalog = await loadSkillCatalog({ force: true })
-check('技能目录可加载', catalog.length >= 4, `path=${getSkillCatalogPath()}, count=${catalog.length}`)
+const registeredTools = toolRegistry.getToolNames()
+const declaredTools = [...new Set(catalog.flatMap(skill => skill.tools))]
+check('技能目录可加载', catalog.length >= 8, `path=${getSkillCatalogPath()}, count=${catalog.length}`)
 check('技能元数据完整', catalog.every(skill => skill.name && skill.description && skill.body), '存在缺少元数据或正文的技能')
+check('技能引用的工具都已注册', declaredTools.every(name => registeredTools.includes(name)), JSON.stringify(declaredTools.filter(name => !registeredTools.includes(name))))
+check('所有注册工具至少有一个 Skill 说明', registeredTools.every(name => declaredTools.includes(name)), JSON.stringify(registeredTools.filter(name => !declaredTools.includes(name))))
 
-const maintenance = await selectRelevantSkills('请读取这个插件的代码，修改配置后运行测试', {
-    enabledTools: ['workspace_read', 'workspace_patch', 'workspace_verify', 'config_manage', 'shell_exec']
-})
-check('代码维护请求命中项目维护技能', maintenance.some(skill => skill.name === 'project-maintenance'))
+const maintenance = await selectNames('请读取这个插件的代码，修改配置后运行测试', [
+    'workspace_read', 'workspace_patch', 'workspace_verify', 'config_manage', 'shell_exec'
+])
+check('代码维护请求命中项目维护技能', maintenance.includes('project-maintenance'))
 
-const research = await selectRelevantSkills('搜索最新版本并打开官方来源核实', {
-    enabledTools: ['web_search', 'web_fetch']
-})
-check('联网核验请求命中网页研究技能', research.some(skill => skill.name === 'web-research'))
+const research = await selectNames('搜索最新版本并打开官方来源核实', ['web_search', 'web_fetch'])
+check('联网核验请求命中网页研究技能', research.includes('web-research'))
 
-const image = await selectRelevantSkills('用这张参考图生成一张新的图片', {
-    enabledTools: ['draw_image', 'vision_relay'],
-    hasImages: true
-})
-check('图片请求命中图像工作流技能', image.some(skill => skill.name === 'image-workflow'))
+const weather = await selectNames('查一下深圳明天会不会下雨', ['weather'])
+check('天气请求命中网页研究技能', weather.includes('web-research'))
 
-const memory = await selectRelevantSkills('请记住我的长期偏好并更新个人档案', {
-    enabledTools: ['memory_search', 'user_profile_update']
-})
-check('记忆请求命中记忆整理技能', memory.some(skill => skill.name === 'memory-curation'))
+const image = await selectNames('用这张参考图生成一张新的图片', ['draw_image', 'vision_relay'], { hasImages: true })
+check('图片请求命中图像工作流技能', image.includes('image-workflow'))
 
-const unrelated = await selectRelevantSkills('你好，今天过得怎么样？', { enabledTools: ['weather'] })
-check('普通寒暄不会误加载技能', unrelated.length === 0, JSON.stringify(unrelated.map(skill => skill.name)))
-const allToolsGreeting = await selectRelevantSkills('你好，今天过得怎么样？', { enabledTools: catalog.flatMap(skill => skill.tools) })
-check('工具重叠不能单独触发技能', allToolsGreeting.length === 0, JSON.stringify(allToolsGreeting.map(skill => skill.name)))
+const imageQuestion = await selectNames('请描述这张图里有什么，不要生成图片', ['draw_image', 'vision_relay'], { hasImages: true })
+check('看图请求仍命中图像理解技能', imageQuestion.includes('image-workflow'))
 
-const guidance = formatSkillGuidance(maintenance)
+const memory = await selectNames('请记住我的长期偏好并更新个人档案', ['memory_search', 'user_profile_update'])
+check('记忆请求命中记忆整理技能', memory.includes('memory-curation'))
+
+const groupContext = await selectNames('群里刚刚发生了什么，帮我看下前情', ['group_chat_context', 'group_chat_digest', 'group_member_aliases'])
+check('群聊前情请求命中群上下文技能', groupContext.includes('group-context'))
+
+const groupAction = await selectNames('同意这条入群申请', ['group_request_list', 'group_request_handle'])
+check('群管理动作命中群操作技能', groupAction.includes('group-operations'))
+
+const fileTransfer = await selectNames('把这个日志文件发给我', ['file_send', 'file_download', 'group_file_list', 'group_file_download'])
+check('服务器文件发送请求命中文件媒体技能', fileTransfer.includes('file-media'))
+
+const groupFile = await selectNames('列一下群文件并包括子文件夹', ['group_file_list', 'group_file_download'])
+check('群文件请求命中文件媒体技能', groupFile.includes('file-media'))
+
+const system = await selectNames('查看服务器 CPU、内存和磁盘状态', ['system_info', 'shell_exec', 'shell_session'])
+check('服务器状态请求命中系统操作技能', system.includes('system-operations'))
+
+const tmux = await selectNames('读取 ai-shell 的 tmux 输出', ['system_info', 'shell_exec', 'shell_session'])
+check('持久 Shell 请求命中系统操作技能', tmux.includes('system-operations'))
+
+const unrelated = await selectNames('你好，今天过得怎么样？', ['weather'])
+check('普通寒暄不会误加载技能', unrelated.length === 0, JSON.stringify(unrelated))
+const allToolsGreeting = await selectNames('你好，今天过得怎么样？', registeredTools)
+check('工具重叠不能单独触发技能', allToolsGreeting.length === 0, JSON.stringify(allToolsGreeting))
+
+const guidance = formatSkillGuidance(catalog)
 check('技能指导包含权限边界', guidance.includes('不授予任何工具权限'))
+check('技能指导包含完成证据纪律', guidance.includes('完成证据') || guidance.includes('结果纪律'))
 check('技能指导不会无限增长', guidance.length <= 12000)
 
 if (failures.length > 0) {
