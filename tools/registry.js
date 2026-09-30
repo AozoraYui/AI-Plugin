@@ -426,7 +426,7 @@ const TOOL_USAGE_GUIDES = {
             '已入群成员不能用它踢出或管理。'
         ],
         rules: [
-            'approve=true 通过，false 拒绝；多条申请时尽量填写 target，如“幸福的”。'
+            'approve=true 通过，false 拒绝；用户已经明确表达方向时不需要重复确认。多条申请时必须填写 target，如“幸福的”，否则先列出候选。'
         ]
     },
     draw_image: {

@@ -838,7 +838,19 @@ export function isContinuationToolInstruction(text) {
     return new RegExp(`^\\s*${prefix}[,，。!！\\s]*(?:现在)?(?:能不能|能|可以|可不可以)?(?:帮我|给我|麻烦你?)?${action}(?:了吗|了没|吗|嘛|么|吧|一下|下)?[?？!！。,.，\\s]*$`, 'i').test(value)
 }
 
+export function parseExplicitGroupRequestDecision(text = '') {
+    const value = getPrimaryUserInstruction(text).trim()
+    if (!value || isCapabilityOrUsageQuestion(value, '入群申请|加群申请|进群申请|通过申请|拒绝申请')) return null
+    if (/[?？]/.test(value) || /(?:谁|哪个人|什么人|有没有人|是否|怎么|如何|为什么|什么时候).{0,20}(?:通过|同意|批准|允许|拒绝|驳回)/i.test(value)) return null
+    if (/(?:不要|别|不准|先别|取消|暂缓|并非|不是|并不).{0,12}(?:通过|同意|批准|允许|拒绝|驳回|放|让)|(?:不|没)(?:通过|同意|批准|允许|拒绝|驳回)|(?:通过|同意|批准|允许|拒绝|驳回).{0,12}(?:吗|么|还是|或者)/i.test(value)) return null
+
+    const approve = /(?:通过|同意|批准|允许).{0,32}(?:申请|入群|进群|加群)|(?:申请|入群|进群|加群).{0,32}(?:通过|同意|批准|允许)|(?:放|让).{0,16}进来/i.test(value)
+    const reject = /(?:拒绝|驳回).{0,32}(?:申请|入群|进群|加群)|(?:申请|入群|进群|加群).{0,32}(?:拒绝|驳回)/i.test(value)
+    return approve === reject ? null : approve
+}
+
 export function hasExplicitGroupAdminIntent(toolName, text) {
+    if (toolName === 'group_request_handle') return parseExplicitGroupRequestDecision(text) !== null
     const value = getPrimaryUserInstruction(text)
     if (isCapabilityOrUsageQuestion(value, '禁言|解禁|踢人|踢出|移出群|全员禁言|群名片|群昵称|头衔|精华|入群申请|加群申请|进群申请|群管理')) return false
     if (/(?:谁|哪个人|什么人|有没有人).{0,20}(?:通过|同意|拒绝|处理).{0,20}(?:申请|入群|进群|加群)/i.test(value)) return false
@@ -872,8 +884,8 @@ export function hasExplicitGroupFileDownloadIntent(text) {
 export function hasExplicitGroupRequestListIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value || isCapabilityOrUsageQuestion(value, '入群申请|加群申请|进群申请')) return false
-    if (/(?:谁|哪个人|什么人).{0,20}(?:通过|同意|拒绝|处理).{0,20}(?:入群|加群|进群).{0,8}申请/i.test(value)) return false
-    return /(?:看看|查看|列出|有哪些|有什么|谁|待处理|最近).{0,30}(?:入群|加群|进群).{0,8}申请|(?:入群|加群|进群).{0,8}申请.{0,30}(?:列表|有哪些|有什么|谁|待处理)/i.test(value)
+    if (/(?:谁|哪个人|什么人|有没有人).{0,20}(?:通过|同意|拒绝|处理).{0,20}(?:入群|加群|进群).{0,8}申请/i.test(value)) return false
+    return /(?:看看|查看|列出|有哪些|有什么|谁|待处理|最近).{0,30}(?:入群|加群|进群).{0,8}申请|(?:入群|加群|进群).{0,8}申请.{0,30}(?:列表|有哪些|有什么|谁|待处理)|(?:有人|有谁|有没有人).{0,12}(?:申请|加群|进群|入群)(?:了|吗|么|没|没有|[？?]|$)/i.test(value)
 }
 
 export function hasExplicitWeatherIntent(text) {

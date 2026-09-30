@@ -6,10 +6,12 @@
  */
 
 import { toolRegistry } from './registry.js'
+import { parseExplicitGroupRequestDecision } from '../utils/tool_intent.js'
 
 // 入群申请缓存 redis key（与 apps/group_request.js 保持一致）
 export const GROUP_REQUEST_KEY = (groupId, userId) => `AI-Plugin:groupAdd:${groupId}:${userId}`
 export const GROUP_REQUEST_SCAN = (groupId) => `AI-Plugin:groupAdd:${groupId}:*`
+export const GROUP_REQUEST_TTL_SECONDS = 24 * 60 * 60
 
 // 时间单位 → 秒
 const TIME_UNIT = { '秒': 1, '分': 60, '分钟': 60, '小时': 3600, '时': 3600, '天': 86400, '日': 86400 }
@@ -706,12 +708,12 @@ export const groupRequestListTool = {
 export const groupRequestHandleTool = {
     name: 'group_request_handle',
     permission: 'everyone',
-    description: '通过或拒绝某个加群申请。仅主人或群管理员可用，机器人需为管理员。适合"通过xxx的申请""同意那个人进群""拒绝xxx的入群申请"等。需先有待审申请；可用 user_id 精确定位，也可用 target 按昵称/留言模糊定位；若当前群只有一条待审申请，可省略定位参数。',
+    description: '通过或拒绝某个加群申请。仅主人或群管理员可用，机器人需为管理员。用户已明确表达通过或拒绝时，当前群只有一条待审申请可直接处理；多条申请或目标不明确时必须先缩小范围，不得猜测。可用 user_id 精确定位，也可用 target 按昵称/留言模糊定位。',
     functionSchema: {
         type: 'function',
         function: {
             name: 'group_request_handle',
-            description: '处理加群申请（通过/拒绝）。通过 user_id 精确定位，或通过 target 在待审申请昵称/留言中模糊定位。',
+            description: '处理加群申请（通过/拒绝）。明确方向和目标后直接执行；通过 user_id 精确定位，或通过 target 在待审申请昵称/留言中模糊定位。',
             parameters: {
                 type: 'object',
                 properties: {
@@ -735,6 +737,10 @@ export const groupRequestHandleTool = {
         let userId = String(args.user_id || '').trim()
         const target = String(args.target || '').trim()
         if (typeof args.approve !== 'boolean') return '【处理申请失败】请明确说明是通过还是拒绝该申请。'
+        const decision = parseExplicitGroupRequestDecision(context.originalUserMessage || context.userMessage || '')
+        if (decision === null || decision !== args.approve) {
+            return '【处理申请失败】当前指令没有明确授权该通过/拒绝方向，或与工具参数不一致。'
+        }
 
         if (typeof redis === 'undefined' || !redis.get) return '【处理申请失败】redis 不可用，无法读取申请记录。'
         if (!/^\d{5,}$/.test(userId)) {
