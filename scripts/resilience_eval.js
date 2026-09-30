@@ -128,6 +128,9 @@ function testErrorClassification() {
     const network = client._classifyRequestError('AggregateError: connect ECONNRESET')
     assert.equal(network.retryable, true)
     assert.equal(network.scope, 'provider')
+    const ipv6Route = client._classifyRequestError('connect ENETUNREACH 2606:4700::1')
+    assert.equal(ipv6Route.retryable, true)
+    assert.equal(ipv6Route.scope, 'provider')
 
     const formatted = client._formatRequestError({
         message: 'AggregateError',

@@ -195,6 +195,7 @@ export async function fetchWithProxy(url, options = {}) {
             method: options.method || 'GET',
             headers: options.headers || {},
             agent: agent,
+            family: options.family === 4 || options.family === 6 ? options.family : undefined,
             timeout: requestTimeout
         }
         const req = httpModule.request(requestOptions, (res) => {

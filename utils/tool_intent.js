@@ -267,10 +267,11 @@ export function hasExplicitDrawIntent(text, options = {}) {
         || /(?:帮我|给我|请|麻烦你?|想让你|让你|要你|你来|你能不能|能不能|可以帮我).{0,12}做(?:个|一个|一张|一下)?[\s\S]{0,80}(?:图|图片|插画|头像|壁纸|表情包|设定图|立绘)/i.test(value)
         || /(?:^|[，,。；;！？!?\s])做(?:个|一个|一张)[\s\S]{0,80}(?:图|图片|插画|头像|壁纸|表情包|设定图|立绘)[。！!？?\s]*$/i.test(value)
         || /(?:看看|给我看看)(?:你长什么样|你的样子)/i.test(value)
+    const modelGroupDrawIntent = /(?:用|使用|指定|切换到|选择|调用)\s*(?:模型组\s*)?(?:flash|pro|ultra|快速|专业|旗舰)\s*(?:模型组|模型)?[，,。；;：:\s]*(?:再|重新)?\s*(?:画|绘制|生成|创作|生图|作图|做图|做)(?:个|一张|一下|张)?[\s\S]{1,100}/i.test(value)
     const imageEditIntent = hasImageContext
         && /(?:去掉|去除|移除|擦除|消除|抹掉|清理|删掉|去水印|水印|二维码|改成|变成|转成|风格化|手办化|inpaint|inpainting|修图|处理图片|p图|P图)/i.test(value)
         && /(?:图片|照片|图|原图|参考图|这张|那张|刚才|刚刚|水印|二维码|手办化|风格化|修图|p图|P图)/i.test(value)
-    return generationIntent || imageEditIntent
+    return generationIntent || modelGroupDrawIntent || imageEditIntent
 }
 
 export function hasExplicitWebSearchIntent(text) {

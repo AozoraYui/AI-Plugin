@@ -506,7 +506,7 @@ export class AiClient {
         }
 
         const isTransient = status === 408 || status === 409 || status === 425 || status === 429 || status >= 500
-            || /aggregateerror|fetch failed|econn|etimedout|enotfound|socket|timeout|timed out|连接|网络|代理|网关/.test(lower)
+            || /aggregateerror|fetch failed|econn|enetunreach|enetdown|ehostunreach|eai_again|etimedout|enotfound|socket|timeout|timed out|连接|网络|代理|网关/.test(lower)
         return {
             retryable: true,
             scope: isTransient ? 'provider' : 'model',
@@ -1216,7 +1216,16 @@ export class AiClient {
             }
             options.allowPrivateNetwork = true
             
-            const res = await fetchWithProxy(url, options)
+            let res
+            try {
+                res = await fetchWithProxy(url, { ...options, autoDetectProxy: true, family: 4 })
+            } catch (error) {
+                const failure = this._classifyRequestError(error?.message || error)
+                if (type !== 'chat' || !failure.retryable) throw error
+                await this._waitBeforeFailover(1)
+                logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 传输失败，重试当前请求一次`)
+                res = await fetchWithProxy(url, { ...options, autoDetectProxy: true, family: 4 })
+            }
 
             if (!res.ok) {
                 const errBody = await res.text().catch(() => '')
@@ -1377,7 +1386,7 @@ export class AiClient {
             options.allowPrivateNetwork = true
 
             logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 使用 /images/edits（${images.length} 张参考图）`)
-            const res = await fetchWithProxy(url, options)
+            const res = await fetchWithProxy(url, { ...options, autoDetectProxy: true, family: 4 })
             if (!res.ok) throw new Error(`HTTP状态码: ${res.status}`)
 
             const responseText = await res.text()
@@ -1410,7 +1419,7 @@ export class AiClient {
         if (timeout > 0) options.timeout = timeout
         options.allowPrivateNetwork = true
 
-        const res = await fetchWithProxy(url, options)
+        const res = await fetchWithProxy(url, { ...options, autoDetectProxy: true, family: 4 })
         if (!res.ok) throw new Error(`HTTP状态码: ${res.status}`)
 
         const responseText = await res.text()

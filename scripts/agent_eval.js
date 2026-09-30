@@ -690,6 +690,19 @@ for (const [name, text, expected, options = {}] of candidateCases) {
 
 check('委派式依赖补全识别为系统执行', hasExplicitSystemOperationIntent('#c我是在测试你的agent能力，你去补一下依赖'))
 check('询问依赖安装方法不会误执行', !hasExplicitSystemOperationIntent('#c这个项目的依赖应该怎么安装？'))
+check('指定 Flash 模型组绘图不会被安全门拦截', (() => {
+    const guarded = filterToolCallsByIntent([{ name: 'draw_image', args: { prompt: '一只猫', quality: 'flash' } }], '#c用 flash 模型组画一只猫')
+    return hasExplicitDrawIntent('#c用 flash 模型组画一只猫') && guarded.tools.length === 1 && guarded.blocked.length === 0
+})())
+check('指定 Pro 模型组绘图不会被安全门拦截', (() => {
+    const guarded = filterToolCallsByIntent([{ name: 'draw_image', args: { prompt: '一只猫', quality: 'pro' } }], '#c用专业模型画一只猫')
+    return hasExplicitDrawIntent('#c用专业模型画一只猫') && guarded.tools.length === 1 && guarded.blocked.length === 0
+})())
+check('指定 Ultra 模型组绘图不会被安全门拦截', (() => {
+    const guarded = filterToolCallsByIntent([{ name: 'draw_image', args: { prompt: '一只猫', quality: 'ultra' } }], '#c用 ultra 模型组画一只猫')
+    return hasExplicitDrawIntent('#c用 ultra 模型组画一只猫') && guarded.tools.length === 1 && guarded.blocked.length === 0
+})())
+check('模型组绘图能力问句不会误触发绘图', !hasExplicitDrawIntent('#c怎么用 ultra 模型组画图'))
 check('明确更新当前插件可生成规划失败降级参数', (() => {
     const request = parsePluginUpdateRequest('#c诺亚更新一下插件')
     return request?.command === 'git pull' && request?.cwd === 'plugins/AI-Plugin'
