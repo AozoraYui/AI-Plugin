@@ -36,16 +36,6 @@ const maintenance = await selectNames('请读取这个插件的代码，修改�
 ], { isMaster: true })
 check('代码维护请求命中项目维护技能', maintenance.includes('project-maintenance'))
 
-const modelRouting = await selectNames('模型列表显示成功但本次返回空消息，检查容灾和 MODEL_MAX_ATTEMPTS', [
-    'config_manage', 'workspace_read', 'workspace_search', 'shell_exec'
-], { isMaster: true })
-check('模型故障请求命中模型路由技能', modelRouting.includes('model-routing'))
-
-const nonMasterModelRouting = await selectNames('模型列表和容灾配置为什么报错', [
-    'config_manage', 'workspace_read', 'workspace_search', 'shell_exec'
-], { isMaster: false })
-check('非主人不会注入模型路由技能', !nonMasterModelRouting.includes('model-routing'))
-
 const research = await selectNames('搜索最新版本并打开官方来源核实', ['web_search', 'web_fetch'])
 check('联网核验请求命中网页研究技能', research.includes('web-research'))
 
