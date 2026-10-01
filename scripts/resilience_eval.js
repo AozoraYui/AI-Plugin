@@ -8,6 +8,7 @@ global.logger = {
 }
 
 const { AiClient } = await import('../client/AiClient.js')
+const { Config } = await import('../utils/config.js')
 
 function createClient(pool) {
     const client = Object.create(AiClient.prototype)
@@ -47,8 +48,8 @@ async function testProviderFailoverBudget() {
 
     const result = await client.makeRequest('chat', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] })
     assert.equal(result.success, true)
-    assert.deepEqual(calls, ['qianye', 'qianye', 'backup'])
-    assert.equal(client.providerStatus.qianye.fail_count, 2)
+    assert.deepEqual(calls, ['qianye', 'backup'])
+    assert.equal(client.providerStatus.qianye.fail_count, 1)
 }
 
 async function testConfiguredOrderBeatsHealthScore() {
@@ -77,7 +78,7 @@ async function testConfiguredOrderBeatsHealthScore() {
     assert.deepEqual(calls, ['configured-first'])
 }
 
-async function testInterleavedProvidersFollowConfiguredOrder() {
+async function testModelSpecificFailureKeepsConfiguredOrder() {
     const calls = []
     const client = createClient([
         model('first-provider', 'first-model'),
@@ -94,6 +95,43 @@ async function testInterleavedProvidersFollowConfiguredOrder() {
     const result = await client.makeRequest('chat', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] })
     assert.equal(result.success, true)
     assert.deepEqual(calls, ['first-provider/first-model', 'second-provider/second-model'])
+}
+
+async function testProviderFailurePrioritizesOtherProvider() {
+    const calls = []
+    const client = createClient([
+        model('qianye', 'empty-response'),
+        model('qianye', 'same-provider-backup', 1),
+        model('backup', 'cross-provider', 2)
+    ])
+    client.attemptRequest = async (_type, _payload, provider, modelId) => {
+        calls.push(`${provider.id}/${modelId}`)
+        return provider.id === 'backup'
+            ? { success: true, data: 'ok' }
+            : { success: false, error: 'API业务错误: AI返回了空消息' }
+    }
+
+    const result = await client.makeRequest('chat', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] })
+    assert.equal(result.success, true)
+    assert.deepEqual(calls, ['qianye/empty-response', 'backup/cross-provider'])
+}
+
+async function testFailureMessageReportsUntriedCandidates() {
+    const client = createClient([
+        model('qianye', 'first'),
+        model('backup', 'second', 1),
+        model('third', 'third', 2)
+    ])
+    const previousMaxAttempts = Config.MODEL_MAX_ATTEMPTS
+    Config.MODEL_MAX_ATTEMPTS = 1
+    try {
+        client.attemptRequest = async () => ({ success: false, error: 'API业务错误: AI返回了空消息' })
+        const result = await client.makeRequest('chat', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] })
+        assert.match(result.error, /已尝试 1\/3 个候选模型/)
+        assert.match(result.error, /仍有 2 个候选未尝试/)
+    } finally {
+        Config.MODEL_MAX_ATTEMPTS = previousMaxAttempts
+    }
 }
 
 async function testModelFailureUsesSameProviderBackup() {
@@ -131,6 +169,9 @@ function testErrorClassification() {
     const ipv6Route = client._classifyRequestError('connect ENETUNREACH 2606:4700::1')
     assert.equal(ipv6Route.retryable, true)
     assert.equal(ipv6Route.scope, 'provider')
+    const emptyResponse = client._classifyRequestError('API业务错误: AI返回了空消息')
+    assert.equal(emptyResponse.retryable, true)
+    assert.equal(emptyResponse.scope, 'provider')
 
     const formatted = client._formatRequestError({
         message: 'AggregateError',
@@ -209,7 +250,7 @@ async function testLaterProviderRemainsReachableWithinAttemptBudget() {
     }
     const result = await client.makeRequest('chat', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] })
     assert.equal(result.success, true)
-    assert.deepEqual(calls, ['first', 'first', 'second', 'third'])
+    assert.deepEqual(calls, ['first', 'second', 'first', 'third'])
 }
 
 async function testDirectModelProbe() {
@@ -325,7 +366,9 @@ async function testVisionRelayAutoDiscoversUnlistedChatFallback() {
 
 await testProviderFailoverBudget()
 await testConfiguredOrderBeatsHealthScore()
-await testInterleavedProvidersFollowConfiguredOrder()
+await testModelSpecificFailureKeepsConfiguredOrder()
+await testProviderFailurePrioritizesOtherProvider()
+await testFailureMessageReportsUntriedCandidates()
 await testModelFailureUsesSameProviderBackup()
 testErrorClassification()
 testProviderStatsRecordFailuresWithoutCircuit()
@@ -337,4 +380,4 @@ await testAllModelTargetsCoverChatAndImage()
 await testAllModelProbeContinuesAfterUnexpectedFailure()
 await testMultimodalVisionRelayDependsOnConfiguration()
 await testVisionRelayAutoDiscoversUnlistedChatFallback()
-console.log('Resilience eval: 12 passed, 0 failed')
+console.log('Resilience eval: 14 passed, 0 failed')

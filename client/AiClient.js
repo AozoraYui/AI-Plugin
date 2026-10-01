@@ -505,6 +505,16 @@ export class AiClient {
             }
         }
 
+        const isEmptyResponse = /empty response|empty message|空消息|空响应/.test(lower)
+        if (isEmptyResponse) {
+            return {
+                retryable: true,
+                scope: 'provider',
+                reason: '上游返回空响应',
+                error: text
+            }
+        }
+
         const isTransient = status === 408 || status === 409 || status === 425 || status === 429 || status >= 500
             || /aggregateerror|fetch failed|econn|enetunreach|enetdown|ehostunreach|eai_again|etimedout|enotfound|socket|timeout|timed out|连接|网络|代理|网关/.test(lower)
         return {
@@ -551,6 +561,14 @@ export class AiClient {
         logger.debug(`[AI-Plugin] 模型排序: ${logging}`)
 
         return ordered
+    }
+
+    _prioritizeProviderFallback(pool, failedProviderId) {
+        const index = pool.findIndex(item => String(item.provider?.id || item.provider?.name || '') !== String(failedProviderId || ''))
+        if (index <= 0) return false
+        const [candidate] = pool.splice(index, 1)
+        pool.unshift(candidate)
+        return true
     }
 
     loadModelsConfig() {
@@ -1456,19 +1474,21 @@ export class AiClient {
         }
 
         if (modelPool && modelPool.length > 0) {
-            // 智能排序模型池
+            // 保留配置顺序，并为日志记录历史状态评分
             const sortedPool = this._sortModelPool(modelPool)
 
-            logger.debug(`[AI-Plugin] 模型池: 共 ${sortedPool.length} 个，按配置顺序尝试，供应商故障不会进入全局冷却`)
+            logger.debug(`[AI-Plugin] 模型池: 共 ${sortedPool.length} 个，按配置顺序起步；供应商级失败会动态优先切换，且不会进入全局冷却`)
 
-            const poolToTry = sortedPool
+            const poolToTry = [...sortedPool]
+            const candidateCount = poolToTry.length
+            logger.debug(`[AI-Plugin] 模型容灾初始顺序: ${poolToTry.map(item => `${item.provider.name}/${item.modelId}`).join(' -> ')}`)
 
             lastError = ''
             const requestTimeout = this._resolveRequestTimeout(type, maxTokens, modelGroupKey)
             const maxAttempts = Config.MODEL_MAX_ATTEMPTS
             let attempt = 0
-            for (const { provider, modelId, modelKey, modelConfig, statusKey: poolStatusKey, score } of poolToTry) {
-                if (attempt >= maxAttempts) break
+            while (poolToTry.length > 0 && attempt < maxAttempts) {
+                const { provider, modelId, modelKey, modelConfig, statusKey: poolStatusKey, score } = poolToTry.shift()
                 if (attempt > 0) await this._waitBeforeFailover(attempt)
                 attempt += 1
                 const statusKey = poolStatusKey || `${provider.id}-${modelKey || modelId}`
@@ -1486,6 +1506,9 @@ export class AiClient {
                 }
 
                 const failure = this._classifyRequestError(result.error)
+                if (failure.scope === 'provider' && this._prioritizeProviderFallback(poolToTry, provider.id)) {
+                    logger.info(`[AI-Plugin] ${provider.name}(${modelId}) ${failure.reason || '供应商级失败'}，优先尝试其他供应商候选`)
+                }
                 this._recordModelFail(statusKey)
                 this._recordProviderFail(provider.id, failure)
                 this.scheduleModelStatusSave()
@@ -1493,7 +1516,11 @@ export class AiClient {
                 lastError += `[${provider.name}-${modelId}]: ${result.error}\n`
             }
 
-            const errorMessage = `模型组 [${modelGroupKey}] 中的容灾候选均尝试失败。\n具体错误:\n${lastError.trim() || '没有可用的健康供应商，已避免继续重试。'}`
+            const remainingCandidates = Math.max(0, candidateCount - attempt)
+            const attemptSummary = remainingCandidates > 0
+                ? `本轮已尝试 ${attempt}/${candidateCount} 个候选模型，受 MODEL_MAX_ATTEMPTS=${maxAttempts} 限制，仍有 ${remainingCandidates} 个候选未尝试。`
+                : `本轮已尝试全部 ${attempt} 个候选模型。`
+            const errorMessage = `模型组 [${modelGroupKey}] 容灾失败：${attemptSummary}\n具体错误:\n${lastError.trim() || '没有可用的健康供应商，已避免继续重试。'}`
             logger.error(`[AI-Plugin] ${errorMessage}`)
             return { success: false, error: `${errorMessage}` }
         } else {

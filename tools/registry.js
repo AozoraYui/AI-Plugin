@@ -75,7 +75,10 @@ const TOOL_USAGE_GUIDES = {
         rules: [
             '读取整个文件 action=read；读取字段 action=get；只校验语法 action=validate。',
             '更新时 action=update，并明确填写 key_path、operation 和必要的 value。',
-            '列表增删优先 append/remove；覆盖字段才使用 set；默认保留 backup=true。'
+            '列表增删优先 append/remove；覆盖字段才使用 set；默认保留 backup=true。',
+            'MODEL_MAX_ATTEMPTS 是单次请求的容灾尝试上限，不是模型数量；调大可能增加延迟和消耗，修改前应结合候选模型数量说明影响。',
+            '模型不存在、参数错误等模型级失败优先尝试同供应商备用模型；网络故障、认证/余额异常或上游空响应应优先切换其他供应商。',
+            '#ai模型列表中的成功率和延迟是历史统计，不是实时探活结果；不要仅凭 ✅ 断言模型当前一定可用。'
         ]
     },
     workspace_list: {

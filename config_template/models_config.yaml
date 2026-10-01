@@ -144,7 +144,7 @@ enable_web_fetch: false
 # MODEL_IMAGE_REQUEST_TIMEOUT_MS: 180000
 # MODEL_LONG_REQUEST_TIMEOUT_MS: 240000
 # MODEL_MAX_ATTEMPTS: 4
-#   单轮模型组最多按配置顺序尝试多少个候选模型，范围 1-32
+#   单轮模型组最多尝试多少个候选模型，范围 1-32；供应商级故障/空响应会优先切换到其他供应商
 
 # ================================================
 # Shell 工具配置

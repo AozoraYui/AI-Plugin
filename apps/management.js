@@ -408,9 +408,10 @@ export class ManagementHandler extends plugin {
             const total = (status.success_count || 0) + (status.fail_count || 0)
             if (total === 0) return " (未使用)"
 
-            const rate = Math.round((status.success_count || 0) / total * 100)
-            let extraInfo = `成功率${rate}%`
-            if (status.avg_latency_ms) extraInfo += ` | 延迟${Math.round(status.avg_latency_ms / 1000)}s`
+            const successCount = status.success_count || 0
+            const rate = Math.round(successCount / total * 100)
+            let extraInfo = `历史成功率${rate}%（${successCount}/${total}）`
+            if (status.avg_latency_ms) extraInfo += ` | 历史延迟${Math.round(status.avg_latency_ms / 1000)}s`
             const icon = rate < 50 ? '❌' : '✅'
             return ` ${icon} ${extraInfo}`
         }
