@@ -10,7 +10,7 @@ import { GROUP_REQUEST_KEY, GROUP_REQUEST_TTL_SECONDS } from '../tools/group_adm
 export class AIGroupRequest extends plugin {
     constructor() {
         super({
-            name: 'AI入群申请监听',
+            name: '[AI插件]AI入群申请监听',
             dsc: '记录加群申请供 AI 审核',
             event: 'request.group.add',
             priority: 5000

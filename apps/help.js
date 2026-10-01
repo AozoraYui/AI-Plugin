@@ -5,7 +5,7 @@ import { resolveModelDisplay, resolveModelGroup } from '../utils/common.js'
 export class HelpHandler extends plugin {
     constructor() {
         super({
-            name: 'AI帮助',
+            name: '[AI插件]AI帮助',
             dsc: '显示AI插件帮助信息',
             event: 'message',
             priority: 1148,

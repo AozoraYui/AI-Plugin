@@ -11,7 +11,7 @@ const PLUGIN_DIR = path.resolve(__dirname, '..')
 export class UpdateHandler extends plugin {
     constructor() {
         super({
-            name: 'AI插件更新',
+            name: '[AI插件]AI插件更新',
             dsc: 'git pull 更新 AI-Plugin',
             event: 'message',
             priority: 1150,

@@ -1756,7 +1756,7 @@ export class ChatHandler extends plugin {
     constructor() {
         const chatCmd = Config.CHAT_COMMAND
         super({
-            name: 'AI对话',
+            name: '[AI插件]AI对话',
             dsc: '与AI进行智能对话',
             event: 'message',
             priority: -9101,

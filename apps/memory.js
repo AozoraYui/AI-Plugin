@@ -13,7 +13,7 @@ import { updateUserProfileFromSummary } from '../utils/user_profile.js'
 export class MemoryHandler extends plugin {
     constructor() {
         super({
-            name: 'AI记忆管理',
+            name: '[AI插件]AI记忆管理',
             dsc: '管理AI的记忆锚点和总结',
             event: 'message',
             priority: 1146,

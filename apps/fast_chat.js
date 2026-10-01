@@ -1224,7 +1224,7 @@ function formatFastChatToolInjection(toolName, result) {
 export class FastChatHandler extends plugin {
     constructor() {
         super({
-            name: 'AI畅聊',
+            name: '[AI插件]AI畅聊',
             dsc: '群消息捕获与诺亚触发回复',
             event: 'message',
             priority: 10000,

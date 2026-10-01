@@ -22,7 +22,7 @@ export class ImageHandler extends plugin {
     constructor() {
         const drawCmd = Config.DRAW_COMMAND
         super({
-            name: 'AI作图',
+            name: '[AI插件]AI作图',
             dsc: '使用AI生成图片',
             event: 'message',
             priority: -9101,

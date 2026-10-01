@@ -114,7 +114,7 @@ function isForwardMessage(message) {
 export class OutboundMessageCapture extends plugin {
     constructor() {
         super({
-            name: 'AI出站消息记录',
+            name: '[AI插件]AI出站消息记录',
             dsc: '记录机器人发送的群消息并缓存合并转发原文',
             event: 'message',
             priority: -10000,

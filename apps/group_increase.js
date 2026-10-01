@@ -7,7 +7,7 @@ import {
 export class AIGroupIncrease extends plugin {
     constructor() {
         super({
-            name: 'AI群成员入群记录',
+            name: '[AI插件]AI群成员入群记录',
             dsc: '记录群成员实际入群事件供 AI 查询最近新成员',
             event: 'notice.group.increase',
             priority: 5000

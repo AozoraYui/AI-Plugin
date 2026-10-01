@@ -44,7 +44,7 @@ function saveRuntimeSwitch(key, value) {
 export class ManagementHandler extends plugin {
     constructor() {
         super({
-            name: 'AI管理',
+            name: '[AI插件]AI管理',
             dsc: 'AI插件管理功能',
             event: 'message',
             priority: 1140,
