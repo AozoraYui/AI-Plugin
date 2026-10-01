@@ -48,6 +48,25 @@ function containsCharacterMultiset(candidate = '', query = '') {
     return true
 }
 
+function longestCommonSubstringLength(left = '', right = '') {
+    let longest = 0
+    const previous = new Array(right.length + 1).fill(0)
+    for (let leftIndex = 1; leftIndex <= left.length; leftIndex++) {
+        const current = new Array(right.length + 1).fill(0)
+        for (let rightIndex = 1; rightIndex <= right.length; rightIndex++) {
+            if (left[leftIndex - 1] !== right[rightIndex - 1]) continue
+            current[rightIndex] = previous[rightIndex - 1] + 1
+            longest = Math.max(longest, current[rightIndex])
+        }
+        for (let index = 0; index <= right.length; index++) previous[index] = current[index]
+    }
+    return longest
+}
+
+function extractCjk(value = '') {
+    return [...value].filter(character => /[\u4e00-\u9fff]/u.test(character)).join('')
+}
+
 export function scoreWorkspaceFilenameMatch(fileName = '', query = '') {
     const rawName = String(fileName || '').toLowerCase()
     const rawQuery = String(query || '').trim().toLowerCase()
@@ -59,10 +78,15 @@ export function scoreWorkspaceFilenameMatch(fileName = '', query = '') {
     if (!normalizedName || !normalizedQuery) return 0
     if (normalizedName.includes(normalizedQuery)) return 95
 
-    const cjkQuery = /^[\u4e00-\u9fff]{4,16}$/u.test(normalizedQuery)
-    const cjkName = /^[\u4e00-\u9fff]{2,40}$/u.test(normalizedName)
-    if (cjkQuery && cjkName && containsCharacterMultiset(normalizedName, normalizedQuery)) {
-        return Math.max(60, 88 - Math.max(0, normalizedName.length - normalizedQuery.length) * 2)
+    const cjkQuery = extractCjk(normalizedQuery)
+    const cjkName = extractCjk(normalizedName)
+    if (cjkQuery.length >= 4 && cjkName.length >= 2 && containsCharacterMultiset(cjkName, cjkQuery)) {
+        return Math.max(60, 88 - Math.max(0, cjkName.length - cjkQuery.length) * 2)
+    }
+
+    const commonCjkLength = longestCommonSubstringLength(cjkName, cjkQuery)
+    if (commonCjkLength >= 3) {
+        return Math.max(40, 70 - Math.max(0, cjkName.length - commonCjkLength) * 2)
     }
     return 0
 }

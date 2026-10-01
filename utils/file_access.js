@@ -72,7 +72,7 @@ export function normalizeFuzzyFileName(value) {
     return String(value || '')
         .normalize('NFKC')
         .toLowerCase()
-        .replace(/(?:这个|那个|刚才|上面|前面|名为|名字叫|叫做|叫|插件|源码|源文件|脚本|文件|目录)+/g, '')
+        .replace(/(?:有没有|是否|名字|名称|接近|相近|类似|相关|找一下|找找|看一下|看下|看看|查一下|查找|搜索|搜一下|一个|这个|那个|刚才|上面|前面|名为|名字叫|叫做|叫|插件|源码|源文件|脚本|文件|目录|的)+/g, '')
         .replace(/\.(?:tar\.gz|[a-z0-9]{1,8})$/i, '')
         .replace(/[\s_.\-–—()（）\[\]【】'"“”‘’]+/g, '')
 }
