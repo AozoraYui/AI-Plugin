@@ -381,14 +381,22 @@ const TOOL_USAGE_GUIDES = {
     group_member_list: {
         capabilities: [
             '查看当前 QQ 群成员列表，或按昵称、群名片、QQ 搜索成员。',
-            '返回成员 QQ、昵称/名片和身份信息，供确认对象或回答成员列表问题。'
+            '返回成员 QQ、昵称/名片和身份信息，供确认对象或回答成员列表问题。',
+            '当协议返回 join_time，或插件已记录 group_increase 入群事件时，可按真实入群时间查询最近加入成员。'
         ],
         useWhen: [
             '操作者具备权限且问“群里有哪些成员/查看群成员/找昵称 xxx 的人”时使用。',
+            '用户问“最近有哪些新成员/谁刚进群/最近加入了谁”时使用，并设置 recent_limit 或 sort=join_time_desc。',
             '群管理目标只有昵称且可能重名时，可先用它搜索。'
         ],
         avoid: [
-            '不要用于查询外号称呼记忆；那是 group_member_aliases。'
+            '不要用于查询外号称呼记忆；那是 group_member_aliases。',
+            '不要把 get_group_member_list 的返回顺序当作入群顺序；没有 join_time 或本地入群事件记录时必须明确说无法判断。',
+            '不要把 group_request_list 的申请时间当作实际入群时间；申请可能未通过，也可能延迟入群。'
+        ],
+        rules: [
+            'recent_limit 只限制最近结果条数；优先按 join_time 倒序，结果不完整时必须说明时间覆盖范围。',
+            '本地入群事件历史只覆盖插件开始监听后的成员；无法追溯监听前的历史成员。'
         ]
     },
     group_member_resolve: {

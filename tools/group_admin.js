@@ -12,6 +12,9 @@ import { parseExplicitGroupRequestDecision } from '../utils/tool_intent.js'
 export const GROUP_REQUEST_KEY = (groupId, userId) => `AI-Plugin:groupAdd:${groupId}:${userId}`
 export const GROUP_REQUEST_SCAN = (groupId) => `AI-Plugin:groupAdd:${groupId}:*`
 export const GROUP_REQUEST_TTL_SECONDS = 24 * 60 * 60
+export const GROUP_INCREASE_KEY = (groupId, userId, timestamp) => `AI-Plugin:groupIncrease:${groupId}:${timestamp}:${userId}`
+export const GROUP_INCREASE_SCAN = (groupId) => `AI-Plugin:groupIncrease:${groupId}:*`
+export const GROUP_INCREASE_TTL_SECONDS = 180 * 24 * 60 * 60
 
 // 时间单位 → 秒
 const TIME_UNIT = { '秒': 1, '分': 60, '分钟': 60, '小时': 3600, '时': 3600, '天': 86400, '日': 86400 }
@@ -148,18 +151,41 @@ async function preCheck(event, options = {}) {
     return { group, opRole, botRole }
 }
 
-function normalizeMemberInfo(info = {}) {
+function normalizeUnixTime(value) {
+    if (value instanceof Date) return value.getTime()
+    const number = Number(value)
+    if (Number.isFinite(number) && number > 0) return number < 1e12 ? number * 1000 : number
+    if (typeof value === 'string' && value.trim()) {
+        const parsed = Date.parse(value)
+        if (Number.isFinite(parsed)) return parsed
+    }
+    return 0
+}
+
+export function normalizeMemberInfo(info = {}) {
     const userId = String(info.user_id || info.userId || info.uin || info.uid || '').trim()
+    const joinTime = normalizeUnixTime(info.join_time ?? info.joinTime)
+    const lastSentTime = normalizeUnixTime(info.last_sent_time ?? info.lastSentTime)
     return {
         userId,
         nickname: info.nickname || info.nick || '',
         card: info.card || info.card_name || '',
         role: normalizeRole(info.role),
-        title: info.title || info.special_title || ''
+        title: info.title || info.special_title || '',
+        ...(joinTime ? { joinTime } : {}),
+        ...(lastSentTime ? { lastSentTime } : {})
     }
 }
 
 async function getGroupMembers(event, group) {
+    if (event?.bot?.sendApi) {
+        try {
+            const res = await event.bot.sendApi('get_group_member_list', { group_id: Number(event.group_id) })
+            const data = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
+            const list = data.map(normalizeMemberInfo).filter(m => m.userId)
+            if (list.length > 0) return list
+        } catch {}
+    }
     if (group?.getMemberMap) {
         try {
             const map = await group.getMemberMap()
@@ -170,14 +196,32 @@ async function getGroupMembers(event, group) {
         const list = [...group.memberMap.values()].map(normalizeMemberInfo).filter(m => m.userId)
         if (list.length > 0) return list
     }
-    if (event?.bot?.sendApi) {
-        try {
-            const res = await event.bot.sendApi('get_group_member_list', { group_id: Number(event.group_id) })
-            const data = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
-            return data.map(normalizeMemberInfo).filter(m => m.userId)
-        } catch { /* ignore */ }
-    }
     return []
+}
+
+async function getGroupIncreaseHistory(groupId) {
+    if (!groupId || typeof redis === 'undefined' || !redis.keys || !redis.get) return []
+    const records = []
+    try {
+        const keys = await redis.keys(GROUP_INCREASE_SCAN(groupId))
+        for (const key of keys) {
+            try {
+                const raw = await redis.get(key)
+                if (!raw) continue
+                const record = JSON.parse(raw)
+                const joinTime = normalizeUnixTime(record.join_time ?? record.joinTime ?? record.time)
+                const userId = String(record.user_id || record.userId || '').trim()
+                if (userId && joinTime) records.push({ ...record, user_id: userId, joinTime })
+            } catch {}
+        }
+    } catch {}
+    return records.sort((a, b) => b.joinTime - a.joinTime)
+}
+
+function formatMemberJoinTime(value) {
+    const time = normalizeUnixTime(value)
+    if (!time) return ''
+    return new Date(time).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
 }
 
 function extractMentionedUserIds(event) {
@@ -521,17 +565,19 @@ export const groupEssenceTool = {
 export const groupMemberListTool = {
     name: 'group_member_list',
     permission: 'everyone',
-    description: '查看当前 QQ 群成员列表或按昵称/群名片搜索成员。仅主人或群管理员可用。适合"群里有哪些成员""查一下群成员""找一下昵称叫xxx的人"等。',
+    description: '查看当前 QQ 群成员列表、搜索成员，或按真实入群时间查询最近加入的成员。仅主人或群管理员可用。',
     functionSchema: {
         type: 'function',
         function: {
             name: 'group_member_list',
-            description: '列出或搜索当前群成员。仅主人或群管理员可用。',
+            description: '列出或搜索当前群成员；查询最近加入成员时必须依据真实入群时间或已记录的入群事件。仅主人或群管理员可用。',
             parameters: {
                 type: 'object',
                 properties: {
                     query: { type: 'string', description: '可选，按昵称、群名片或 QQ 号搜索成员；不填则列出成员列表。' },
-                    limit: { type: 'number', description: '可选，最多返回多少名成员，默认 80，最大 200。' }
+                    limit: { type: 'number', description: '可选，最多返回多少名成员，默认 80，最大 200。' },
+                    recent_limit: { type: 'number', description: '可选，用户问“最近/新加入成员”时填写要返回的最近人数；只依据 join_time 或已记录的真实入群事件，不得把成员列表顺序当入群顺序。' },
+                    sort: { type: 'string', enum: ['default', 'join_time_desc'], description: '可选；查询最近入群成员时使用 join_time_desc。没有真实时间时不得猜测。' }
                 },
                 required: []
             }
@@ -545,31 +591,63 @@ export const groupMemberListTool = {
         if (members.length === 0) return '【群成员查询失败】无法读取群成员列表，当前协议端可能不支持。'
 
         const query = String(args.query || '').trim()
-        const limit = Math.min(Math.max(Number(args.limit) || 80, 1), 200)
-        const matched = query ? matchMembers(members, query) : members
+        const requestedRecentLimit = Number(args.recent_limit)
+        const recentRequested = (Number.isFinite(requestedRecentLimit) && requestedRecentLimit > 0)
+            || args.sort === 'join_time_desc'
+            || /最近|新成员|新加入|刚入群|刚加入/.test(String(context.originalUserMessage || context.userMessage || ''))
+        const history = recentRequested ? await getGroupIncreaseHistory(event.group_id) : []
+        const historyByUser = new Map()
+        for (const record of history) {
+            if (!historyByUser.has(record.user_id)) historyByUser.set(record.user_id, record)
+        }
+        const enrichedMembers = members.map(member => {
+            if (member.joinTime) return member
+            const record = historyByUser.get(member.userId)
+            return record ? { ...member, joinTime: record.joinTime, joinTimeSource: 'group_increase' } : member
+        })
+        const knownJoinTimeCount = enrichedMembers.filter(member => member.joinTime).length
+        const recentUnavailable = recentRequested && knownJoinTimeCount === 0
+        const matched = query ? matchMembers(enrichedMembers, query) : enrichedMembers
+        if (recentRequested && !recentUnavailable) matched.sort((a, b) => (b.joinTime || 0) - (a.joinTime || 0))
+        const recentLimit = Math.min(Math.max(requestedRecentLimit || 10, 1), 200)
+        const limit = Math.min(Math.max(Number(args.limit) || (recentRequested ? recentLimit : 80), 1), 200)
         return {
             ok: true,
             query,
             total: members.length,
             matched: matched.length,
             limit,
-            members: matched.slice(0, limit)
+            recentRequested,
+            recentUnavailable,
+            knownJoinTimeCount,
+            historyCount: history.length,
+            members: recentUnavailable ? [] : matched.slice(0, limit)
         }
     },
     formatResult(data) {
         if (typeof data === 'string') return data
         if (!data?.ok) return String(data || '')
+        if (data.recentRequested && data.recentUnavailable) {
+            return `\n\n【最近入群成员】当前群成员接口和插件已记录的入群事件都没有提供可用的入群时间，无法可靠判断谁是最近加入的成员。当前成员列表的排列顺序不代表入群先后；待适配器返回 join_time 或插件开始监听入群事件后，才能继续追踪。请不要把普通成员列表前排当作新成员。`
+        }
         if (data.matched === 0) return `\n\n【群成员查询结果】没有找到匹配「${data.query}」的成员。请如实告知操作者。`
-        const title = data.query
-            ? `【群成员查询结果】全群 ${data.total} 人，匹配「${data.query}」共 ${data.matched} 人`
-            : `【群成员列表】全群 ${data.total} 人`
+        const title = data.recentRequested
+            ? `【最近入群成员】当前群 ${data.total} 人，已按真实入群时间倒序，显示 ${data.members.length} 人`
+            : data.query
+                ? `【群成员查询结果】全群 ${data.total} 人，匹配「${data.query}」共 ${data.matched} 人`
+                : `【群成员列表】全群 ${data.total} 人`
         const lines = data.members.map((m, i) => {
             const names = [m.card ? `群名片：${m.card}` : '', m.nickname ? `昵称：${m.nickname}` : ''].filter(Boolean).join('，') || '无名称'
             const role = m.role === 'owner' ? '群主' : (m.role === 'admin' ? '管理员' : '成员')
-            return `${i + 1}. ${names}，QQ：${m.userId}，身份：${role}${m.title ? `，头衔：${m.title}` : ''}`
+            const joinTime = m.joinTime ? `，入群时间：${formatMemberJoinTime(m.joinTime)}` : ''
+            return `${i + 1}. ${names}，QQ：${m.userId}，身份：${role}${m.title ? `，头衔：${m.title}` : ''}${joinTime}`
         })
         const omitted = data.matched > data.members.length ? `\n（仅显示前 ${data.members.length} 人，仍有 ${data.matched - data.members.length} 人未列出。）` : ''
-        return `\n\n${title}：\n${lines.join('\n')}${omitted}\n【转述要求】请按上面实际结果回复，不要编造成员。`
+        const coverage = data.recentRequested && data.knownJoinTimeCount < data.total
+            ? `\n（仅 ${data.knownJoinTimeCount}/${data.total} 名当前成员有可验证入群时间，结果可能不完整；没有时间的成员不会被擅自排序为新成员。）`
+            : ''
+        const orderNote = !data.recentRequested ? '\n（普通成员列表顺序不代表入群先后。）' : ''
+        return `\n\n${title}：\n${lines.join('\n')}${omitted}${coverage}${orderNote}\n【转述要求】请按上面实际结果回复，不要编造成员或猜测入群顺序。`
     }
 }
 
