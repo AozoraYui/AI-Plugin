@@ -40,7 +40,7 @@ const { buildParticipantIdentityHint, expandInlineContent, isThirdPartySubjectQu
 const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq_face.js')
 const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
-const { buildBingImageSearchUrl, extractPageImageUrls, filterRelevantSearchResults, parseSo360ImageResults, parseSogouSearchResults, parseYahooSearchResults, prepareSearchResults, scoreSearchResultRelevance, scoreSearchSourceAuthority, webSearchTool } = await import('../tools/search.js')
+const { buildBingImageSearchUrl, extractPageImageUrls, filterRelevantSearchResults, normalizeWebSearchQueries, parseSo360ImageResults, parseSogouSearchResults, parseYahooSearchResults, prepareSearchResults, scoreSearchResultRelevance, scoreSearchSourceAuthority, webSearchTool } = await import('../tools/search.js')
 const { createHeadersLike, getProxyCandidates } = await import('../utils/common.js')
 const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
@@ -81,6 +81,25 @@ function check(name, condition, detail = '') {
     failures.push({ name, detail })
     console.error(`FAIL ${name}${detail ? `: ${detail}` : ''}`)
 }
+
+const normalizedBatchQueries = normalizeWebSearchQueries({
+    queries: ['小米 Buds 4 Pro 硬件参数', '小米 Buds 5 Pro Wi-Fi版 硬件参数', '小米 Buds 4 Pro 硬件参数', '', '  ']
+})
+check('web_search 支持多个独立目标并去重空查询', normalizedBatchQueries.length === 2 && normalizedBatchQueries[0].includes('Buds 4 Pro') && normalizedBatchQueries[1].includes('Buds 5 Pro'))
+check('web_search 兼容旧的单 query 参数', normalizeWebSearchQueries({ query: 'Linux 新闻' }).length === 1 && normalizeWebSearchQueries({ query: 'Linux 新闻' })[0] === 'Linux 新闻')
+check('web_search 批量目标最多限制为六个', normalizeWebSearchQueries({ queries: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] }).length === 6)
+check('web_search Schema 暴露批量 queries 参数', webSearchTool.functionSchema.function.parameters.properties.queries?.type === 'array' && webSearchTool.functionSchema.function.parameters.properties.queries.maxItems === 6)
+check('注册表允许仅使用 queries 调用 web_search', toolRegistry._validateArgsAgainstSchema('web_search', { queries: ['目标 A', '目标 B'] }))
+check('空 queries 会回退到旧 query', normalizeWebSearchQueries({ queries: [], query: '兼容查询' }).length === 1 && normalizeWebSearchQueries({ queries: [], query: '兼容查询' })[0] === '兼容查询')
+const formattedBatchSearch = webSearchTool.formatResult({
+    batch: true,
+    summary: '已并行搜索 2 个目标。',
+    targets: [
+        { query: '目标 A', results: [{ title: 'A 结果', url: 'https://a.example', snippet: 'A 摘要' }], evidenceQuality: 'medium', usableEvidenceCount: 1, independentSourceCount: 1, sufficientForSensitiveClaims: false },
+        { query: '目标 B', results: [{ title: 'B 结果', url: 'https://b.example', snippet: 'B 摘要' }], evidenceQuality: 'high', usableEvidenceCount: 1, independentSourceCount: 1, sufficientForSensitiveClaims: true }
+    ]
+})
+check('web_search 批量结果按目标分组格式化', formattedBatchSearch.includes('【搜索目标 1】目标 A') && formattedBatchSearch.includes('【搜索目标 2】目标 B') && formattedBatchSearch.indexOf('A 结果') < formattedBatchSearch.indexOf('B 结果'))
 
 check('Node 响应头兼容 Fetch Headers 的 get 接口', (() => {
     const headers = createHeadersLike({ 'content-type': 'text/html', 'set-cookie': ['a=1', 'b=2'] })

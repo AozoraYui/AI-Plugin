@@ -20,6 +20,8 @@ const MAX_IMAGE_SEND_COUNT = 3
 const MAX_IMAGE_VERIFY_CANDIDATES = 6
 const SEARCH_ENGINE_FAILURE_THRESHOLD = 2
 const SEARCH_ENGINE_COOLDOWN_MS = 5 * 60 * 1000
+const MAX_BATCH_SEARCH_TARGETS = 6
+const MAX_SEARCH_QUERY_CHARS = 128
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
 const searchEngineHealth = new Map()
@@ -914,6 +916,26 @@ function mergeSearchResults(resultGroups, limit) {
     return merged
 }
 
+export function normalizeWebSearchQueries(args = {}) {
+    const rawQueries = Array.isArray(args.queries) && args.queries.length > 0
+        ? args.queries
+        : [args.query]
+    const seen = new Set()
+    const queries = []
+
+    for (const rawQuery of rawQueries) {
+        const query = String(rawQuery || '').replace(/\s+/g, ' ').trim().slice(0, MAX_SEARCH_QUERY_CHARS)
+        if (!query) continue
+        const key = query.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        queries.push(query)
+        if (queries.length >= MAX_BATCH_SEARCH_TARGETS) break
+    }
+
+    return queries
+}
+
 /**
  * 搜索网络：Bing + 百度并行主搜索，DuckDuckGo/Yahoo Japan/360 补位
  * @param {string} query - 搜索关键词
@@ -1002,19 +1024,29 @@ async function searchWeb(query, count = 5) {
 export const webSearchTool = {
     name: 'web_search',
     permission: 'all',
-    description: '联网搜索实时信息；用户明确要求图片时，还可搜索并直接发送最多 3 张相关图片。网页搜索使用多引擎冗余，图片搜索使用 Bing 严格安全搜索。',
+    description: '联网搜索实时信息；单个目标使用 query，多个独立目标使用 queries 数组并行搜索、分组返回。用户明确要求图片时，还可搜索并直接发送最多 3 张相关图片。网页搜索使用多引擎冗余，图片搜索使用 Bing 严格安全搜索。',
 
     functionSchema: {
         type: 'function',
         function: {
             name: 'web_search',
-            description: '搜索互联网获取实时信息。用户明确要求“带张图/有图片发我/搜图给我看”时设置 image_count；未明确要求图片时必须保持 0。',
+            description: '搜索互联网获取实时信息。单个目标使用 query；需要比较或分别查询多个独立目标时使用 queries 数组，工具会并行搜索并按目标分组返回结果。用户明确要求“带张图/有图片发我/搜图给我看”时设置 image_count；未明确要求图片时必须保持 0。',
             parameters: {
                 type: 'object',
                 properties: {
                     query: {
                         type: 'string',
-                        description: '搜索关键词，使用中文为佳'
+                        description: '单个搜索目标的关键词；与 queries 二选一，使用中文为佳'
+                    },
+                    queries: {
+                        type: 'array',
+                        minItems: 1,
+                        maxItems: MAX_BATCH_SEARCH_TARGETS,
+                        items: {
+                            type: 'string',
+                            maxLength: MAX_SEARCH_QUERY_CHARS
+                        },
+                        description: `多个独立搜索目标的关键词数组，最多 ${MAX_BATCH_SEARCH_TARGETS} 个；需要逐个查型号、产品、人物、地点或比较对象时使用，结果会按目标分组返回`
                     },
                     count: {
                         type: 'integer',
@@ -1026,74 +1058,172 @@ export const webSearchTool = {
                         description: '需要直接发送到当前 QQ 会话的相关图片数量。只有用户明确要求图片时填写 1-3；普通资料搜索必须为 0。',
                         default: 0
                     }
-                },
-                required: ['query']
+                }
             }
         }
     },
 
     async execute(args, context = {}) {
-        const query = args.query
-        const count = Math.min(args.count || 5, 10)
+        const queries = normalizeWebSearchQueries(args)
+        const count = Math.max(1, Math.min(Number(args.count) || 5, 10))
         const requestedImageCount = Math.max(0, Math.min(MAX_IMAGE_SEND_COUNT, Number(args.image_count) || 0))
         const currentInstruction = context.originalUserMessage || context.userMessage || ''
-        const imageCount = requestedImageCount > 0 && hasExplicitImageSearchIntent(currentInstruction)
-            ? requestedImageCount
-            : 0
+        const imageIntent = requestedImageCount > 0 && hasExplicitImageSearchIntent(currentInstruction)
+        const imageCount = imageIntent && queries.length === 1 ? requestedImageCount : 0
         if (requestedImageCount > 0 && imageCount === 0) {
-            logger.warn('[AI-Plugin] web_search 已忽略未经用户明确要求的 image_count，降级为纯文本搜索')
+            const reason = !imageIntent ? '未经用户明确要求图片' : '批量搜索暂不按多个目标分别发送图片'
+            logger.warn(`[AI-Plugin] web_search 已忽略 image_count：${reason}，降级为纯文本搜索`)
         }
-        if (!query || !query.trim()) {
-            throw new Error('搜索关键词不能为空')
+        if (queries.length === 0) {
+            throw new Error('搜索关键词不能为空：请提供 query 或 queries')
         }
-        if (imageCount === 0) return await searchWeb(query, count)
 
-        const expandedWebSearch = await searchWeb(query, Math.max(count, 8))
-        const expandedWebResults = expandedWebSearch.results || []
-        const webResults = expandedWebResults.slice(0, count)
-        const directImageResults = await Promise.allSettled([
-            searchBingImages(query, Math.max(8, imageCount * 4)),
-            searchSo360Images(query, Math.max(8, imageCount * 4))
-        ])
-        const bingResults = directImageResults[0].status === 'fulfilled' ? directImageResults[0].value : []
-        const so360Results = directImageResults[1].status === 'fulfilled' ? directImageResults[1].value : []
-        if (directImageResults[0].status === 'rejected') logger.warn(`[AI-Plugin] Bing 图片搜索失败: ${directImageResults[0].reason?.message || directImageResults[0].reason}`)
-        if (directImageResults[1].status === 'rejected') logger.warn(`[AI-Plugin] 360 图片搜索失败: ${directImageResults[1].reason?.message || directImageResults[1].reason}`)
-        let imageSearchResult = mergeImageCandidateGroups([bingResults, so360Results])
-        if (imageSearchResult.length < MAX_IMAGE_VERIFY_CANDIDATES) {
-            const pageImageResults = await searchResultPageImages(expandedWebResults, Math.max(8, imageCount * 4))
-            imageSearchResult = mergeImageCandidateGroups([imageSearchResult, pageImageResults])
+        const searchTarget = async query => {
+            if (imageCount === 0) return await searchWeb(query, count)
+
+            const expandedWebSearch = await searchWeb(query, Math.max(count, 8))
+            const expandedWebResults = expandedWebSearch.results || []
+            const webResults = expandedWebResults.slice(0, count)
+            const directImageResults = await Promise.allSettled([
+                searchBingImages(query, Math.max(8, imageCount * 4)),
+                searchSo360Images(query, Math.max(8, imageCount * 4))
+            ])
+            const bingResults = directImageResults[0].status === 'fulfilled' ? directImageResults[0].value : []
+            const so360Results = directImageResults[1].status === 'fulfilled' ? directImageResults[1].value : []
+            if (directImageResults[0].status === 'rejected') logger.warn(`[AI-Plugin] Bing 图片搜索失败: ${directImageResults[0].reason?.message || directImageResults[0].reason}`)
+            if (directImageResults[1].status === 'rejected') logger.warn(`[AI-Plugin] 360 图片搜索失败: ${directImageResults[1].reason?.message || directImageResults[1].reason}`)
+            let imageSearchResult = mergeImageCandidateGroups([bingResults, so360Results])
+            if (imageSearchResult.length < MAX_IMAGE_VERIFY_CANDIDATES) {
+                const pageImageResults = await searchResultPageImages(expandedWebResults, Math.max(8, imageCount * 4))
+                imageSearchResult = mergeImageCandidateGroups([imageSearchResult, pageImageResults])
+            }
+            if (imageSearchResult.length < MAX_IMAGE_VERIFY_CANDIDATES) {
+                const duckDuckGoResults = await searchDuckDuckGoImages(query, Math.max(8, imageCount * 4)).catch(err => {
+                    logger.warn(`[AI-Plugin] DuckDuckGo 图片搜索失败: ${err.message}`)
+                    return []
+                })
+                imageSearchResult = mergeImageCandidateGroups([imageSearchResult, duckDuckGoResults])
+            }
+            imageSearchResult = filterRelevantSearchResults(query, imageSearchResult)
+            const preparedResult = await prepareImageCandidates(imageSearchResult, imageCount)
+            const visionResult = await verifyImagesWithVision(context.client, query, preparedResult.prepared)
+            const sentImages = await sendPreparedImages(context.event, visionResult.selected, imageCount)
+            return {
+                ...expandedWebSearch,
+                query,
+                results: webResults,
+                imageResults: imageSearchResult.slice(0, 10),
+                requestedImages: imageCount,
+                sentImages,
+                imageFailures: preparedResult.failures,
+                relevanceVerified: imageSearchResult.length > 0,
+                visionVerificationUsed: visionResult.used,
+                visionVerificationReason: visionResult.reason,
+                searchUnavailable: expandedWebSearch.searchUnavailable === true && sentImages.length === 0,
+                transportFailure: expandedWebSearch.transportFailure === true && sentImages.length === 0,
+                ok: expandedWebSearch.ok === true || sentImages.length > 0,
+                recoverable: expandedWebSearch.ok !== true && sentImages.length === 0
+            }
         }
-        if (imageSearchResult.length < MAX_IMAGE_VERIFY_CANDIDATES) {
-            const duckDuckGoResults = await searchDuckDuckGoImages(query, Math.max(8, imageCount * 4)).catch(err => {
-                logger.warn(`[AI-Plugin] DuckDuckGo 图片搜索失败: ${err.message}`)
-                return []
-            })
-            imageSearchResult = mergeImageCandidateGroups([imageSearchResult, duckDuckGoResults])
-        }
-        imageSearchResult = filterRelevantSearchResults(query, imageSearchResult)
-        const preparedResult = await prepareImageCandidates(imageSearchResult, imageCount)
-        const visionResult = await verifyImagesWithVision(context.client, query, preparedResult.prepared)
-        const sentImages = await sendPreparedImages(context.event, visionResult.selected, imageCount)
+
+        if (queries.length === 1) return await searchTarget(queries[0])
+
+        logger.info(`[AI-Plugin] 批量搜索 ${queries.length} 个目标：${queries.join(' | ')}`)
+        const targets = await Promise.all(queries.map(async query => {
+            try {
+                return await searchTarget(query)
+            } catch (error) {
+                logger.warn(`[AI-Plugin] 批量搜索目标失败: ${query}: ${error.message}`)
+                return {
+                    query,
+                    results: [],
+                    evidenceQuality: 'low',
+                    usableEvidenceCount: 0,
+                    independentSourceCount: 0,
+                    independentDomains: [],
+                    sufficientForSensitiveClaims: false,
+                    engineStatus: [],
+                    successfulEngineCount: 0,
+                    searchUnavailable: true,
+                    transportFailure: true,
+                    ok: false,
+                    recoverable: true,
+                    error: error.message,
+                    summary: `该目标搜索失败：${error.message}`
+                }
+            }
+        }))
+        const usableTargets = targets.filter(target => target.ok === true)
+        const qualities = [...new Set(targets.map(target => target.evidenceQuality).filter(Boolean))]
+        const allUnavailable = targets.every(target => target.searchUnavailable === true)
+        const aggregateUsableEvidenceCount = targets.reduce((sum, target) => sum + (Number(target.usableEvidenceCount) || 0), 0)
+        const aggregateIndependentSourceCount = targets.reduce((sum, target) => sum + (Number(target.independentSourceCount) || 0), 0)
+        const summary = usableTargets.length === targets.length
+            ? `已并行搜索 ${targets.length} 个目标，全部获得可用搜索结果。`
+            : `已并行搜索 ${targets.length} 个目标，其中 ${usableTargets.length} 个目标获得可用搜索结果；失败或无结果的目标不能视为不存在。`
         return {
-            ...expandedWebSearch,
-            query,
-            results: webResults,
-            imageResults: imageSearchResult.slice(0, 10),
-            requestedImages: imageCount,
-            sentImages,
-            imageFailures: preparedResult.failures,
-            relevanceVerified: imageSearchResult.length > 0,
-            visionVerificationUsed: visionResult.used,
-            visionVerificationReason: visionResult.reason,
-            searchUnavailable: expandedWebSearch.searchUnavailable === true && sentImages.length === 0,
-            transportFailure: expandedWebSearch.transportFailure === true && sentImages.length === 0,
-            ok: expandedWebSearch.ok === true || sentImages.length > 0,
-            recoverable: expandedWebSearch.ok !== true && sentImages.length === 0
+            batch: true,
+            queries,
+            targets,
+            results: targets.flatMap(target => Array.isArray(target.results) ? target.results : []),
+            evidenceQuality: qualities.length === 1 ? qualities[0] : 'mixed',
+            usableEvidenceCount: aggregateUsableEvidenceCount,
+            independentSourceCount: aggregateIndependentSourceCount,
+            independentDomains: [...new Set(targets.flatMap(target => target.independentDomains || []))],
+            sufficientForSensitiveClaims: targets.every(target => target.sufficientForSensitiveClaims === true),
+            autoFetchCandidate: null,
+            engineStatus: [],
+            successfulEngineCount: targets.reduce((sum, target) => sum + (Number(target.successfulEngineCount) || 0), 0),
+            searchUnavailable: allUnavailable,
+            transportFailure: allUnavailable,
+            ok: usableTargets.length > 0,
+            recoverable: usableTargets.length < targets.length,
+            summary,
+            facts: {
+                batch: true,
+                queries,
+                targetCount: targets.length,
+                successfulTargetCount: usableTargets.length,
+                usableEvidenceCount: aggregateUsableEvidenceCount,
+                independentSourceCount: aggregateIndependentSourceCount,
+                evidenceQuality: qualities.length === 1 ? qualities[0] : 'mixed',
+                searchUnavailable: allUnavailable,
+                transportFailure: allUnavailable
+            },
+            next_hints: targets.some(target => target.sufficientForSensitiveClaims !== true)
+                ? ['逐个打开每个目标的权威原始来源后再做敏感或精确参数结论。']
+                : []
         }
     },
 
     formatResult(data) {
+        if (!Array.isArray(data) && Array.isArray(data?.targets)) {
+            let text = '\n\n【批量外部搜索数据】以下结果按搜索目标分组；搜索摘要只能作为资料线索，不能把一个目标的结果当成另一个目标的证据。\n'
+            data.targets.forEach((target, targetIndex) => {
+                const targetResults = Array.isArray(target?.results) ? target.results : []
+                text += `\n【搜索目标 ${targetIndex + 1}】${target?.query || '未命名目标'}\n`
+                if (targetResults.length === 0) {
+                    if (target?.error) {
+                        text += `该目标搜索执行失败：${target.error}\n`
+                    } else if (target?.searchUnavailable === true) {
+                        text += '该目标的搜索源不可用，没有获得搜索证据；这不代表目标不存在。\n'
+                    } else {
+                        text += '该目标没有找到相关结果；这不等于目标不存在。\n'
+                    }
+                    return
+                }
+                targetResults.forEach((item, index) => {
+                    const source = item.source ? ` (${item.source})` : ''
+                    text += `${index + 1}. ${item.title}${source}\n   来源: ${item.url}\n   摘要: ${item.snippet}\n`
+                })
+                text += `证据质量：${target.evidenceQuality || 'low'}；可用直接来源 ${Math.max(0, Number(target.usableEvidenceCount) || 0)} 条；独立域名 ${Math.max(0, Number(target.independentSourceCount) || 0)} 个。\n`
+                if (target.sufficientForSensitiveClaims !== true) {
+                    text += '该目标的搜索摘要不足以单独支撑敏感或精确结论，需要继续读取权威原始来源。\n'
+                }
+            })
+            text += `\n【批量搜索汇总】共 ${data.targets.length} 个目标，${data.summary || '已完成分组搜索。'}\n`
+            return text
+        }
         const results = Array.isArray(data) ? data : (Array.isArray(data?.results) ? data.results : [])
         const requestedImages = Array.isArray(data) ? 0 : Number(data?.requestedImages || 0)
         const sentImages = Array.isArray(data?.sentImages) ? data.sentImages : []
