@@ -3627,6 +3627,7 @@ export class ChatHandler extends plugin {
             // 直读失败时再降级：先用健康的 Vision Relay 把图片转成摘要，再让纯文本模型接管。
             // 这条路径专门处理“模型组存在多模态模型，但它们所在供应商临时不可用”的情况。
             const currentImageParts = currentUserTurnParts.filter(part => part?.inline_data?.data)
+            let visionRelayDescription = ''
             if ((!result.success || !result.data) && currentImageParts.length > 0 && !useVisionRelay && this.client.enableVisionRelay) {
                 logger.warn(`[AI-Plugin] 多模态直读失败，启动 Vision Relay 灾备：${result.error || '模型无返回'}`)
                 const description = await requestVisionRelayFallback(
@@ -3638,6 +3639,7 @@ export class ChatHandler extends plugin {
                 )
                 throwIfExecutionCancelled()
                 if (description) {
+                    visionRelayDescription = description
                     const relayContents = replaceInlineImagesWithVisionDescription(contents, description)
                     const relayResult = await this.client.makeRequest('chat', { contents: relayContents }, modelGroupKey, 8192, { signal: cancellationHandle?.signal })
                     throwIfExecutionCancelled()
@@ -3648,6 +3650,22 @@ export class ChatHandler extends plugin {
                     } else {
                         logger.warn(`[AI-Plugin] Vision Relay 灾备后的文本模型请求仍失败: ${relayResult.error || '模型无返回'}`)
                     }
+                }
+            }
+
+            if (result.success && visionRelayDescription && /(?:没有|未|无法).{0,20}(?:传来|收到|提供).{0,20}(?:视觉|图片).{0,20}(?:摘要|内容)/i.test(String(result.data || ''))) {
+                logger.warn('[AI-Plugin] Vision Relay 摘要已成功生成，但最终模型错误声称没有摘要，启动一次强制摘要重试')
+                const recoveryContents = replaceInlineImagesWithVisionDescription(contents, `${visionRelayDescription}
+
+【强制处理要求】以上摘要来自本轮实际图片。不要声称没有收到图片、没有视觉摘要或无法判断图片内容；请严格基于摘要直接回答用户当前请求，不要编造摘要之外的事实。`)
+                const recoveryResult = await this.client.makeRequest('chat', { contents: recoveryContents }, modelGroupKey, 8192, { signal: cancellationHandle?.signal })
+                throwIfExecutionCancelled()
+                if (recoveryResult.success && recoveryResult.data) {
+                    result = recoveryResult
+                    contents = recoveryContents
+                    logger.info('[AI-Plugin] Vision Relay 摘要强制重试成功')
+                } else {
+                    logger.warn(`[AI-Plugin] Vision Relay 摘要强制重试失败: ${recoveryResult.error || '模型无返回'}`)
                 }
             }
 

@@ -5,7 +5,7 @@
  */
 
 import { toolRegistry } from './registry.js'
-import { processImagesInBatches } from '../utils/image.js'
+import { processImagesInBatches, processInlineImagesForAI } from '../utils/image.js'
 
 /**
  * 将图片发送给 Vision 模型，获取详细描述
@@ -26,8 +26,8 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
         const inlineImages = imageUrls.filter(img => img?.inline_data?.data)
         const urlImages = imageUrls.filter(img => typeof img === 'string')
         const validImages = [
-            ...inlineImages,
-            ...(urlImages.length > 0 ? await processImagesInBatches(urlImages) : [])
+            ...(inlineImages.length > 0 ? await processInlineImagesForAI(inlineImages, { forceFormat: 'jpeg' }) : []),
+            ...(urlImages.length > 0 ? await processImagesInBatches(urlImages, { forceFormat: 'jpeg' }) : [])
         ]
         if (requestOptions.signal?.aborted) return ''
         if (validImages.length === 0) {

@@ -29,6 +29,8 @@ const defaultConfig = {
     // 图片压缩后的最大边长（像素），用于等比缩放
     // 使用场景: apps/chat.js 中压缩过大图片
     MAX_IMAGE_RESIZE: 1920,
+    // 单张图片允许的最大像素总数，避免高分辨率小文件触发上游视觉 patch 限制
+    MAX_IMAGE_PIXELS: 4000000,
     // 图片压缩后的 JPEG 质量（1-100），数值越高质量越好
     // 使用场景: apps/chat.js 中压缩图片时指定质量
     IMAGE_QUALITY: 80,
@@ -377,6 +379,8 @@ export const Config = {
     set MAX_IMAGE_SIZE_MB(val) { config.MAX_IMAGE_SIZE_MB = val },
     get MAX_IMAGE_RESIZE() { return config.MAX_IMAGE_RESIZE ?? defaultConfig.MAX_IMAGE_RESIZE },
     set MAX_IMAGE_RESIZE(val) { config.MAX_IMAGE_RESIZE = val },
+    get MAX_IMAGE_PIXELS() { return config.MAX_IMAGE_PIXELS ?? defaultConfig.MAX_IMAGE_PIXELS },
+    set MAX_IMAGE_PIXELS(val) { config.MAX_IMAGE_PIXELS = val },
     get IMAGE_QUALITY() { return config.IMAGE_QUALITY ?? defaultConfig.IMAGE_QUALITY },
     set IMAGE_QUALITY(val) { config.IMAGE_QUALITY = val },
     get REQUEST_SIZE_WARNING_MB() {
