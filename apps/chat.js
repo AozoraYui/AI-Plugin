@@ -24,6 +24,7 @@ import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgent
 import { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resolvePersistedAgentStatus } from '../utils/agent_completion.js'
 import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK_SUMMARY_MAX_CHARS, mergeAgentRisk, recordAgentTaskStep, updateAgentTaskProgress } from '../utils/agent_task_runtime.js'
 import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../utils/agent_plan.js'
+import { isAgentExecutionCancelled, registerAgentExecution } from '../utils/agent_cancellation.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { createPendingGroupSendAction, executePendingGroupSend, parseGroupSendDisambiguationSelection } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
@@ -52,10 +53,11 @@ function replaceInlineImagesWithVisionDescription(contents, description) {
     return cloned
 }
 
-async function requestVisionRelayFallback(client, imageParts, context, reason) {
+async function requestVisionRelayFallback(client, imageParts, context, reason, requestOptions = {}) {
     const visionModels = client.getVisionRelayModels?.() || client.visionModels || []
     for (const visionConf of visionModels) {
-        const description = await relayImagesToVision(imageParts, context, client, visionConf)
+        if (requestOptions.signal?.aborted) return ''
+        const description = await relayImagesToVision(imageParts, context, client, visionConf, requestOptions)
         if (description) return description
         logger.warn(`[AI-Plugin] ${reason}: ${visionConf.provider_id}/${visionConf.model_id} 不可用，尝试下一个 Vision 模型`)
     }
@@ -786,7 +788,7 @@ async function recordAgentStep(db, task, step = {}) {
     })
 }
 
-async function summarizeAgentRound(client, modelGroupKey, task, round, observations = [], plan = {}) {
+async function summarizeAgentRound(client, modelGroupKey, task, round, observations = [], plan = {}, requestOptions = {}) {
     const deterministic = summarizeDeterministicAgentRound(observations)
     if (deterministic) return deterministic
     if (!client?.makeRequest || observations.length === 0) return null
@@ -830,7 +832,7 @@ ${observationText}
 {"summary":"更新后的任务摘要","last_observation":"本轮最重要观察","completion_status":"continue|ready|waiting|blocked","next_hint":"如果需要继续，下一步建议；否则留空"}`
 
     const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
-    const result = await client.makeRequest('chat', payload, modelGroupKey, 1024)
+    const result = await client.makeRequest('chat', payload, modelGroupKey, 1024, requestOptions)
     if (!result.success || !result.data) {
         logger.warn(`[AI-Plugin] Agent观察摘要失败: ${result.error || '无返回'}`)
         return null
@@ -1550,7 +1552,8 @@ async function askMainModelForToolPlan(client, modelGroupKey, options = {}) {
         currentInstruction: providedCurrentInstruction = '',
         planningContext = '',
         skillGuidance = '',
-        agentRound = 0
+        agentRound = 0,
+        requestOptions = {}
     } = options
 
     if (!userMessage && !hasImages) return { need_tools: false, reason: '当前消息为空' }
@@ -1682,7 +1685,7 @@ ${agentRoundBlock}
 }`
 
     const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
-    const result = await client.makeRequest('chat', payload, modelGroupKey, 2048)
+    const result = await client.makeRequest('chat', payload, modelGroupKey, 2048, requestOptions)
     if (!result.success || !result.data) {
         logger.warn(`[AI-Plugin] 主模型工具规划失败: ${result.error || '无返回'}`)
         return { need_tools: false, planning_failed: true, reason: '主模型工具规划失败', error: result.error || '无返回' }
@@ -1706,7 +1709,7 @@ ${agentRoundBlock}
     return parsed
 }
 
-async function askMainModelForNextShellCommand(client, modelGroupKey, userMessage, executedCommands, round) {
+async function askMainModelForNextShellCommand(client, modelGroupKey, userMessage, executedCommands, round, requestOptions = {}) {
     const prompt = `你是服务器 Shell 补查决策器。请根据用户原始需求和已经执行过的工具结果，判断是否还需要再执行一条 Shell 命令来补充信息。
 
 规则：
@@ -1738,7 +1741,7 @@ ${executedCommands.length > 0 ? executedCommands.map((cmd, i) => `${i + 1}. ${cm
 ${truncateForPrompt(userMessage, Config.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS)}`
 
     const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
-    const result = await client.makeRequest('chat', payload, modelGroupKey, 1024)
+    const result = await client.makeRequest('chat', payload, modelGroupKey, 1024, requestOptions)
     if (!result.success || !result.data) {
         logger.warn(`[AI-Plugin] Shell 补查决策失败: ${result.error || '无返回'}`)
         return null
@@ -1816,6 +1819,14 @@ export class ChatHandler extends plugin {
         const match = e.msg.match(buildChatRegex(chatCmd))
         if (!match) return
 
+        const cancellationHandle = registerAgentExecution({
+            messageId: e.message_id || e.seq || '',
+            groupId: e.group_id || '',
+            userId: e.user_id || ''
+        })
+        const throwIfExecutionCancelled = () => cancellationHandle?.throwIfCancelled()
+        const disposeCancellation = () => cancellationHandle?.dispose()
+
         const prefix = match[1].toLowerCase()
         const flags = match[2].toLowerCase()
         let userMessage = match[3].trim()
@@ -1842,7 +1853,9 @@ export class ChatHandler extends plugin {
         let allImages = []
 
         try {
+            throwIfExecutionCancelled()
             const sourceMsg = await takeSourceMsg(e)
+            throwIfExecutionCancelled()
 
             if (sourceMsg) {
                 if (sourceMsg.message) {
@@ -2127,6 +2140,8 @@ export class ChatHandler extends plugin {
                     return true
                 }
                 agentTaskContinuation = true
+                cancellationHandle?.bindTask(agentTask.taskId)
+                throwIfExecutionCancelled()
                 userMessage = `${userMessage}\n\n${buildAgentTaskContext(agentTask)}`
                 logger.info(`[AI-Plugin] Agent 续接任务: ${agentTask.taskId}, objective=${agentTask.objective.slice(0, 120)}`)
             }
@@ -2420,8 +2435,10 @@ export class ChatHandler extends plugin {
                             isMaster: e.isMaster === true,
                             currentInstruction: currentToolInstruction,
                             planningContext: recentAgentTaskPlanningContext,
-                            skillGuidance: activeSkillGuidance
+                            skillGuidance: activeSkillGuidance,
+                            requestOptions: { signal: cancellationHandle?.signal }
                         })
+                        throwIfExecutionCancelled()
                         if (mainToolPlan?.need_tools) {
                             logger.info(`[AI-Plugin] 主模型计划调用 ${mainToolPlan.tool_plan.length} 个工具，交给意图模型编译参数`)
                             toolAnalysis = await toolRegistry.compileToolPlan(mainToolPlan, this.client, planningCandidates.tools, {
@@ -2541,6 +2558,7 @@ export class ChatHandler extends plugin {
                                 plan: buildAgentTaskPlan(persistedPlanSource, objective)
                             })
                             if (agentTask?.taskId) {
+                                cancellationHandle?.bindTask(agentTask.taskId)
                                 logger.info(`[AI-Plugin] Agent 创建任务: ${agentTask.taskId}, risk=${agentTask.riskLevel}, objective=${agentTask.objective.slice(0, 120)}`)
                             }
                         } catch (err) {
@@ -2557,6 +2575,8 @@ export class ChatHandler extends plugin {
                             logger.warn(`[AI-Plugin] Agent任务续接更新失败: ${err.message}`)
                         }
                     }
+                    cancellationHandle?.bindTask(agentTask?.taskId)
+                    throwIfExecutionCancelled()
                     await recordAgentStep(this.conversationManager.db, agentTask, {
                         stepIndex: 1,
                         stepType: agentTaskContinuation ? 'resume_plan' : 'plan',
@@ -2576,6 +2596,7 @@ export class ChatHandler extends plugin {
                 let memorySearchToolUsed = false
                 let shellFollowupConsideredByAgent = false
                 for (let agentRound = 1; agentRound <= AGENT_LOOP_MAX_ROUNDS; agentRound++) {
+                    throwIfExecutionCancelled()
                     if (toolCalls.length === 0) {
                         logger.info(agentRound === 1 ? '[AI-Plugin] 工具执行队列为空，本轮直接进入最终回复' : `[AI-Plugin] Agent 第 ${agentRound} 轮无后续工具，停止循环`)
                         break
@@ -2602,6 +2623,7 @@ export class ChatHandler extends plugin {
                         isMaster: e.isMaster,
                         context: { userId: e.user_id, groupId: e.group_id, event: e, client: this.client, userMessage: originalUserMessage, originalUserMessage, agentTaskId: agentTask?.taskId || '' }
                     })) {
+                        throwIfExecutionCancelled()
                         const { call, index: roundCallIndex, key, result, protocol, formattedResult: runtimeFormattedResult, status: runtimeStatus, pending } = execution
                         seenToolCalls.add(key)
                         if (call.name === 'shell_exec' || call.name === 'shell_session') shellToolExecutionCount++
@@ -2931,7 +2953,8 @@ export class ChatHandler extends plugin {
                             ...agentTask,
                             summary: agentTaskLatestSummary,
                             lastObservation: agentTaskLatestObservation
-                        }, agentRound, roundObservations, currentAgentPlan)
+                        }, agentRound, roundObservations, currentAgentPlan, { signal: cancellationHandle?.signal })
+                        throwIfExecutionCancelled()
                         const completionStatus = roundPendingConfirmation ? 'waiting' : (roundSummary?.completionStatus || (roundExecuted > 0 ? 'continue' : 'blocked'))
                         roundCompletionStatus = completionStatus
                         agentTaskLatestSummary = roundSummary?.summary || agentTaskLatestSummary
@@ -3099,8 +3122,10 @@ export class ChatHandler extends plugin {
                         isMaster: e.isMaster === true,
                         currentInstruction: currentToolInstruction,
                         skillGuidance: activeSkillGuidance,
-                        agentRound: agentRound + 1
+                        agentRound: agentRound + 1,
+                        requestOptions: { signal: cancellationHandle?.signal }
                     })
+                    throwIfExecutionCancelled()
                     if (!nextPlan?.need_tools) {
                         logger.info(`[AI-Plugin] Agent 后续规划结束: ${String(nextPlan?.reason || '信息已足够').slice(0, 180)}`)
                         break
@@ -3179,7 +3204,9 @@ export class ChatHandler extends plugin {
                     // 翻页续读使用 "命令@offset" 作为去重键，允许同命令不同分页继续
                     const seenPagedKeys = new Set()
                     for (let round = 1; round <= Config.SHELL_EXEC_FOLLOWUP_MAX_ROUNDS; round++) {
-                        const decision = await askMainModelForNextShellCommand(this.client, modelGroupKey, userMessage, [...seenCommands], round)
+                        throwIfExecutionCancelled()
+                        const decision = await askMainModelForNextShellCommand(this.client, modelGroupKey, userMessage, [...seenCommands], round, { signal: cancellationHandle?.signal })
+                        throwIfExecutionCancelled()
                         if (!decision?.need_shell) {
                             logger.info(`[AI-Plugin] Shell 补查结束: ${decision?.reason || '无需补查'}`)
                             break
@@ -3299,7 +3326,8 @@ export class ChatHandler extends plugin {
                 logger.info(`[AI-Plugin] Vision Relay: 检测到 ${allImages.length} 张图片，开始转述，共 ${visionModels.length} 个 Vision 模型`)
                 let description = ''
                 for (const visionConf of visionModels) {
-                    description = await relayImagesToVision(allImages, userMessage, this.client, visionConf)
+                    throwIfExecutionCancelled()
+                    description = await relayImagesToVision(allImages, userMessage, this.client, visionConf, { signal: cancellationHandle?.signal })
                     if (description) break
                     logger.warn(`[AI-Plugin] Vision Relay: ${visionConf.provider_id}/${visionConf.model_id} 转述失败，尝试下一个`)
                 }
@@ -3317,7 +3345,8 @@ export class ChatHandler extends plugin {
                 logger.info(`[AI-Plugin] Vision Relay: 检测到 ${localImageInput.imageParts.length} 张本地图片输入，开始转述`)
                 let description = ''
                 for (const visionConf of visionModels) {
-                    description = await relayImagesToVision(localImageInput.imageParts, userMessage, this.client, visionConf)
+                    throwIfExecutionCancelled()
+                    description = await relayImagesToVision(localImageInput.imageParts, userMessage, this.client, visionConf, { signal: cancellationHandle?.signal })
                     if (description) break
                     logger.warn(`[AI-Plugin] Vision Relay: ${visionConf.provider_id}/${visionConf.model_id} 本地图片转述失败，尝试下一个`)
                 }
@@ -3334,7 +3363,8 @@ export class ChatHandler extends plugin {
                 logger.info(`[AI-Plugin] Vision Relay: 检测到 ${avatarImageInput.imageParts.length} 张头像图片输入，开始转述`)
                 let description = ''
                 for (const visionConf of visionModels) {
-                    description = await relayImagesToVision(avatarImageInput.imageParts, userMessage, this.client, visionConf)
+                    throwIfExecutionCancelled()
+                    description = await relayImagesToVision(avatarImageInput.imageParts, userMessage, this.client, visionConf, { signal: cancellationHandle?.signal })
                     if (description) break
                     logger.warn(`[AI-Plugin] Vision Relay: ${visionConf.provider_id}/${visionConf.model_id} 头像图片转述失败，尝试下一个`)
                 }
@@ -3365,7 +3395,8 @@ export class ChatHandler extends plugin {
                 logger.info(`[AI-Plugin] Vision Relay: 目标模型为纯文本，开始转述 ${generatedDrawReviewImages.length} 张生成图审图图片`)
                 let reviewDescription = ''
                 for (const visionConf of visionModels) {
-                    reviewDescription = await relayImagesToVision(generatedDrawReviewImages, '这是刚生成并已发送给用户的图片，请简短描述画面，供后续回复用户时使用。', this.client, visionConf)
+                    throwIfExecutionCancelled()
+                    reviewDescription = await relayImagesToVision(generatedDrawReviewImages, '这是刚生成并已发送给用户的图片，请简短描述画面，供后续回复用户时使用。', this.client, visionConf, { signal: cancellationHandle?.signal })
                     if (reviewDescription) break
                     logger.warn(`[AI-Plugin] Vision Relay: ${visionConf.provider_id}/${visionConf.model_id} 生成图审图转述失败，尝试下一个`)
                 }
@@ -3568,12 +3599,15 @@ export class ChatHandler extends plugin {
                 }
             }
             if (currentSizeMB > Config.REQUEST_SIZE_LIMIT_MB) {
+                throwIfExecutionCancelled()
                 logger.error(`[AI-Plugin] 请求体在历史和图片裁剪后仍超限: ${currentSizeMB.toFixed(2)}MB > ${Config.REQUEST_SIZE_LIMIT_MB}MB`)
                 await e.reply(`❌ 本轮上下文过大（${currentSizeMB.toFixed(2)}MB），即使裁剪历史和图片后仍超过 ${Config.REQUEST_SIZE_LIMIT_MB}MB。请减少单次引用内容或图片数量后重试。`, true)
                 return true
             }
             
-            let result = await this.client.makeRequest('chat', currentPayload, modelGroupKey, 8192)
+            throwIfExecutionCancelled()
+            let result = await this.client.makeRequest('chat', currentPayload, modelGroupKey, 8192, { signal: cancellationHandle?.signal })
+            throwIfExecutionCancelled()
 
             // 直读失败时再降级：先用健康的 Vision Relay 把图片转成摘要，再让纯文本模型接管。
             // 这条路径专门处理“模型组存在多模态模型，但它们所在供应商临时不可用”的情况。
@@ -3584,11 +3618,14 @@ export class ChatHandler extends plugin {
                     this.client,
                     currentImageParts,
                     userMessage,
-                    'Vision Relay 灾备'
+                    'Vision Relay 灾备',
+                    { signal: cancellationHandle?.signal }
                 )
+                throwIfExecutionCancelled()
                 if (description) {
                     const relayContents = replaceInlineImagesWithVisionDescription(contents, description)
-                    const relayResult = await this.client.makeRequest('chat', { contents: relayContents }, modelGroupKey, 8192)
+                    const relayResult = await this.client.makeRequest('chat', { contents: relayContents }, modelGroupKey, 8192, { signal: cancellationHandle?.signal })
+                    throwIfExecutionCancelled()
                     if (relayResult.success && relayResult.data) {
                         result = relayResult
                         contents = relayContents
@@ -3600,6 +3637,7 @@ export class ChatHandler extends plugin {
             }
 
             if (result.success) {
+                throwIfExecutionCancelled()
                 let rawResponseText = String(result.data || '').trim()
                 let finalResponseText = sanitizeModelOutput(rawResponseText, { showThinking: Config.show_thinking })
                 let usedSafeFallbackReply = false
@@ -3629,7 +3667,9 @@ export class ChatHandler extends plugin {
                             }
                         ]
                     }
-                    const retryResult = await this.client.makeRequest('chat', retryPayload, modelGroupKey, 8192)
+                    throwIfExecutionCancelled()
+                    const retryResult = await this.client.makeRequest('chat', retryPayload, modelGroupKey, 8192, { signal: cancellationHandle?.signal })
+                    throwIfExecutionCancelled()
                     if (retryResult.success && retryResult.data) {
                         result = retryResult
                         rawResponseText = String(retryResult.data).trim()
@@ -3679,6 +3719,7 @@ export class ChatHandler extends plugin {
                 const reasoningText = Config.show_thinking && result.reasoning ? String(result.reasoning).trim() : ''
 
                 const sendFinalReply = async (responseText, responseReasoning = '') => {
+                    throwIfExecutionCancelled()
                     if (responseReasoning) {
                         const forwardMsgNodes = []
                         const pushChunks = (title, text, footer = '') => {
@@ -3703,10 +3744,13 @@ export class ChatHandler extends plugin {
                         }
                         pushChunks('思考过程', `思考过程\n\n${responseReasoning}`)
                         pushChunks('最终回复', `最终回复\n\n${responseText}`, footerInfo)
+                        throwIfExecutionCancelled()
                         const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
+                        throwIfExecutionCancelled()
                         return e.reply(forwardMsg)
                     }
                     if (responseText.length <= MAX_LENGTH) {
+                        throwIfExecutionCancelled()
                         return e.reply(`${responseText}\n\n${footerInfo}`, true)
                     }
                     const forwardMsgNodes = []
@@ -3727,18 +3771,25 @@ export class ChatHandler extends plugin {
                         })
                         part++
                     }
+                    throwIfExecutionCancelled()
                     const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
+                    throwIfExecutionCancelled()
                     return e.reply(forwardMsg)
                 }
 
+                throwIfExecutionCancelled()
                 let sendResult = await sendFinalReply(finalResponseText, reasoningText)
+                throwIfExecutionCancelled()
                 let sendError = extractMessageSendError(sendResult)
                 if (sendError) {
                     logger.warn(`[AI-Plugin] 最终回复发送失败: ${sendError}`)
                     if (isContentModerationSendError(sendError)) {
-                        const rewritten = await rewriteRejectedReply(this.client, finalResponseText, modelGroupKey, 4096)
+                        throwIfExecutionCancelled()
+                        const rewritten = await rewriteRejectedReply(this.client, finalResponseText, modelGroupKey, 4096, { signal: cancellationHandle?.signal })
+                        throwIfExecutionCancelled()
                         if (rewritten) {
                             const retryResult = await sendFinalReply(rewritten)
+                            throwIfExecutionCancelled()
                             const retryError = extractMessageSendError(retryResult)
                             if (!retryError) {
                                 finalResponseText = rewritten
@@ -3750,9 +3801,11 @@ export class ChatHandler extends plugin {
                             }
                         }
                         if (sendError) {
+                            throwIfExecutionCancelled()
                             finalResponseText = '刚才生成的答复被消息发送过滤器拦截，自动改写后仍未能发送。你可以换一种说法再问，或让我只做简短、客观的概括。'
                             usedSafeFallbackReply = true
                             const fallbackResult = await e.reply(finalResponseText, true)
+                            throwIfExecutionCancelled()
                             sendError = extractMessageSendError(fallbackResult)
                         }
                     }
@@ -3763,9 +3816,11 @@ export class ChatHandler extends plugin {
                     }
                 }
 
+                throwIfExecutionCancelled()
                 await setMsgEmojiLike(e, 144)
 
                 if (agentTask?.taskId) {
+                    throwIfExecutionCancelled()
                     const finalStatus = resolvePersistedAgentStatus({
                         completionStatus: agentTaskFinalStatus,
                         pendingVerification: agentPendingMandatoryVerification,
@@ -3793,6 +3848,7 @@ export class ChatHandler extends plugin {
                 }
 
                 if (!isSingleMode) {
+                    throwIfExecutionCancelled()
                     const cleanHistoryText = historyUserMessage || (allImages.length > 0 ? '【用户发送了图片】' : '')
                     const historyUserTurnParts = cleanHistoryText ? [{ text: cleanHistoryText }] : []
                     const compactedHistory = compactConversationHistory([
@@ -3846,9 +3902,15 @@ export class ChatHandler extends plugin {
                 await e.reply(`❌ 请求失败\n错误: ${result.error}`, true)
             }
         } catch (err) {
+            if (cancellationHandle?.isCancelled() || isAgentExecutionCancelled(err)) {
+                logger.info('[AI-Plugin] 触发消息已撤回，停止发送任务结果')
+                return true
+            }
             await setMsgEmojiLike(e, 10)
             logger.error(`[AI-Plugin] 对话处理异常:`, err)
             await e.reply(`❌ 处理异常: ${err.message}`, true)
+        } finally {
+            disposeCancellation()
         }
     }
 

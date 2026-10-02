@@ -37,7 +37,7 @@ export function isContentModerationSendError(error) {
     return CONTENT_REJECTION_RE.test(String(error || ''))
 }
 
-export async function rewriteRejectedReply(client, text, modelGroupKey = 'flash', maxTokens = 4096) {
+export async function rewriteRejectedReply(client, text, modelGroupKey = 'flash', maxTokens = 4096, requestOptions = {}) {
     const source = String(text || '').trim().slice(0, 16000)
     if (!source) return ''
     const payload = {
@@ -48,7 +48,7 @@ export async function rewriteRejectedReply(client, text, modelGroupKey = 'flash'
             }]
         }]
     }
-    const result = await client.makeRequest('chat', payload, modelGroupKey, maxTokens)
+    const result = await client.makeRequest('chat', payload, modelGroupKey, maxTokens, requestOptions)
     if (!result?.success || !result.data) return ''
     return sanitizeModelOutput(result.data).trim()
 }

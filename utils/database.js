@@ -1427,6 +1427,20 @@ export class AIDatabase {
         })
     }
 
+    cancelAgentTask(taskId, reason = '用户取消') {
+        return new Promise((resolve, reject) => {
+            const now = getDBTimestamp()
+            this.db.run(`
+                UPDATE agent_tasks
+                SET status = 'cancelled', summary = ?, last_observation = ?, completed_at = ?, updated_at = ?, version = version + 1
+                WHERE task_id = ? AND status IN ('active', 'waiting')
+            `, [String(reason || '用户取消'), String(reason || '用户取消'), now, now, String(taskId || '')], function(err) {
+                if (err) reject(err)
+                else resolve(this.changes > 0)
+            })
+        })
+    }
+
     getAllUserIds() {
         return new Promise((resolve, reject) => {
             this.db.all('SELECT DISTINCT user_id FROM user_histories', [], (err, rows) => {

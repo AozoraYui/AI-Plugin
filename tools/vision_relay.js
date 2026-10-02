@@ -15,9 +15,10 @@ import { processImagesInBatches } from '../utils/image.js'
  * @param {object} visionModelConfig - { provider_id, model_id }
  * @returns {Promise<string>} 图片描述文本
  */
-async function relayImagesToVision(imageUrls, context, client, visionModelConfig) {
+async function relayImagesToVision(imageUrls, context, client, visionModelConfig, requestOptions = {}) {
     if (!imageUrls?.length) return ''
     if (!visionModelConfig?.provider_id || !visionModelConfig?.model_id) return ''
+    if (requestOptions.signal?.aborted) return ''
     logger.info(`[AI-Plugin] Vision Relay: 开始转述 ${imageUrls.length} 张图片`)
     const startTime = Date.now()
 
@@ -28,6 +29,7 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
             ...inlineImages,
             ...(urlImages.length > 0 ? await processImagesInBatches(urlImages) : [])
         ]
+        if (requestOptions.signal?.aborted) return ''
         if (validImages.length === 0) {
             logger.warn('[AI-Plugin] Vision Relay: 所有图片处理失败')
             return ''
@@ -64,7 +66,8 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
             modelConfig.model_id,
             2048,
             timeout,
-            modelConfig
+            modelConfig,
+            requestOptions
         )
 
         if (result?.success && result.data) {

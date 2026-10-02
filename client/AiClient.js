@@ -1222,10 +1222,14 @@ export class AiClient {
         }
     }
 
-    async attemptRequest(type, payload, provider, modelId, maxTokens = 8192, timeout = 0, modelConfig = null) {
+    async attemptRequest(type, payload, provider, modelId, maxTokens = 8192, timeout = 0, modelConfig = null, requestOptions = {}) {
         try {
+            if (requestOptions.signal?.aborted) {
+                return { success: false, cancelled: true, error: '请求已取消', code: 'AGENT_CANCELLED' }
+            }
             const { url, options } = this.buildRequest(type, payload, provider, modelId, maxTokens, modelConfig)
             if (timeout > 0) options.timeout = timeout
+            if (requestOptions.signal) options.signal = requestOptions.signal
             
             // 检查请求体大小，防止 413 错误
             const bodySize = Buffer.byteLength(options.body, 'utf8')
@@ -1238,9 +1242,15 @@ export class AiClient {
             try {
                 res = await fetchWithProxy(url, { ...options, autoDetectProxy: true, family: 4 })
             } catch (error) {
+                if (requestOptions.signal?.aborted || error?.code === 'AGENT_CANCELLED') {
+                    return { success: false, cancelled: true, error: '请求已取消', code: 'AGENT_CANCELLED' }
+                }
                 const failure = this._classifyRequestError(error?.message || error)
                 if (type !== 'chat' || !failure.retryable) throw error
                 await this._waitBeforeFailover(1)
+                if (requestOptions.signal?.aborted) {
+                    return { success: false, cancelled: true, error: '请求已取消', code: 'AGENT_CANCELLED' }
+                }
                 logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 传输失败，重试当前请求一次`)
                 res = await fetchWithProxy(url, { ...options, autoDetectProxy: true, family: 4 })
             }
@@ -1455,7 +1465,10 @@ export class AiClient {
         throw new Error(`API业务错误: ${result.error}`)
     }
 
-    async makeRequest(type, payload, modelGroupKey = 'flash', maxTokens = 8192) {
+    async makeRequest(type, payload, modelGroupKey = 'flash', maxTokens = 8192, requestOptions = {}) {
+        if (requestOptions.signal?.aborted) {
+            return { success: false, cancelled: true, error: '请求已取消', code: 'AGENT_CANCELLED' }
+        }
         let modelPool = this.activeModelPools[modelGroupKey]?.[type]
         const taskTypeName = type === 'image' ? '绘图' : '对话'
         let lastError = `模型组 [${modelGroupKey}] 中没有可用的 [${taskTypeName}] 模型。`
@@ -1490,10 +1503,13 @@ export class AiClient {
             while (poolToTry.length > 0 && attempt < maxAttempts) {
                 const { provider, modelId, modelKey, modelConfig, statusKey: poolStatusKey, score } = poolToTry.shift()
                 if (attempt > 0) await this._waitBeforeFailover(attempt)
+                if (requestOptions.signal?.aborted) {
+                    return { success: false, cancelled: true, error: '请求已取消', code: 'AGENT_CANCELLED' }
+                }
                 attempt += 1
                 const statusKey = poolStatusKey || `${provider.id}-${modelKey || modelId}`
                 const startTime = Date.now()
-                const result = await this.attemptRequest(type, payload, provider, modelId, maxTokens, requestTimeout, modelConfig)
+                const result = await this.attemptRequest(type, payload, provider, modelId, maxTokens, requestTimeout, modelConfig, requestOptions)
                 const elapsedMs = Date.now() - startTime
                 const elapsed = (elapsedMs / 1000).toFixed(2)
 
@@ -1504,6 +1520,8 @@ export class AiClient {
                     logger.debug(`[AI-Plugin] 请求成功: ${provider.name} (${modelId})，耗时 ${elapsed}s, 得分:${score?.toFixed(2)}`)
                     return result
                 }
+
+                if (result.cancelled || requestOptions.signal?.aborted) return result
 
                 const failure = this._classifyRequestError(result.error)
                 if (failure.scope === 'provider' && this._prioritizeProviderFallback(poolToTry, provider.id)) {

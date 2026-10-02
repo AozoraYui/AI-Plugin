@@ -180,13 +180,25 @@ export async function resolveProxyUrl(options = {}) {
 }
 
 export async function fetchWithProxy(url, options = {}) {
+    const signal = options.signal
+    const createAbortError = () => {
+        const error = new Error('请求已取消')
+        error.code = 'AGENT_CANCELLED'
+        return error
+    }
+    if (signal?.aborted) throw createAbortError()
     const proxyUrl = await resolveProxyUrl(options)
+    if (signal?.aborted) throw createAbortError()
     const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : null
     const requestTimeout = options.timeout || 600000
     const maxRedirects = Math.max(0, Math.min(10, Number(options.maxRedirects ?? 5) || 0))
     const maxResponseBytes = Math.max(1024, Number(options.maxResponseBytes) || DEFAULT_MAX_RESPONSE_BYTES)
     const request = (targetUrl, redirectCount = 0) => new Promise((resolve, reject) => {
         assertPublicUrl(targetUrl, options).then(urlObj => {
+        if (signal?.aborted) {
+            reject(createAbortError())
+            return
+        }
         const httpModule = urlObj.protocol === 'https:' ? https : http
         const requestOptions = {
             hostname: urlObj.hostname,
@@ -199,9 +211,13 @@ export async function fetchWithProxy(url, options = {}) {
             timeout: requestTimeout
         }
         const req = httpModule.request(requestOptions, (res) => {
+            const cleanupAbort = () => {
+                if (signal && abortHandler) signal.removeEventListener('abort', abortHandler)
+            }
             const location = res.headers.location
             if (location && res.statusCode >= 300 && res.statusCode < 400 && options.redirect !== 'manual' && redirectCount < maxRedirects) {
                 res.resume()
+                cleanupAbort()
                 const nextUrl = new URL(location, targetUrl).toString()
                 resolve(request(nextUrl, redirectCount + 1))
                 return
@@ -211,6 +227,7 @@ export async function fetchWithProxy(url, options = {}) {
             const declaredLength = Number(res.headers['content-length'])
             if (Number.isFinite(declaredLength) && declaredLength > maxResponseBytes) {
                 res.resume()
+                cleanupAbort()
                 reject(new Error(`响应体超过 ${maxResponseBytes} 字节上限`))
                 return
             }
@@ -223,6 +240,7 @@ export async function fetchWithProxy(url, options = {}) {
                 chunks.push(chunk)
             })
             res.on('end', () => {
+                cleanupAbort()
                 const buffer = Buffer.concat(chunks)
                 const data = buffer.toString()
                 const jsonResponse = () => {
@@ -243,8 +261,13 @@ export async function fetchWithProxy(url, options = {}) {
                 })
             })
         })
-        req.on('error', reject)
-        req.on('timeout', () => { req.destroy(); reject(new Error('请求超时')) })
+        const abortHandler = () => req.destroy(createAbortError())
+        if (signal) signal.addEventListener('abort', abortHandler, { once: true })
+        req.on('error', error => {
+            if (signal && abortHandler) signal.removeEventListener('abort', abortHandler)
+            reject(error)
+        })
+        req.on('timeout', () => { req.destroy(new Error('请求超时')); reject(new Error('请求超时')) })
         if (options.body) req.write(options.body)
         req.end()
         }).catch(reject)

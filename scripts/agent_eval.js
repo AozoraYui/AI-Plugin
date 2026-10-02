@@ -68,6 +68,7 @@ const { trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
 const { getPureImageReplyPolicy, isReferentialBotKeywordMention, resolveFastChatImageDelivery, resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
 const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, classifyWebUrl, hasOverconfidentLowEvidenceAnswer, updateWebEvidenceState } = await import('../utils/web_evidence.js')
 const { extractMessageSendError, isContentModerationSendError } = await import('../utils/message_delivery.js')
+const { cancelAgentExecutionsByRecalledMessage, getActiveAgentExecutionCount, registerAgentExecution } = await import('../utils/agent_cancellation.js')
 
 const failures = []
 let passed = 0
@@ -81,6 +82,69 @@ function check(name, condition, detail = '') {
     failures.push({ name, detail })
     console.error(`FAIL ${name}${detail ? `: ${detail}` : ''}`)
 }
+
+check('撤回原消息且作者主动操作可以取消 Agent 执行', (() => {
+    const execution = registerAgentExecution({ messageId: 'recall-1', groupId: 'group-1', userId: 'user-1' })
+    const cancelled = cancelAgentExecutionsByRecalledMessage({ messageId: 'recall-1', groupId: 'group-1', userId: 'user-1', operatorId: 'user-1' })
+    const result = execution.isCancelled() && cancelled.length === 1
+    execution.dispose()
+    return result
+})())
+check('不同消息 ID 不会误取消 Agent 执行', (() => {
+    const execution = registerAgentExecution({ messageId: 'recall-2', groupId: 'group-1', userId: 'user-1' })
+    const cancelled = cancelAgentExecutionsByRecalledMessage({ messageId: 'other-message', groupId: 'group-1', userId: 'user-1', operatorId: 'user-1' })
+    const result = !execution.isCancelled() && cancelled.length === 0
+    execution.dispose()
+    return result
+})())
+check('不同群组不会误取消 Agent 执行', (() => {
+    const execution = registerAgentExecution({ messageId: 'recall-3', groupId: 'group-1', userId: 'user-1' })
+    const cancelled = cancelAgentExecutionsByRecalledMessage({ messageId: 'recall-3', groupId: 'group-2', userId: 'user-1', operatorId: 'user-1' })
+    const result = !execution.isCancelled() && cancelled.length === 0
+    execution.dispose()
+    return result
+})())
+check('不同用户不会误取消 Agent 执行', (() => {
+    const execution = registerAgentExecution({ messageId: 'recall-4', groupId: 'group-1', userId: 'user-1' })
+    const cancelled = cancelAgentExecutionsByRecalledMessage({ messageId: 'recall-4', groupId: 'group-1', userId: 'user-2', operatorId: 'user-2' })
+    const result = !execution.isCancelled() && cancelled.length === 0
+    execution.dispose()
+    return result
+})())
+check('管理员撤回他人消息不会取消 Agent 执行', (() => {
+    const execution = registerAgentExecution({ messageId: 'recall-5', groupId: 'group-1', userId: 'user-1' })
+    const cancelled = cancelAgentExecutionsByRecalledMessage({ messageId: 'recall-5', groupId: 'group-1', userId: 'user-1', operatorId: 'admin-1' })
+    const result = !execution.isCancelled() && cancelled.length === 0
+    execution.dispose()
+    return result
+})())
+check('私聊撤回按空群组精确匹配', (() => {
+    const execution = registerAgentExecution({ messageId: 'recall-6', userId: 'user-1' })
+    const cancelled = cancelAgentExecutionsByRecalledMessage({ messageId: 'recall-6', groupId: '', userId: 'user-1', operatorId: 'user-1' })
+    const result = execution.isCancelled() && cancelled.length === 1
+    execution.dispose()
+    return result
+})())
+check('Agent 执行可以绑定精确任务 ID 并抛出取消错误', (() => {
+    const execution = registerAgentExecution({ messageId: 'recall-bind', groupId: 'group-1', userId: 'user-1' })
+    const boundTaskId = execution.bindTask('task-recall-bind')
+    cancelAgentExecutionsByRecalledMessage({ messageId: 'recall-bind', groupId: 'group-1', userId: 'user-1', operatorId: 'user-1' })
+    let cancelledCode = ''
+    try {
+        execution.throwIfCancelled()
+    } catch (error) {
+        cancelledCode = error.code
+    }
+    execution.dispose()
+    return boundTaskId === 'task-recall-bind' && cancelledCode === 'AGENT_CANCELLED'
+})())
+check('撤回取消注册表中的执行记录', (() => {
+    const before = getActiveAgentExecutionCount()
+    const execution = registerAgentExecution({ messageId: 'recall-7', groupId: 'group-1', userId: 'user-1' })
+    const registered = getActiveAgentExecutionCount() === before + 1
+    execution.dispose()
+    return registered && getActiveAgentExecutionCount() === before
+})())
 
 const normalizedBatchQueries = normalizeWebSearchQueries({
     queries: ['小米 Buds 4 Pro 硬件参数', '小米 Buds 5 Pro Wi-Fi版 硬件参数', '小米 Buds 4 Pro 硬件参数', '', '  ']
