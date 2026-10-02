@@ -10,6 +10,8 @@ const {
     hasExplicitGroupFileListIntent,
     hasExplicitDrawIntent,
     hasExplicitMemorySearchIntent,
+    hasExplicitQQUserLookupIntent,
+    parseQQUserLookupRequest,
     hasExplicitLocalFileMutationIntent,
     hasExplicitLocalFileReadIntent,
     hasExplicitFileSendIntent,
@@ -761,11 +763,17 @@ const routingCases = [
 ]
 
 for (const item of routingCases) check(item.name, item.assert(item.text), item.text)
+check('QQ来源查询意图需要明确动作', hasExplicitQQUserLookupIntent('#c查一下 QQ号为3837933930 的对话记录'))
+check('QQ来源查询解析用户号和模式', (() => {
+    const parsed = parseQQUserLookupRequest('#c查一下 QQ号为3837933930 的私聊记录')
+    return parsed?.user_id === '3837933930' && parsed.mode === 'private_messages'
+})())
+check('没有QQ号的人物评价不触发来源意图', !hasExplicitQQUserLookupIntent('#c这个人怎么样'))
 
 const naturalLanguageEnabledTools = [
     'weather', 'web_search', 'web_fetch', 'system_info', 'shell_exec', 'config_manage', 'shell_session',
     'file_send', 'file_download', 'group_file_list', 'group_file_download', 'draw_image',
-    'user_profile_update', 'memory_search', 'group_chat_context', 'group_chat_digest',
+    'user_profile_update', 'memory_search', 'qq_user_lookup', 'group_chat_context', 'group_chat_digest',
     'group_send_message', 'group_leave', 'group_member_aliases', 'group_member_list',
     'group_member_resolve', 'group_mute', 'group_whole_mute', 'group_kick', 'group_set_card',
     'group_set_title', 'group_essence', 'group_request_list', 'group_request_handle'
@@ -780,6 +788,9 @@ const candidateCases = [
     ['自然语言配置修改命中结构化配置', '#c把 config.yaml 里的 enable 设置成 true', ['config_manage', 'shell_exec']],
     ['群聊水群说法命中群上下文', '#c那个群刚才都在水什么', ['group_chat_context']],
     ['翻翻以前命中记忆检索', '#c翻翻以前我有没有提过中山', ['memory_search']],
+    ['QQ号共同群查询命中来源工具', '#c查一下QQ号为3837933930的人在哪些群', ['qq_user_lookup']],
+    ['QQ号私聊查询命中来源工具', '#c查一下QQ号为3837933930的私聊记录', ['qq_user_lookup']],
+    ['普通人物评价不触发QQ来源查询', '#c这个人怎么样', []],
     ['写进我的资料命中档案更新', '#c把我住中山写进我的资料', ['user_profile_update']],
     ['整张角色图命中绘图', '#c给我整张诺亚在海边的图', ['draw_image']],
     ['口语离开指定群命中退群', '#c别在测试群待了，退掉吧', ['group_leave']],

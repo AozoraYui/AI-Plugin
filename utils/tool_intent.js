@@ -665,6 +665,32 @@ export function hasExplicitMemorySearchIntent(text) {
         || /(?:你还记得|还记不记得|有没有印象).{0,80}(?:我|我们|之前|以前|说过|提过|聊过|讨论过)/i.test(value)
 }
 
+export function hasExplicitQQUserLookupIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    const hasLabeledUserId = /(?:QQ(?:号|号码)?|用户(?:号|ID)|账号|帐号|user[_\s-]*id)\s*(?:为|是|叫|：|:|=)?\s*\d{5,15}/i.test(value)
+    const hasBareUserId = /(?<!\d)\d{5,15}(?!\d)/.test(value)
+        && /(?:这个人|该用户|目标用户|共同群|在哪些群|所在群|私聊|好友消息|临时会话|群聊记录|群消息|对话记录|聊天记录|交互记录|发言记录)/i.test(value)
+    const hasUserIdHint = hasLabeledUserId || hasBareUserId
+    if (!hasUserIdHint) return false
+    return /(?:查|查询|检索|搜索|反查|找找|看看|确认|核实|排查|了解|哪来的|来自哪里|来源|共同群|在哪些群|在哪个群|和机器人.{0,8}(?:在哪|共同)|私聊|好友消息|临时会话|群聊记录|对话记录|聊天记录|交互记录|发言记录|有没有.{0,8}(?:记录|对话|交互)|这个人是谁)/i.test(value)
+}
+
+export function parseQQUserLookupRequest(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!hasExplicitQQUserLookupIntent(value)) return null
+    const labeled = value.match(/(?:QQ(?:号|号码)?|用户(?:号|ID)|账号|帐号|user[_\s-]*id)\s*(?:为|是|叫|：|:|=)?\s*(\d{5,15})/i)
+    const fallback = value.match(/(?<!\d)\d{5,15}(?!\d)/)
+    const userId = labeled?.[1] || fallback?.[0]
+    if (!userId) return null
+
+    let mode = 'all'
+    if (/(?:共同群|在哪些群|哪个群|和机器人.{0,8}(?:在哪|共同)|所在群)/i.test(value)) mode = 'common_groups'
+    else if (/(?:私聊|好友消息|临时会话|私信)/i.test(value)) mode = 'private_messages'
+    else if (/(?:群聊记录|群消息|群发言|群里说过)/i.test(value) && !/(?:对话记录|聊天记录)/i.test(value)) mode = 'group_messages'
+    return { user_id: userId, mode }
+}
+
 export function parseMemorySearchRequest(text) {
     const value = getPrimaryUserInstruction(text).trim()
     if (!hasExplicitMemorySearchIntent(value)) return null
@@ -902,6 +928,12 @@ export function detectToolIntentFamilies(text, options = {}) {
     const families = new Set()
     if (!value) return families
 
+    const qqUserLookupIntent = hasExplicitQQUserLookupIntent(value)
+    if (qqUserLookupIntent) {
+        families.add('qq_user_lookup')
+        return families
+    }
+
     const add = (condition, family) => {
         if (condition) families.add(family)
     }
@@ -959,6 +991,7 @@ export function selectToolCandidates(enabledTools = [], text = '', options = {})
     if (families.has('draw')) add(['draw_image'])
     if (families.has('profile_update')) add(['user_profile_update'])
     if (families.has('memory')) add(['memory_search'])
+    if (families.has('qq_user_lookup')) add(['qq_user_lookup'])
     if (families.has('group_digest')) add(['group_chat_digest'])
     if (families.has('group_context')) add(['group_chat_context'])
     if (families.has('group_send')) add(['group_send_message'])
@@ -1070,6 +1103,8 @@ export function isExplicitToolIntent(toolName, text, options = {}) {
             return hasExplicitGroupChatDigestIntent(text)
         case 'memory_search':
             return hasExplicitMemorySearchIntent(text)
+        case 'qq_user_lookup':
+            return hasExplicitQQUserLookupIntent(text)
         case 'user_profile_update':
             return hasExplicitUserProfileUpdateIntent(text)
         case 'group_mute':

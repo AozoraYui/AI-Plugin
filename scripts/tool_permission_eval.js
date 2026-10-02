@@ -31,7 +31,8 @@ const masterArgs = {
     workspace_patch: { path: '/tmp/not-used-by-permission-test', old_text: 'x', new_text: 'y' },
     workspace_verify: { path: '/tmp/not-used-by-permission-test' },
     shell_session: { action: 'status' },
-    web_fetch: { url: 'https://example.com' }
+    web_fetch: { url: 'https://example.com' },
+    qq_user_lookup: { user_id: '114514' }
 }
 
 const masterTools = toolRegistry.getToolNames().filter(name => toolRegistry.get(name)?.permission === 'master')

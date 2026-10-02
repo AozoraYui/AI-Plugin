@@ -234,6 +234,26 @@ const TOOL_USAGE_GUIDES = {
             'scope 默认 auto；当前群语义搜索用 current_group；触发者个人记忆用 my_memory；主人全局跨群用 all；指定人/群时填 user_id/group_id。'
         ]
     },
+    qq_user_lookup: {
+        capabilities: [
+            '主人专用只读查询：根据 QQ 号实时确认机器人所在群中的共同群，并检索本地已采集的群聊、好友私聊和群临时会话流水。',
+            '可把已有 user_histories 作为补充的 AI 对话历史，但会明确区分它与原始私聊流水。'
+        ],
+        useWhen: [
+            '仅主人明确要求“查 QQ 号在哪些群/这个人哪来的/查共同群/查这个 QQ 的私聊或对话记录”时使用。'
+        ],
+        avoid: [
+            '非主人不可用；不要因为普通提到昵称、@成员或“这个人怎么样”就启动跨群反查。',
+            '不要把没有本地记录说成目标用户不存在，也不要把昵称、群名片或发言内容推断成真实身份。',
+            '这是只读查询，不会联系目标、加好友、拉群、发送消息或修改资料。'
+        ],
+        rules: [
+            'user_id 必须使用用户明确提供的 5-15 位数字 QQ 号；mode 可选 all、common_groups、group_messages、private_messages。',
+            '共同群来自 OneBot get_group_list 与 get_group_member_info 的实时检查；成员查询失败或检查被截断时必须保留提示，不能当作不在群。',
+            '群聊、好友私聊和群临时会话来自插件开始采集后的本地流水；AI 对话历史只能作为补充来源。',
+            '回答只展示完成任务所需的最小信息，并明确查询覆盖范围和“查无记录不等于不存在”。'
+        ]
+    },
     user_profile_update: {
         capabilities: [
             '在用户明确要求时，把本轮补充或自然语言指定来源中的长期稳定信息提炼并合并写入 user_profiles。',

@@ -14,7 +14,7 @@ import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, compactConversationHistory, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldLoadPrivateMemoryContext, shouldPrioritizeCurrentMultimodalTurn } from '../utils/message_context.js'
 import { collectQQFaceImageUrls, describeQQFaceSegment, formatQQFaceSegments } from '../utils/qq_face.js'
-import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parsePluginUpdateRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
+import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parsePluginUpdateRequest, parseQQUserLookupRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } from '../utils/pending_actions.js'
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
@@ -97,6 +97,7 @@ const CONTINUATION_ALLOWED_TOOLS = [
     'workspace_verify',
     'shell_session',
     'memory_search',
+    'qq_user_lookup',
     'user_profile_update',
     'group_chat_context',
     'group_chat_digest',
@@ -136,6 +137,7 @@ const AGENT_LOOP_ALLOWED_TOOLS = [
     'workspace_verify',
     'shell_session',
     'memory_search',
+    'qq_user_lookup',
     'group_chat_context',
     'group_chat_digest',
     'group_member_aliases',
@@ -160,6 +162,7 @@ const TASK_CONTEXT_CONTINUATION_TOOLS = [
     'workspace_verify',
     'shell_session',
     'memory_search',
+    'qq_user_lookup',
     'group_chat_context',
     'group_chat_digest',
     'group_member_aliases',
@@ -1085,6 +1088,17 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         hasImages,
         hasRecentImages
     })
+
+    if (isMaster && hasTool(enabledTools, 'qq_user_lookup')) {
+        const qqLookupArgs = parseQQUserLookupRequest(routeText)
+        if (qqLookupArgs) {
+            return {
+                intent: '规则预路由：主人要求根据 QQ 号反查共同群及已记录的交互来源。',
+                tools: [{ name: 'qq_user_lookup', args: qqLookupArgs }],
+                routedBy: 'rule'
+            }
+        }
+    }
     if (routeFamilies.size > 1) {
         logger.info(`[AI-Plugin] 检测到复合工具意图，跳过单工具预路由: ${[...routeFamilies].join(', ')}`)
         return null
@@ -2175,6 +2189,7 @@ export class ChatHandler extends plugin {
             }
             if (e.isMaster) {
                 enabledTools.push('system_info')
+                enabledTools.push('qq_user_lookup')
                 if (this.client.enableGroupSend) {
                     enabledTools.push('group_send_message')
                 } else if (/(帮我|替我|代我|转达).{0,30}(群|说|发|发送|告诉|带话|捎话|传话)/i.test(currentToolInstruction)) {

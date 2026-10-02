@@ -42,6 +42,11 @@ check('联网核验请求命中网页研究技能', research.includes('web-resea
 const weather = await selectNames('查一下深圳明天会不会下雨', ['weather'])
 check('天气请求命中网页研究技能', weather.includes('web-research'))
 
+const userLookup = await selectNames('主人查一下 QQ号为3837933930的人在哪些群', ['qq_user_lookup'], { isMaster: true })
+check('QQ 用户来源查询命中专用技能', userLookup.includes('user-lookup'))
+const nonMasterUserLookup = await selectNames('查一下 QQ号为3837933930的人在哪些群', ['qq_user_lookup'], { isMaster: false })
+check('非主人不会加载 QQ 用户来源技能', !nonMasterUserLookup.includes('user-lookup'))
+
 const image = await selectNames('用这张参考图生成一张新的图片', ['draw_image', 'vision_relay'], { hasImages: true })
 check('图片请求命中图像工作流技能', image.includes('image-workflow'))
 

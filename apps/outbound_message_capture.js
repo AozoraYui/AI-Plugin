@@ -36,6 +36,36 @@ function captureAllowed(e) {
     return !accessConfig.blacklist_users?.includes(userId) && !accessConfig.blacklist_groups?.includes(groupId)
 }
 
+function getDirectMessageScope(e) {
+    const messageType = String(e?.message_type || '').toLowerCase()
+    const subType = String(e?.sub_type || '').toLowerCase()
+    const groupId = String(e?.group_id || '').trim()
+    if (messageType === 'private' && (groupId || subType === 'group' || subType === 'group_self')) return 'temp'
+    if (messageType === 'private' || e?.isPrivate === true || (!groupId && e?.user_id)) return 'friend'
+    return ''
+}
+
+async function persistInboundDirectMessage(e) {
+    const scopeType = getDirectMessageScope(e)
+    if (!scopeType || !captureAllowed(e)) return
+    const db = global.AIPluginConversationManager?.db
+    if (!db?.saveDirectMessageLog) return
+    const normalized = normalizeOutboundMessage(e.message?.length ? e.message : e.msg)
+    if (!normalized.normalizedText && normalized.imageMeta.length === 0) return
+    const messageId = String(e.message_id || e.seq || `direct_${Date.now()}_${e.user_id || 'unknown'}`)
+    await db.saveDirectMessageLog({
+        userId: String(e.user_id || ''),
+        groupId: e.group_id ? String(e.group_id) : '',
+        scopeType,
+        messageId,
+        seq: e.seq || '',
+        nickname: e.sender?.card || e.sender?.nickname || e.friend?.nickname || `用户${e.user_id}`,
+        normalizedText: normalized.normalizedText,
+        imageMeta: normalized.imageMeta,
+        createdAt: getDBTimestamp()
+    })
+}
+
 async function persistInboundCommand(e) {
     if (!e?.group_id || !String(e.msg || '').trim().startsWith('#') || !captureAllowed(e)) return
     const enabled = global.AIPluginClient?.enableFastChat || Config.enable_fast_chat === true
@@ -126,6 +156,12 @@ export class OutboundMessageCapture extends plugin {
 
     async captureReply(e) {
         if (!e?.reply || e[REPLY_WRAPPED]) return false
+
+        try {
+            await persistInboundDirectMessage(e)
+        } catch (err) {
+            logger.warn(`[AI-Plugin] 私聊/临时会话消息入库失败: ${err.message}`)
+        }
 
         try {
             await persistInboundCommand(e)

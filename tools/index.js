@@ -30,3 +30,4 @@ export { workspaceListTool, workspaceSearchTool, workspaceReadTool, workspacePat
 export { shellSessionTool } from './shell_session.js'
 export { webFetchTool } from './web_fetch.js'
 export { weatherTool } from './weather.js'
+export { qqUserLookupTool } from './qq_user_lookup.js'

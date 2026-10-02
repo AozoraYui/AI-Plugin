@@ -73,6 +73,15 @@ function normalizeGroupMessageRow(row) {
     }
 }
 
+function parseJsonArray(value) {
+    try {
+        const parsed = JSON.parse(value || '[]')
+        return Array.isArray(parsed) ? parsed : []
+    } catch {
+        return []
+    }
+}
+
 function appendLimitClause(query, params, limit, defaultLimit, maxLimit = Infinity) {
     const num = Number(limit)
     if (num === Infinity) return query
@@ -163,6 +172,27 @@ export class AIDatabase {
 
                 CREATE INDEX IF NOT EXISTS idx_group_logs_group_recent
                 ON group_message_logs(group_id, id);
+
+                -- 好友私聊/群临时会话流水（只保存文本和图片元信息，不保存图片本体）
+                CREATE TABLE IF NOT EXISTS direct_message_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    group_id TEXT,
+                    scope_type TEXT NOT NULL DEFAULT 'friend',
+                    message_id TEXT NOT NULL,
+                    seq TEXT,
+                    nickname TEXT,
+                    normalized_text TEXT NOT NULL,
+                    image_meta TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(scope_type, user_id, message_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_direct_logs_user_created
+                ON direct_message_logs(user_id, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_direct_logs_scope_group
+                ON direct_message_logs(scope_type, group_id, created_at);
 
                 -- 机器人主动发送的合并转发原文，避免 OneBot 无法回读临时 resid
                 CREATE TABLE IF NOT EXISTS outbound_forward_messages (
@@ -529,6 +559,77 @@ export class AIDatabase {
                     queueGroupMessageVectorIndex({ ...log, id: this.lastID, createdAt })
                 }
                 resolve(changes)
+            })
+        })
+    }
+
+    saveDirectMessageLog(log = {}) {
+        return new Promise((resolve, reject) => {
+            const userId = String(log.userId || '').trim()
+            const messageId = String(log.messageId || '').trim()
+            const scopeType = String(log.scopeType || 'friend').trim() || 'friend'
+            if (!userId || !messageId) {
+                resolve(false)
+                return
+            }
+            this.db.run(`
+                INSERT OR IGNORE INTO direct_message_logs
+                    (user_id, group_id, scope_type, message_id, seq, nickname, normalized_text, image_meta, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                userId,
+                log.groupId ? String(log.groupId) : '',
+                scopeType,
+                messageId,
+                log.seq ? String(log.seq) : '',
+                String(log.nickname || ''),
+                String(log.normalizedText || ''),
+                JSON.stringify(log.imageMeta || []),
+                log.createdAt || getDBTimestamp()
+            ], function(err) {
+                if (err) reject(err)
+                else resolve((this.changes || 0) > 0)
+            })
+        })
+    }
+
+    getDirectMessageLogs(options = {}) {
+        return new Promise((resolve, reject) => {
+            const params = []
+            let query = `
+                SELECT id, user_id, group_id, scope_type, message_id, seq, nickname, normalized_text, image_meta, created_at
+                FROM direct_message_logs
+                WHERE 1 = 1
+            `
+            if (options.userId) {
+                query += ' AND user_id = ?'
+                params.push(String(options.userId))
+            }
+            if (options.scopeType) {
+                query += ' AND scope_type = ?'
+                params.push(String(options.scopeType))
+            }
+            const q = String(options.query || '').trim()
+            if (q) {
+                const like = `%${q}%`
+                query += ' AND (normalized_text LIKE ? OR nickname LIKE ? OR user_id LIKE ? OR group_id LIKE ?)'
+                params.push(like, like, like, like)
+            }
+            query = appendLimitClause(`${query} ORDER BY id DESC`, params, options.limit, 60, 300)
+            this.db.all(query, params, (err, rows) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                resolve(rows.reverse().map(row => ({
+                    ...row,
+                    userId: row.user_id,
+                    groupId: row.group_id || '',
+                    scopeType: row.scope_type,
+                    messageId: row.message_id,
+                    seq: row.seq || '',
+                    imageMeta: parseJsonArray(row.image_meta)
+                })))
             })
         })
     }
