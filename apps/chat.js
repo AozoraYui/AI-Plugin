@@ -1605,7 +1605,7 @@ async function askMainModelForToolPlan(client, modelGroupKey, options = {}) {
         ? `\n\n${truncateForPrompt(planningContext, AGENT_TASK_CONTEXT_MAX_CHARS)}`
         : ''
     const researchRequirementsBlock = researchRequirements.requiresFetch
-        ? `\n\n【联网研究硬约束】当前日期为 ${getTodayDateStr()}（北京时间）。${researchRequirements.targetVersions.length > 0 ? `用户指定的版本目标是「${researchRequirements.targetVersions.join('、')}」，后续搜索、抓取和回答必须保持该版本，不能擅自替换成其他版本。` : ''}${researchRequirements.asksCompleteList ? '用户要求全部/完整名单，必须验证完整来源；部分批次不能包装成完整名单。' : ''}${researchRequirements.asksOfficialSource ? '用户询问官方/正式发布/升级适配信息，搜索摘要只能发现来源，必须继续读取权威原文或明确说明无法核实。' : ''}`
+        ? `\n\n【联网研究硬约束】当前日期为 ${getTodayDateStr()}（北京时间）。${researchRequirements.scopeTerms.length > 0 ? `用户明确给出的范围词是「${researchRequirements.scopeTerms.join('、')}」，后续搜索、抓取和回答必须保持这些实体、型号、版本、时间或范围，不能擅自替换。` : ''}${researchRequirements.asksCompleteList ? '用户要求全部/完整名单，必须验证完整来源；部分批次不能包装成完整名单。' : ''}${researchRequirements.asksOfficialSource ? '用户询问官方/正式发布/升级适配信息，搜索摘要只能发现来源，必须继续读取权威原文或明确说明无法核实。' : ''}`
         : ''
     const fullMessageHasQuotedContext = currentInstruction && currentInstruction !== String(userMessage || '').trim()
     const fullMessageForPlanner = fullMessageHasQuotedContext
@@ -3391,10 +3391,10 @@ ${visualDescription}`
             }
             if (webResearchUsed) {
                 const domains = (webEvidenceState.domains || []).join('、') || '无'
-                const fetchedOfficialDomains = (webEvidenceState.fetchedOfficialDomains || []).join('、') || '无'
-                userMessage += `\n\n【联网证据账本】证据质量=${webEvidenceState.quality || 'low'}；可用正文抓取=${webEvidenceState.usableFetchCount || 0}；独立直接来源=${(webEvidenceState.domains || []).length}（${domains}）；已抓取官方域名=${fetchedOfficialDomains}；低质量/失败页面=${webEvidenceState.lowQualityCount || 0}；搜索不可用次数=${webEvidenceState.searchUnavailableCount || 0}。搜索摘要只是线索，不等于原文。若证据质量不足或搜索链路不可用，必须明确说无法核实；不得把失败、熔断或零结果解释为目标不存在、事件未发生、从未报道或纯属虚构，也不得自行补全具体日期、金额、动机、违法性质、因果关系、他人反应和事件后续。`
+                const fetchedAuthoritativeDomains = (webEvidenceState.fetchedAuthoritativeDomains || []).join('、') || '无'
+                userMessage += `\n\n【联网证据账本】证据质量=${webEvidenceState.quality || 'low'}；可用正文抓取=${webEvidenceState.usableFetchCount || 0}；独立直接来源=${(webEvidenceState.domains || []).length}（${domains}）；已抓取高可信域名=${fetchedAuthoritativeDomains}；低质量/失败页面=${webEvidenceState.lowQualityCount || 0}；搜索不可用次数=${webEvidenceState.searchUnavailableCount || 0}。搜索摘要只是线索，不等于原文。若证据质量不足或搜索链路不可用，必须明确说无法核实；不得把失败、熔断或零结果解释为目标不存在、事件未发生、从未报道或纯属虚构，也不得自行补全具体日期、金额、动机、违法性质、因果关系、他人反应和事件后续。`
                 if (hasInsufficientWebEvidenceForRequirements(webEvidenceState, webResearchRequirements)) {
-                    userMessage += '\n【联网研究硬门控】本任务仍缺少指定版本/官方来源/完整名单所需的可用正文。最终只能如实说明证据不足，不能替换版本、断言官方不存在或把部分名单包装成完整名单。'
+                    userMessage += '\n【联网研究硬门控】本任务仍缺少用户指定范围、时效性、官方核验或完整结果所需的可用正文。最终只能如实说明证据不足，不能擅自替换目标、断言目标不存在或把部分结果包装成完整结果。'
                 }
             }
 

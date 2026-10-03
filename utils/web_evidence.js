@@ -25,49 +25,64 @@ const ERROR_CONTENT_PATTERNS = [
     /(?:waerrpage|error[_ -]?page|captcha|challenge-platform)/i
 ]
 
-const OFFICIAL_WEB_DOMAINS = new Set([
-    'mi.com',
-    'mi.com.cn',
-    'xiaomi.com',
-    'xiaomi.com.cn',
-    'xiaomi.cn',
-    'miui.com'
-])
+const AUTHORITATIVE_DOMAIN_SUFFIXES = [
+    '.gov',
+    '.gov.cn',
+    '.edu',
+    '.edu.cn',
+    '.mil',
+    '.mil.cn'
+]
 
 function normalizeHost(hostname = '') {
     return String(hostname || '').toLowerCase().replace(/^www\./, '')
 }
 
-export function isOfficialWebDomain(domain = '') {
+export function isLikelyAuthoritativeWebDomain(domain = '') {
     const host = normalizeHost(domain)
-    return [...OFFICIAL_WEB_DOMAINS].some(item => host === item || host.endsWith(`.${item}`))
+    if (!host) return false
+    return AUTHORITATIVE_DOMAIN_SUFFIXES.some(suffix => host.endsWith(suffix) || host.includes(`${suffix}.`))
+        || host.split('.').some(part => /^(?:official|gov|government|edu|university|museum)$/i.test(part))
 }
 
 export function buildWebResearchRequirements(instruction = '') {
     const value = String(instruction || '').replace(/\s+/g, ' ').trim()
-    const targetVersions = [...value.matchAll(/(?:(?:澎湃|小米)?\s*OS|HyperOS|MIUI)\s*[-_ ]?(\d+(?:\.\d+)?)/gi)]
-        .map(match => match[0].replace(/\s+/g, ' ').trim())
-        .filter(Boolean)
     const asksCompleteList = /(?:全部|完整|所有|全量|全名单|完整名单|全部名单|所有机型|每一款|每个机型)/i.test(value)
     const asksOfficialSource = /(?:官方|正式|公告|发布|升级|适配|名单|推送|是否存在|有没有|真假|核实)/i.test(value)
-    const requiresFetch = asksCompleteList || asksOfficialSource || targetVersions.length > 0
+    const asksFreshness = /(?:最新|目前|现在|当前|截至|实时|近期|今天|今日|昨天|明天|最近)/i.test(value)
+    const asksFactCheck = /(?:核实|核查|查证|查真|真假|是否真实|是否属实|有没有发生|是否发生|是否存在)/i.test(value)
+    const scopeTerms = extractResearchScopeTerms(value)
+    const requiresFetch = asksCompleteList || asksOfficialSource || asksFreshness || asksFactCheck
     return {
-        targetVersions: [...new Set(targetVersions)],
+        scopeTerms,
         asksCompleteList,
         asksOfficialSource,
+        asksFreshness,
+        asksFactCheck,
         requiresFetch,
-        preserveTargetVersion: targetVersions.length > 0
+        preserveScope: scopeTerms.length > 0 || asksCompleteList
     }
 }
 
 export function hasInsufficientWebEvidenceForRequirements(state = {}, requirements = {}) {
     if (!requirements?.requiresFetch) return false
-    if (Number(state.usableFetchCount) <= 0) return true
-    if (requirements.asksOfficialSource) {
-        const fetchedOfficialDomains = Array.isArray(state.fetchedOfficialDomains) ? state.fetchedOfficialDomains : []
-        if (fetchedOfficialDomains.length === 0) return true
+    return Number(state.usableFetchCount) <= 0
+}
+
+export function extractResearchScopeTerms(text = '') {
+    const value = String(text || '')
+    const terms = new Set()
+    for (const match of value.matchAll(/[A-Za-z][A-Za-z0-9._-]*\d[A-Za-z0-9._-]*/g)) {
+        terms.add(match[0].toLowerCase())
     }
-    return false
+    for (const match of value.matchAll(/\b(?:v|ver|version|第)\s*\d+(?:\.\d+){0,3}\b/gi)) {
+        terms.add(match[0].replace(/\s+/g, '').toLowerCase())
+    }
+    for (const match of value.matchAll(/[“「『"]([^”」』"]{2,40})[”」』"]/g)) {
+        const term = match[1].replace(/\s+/g, ' ').trim().toLowerCase()
+        if (term) terms.add(term)
+    }
+    return [...terms].slice(0, 12)
 }
 
 function safeUrl(rawUrl = '') {
@@ -155,7 +170,8 @@ export function assessSearchResults(results = []) {
     const quality = independentDomains.length >= 3 && evidenceKeys.length >= 3
         ? 'high'
         : (independentDomains.length >= 2 && evidenceKeys.length >= 2 ? 'medium' : 'low')
-    const autoFetchCandidates = enriched.filter(item => item.autoFetchEligible && (item.usableEvidence || isOfficialWebDomain(item.domain)))
+    const directCandidates = enriched.filter(item => item.autoFetchEligible)
+    const autoFetchCandidates = enriched.filter(item => item.autoFetchEligible && (item.usableEvidence || isLikelyAuthoritativeWebDomain(item.domain)))
     const autoFetchCandidate = autoFetchCandidates[0] || null
     return {
         results: enriched,
@@ -166,6 +182,7 @@ export function assessSearchResults(results = []) {
         evidenceKeys,
         autoFetchCandidate,
         autoFetchCandidates,
+        directCandidates,
         // 搜索摘要只能用于发现来源，不能单独支撑人物/组织争议等敏感结论。
         sufficientForSensitiveClaims: false
     }
@@ -244,7 +261,7 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
         evidenceKeys: [...new Set(state.evidenceKeys || [])],
         fetchedEvidenceKeys: [...new Set(state.fetchedEvidenceKeys || [])],
         domains: [...new Set(state.domains || [])],
-        fetchedOfficialDomains: [...new Set(state.fetchedOfficialDomains || [])],
+        fetchedAuthoritativeDomains: [...new Set(state.fetchedAuthoritativeDomains || [])],
         usableFetchCount: Math.max(0, Number(state.usableFetchCount) || 0),
         lowQualityCount: Math.max(0, Number(state.lowQualityCount) || 0),
         searchCount: Math.max(0, Number(state.searchCount) || 0),
@@ -257,7 +274,7 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
     const keys = new Set(current.evidenceKeys)
     const fetchedKeys = new Set(current.fetchedEvidenceKeys)
     const domains = new Set(current.domains)
-    const fetchedOfficialDomains = new Set(current.fetchedOfficialDomains)
+    const fetchedAuthoritativeDomains = new Set(current.fetchedAuthoritativeDomains)
     if (toolName === 'web_search') {
         current.searchCount++
         if (data?.searchUnavailable === true) current.searchUnavailableCount++
@@ -277,7 +294,7 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
                 fetchedKeys.add(String(facts.evidenceKey))
             }
             if (facts.domain) domains.add(String(facts.domain))
-            if (facts.domain && isOfficialWebDomain(facts.domain)) fetchedOfficialDomains.add(String(facts.domain))
+            if (facts.domain && isLikelyAuthoritativeWebDomain(facts.domain)) fetchedAuthoritativeDomains.add(String(facts.domain))
         } else {
             current.lowQualityCount++
         }
@@ -285,7 +302,7 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
     current.evidenceKeys = [...keys].sort()
     current.fetchedEvidenceKeys = [...fetchedKeys].sort()
     current.domains = [...domains].sort()
-    current.fetchedOfficialDomains = [...fetchedOfficialDomains].sort()
+    current.fetchedAuthoritativeDomains = [...fetchedAuthoritativeDomains].sort()
     current.usableFetchCount = current.fetchedEvidenceKeys.length
     current.quality = current.usableFetchCount >= 1 && current.domains.length >= 2
         ? 'high'
@@ -299,7 +316,7 @@ export function buildWebEvidenceFingerprint(state = {}) {
         evidenceKeys: [...new Set(state.evidenceKeys || [])].sort(),
         fetchedEvidenceKeys: [...new Set(state.fetchedEvidenceKeys || [])].sort(),
         domains: [...new Set(state.domains || [])].sort(),
-        fetchedOfficialDomains: [...new Set(state.fetchedOfficialDomains || [])].sort(),
+        fetchedAuthoritativeDomains: [...new Set(state.fetchedAuthoritativeDomains || [])].sort(),
         usableFetchCount: Math.max(0, Number(state.usableFetchCount) || 0),
         quality: state.quality || 'low',
         searchUnavailable: state.searchUnavailable === true
@@ -321,20 +338,21 @@ function hasDefinitivePublicFactDenial(text = '') {
     return /(?:不存在|没有发生|没发生过|从未发生|根本没发生|完全是虚构|纯属虚构|现实中不存在|没有任何真实记录|从未报道|没有报道过|确定是谣言|必然是假的|事实不存在|不可能发生)/i.test(String(text || ''))
 }
 
-function extractResearchVersionNumbers(text = '') {
-    return [...String(text || '').matchAll(/(?:(?:澎湃|小米)?\s*OS|HyperOS|MIUI)\s*[-_ ]?(\d+(?:\.\d+)?)/gi)]
-        .map(match => match[1])
-        .filter(Boolean)
+function scopeFamily(term = '') {
+    return String(term || '').toLowerCase().replace(/\d.*$/, '').replace(/[^a-z]+/g, '')
 }
 
-function hasVersionScopeMismatch(answer = '', instruction = '', evidenceState = {}) {
+function hasResearchScopeMismatch(answer = '', instruction = '', evidenceState = {}) {
     const requirements = buildWebResearchRequirements(instruction)
-    if (!requirements.preserveTargetVersion || Number(evidenceState?.usableFetchCount || 0) > 0) return false
-    const requestedVersions = new Set(extractResearchVersionNumbers(instruction))
-    const answerVersions = new Set(extractResearchVersionNumbers(answer))
-    const alternateVersion = [...answerVersions].some(version => !requestedVersions.has(version))
-    const listOrReleaseClaim = /(?:升级名单|适配名单|完整名单|全部名单|官方|正式发布|已经发布|尚未发布|不存在)/i.test(String(answer || ''))
-    return alternateVersion && listOrReleaseClaim
+    if (!requirements.preserveScope || Number(evidenceState?.usableFetchCount || 0) > 0) return false
+    const requestedTerms = new Set(requirements.scopeTerms)
+    const answerTerms = extractResearchScopeTerms(answer)
+    const alternateScope = answerTerms.some(term => {
+        const family = scopeFamily(term)
+        return family && [...requestedTerms].some(requested => scopeFamily(requested) === family && requested !== term)
+    })
+    const definitiveClaim = /(?:官方|正式发布|已经发布|尚未发布|不存在|升级名单|适配名单|完整名单|全部名单|可以确认|明确)/i.test(String(answer || ''))
+    return alternateScope && definitiveClaim
 }
 
 export function hasUnsupportedWebResearchClaim(answer = '', instruction = '', evidenceState = {}) {
@@ -358,9 +376,14 @@ export function hasOverconfidentLowEvidenceAnswer(answer = '', instruction = '',
     const publicFactClaim = hasEvidenceAttempt && isPublicFactCheckRequest(instruction) && hasDefinitivePublicFactDenial(value)
     const unavailableClaim = evidenceState?.searchUnavailable === true
         && /(?:搜索失败|搜索源|网络搜索|联网|没有搜到|未找到结果|查不到)/i.test(value)
-    const versionScopeMismatch = hasVersionScopeMismatch(value, instruction, evidenceState)
-    const unverifiedVersionDenial = buildWebResearchRequirements(instruction).preserveTargetVersion
+    const scopeMismatch = hasResearchScopeMismatch(value, instruction, evidenceState)
+    const requirements = buildWebResearchRequirements(instruction)
+    const incompleteResearchClaim = requirements.requiresFetch
+        && Number(evidenceState?.usableFetchCount || 0) <= 0
+        && !uncertainty
+        && /(?:官方|正式|最新|当前|截至|全部|完整|所有|名单|价格|版本|政策|公告|已经|可以确认|明确|确定|属实|真实|存在|支持|不支持|发生|没有)/i.test(value)
+    const unverifiedScopeDenial = requirements.preserveScope
         && Number(evidenceState?.usableFetchCount || 0) <= 0
         && /(?:官方|正式).{0,16}(?:不存在|未发布|没有发布|尚未发布)|(?:不存在|未发布|没有发布|尚未发布).{0,16}(?:官方|正式)/i.test(value)
-    return (sensitivePersonClaim || publicFactClaim || unavailableClaim || versionScopeMismatch || unverifiedVersionDenial) && !uncertainty
+    return (sensitivePersonClaim || publicFactClaim || unavailableClaim || scopeMismatch || incompleteResearchClaim || unverifiedScopeDenial) && !uncertainty
 }

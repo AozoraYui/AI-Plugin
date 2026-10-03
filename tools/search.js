@@ -936,13 +936,12 @@ export function normalizeWebSearchQueries(args = {}) {
     return queries
 }
 
-function buildOfficialSearchVariants(query = '') {
+function buildResearchSearchVariants(query = '') {
     const value = String(query || '').replace(/\s+/g, ' ').trim()
-    if (!/(?:(?:澎湃|小米)?\s*OS|HyperOS|MIUI)\s*[-_ ]?\d+(?:\.\d+)?/i.test(value)
-        || !/(?:升级|适配|名单|发布|推送|计划|版本)/i.test(value)) return []
-    const variants = [`${value} 官方 小米`]
-    const english = value.replace(/(?:澎湃|小米)?\s*OS\s*[-_ ]?(\d+(?:\.\d+)?)/gi, 'Xiaomi HyperOS $1')
-    if (english !== value) variants.push(`${english} official rollout list`)
+    if (!/(?:官方|正式|公告|发布|升级|适配|名单|推送|计划|版本|最新|核实|真假|完整|全部)/i.test(value)) return []
+    const variants = [`${value} 官方 原始来源`]
+    if (/(?:完整|全部|所有|全量|名单)/i.test(value)) variants.push(`${value} 完整来源`)
+    variants.push(`${value} official primary source`)
     return [...new Set(variants)].slice(0, 2)
 }
 
@@ -986,10 +985,10 @@ async function searchWeb(query, count = 5) {
         assessment = assessSearchResults(merged)
     }
 
-    const officialVariants = buildOfficialSearchVariants(query)
-    for (const variant of officialVariants) {
-        if (assessment.autoFetchCandidates?.some(item => item?.domain && /(?:mi\.com|xiaomi\.com|miui\.com)$/i.test(item.domain))) break
-        logger.info(`[AI-Plugin] 版本名单官方补充搜索: "${variant}"`)
+    const researchVariants = buildResearchSearchVariants(query)
+    for (const variant of researchVariants) {
+        if (assessment.autoFetchCandidates?.length > 0) break
+        logger.info(`[AI-Plugin] 研究任务来源补充搜索: "${variant}"`)
         const variantRuns = await Promise.all([
             runSearchEngine('Bing', () => searchBing(variant, candidateCount)),
             runSearchEngine('百度', () => searchBaidu(variant, candidateCount)),
@@ -1021,7 +1020,7 @@ async function searchWeb(query, count = 5) {
         sufficientForSensitiveClaims: assessment.sufficientForSensitiveClaims,
         autoFetchCandidate: assessment.autoFetchCandidate,
         autoFetchCandidates: assessment.autoFetchCandidates,
-        searchVariants: officialVariants,
+        searchVariants: researchVariants,
         engineStatus: engineRuns.map(run => ({ name: run.name, status: run.status, reason: run.reason || '' })),
         successfulEngineCount,
         searchUnavailable,
@@ -1037,7 +1036,7 @@ async function searchWeb(query, count = 5) {
             independentDomains: assessment.independentDomains,
             evidenceKeys: assessment.evidenceKeys,
             sufficientForSensitiveClaims: assessment.sufficientForSensitiveClaims,
-            searchVariants: officialVariants,
+            searchVariants: researchVariants,
             searchUnavailable,
             transportFailure
         },

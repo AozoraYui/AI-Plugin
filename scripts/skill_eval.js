@@ -40,7 +40,7 @@ const research = await selectNames('搜索最新版本并打开官方来源核�
 check('联网核验请求命中网页研究技能', research.includes('web-research'))
 const researchSkill = catalog.find(skill => skill.name === 'web-research')
 check('网页研究技能覆盖图片引用核查', researchSkill?.body.includes('图片/引用消息核查') && researchSkill.body.includes('视觉摘要只是待核查线索'))
-check('网页研究技能锁定指定版本并要求完整来源', researchSkill?.body.includes('必须锁定该版本') && researchSkill.body.includes('全部名单') && researchSkill.body.includes('不能用其他版本的部分名单回答'))
+check('网页研究技能锁定指定版本并要求完整来源', researchSkill?.body.includes('必须锁定这些范围') && researchSkill.body.includes('全部名单') && researchSkill.body.includes('不能用其他范围的部分结果回答'))
 
 const weather = await selectNames('查一下深圳明天会不会下雨', ['weather'])
 check('天气请求命中网页研究技能', weather.includes('web-research'))

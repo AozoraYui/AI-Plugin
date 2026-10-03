@@ -236,28 +236,34 @@ check('真实网页工具结果允许基于核查汇报', !hasUnsupportedWebRese
 ))
 check('指定澎湃 OS 版本会形成联网研究硬约束', (() => {
     const requirements = buildWebResearchRequirements('查一下红米K60在不在澎湃OS4升级名单内，把澎湃OS4的全部升级名单发给我')
-    return requirements.targetVersions.includes('澎湃OS4')
+    return requirements.scopeTerms.includes('k60')
+        && requirements.scopeTerms.includes('os4')
         && requirements.asksCompleteList
         && requirements.asksOfficialSource
         && requirements.requiresFetch
-        && requirements.preserveTargetVersion
+        && requirements.preserveScope
 })())
 check('缺少正文时不能完成官方完整名单任务', hasInsufficientWebEvidenceForRequirements(
-    { searchCount: 2, usableFetchCount: 0, fetchedOfficialDomains: [] },
+    { searchCount: 2, usableFetchCount: 0, fetchedAuthoritativeDomains: [] },
     buildWebResearchRequirements('联网查一下澎湃OS4官方全部升级名单')
 ))
 check('官方正文抓取后允许完成名单任务', !hasInsufficientWebEvidenceForRequirements(
-    { searchCount: 1, usableFetchCount: 1, fetchedOfficialDomains: ['os.mi.com'] },
+    { searchCount: 1, usableFetchCount: 1, fetchedAuthoritativeDomains: ['example.gov.cn'] },
     buildWebResearchRequirements('联网查一下澎湃OS4官方全部升级名单')
 ))
 check('官方域名短摘要仍进入自动抓取候选', (() => {
-    const assessed = assessSearchResults([{ title: 'Xiaomi HyperOS 4', url: 'https://os.mi.com/hyperos/4', snippet: '计划' }])
-    return assessed.autoFetchCandidate?.url === 'https://os.mi.com/hyperos/4'
+    const assessed = assessSearchResults([{ title: '官方版本名单', url: 'https://www.gov.cn/example/list', snippet: '计划' }])
+    return assessed.autoFetchCandidate?.url === 'https://www.gov.cn/example/list'
 })())
 check('指定版本下替换成 OS2 的结论会被拦截', hasOverconfidentLowEvidenceAnswer(
     '澎湃OS4目前没有官方名单，下面是澎湃OS2的完整升级名单。',
     '查一下澎湃OS4官方全部升级名单',
     { searchCount: 2, fetchCount: 0, usableFetchCount: 0, sufficientForSensitiveClaims: false }
+))
+check('任何指定范围的研究在没有正文时都不能确定性完成', hasOverconfidentLowEvidenceAnswer(
+    '根据搜索结果，当前价格是 99 元，官方已经确认。',
+    '联网查一下产品 X 的最新官方价格',
+    { searchCount: 1, fetchCount: 0, usableFetchCount: 0, sufficientForSensitiveClaims: false }
 ))
 
 check('QQNT faceText 会转换为模型可读语义', formatQQFaceSegment({
