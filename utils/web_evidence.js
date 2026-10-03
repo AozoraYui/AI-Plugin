@@ -9,7 +9,8 @@ const SEARCH_REDIRECT_RULES = [
 const SEARCH_PAGE_RULES = [
     ['baidu.com', /^\/(?:s|search)(?:\/|$)/i],
     ['bing.com', /^\/(?:search|images)(?:\/|$)/i],
-    ['so.com', /^\/s(?:\/|$)/i],
+    ['so.com', /^\/(?:s|search)(?:\/|$)/i],
+    ['ai.so.com', /^\/search(?:\/|$)/i],
     ['image.so.com', /^\/i/i],
     ['sogou.com', /^\/web/i],
     ['google.com', /^\/search/i]
@@ -49,6 +50,17 @@ const KNOWN_OFFICIAL_DOMAINS = new Set([
     'qq.com'
 ])
 
+const OFFICIAL_QUERY_DOMAIN_HINTS = [
+    { pattern: /(?:小米|红米|澎湃|hyperos|miui)/i, domains: ['mi.com', 'xiaomi.com'] },
+    { pattern: /(?:华为|鸿蒙|harmonyos)/i, domains: ['huawei.com'] },
+    { pattern: /(?:荣耀|magicos)/i, domains: ['honor.com'] },
+    { pattern: /(?:苹果|iphone|ipad|ios|macos)/i, domains: ['apple.com'] },
+    { pattern: /(?:微软|windows|xbox|office)/i, domains: ['microsoft.com', 'windows.com'] },
+    { pattern: /(?:谷歌|google|安卓|android|pixel)/i, domains: ['google.com', 'android.com'] },
+    { pattern: /(?:openai|chatgpt)/i, domains: ['openai.com'] },
+    { pattern: /(?:腾讯|微信|qq|企鹅)/i, domains: ['tencent.com', 'qq.com'] }
+]
+
 const WEAK_LANDING_PATHS = new Set(['', '/', '/home', '/index', '/index.html', '/default.html'])
 
 function normalizeHost(hostname = '') {
@@ -59,6 +71,18 @@ export function isLikelyAuthoritativeWebDomain(domain = '') {
     const host = normalizeHost(domain)
     if (!host) return false
     return getWebSourceAuthority(host).tier === 'official'
+}
+
+export function getOfficialSearchDomains(query = '') {
+    const value = String(query || '')
+    const domains = []
+    for (const hint of OFFICIAL_QUERY_DOMAIN_HINTS) {
+        if (!hint.pattern.test(value)) continue
+        for (const domain of hint.domains) {
+            if (!domains.includes(domain)) domains.push(domain)
+        }
+    }
+    return domains.slice(0, 3)
 }
 
 export function getWebSourceAuthority(domain = '') {
@@ -169,7 +193,7 @@ function stableUrlKey(rawUrl = '') {
     if (!url) return ''
     url.hash = ''
     for (const key of [...url.searchParams.keys()]) {
-        if (/^(?:utm_.+|from|source|spm|ref|refer|tracking|share|share_source)$/i.test(key)) {
+        if (/^(?:utm_.+|from|source|spm|ref|refer|tracking|share|share_source|timestamp|signature|src|new|ver|appid)$/i.test(key)) {
             url.searchParams.delete(key)
         }
     }
@@ -299,7 +323,15 @@ export function assessSearchResults(results = [], query = '') {
         ? 'high'
         : (independentDomains.length >= 2 && evidenceKeys.length >= 2 ? 'medium' : 'low')
     const directCandidates = ranked.filter(item => item.autoFetchEligible)
-    const autoFetchCandidates = directCandidates.filter(item => item.usableEvidence || isLikelyAuthoritativeWebDomain(item.domain))
+    const authorityRank = { official: 3, claimed_official: 2, media: 1, unknown: 0 }
+    const autoFetchCandidates = directCandidates
+        .filter(item => item.usableEvidence || isLikelyAuthoritativeWebDomain(item.domain))
+        .sort((left, right) => {
+            const authorityDifference = (authorityRank[right.authorityTier] || 0) - (authorityRank[left.authorityTier] || 0)
+            if (authorityDifference !== 0) return authorityDifference
+            if (right.sourceScore !== left.sourceScore) return right.sourceScore - left.sourceScore
+            return Number(right.relevanceScore || 0) - Number(left.relevanceScore || 0)
+        })
     const autoFetchCandidate = autoFetchCandidates[0] || null
     return {
         results: ranked,
@@ -311,6 +343,8 @@ export function assessSearchResults(results = [], query = '') {
         autoFetchCandidate,
         autoFetchCandidates,
         directCandidates,
+        authoritativeSourceCount: autoFetchCandidates.filter(item => item.authorityTier === 'official').length,
+        mediaSourceCount: autoFetchCandidates.filter(item => item.authorityTier === 'media').length,
         recommendedSources: autoFetchCandidates.slice(0, 8).map(item => ({
             url: item.url,
             title: item.title,
@@ -544,6 +578,10 @@ function hasDefinitivePublicFactDenial(text = '') {
     return /(?:不存在|没有发生|没发生过|从未发生|根本没发生|完全是虚构|纯属虚构|现实中不存在|没有任何真实记录|从未报道|没有报道过|确定是谣言|必然是假的|事实不存在|不可能发生)/i.test(String(text || ''))
 }
 
+export function hasExplicitWebUncertainty(text = '') {
+    return /(?:未能核实|无法核实|无法确认|不能确认|未能确认|尚未找到|没有找到|未检索到|没有拿到|只能确认|仅能确认|暂不能确定|证据不足|原始材料缺失|可靠来源不足|来源(?:存在|之间)?冲突|(?:本次|当前|目前)?(?:联网|搜索|检索|查询).{0,20}(?:未找到|没有找到|未检索到|没有拿到|无法确认|无法核实))/i.test(String(text || ''))
+}
+
 function scopeFamily(term = '') {
     return String(term || '').toLowerCase().replace(/\d.*$/, '').replace(/[^a-z]+/g, '')
 }
@@ -577,7 +615,7 @@ export function hasOverconfidentLowEvidenceAnswer(answer = '', instruction = '',
     const requirements = buildWebResearchRequirements(instruction)
     if (evidenceState?.sufficientForSensitiveClaims === true && !hasInsufficientWebEvidenceForRequirements(evidenceState, requirements)) return false
     const value = String(answer || '')
-    const uncertainty = /(?:未能核实|无法核实|尚未找到|没有找到|只能确认|搜索摘要|网传|据称|有人声称|暂不能确定|证据不足|原始材料缺失|可靠来源不足)/i.test(value)
+    const uncertainty = hasExplicitWebUncertainty(value)
     const sensitivePersonClaim = isSensitivePersonResearch(instruction)
         && /(?:违法|违规|犯罪|卖血|诈骗|造假|收取.{0,12}\d+|在20\d{2}年|事件发酵后|成为.{0,12}外号|引发.{0,20}讨论|事实是|可以确认)/i.test(value)
     const publicFactClaim = hasEvidenceAttempt && isPublicFactCheckRequest(instruction) && hasDefinitivePublicFactDenial(value)

@@ -10,7 +10,7 @@ import net from 'node:net'
 import sharp from 'sharp'
 import { hasExplicitImageSearchIntent } from '../utils/tool_intent.js'
 import { assertPublicUrl, fetchWithProxy } from '../utils/common.js'
-import { assessSearchResults, classifyWebUrl, normalizeWebUrlKey, scoreWebSourceCandidate } from '../utils/web_evidence.js'
+import { assessSearchResults, classifyWebUrl, getOfficialSearchDomains, normalizeWebUrlKey, scoreWebSourceCandidate } from '../utils/web_evidence.js'
 
 const SEARCH_TIMEOUT_MS = 15000
 const IMAGE_DOWNLOAD_TIMEOUT_MS = 18000
@@ -952,10 +952,13 @@ export function normalizeWebSearchQueries(args = {}) {
 function buildResearchSearchVariants(query = '') {
     const value = String(query || '').replace(/\s+/g, ' ').trim()
     if (!/(?:官方|正式|公告|发布|升级|适配|名单|推送|计划|版本|最新|核实|真假|完整|全部)/i.test(value)) return []
-    const variants = [`${value} 官方 原始来源`]
-    if (/(?:完整|全部|所有|全量|名单)/i.test(value)) variants.push(`${value} 完整来源`)
+    const variants = []
+    const officialDomains = getOfficialSearchDomains(value)
+    if (officialDomains.length > 0) variants.push(`${value} site:${officialDomains[0]}`)
+    variants.push(`${value} 官方 原始来源`)
+    if (/(?:完整|全部|所有|全量|名单)/i.test(value) && officialDomains.length === 0) variants.push(`${value} 完整来源`)
     variants.push(`${value} official primary source`)
-    return [...new Set(variants)].slice(0, 2)
+    return [...new Set(variants)].slice(0, 3)
 }
 
 /**
@@ -1043,9 +1046,12 @@ async function searchWeb(query, count = 5) {
         autoFetchCandidate: assessment.autoFetchCandidate,
         autoFetchCandidates: assessment.autoFetchCandidates,
         recommendedSources: assessment.recommendedSources,
+        authoritativeSourceCount: assessment.authoritativeSourceCount,
+        mediaSourceCount: assessment.mediaSourceCount,
         sourceSelection: {
-            strategy: '相关性、直接性、正文路径、权威信号和来源独立性综合评分',
+            strategy: '先按官方/公共权威来源分层，再综合相关性、直接性、正文路径和来源独立性评分',
             candidatesCompared: assessment.directCandidates.length,
+            authoritativeCandidates: assessment.authoritativeSourceCount,
             recommended: assessment.recommendedSources
         },
         searchVariants: researchVariants,
@@ -1065,6 +1071,7 @@ async function searchWeb(query, count = 5) {
             independentDomains: assessment.independentDomains,
             evidenceKeys: assessment.evidenceKeys,
             recommendedSources: assessment.recommendedSources,
+            authoritativeSourceCount: assessment.authoritativeSourceCount,
             searchVariants: researchVariants,
             searchUnavailable,
             transportFailure
@@ -1305,7 +1312,9 @@ export const webSearchTool = {
             const quality = data?.evidenceQuality || 'low'
             const usableCount = Math.max(0, Number(data?.usableEvidenceCount) || 0)
             const domainCount = Math.max(0, Number(data?.independentSourceCount) || 0)
-            text += `\n【搜索证据质量】${quality}；可用直接来源 ${usableCount} 条；独立域名 ${domainCount} 个。\n`
+            const authoritativeCount = Math.max(0, Number(data?.authoritativeSourceCount) || 0)
+            const mediaCount = Math.max(0, Number(data?.mediaSourceCount) || 0)
+            text += `\n【搜索证据质量】${quality}；可用直接来源 ${usableCount} 条；独立域名 ${domainCount} 个；可识别官方来源 ${authoritativeCount} 个；媒体来源 ${mediaCount} 个。\n`
             if (data?.sufficientForSensitiveClaims !== true) {
                 text += '这些搜索摘要不足以单独支撑涉及个人、组织、违法违规、争议经过等敏感结论；必须继续获取原始页面或多个独立直接来源，并明确区分已核实事实与网传说法。\n'
             }

@@ -70,7 +70,7 @@ const { selectWorkspaceSurveyFiles } = await import('../utils/workspace_survey.j
 const { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resolvePersistedAgentStatus } = await import('../utils/agent_completion.js')
 const { trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
 const { getPureImageReplyPolicy, isReferentialBotKeywordMention, resolveFastChatImageDelivery, resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
-const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, getWebSourceAuthority, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, scoreWebSourceCandidate, updateWebEvidenceState } = await import('../utils/web_evidence.js')
+const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, getOfficialSearchDomains, getWebSourceAuthority, hasExplicitWebUncertainty, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, scoreWebSourceCandidate, updateWebEvidenceState } = await import('../utils/web_evidence.js')
 const { extractMessageSendError, isContentModerationSendError } = await import('../utils/message_delivery.js')
 const { cancelAgentExecutionsByRecalledMessage, getActiveAgentExecutionCount, registerAgentExecution } = await import('../utils/agent_cancellation.js')
 
@@ -1977,6 +1977,16 @@ check('搜索证据只统计独立直接来源域名', (() => {
         && assessed.autoFetchCandidate?.url === 'https://a.example/article'
         && assessed.results[2]?.usableEvidence === false
 })())
+check('微信文章临时参数变化不会伪造新来源', (() => {
+    const first = assessSearchResults([{ title: '微信文章', url: 'https://mp.weixin.qq.com/s?src=11&timestamp=1&signature=a&ver=7004&new=1', snippet: '这是足够长度的微信文章摘要，用于测试临时参数去重。' }])
+    const second = assessSearchResults([{ title: '微信文章', url: 'https://mp.weixin.qq.com/s?src=11&timestamp=2&signature=b&ver=7004&new=1', snippet: '这是足够长度的微信文章摘要，用于测试临时参数去重。' }])
+    return first.evidenceKeys[0] === second.evidenceKeys[0]
+})())
+check('同一篇微信文章不会被多个签名链接重复统计', (() => {
+    const first = updateWebEvidenceState({}, 'web_fetch', { facts: { usableEvidence: true, evidenceKey: 'https://mp.weixin.qq.com/s', domain: 'mp.weixin.qq.com' } })
+    const second = updateWebEvidenceState(first, 'web_fetch', { facts: { usableEvidence: true, evidenceKey: 'https://mp.weixin.qq.com/s', domain: 'mp.weixin.qq.com' } })
+    return second.usableFetchCount === 1 && second.independentFetchedDomainCount === 1
+})())
 check('改写搜索词但没有新增来源时证据指纹保持不变', (() => {
     const first = updateWebEvidenceState({}, 'web_search', {
         evidenceKeys: ['a.example:fact'], independentDomains: ['a.example'], usableEvidenceCount: 1
@@ -2037,9 +2047,25 @@ check('二手长文不会被误判为官方高质量证据', (() => {
         && result.facts.authoritativeDomain === false
         && result.facts.quality !== 'high'
 })())
+check('360 搜索结果页不会被当作正文来源', classifyWebUrl('https://ai.so.com/search/abc?query=test').category === 'search_page')
+check('联网不确定性识别规则在最终门控中复用', hasExplicitWebUncertainty('本轮搜索未找到可直接核验的官方原始来源，多个来源之间存在冲突。'))
+check('低证据下的来源冲突说明不会被误判为确定性结论', !hasOverconfidentLowEvidenceAnswer(
+    '本轮搜索找到多个互相冲突的非官方版本，但没有拿到可直接核验的官方原始公告，因此目前无法确认完整名单。',
+    '搜索某版本官方全部升级名单',
+    { searchCount: 2, fetchCount: 2, usableFetchCount: 0, sufficientForSensitiveClaims: false }
+))
 check('搜索引擎中转链接在分类层不可作为直接来源', classifyWebUrl('https://www.baidu.com/link?url=abc').category === 'search_redirect')
 check('网页抓取入口拒绝搜索引擎中转链接', (await webFetchTool.execute({ url: 'https://www.baidu.com/link?url=abc' })).ok === false)
 check('官方厂商域名会被识别为官方来源', getWebSourceAuthority('os.mi.com').tier === 'official')
+check('研究型搜索会根据主题定向官方站点', getOfficialSearchDomains('小米澎湃OS4官方升级名单')[0] === 'mi.com')
+check('无明确厂商主题时不会凭空添加官方站点', getOfficialSearchDomains('某个公共事件的最新通报').length === 0)
+check('自动抓取候选优先官方来源而不是媒体来源', (() => {
+    const assessed = assessSearchResults([
+        { title: '媒体整理', url: 'https://m.sohu.com/a/1', snippet: '这是足够长度的媒体转述摘要，用于测试来源排序。', relevanceScore: 90 },
+        { title: '官方公告', url: 'https://os.mi.com/notice/1', snippet: '这是足够长度的官方公告摘要，用于测试来源排序。', relevanceScore: 10 }
+    ], '澎湃OS4升级名单')
+    return assessed.autoFetchCandidate?.domain === 'os.mi.com'
+})())
 check('完整名单要求必须有官方来源和明确覆盖', hasInsufficientWebEvidenceForRequirements(
     { usableFetchCount: 1, fetchedSourceCount: 1, fetchedSourceDomains: ['sohu.com'], coverage: 'complete', coverageSources: 1 },
     buildWebResearchRequirements('搜索澎湃OS4官方全部升级名单')

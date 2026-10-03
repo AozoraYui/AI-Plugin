@@ -32,7 +32,7 @@ import { executePendingShellExec } from '../tools/shell_exec.js'
 import { executePendingShellSession } from '../tools/shell_session.js'
 import { summarizeShellResultForReply } from '../utils/shell_result_summary.js'
 import { selectWorkspaceSurveyFiles } from '../utils/workspace_survey.js'
-import { buildWebEvidenceFingerprint, buildWebResearchRequirements, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, updateWebEvidenceState } from '../utils/web_evidence.js'
+import { buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, hasExplicitWebUncertainty, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, normalizeWebUrlKey, updateWebEvidenceState } from '../utils/web_evidence.js'
 import { extractMessageSendError, isContentModerationSendError, rewriteRejectedReply } from '../utils/message_delivery.js'
 import yaml from 'yaml'
 import { formatSkillGuidance, selectRelevantSkills } from '../utils/skill_runtime.js'
@@ -2841,13 +2841,18 @@ ${visualDescription}`
                                     : []
                                 const fetchCandidates = [...explicitUrlCandidates, ...structuredCandidates, ...fallbackCandidates]
                                     .filter(item => item?.url)
-                                    .filter((item, index, list) => list.findIndex(candidate => candidate.url === item.url) === index)
-                                    .slice(0, webResearchRequirements.requiresFetch ? 5 : 1)
+                                    .filter(item => classifyWebUrl(item.url).autoFetchEligible === true)
+                                    .filter((item, index, list) => {
+                                        const key = normalizeWebUrlKey(item.url) || item.url
+                                        return list.findIndex(candidate => (normalizeWebUrlKey(candidate.url) || candidate.url) === key) === index
+                                    })
+                                    .slice(0, webResearchRequirements.requiresFetch ? 3 : 1)
                                 if (e.isMaster && !isImageSearch && fetchCandidates.length > 0) {
                                     for (const candidate of fetchCandidates) {
                                         const topUrl = candidate.url
-                                        if (autoFetchedWebUrls.has(topUrl)) continue
-                                        autoFetchedWebUrls.add(topUrl)
+                                        const fetchKey = normalizeWebUrlKey(topUrl) || topUrl
+                                        if (autoFetchedWebUrls.has(fetchKey)) continue
+                                        autoFetchedWebUrls.add(fetchKey)
                                         try {
                                             logger.info(`[AI-Plugin] 自动抓取搜索结果来源: ${topUrl}`)
                                             const fetchArgs = { url: topUrl, max_chars: 12000 }
@@ -3779,8 +3784,8 @@ ${visualDescription}`
                 })
                 let lowEvidenceOverclaim = hasOverconfidentLowEvidenceAnswer(finalResponseText, currentToolInstruction, webEvidenceState)
                 let unsupportedWebClaim = hasUnsupportedWebResearchClaim(finalResponseText, currentToolInstruction, webEvidenceState)
-                const hasResearchUncertainty = /(?:未能核实|无法核实|尚未找到|没有找到|只能确认|暂不能确定|证据不足|原始材料缺失|可靠来源不足|无法确认|不能确认|尚未证实)/i.test(finalResponseText)
-                const blockedResearchClaim = insufficientResearchEvidence
+                const hasResearchUncertainty = hasExplicitWebUncertainty(finalResponseText)
+                let blockedResearchClaim = insufficientResearchEvidence
                     && !hasResearchUncertainty
                     && /(?:官方|正式|最新|当前|截至|全部|完整|所有|名单|价格|版本|政策|公告|已经|可以确认|明确|确定|属实|真实|存在|支持|不支持|发生|没有)/i.test(finalResponseText)
                 if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || lowEvidenceOverclaim || unsupportedWebClaim || blockedResearchClaim) {
@@ -3819,12 +3824,16 @@ ${visualDescription}`
                         })
                         lowEvidenceOverclaim = hasOverconfidentLowEvidenceAnswer(finalResponseText, currentToolInstruction, webEvidenceState)
                         unsupportedWebClaim = hasUnsupportedWebResearchClaim(finalResponseText, currentToolInstruction, webEvidenceState)
+                        const retriedResearchUncertainty = hasExplicitWebUncertainty(finalResponseText)
+                        blockedResearchClaim = insufficientResearchEvidence
+                            && !retriedResearchUncertainty
+                            && /(?:官方|正式|最新|当前|截至|全部|完整|所有|名单|价格|版本|政策|公告|已经|可以确认|明确|确定|属实|真实|存在|支持|不支持|发生|没有)/i.test(finalResponseText)
                     }
                 }
                 if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || lowEvidenceOverclaim || unsupportedWebClaim || blockedResearchClaim) {
                     logger.warn('[AI-Plugin] 最终回复纠正失败，使用安全提示替代无依据的完成声明')
                     finalResponseText = lowEvidenceOverclaim || blockedResearchClaim
-                        ? '这次联网没有拿到足够可靠、足够权威或覆盖完整范围的直接来源，所以我不能把部分结果包装成官方或完整结论。你可以稍后重试，或提供原始公告/链接，我再继续核对。'
+                        ? '本轮搜索确实找到了一些相关线索，但来源之间存在冲突，且没有拿到可直接核验的小米官方原始公告或完整正文。因此目前只能确认网上存在多个非官方版本，不能把其中任何一版当作官方完整升级名单。你可以提供官方链接或公告截图，我再继续逐项核对。'
                         : '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。请再试一次；我会先真正调用工具并确认结果，再向你汇报。'
                     usedSafeFallbackReply = true
                 }
