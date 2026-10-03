@@ -32,7 +32,7 @@ import { executePendingShellExec } from '../tools/shell_exec.js'
 import { executePendingShellSession } from '../tools/shell_session.js'
 import { summarizeShellResultForReply } from '../utils/shell_result_summary.js'
 import { selectWorkspaceSurveyFiles } from '../utils/workspace_survey.js'
-import { buildWebEvidenceFingerprint, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, updateWebEvidenceState } from '../utils/web_evidence.js'
+import { buildWebEvidenceFingerprint, buildWebResearchRequirements, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, updateWebEvidenceState } from '../utils/web_evidence.js'
 import { extractMessageSendError, isContentModerationSendError, rewriteRejectedReply } from '../utils/message_delivery.js'
 import yaml from 'yaml'
 import { formatSkillGuidance, selectRelevantSkills } from '../utils/skill_runtime.js'
@@ -1599,11 +1599,14 @@ async function askMainModelForToolPlan(client, modelGroupKey, options = {}) {
     const mentionBlock = mentions.length > 0
         ? `\n\n【当前消息 @ 的成员】\n${mentions.map((id, index) => `${index + 1}. QQ：${id}`).join('\n')}`
         : ''
+    const currentInstruction = String(providedCurrentInstruction || '').trim() || getPrimaryUserInstruction(userMessage)
+    const researchRequirements = buildWebResearchRequirements(currentInstruction)
     const planningContextBlock = planningContext
         ? `\n\n${truncateForPrompt(planningContext, AGENT_TASK_CONTEXT_MAX_CHARS)}`
         : ''
-
-    const currentInstruction = String(providedCurrentInstruction || '').trim() || getPrimaryUserInstruction(userMessage)
+    const researchRequirementsBlock = researchRequirements.requiresFetch
+        ? `\n\n【联网研究硬约束】当前日期为 ${getTodayDateStr()}（北京时间）。${researchRequirements.targetVersions.length > 0 ? `用户指定的版本目标是「${researchRequirements.targetVersions.join('、')}」，后续搜索、抓取和回答必须保持该版本，不能擅自替换成其他版本。` : ''}${researchRequirements.asksCompleteList ? '用户要求全部/完整名单，必须验证完整来源；部分批次不能包装成完整名单。' : ''}${researchRequirements.asksOfficialSource ? '用户询问官方/正式发布/升级适配信息，搜索摘要只能发现来源，必须继续读取权威原文或明确说明无法核实。' : ''}`
+        : ''
     const fullMessageHasQuotedContext = currentInstruction && currentInstruction !== String(userMessage || '').trim()
     const fullMessageForPlanner = fullMessageHasQuotedContext
         ? truncateForPrompt(userMessage, agentRound > 0 ? 30000 : 12000)
@@ -1627,6 +1630,8 @@ async function askMainModelForToolPlan(client, modelGroupKey, options = {}) {
 
 可用工具：
 ${toolSummary}${skillBlock}
+
+${researchRequirementsBlock}
 
 规划约束：
 - 不要为了“可能有用”而调用工具；只有工具结果会直接影响回答时才计划工具。
@@ -2349,6 +2354,8 @@ ${visualDescription}`
             let webEvidenceState = {}
             let webEvidenceStagnationState = { fingerprint: '', repeatCount: 0, shouldStop: false }
             let webResearchUsed = false
+            const webResearchRequirements = buildWebResearchRequirements(currentToolInstruction || originalUserMessage || userMessage)
+            const autoFetchedWebUrls = new Set()
             const workspaceSurveyRequest = e.isMaster ? parseWorkspaceSurveyRequest(currentToolInstruction || originalUserMessage) : null
             let workspaceSurveyEntries = []
             const workspaceSurveyAttemptedPaths = new Set()
@@ -2815,14 +2822,32 @@ ${visualDescription}`
 
                                 // 图片搜索已经经过候选页与视觉复核，不再自动抓取首条网页污染后续判断。
                                 const isImageSearch = !Array.isArray(searchData) && Number(searchData.requestedImages || 0) > 0
-                                const autoFetchCandidate = !Array.isArray(searchData) ? searchData.autoFetchCandidate : null
-                                if (e.isMaster && !isImageSearch && autoFetchCandidate?.url) {
-                                    try {
-                                        const topUrl = autoFetchCandidate.url
-                                        logger.info(`[AI-Plugin] 自动抓取搜索结果首条: ${topUrl}`)
-                                        const fetchArgs = { url: topUrl, max_chars: 12000 }
-                                        const fetchResult = await toolRegistry.execute('web_fetch', fetchArgs, e.isMaster)
-                                        if (fetchResult.success) {
+                                const structuredCandidates = !Array.isArray(searchData)
+                                    ? [
+                                        ...(Array.isArray(searchData.autoFetchCandidates) ? searchData.autoFetchCandidates : []),
+                                        searchData.autoFetchCandidate
+                                    ].filter(Boolean)
+                                    : []
+                                const fallbackCandidates = webResearchRequirements.requiresFetch
+                                    ? results.filter(item => item?.directSource === true)
+                                    : []
+                                const fetchCandidates = [...structuredCandidates, ...fallbackCandidates]
+                                    .filter(item => item?.url)
+                                    .filter((item, index, list) => list.findIndex(candidate => candidate.url === item.url) === index)
+                                    .slice(0, webResearchRequirements.requiresFetch ? 3 : 1)
+                                if (e.isMaster && !isImageSearch && fetchCandidates.length > 0) {
+                                    for (const candidate of fetchCandidates) {
+                                        const topUrl = candidate.url
+                                        if (autoFetchedWebUrls.has(topUrl)) continue
+                                        autoFetchedWebUrls.add(topUrl)
+                                        try {
+                                            logger.info(`[AI-Plugin] 自动抓取搜索结果来源: ${topUrl}`)
+                                            const fetchArgs = { url: topUrl, max_chars: 12000 }
+                                            const fetchResult = await toolRegistry.execute('web_fetch', fetchArgs, e.isMaster)
+                                            if (!fetchResult.success) {
+                                                logger.warn(`[AI-Plugin] 自动抓取失败: ${fetchResult.error || '未知错误'}`)
+                                                continue
+                                            }
                                             const fetchProtocol = fetchResult.protocol
                                             const fetchFormatted = toolRegistry.formatToolResult('web_fetch', fetchResult.data)
                                             webEvidenceState = updateWebEvidenceState(webEvidenceState, 'web_fetch', fetchResult.data)
@@ -2834,14 +2859,22 @@ ${visualDescription}`
                                                 data: fetchResult.data,
                                                 protocol: fetchProtocol
                                             })
+                                            await recordAgentStep(this.conversationManager.db, agentTask, {
+                                                stepIndex: agentRound * 100 + 50 + autoFetchedWebUrls.size,
+                                                stepType: 'tool',
+                                                toolName: 'web_fetch',
+                                                toolArgs: fetchArgs,
+                                                status: fetchProtocol?.ok ? 'ok' : 'tool_failed',
+                                                content: fetchFormatted
+                                            })
                                             if (fetchProtocol?.ok) successfulToolResultCount++
                                             userMessage = userMessage + fetchFormatted
                                             if (!fetchProtocol?.ok) {
                                                 userMessage += '\n【自动抓取判定】该页面未形成可用证据，不得把它当作原文或事实依据。'
                                             }
+                                        } catch (err) {
+                                            logger.warn(`[AI-Plugin] 自动抓取失败: ${err.message}`)
                                         }
-                                    } catch (err) {
-                                        logger.warn(`[AI-Plugin] 自动抓取失败: ${err.message}`)
                                     }
                                 }
                             } else {
@@ -3005,7 +3038,13 @@ ${visualDescription}`
                             lastObservation: agentTaskLatestObservation
                         }, agentRound, roundObservations, currentAgentPlan, { signal: cancellationHandle?.signal })
                         throwIfExecutionCancelled()
-                        const completionStatus = roundPendingConfirmation ? 'waiting' : (roundSummary?.completionStatus || (roundExecuted > 0 ? 'continue' : 'blocked'))
+                        const researchEvidenceIncomplete = webResearchUsed
+                            && hasInsufficientWebEvidenceForRequirements(webEvidenceState, webResearchRequirements)
+                        const completionStatus = roundPendingConfirmation
+                            ? 'waiting'
+                            : (researchEvidenceIncomplete
+                                ? 'continue'
+                                : (roundSummary?.completionStatus || (roundExecuted > 0 ? 'continue' : 'blocked')))
                         roundCompletionStatus = completionStatus
                         agentTaskLatestSummary = roundSummary?.summary || agentTaskLatestSummary
                         agentTaskLatestObservation = roundSummary?.lastObservation
@@ -3014,6 +3053,10 @@ ${visualDescription}`
                             userMessage += `\n\n【Agent观察 第${agentRound}轮】${agentTaskLatestObservation}\n下一步建议：${roundSummary.nextHint}`
                         } else {
                             userMessage += `\n\n【Agent观察 第${agentRound}轮】${agentTaskLatestObservation}`
+                        }
+                        if (researchEvidenceIncomplete) {
+                            userMessage += '\n【联网研究硬门控】当前用户要求涉及指定版本、官方信息或完整名单，但还没有获得足够的可用网页正文。必须继续抓取权威来源或改写搜索词；不能切换到其他版本，也不能把部分结果包装成完整名单。'
+                            agentTaskLatestObservation = `${agentTaskLatestObservation}\n指定版本/官方/完整名单所需的网页正文证据尚未满足，必须继续检索或抓取。`.trim()
                         }
                         await recordAgentStep(this.conversationManager.db, agentTask, {
                             stepIndex: agentRound * 100 + 90,
@@ -3348,7 +3391,11 @@ ${visualDescription}`
             }
             if (webResearchUsed) {
                 const domains = (webEvidenceState.domains || []).join('、') || '无'
-                userMessage += `\n\n【联网证据账本】证据质量=${webEvidenceState.quality || 'low'}；可用正文抓取=${webEvidenceState.usableFetchCount || 0}；独立直接来源=${(webEvidenceState.domains || []).length}（${domains}）；低质量/失败页面=${webEvidenceState.lowQualityCount || 0}；搜索不可用次数=${webEvidenceState.searchUnavailableCount || 0}。搜索摘要只是线索，不等于原文。若证据质量不足或搜索链路不可用，必须明确说无法核实；不得把失败、熔断或零结果解释为目标不存在、事件未发生、从未报道或纯属虚构，也不得自行补全具体日期、金额、动机、违法性质、因果关系、他人反应和事件后续。`
+                const fetchedOfficialDomains = (webEvidenceState.fetchedOfficialDomains || []).join('、') || '无'
+                userMessage += `\n\n【联网证据账本】证据质量=${webEvidenceState.quality || 'low'}；可用正文抓取=${webEvidenceState.usableFetchCount || 0}；独立直接来源=${(webEvidenceState.domains || []).length}（${domains}）；已抓取官方域名=${fetchedOfficialDomains}；低质量/失败页面=${webEvidenceState.lowQualityCount || 0}；搜索不可用次数=${webEvidenceState.searchUnavailableCount || 0}。搜索摘要只是线索，不等于原文。若证据质量不足或搜索链路不可用，必须明确说无法核实；不得把失败、熔断或零结果解释为目标不存在、事件未发生、从未报道或纯属虚构，也不得自行补全具体日期、金额、动机、违法性质、因果关系、他人反应和事件后续。`
+                if (hasInsufficientWebEvidenceForRequirements(webEvidenceState, webResearchRequirements)) {
+                    userMessage += '\n【联网研究硬门控】本任务仍缺少指定版本/官方来源/完整名单所需的可用正文。最终只能如实说明证据不足，不能替换版本、断言官方不存在或把部分名单包装成完整名单。'
+                }
             }
 
             avatarImageInput = await buildAvatarImageInputContext(e, currentToolInstruction || originalUserMessage || userMessage, {
@@ -3889,6 +3936,12 @@ ${visualDescription}`
                         await setMsgEmojiLike(e, 10)
                         return true
                     }
+                }
+
+                if (webResearchUsed
+                    && hasInsufficientWebEvidenceForRequirements(webEvidenceState, webResearchRequirements)
+                    && agentTaskFinalStatus !== 'waiting') {
+                    agentTaskFinalStatus = 'blocked'
                 }
 
                 throwIfExecutionCancelled()

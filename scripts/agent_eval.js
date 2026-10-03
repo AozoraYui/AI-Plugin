@@ -69,7 +69,7 @@ const { selectWorkspaceSurveyFiles } = await import('../utils/workspace_survey.j
 const { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resolvePersistedAgentStatus } = await import('../utils/agent_completion.js')
 const { trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
 const { getPureImageReplyPolicy, isReferentialBotKeywordMention, resolveFastChatImageDelivery, resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
-const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, classifyWebUrl, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, updateWebEvidenceState } = await import('../utils/web_evidence.js')
+const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, updateWebEvidenceState } = await import('../utils/web_evidence.js')
 const { extractMessageSendError, isContentModerationSendError } = await import('../utils/message_delivery.js')
 const { cancelAgentExecutionsByRecalledMessage, getActiveAgentExecutionCount, registerAgentExecution } = await import('../utils/agent_cancellation.js')
 
@@ -233,6 +233,31 @@ check('真实网页工具结果允许基于核查汇报', !hasUnsupportedWebRese
     '根据搜索结果和原始通报，可以确认该说法属实。',
     '联网查查有没有这回事',
     { searchCount: 1, fetchCount: 1 }
+))
+check('指定澎湃 OS 版本会形成联网研究硬约束', (() => {
+    const requirements = buildWebResearchRequirements('查一下红米K60在不在澎湃OS4升级名单内，把澎湃OS4的全部升级名单发给我')
+    return requirements.targetVersions.includes('澎湃OS4')
+        && requirements.asksCompleteList
+        && requirements.asksOfficialSource
+        && requirements.requiresFetch
+        && requirements.preserveTargetVersion
+})())
+check('缺少正文时不能完成官方完整名单任务', hasInsufficientWebEvidenceForRequirements(
+    { searchCount: 2, usableFetchCount: 0, fetchedOfficialDomains: [] },
+    buildWebResearchRequirements('联网查一下澎湃OS4官方全部升级名单')
+))
+check('官方正文抓取后允许完成名单任务', !hasInsufficientWebEvidenceForRequirements(
+    { searchCount: 1, usableFetchCount: 1, fetchedOfficialDomains: ['os.mi.com'] },
+    buildWebResearchRequirements('联网查一下澎湃OS4官方全部升级名单')
+))
+check('官方域名短摘要仍进入自动抓取候选', (() => {
+    const assessed = assessSearchResults([{ title: 'Xiaomi HyperOS 4', url: 'https://os.mi.com/hyperos/4', snippet: '计划' }])
+    return assessed.autoFetchCandidate?.url === 'https://os.mi.com/hyperos/4'
+})())
+check('指定版本下替换成 OS2 的结论会被拦截', hasOverconfidentLowEvidenceAnswer(
+    '澎湃OS4目前没有官方名单，下面是澎湃OS2的完整升级名单。',
+    '查一下澎湃OS4官方全部升级名单',
+    { searchCount: 2, fetchCount: 0, usableFetchCount: 0, sufficientForSensitiveClaims: false }
 ))
 
 check('QQNT faceText 会转换为模型可读语义', formatQQFaceSegment({

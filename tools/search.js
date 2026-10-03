@@ -936,6 +936,16 @@ export function normalizeWebSearchQueries(args = {}) {
     return queries
 }
 
+function buildOfficialSearchVariants(query = '') {
+    const value = String(query || '').replace(/\s+/g, ' ').trim()
+    if (!/(?:(?:澎湃|小米)?\s*OS|HyperOS|MIUI)\s*[-_ ]?\d+(?:\.\d+)?/i.test(value)
+        || !/(?:升级|适配|名单|发布|推送|计划|版本)/i.test(value)) return []
+    const variants = [`${value} 官方 小米`]
+    const english = value.replace(/(?:澎湃|小米)?\s*OS\s*[-_ ]?(\d+(?:\.\d+)?)/gi, 'Xiaomi HyperOS $1')
+    if (english !== value) variants.push(`${english} official rollout list`)
+    return [...new Set(variants)].slice(0, 2)
+}
+
 /**
  * 搜索网络：Bing + 百度并行主搜索，DuckDuckGo/Yahoo Japan/360 补位
  * @param {string} query - 搜索关键词
@@ -976,6 +986,21 @@ async function searchWeb(query, count = 5) {
         assessment = assessSearchResults(merged)
     }
 
+    const officialVariants = buildOfficialSearchVariants(query)
+    for (const variant of officialVariants) {
+        if (assessment.autoFetchCandidates?.some(item => item?.domain && /(?:mi\.com|xiaomi\.com|miui\.com)$/i.test(item.domain))) break
+        logger.info(`[AI-Plugin] 版本名单官方补充搜索: "${variant}"`)
+        const variantRuns = await Promise.all([
+            runSearchEngine('Bing', () => searchBing(variant, candidateCount)),
+            runSearchEngine('百度', () => searchBaidu(variant, candidateCount)),
+            runSearchEngine('搜狗', () => searchSogou(variant, candidateCount))
+        ])
+        engineRuns.push(...variantRuns)
+        mergedCandidates = mergeSearchResults([...variantRuns.map(run => run.results), ...mainGroups, ...fallbackGroups], candidateCount)
+        merged = prepareSearchResults(query, mergedCandidates, count)
+        assessment = assessSearchResults(merged)
+    }
+
     logger.info(`[AI-Plugin] 搜索相关性过滤: 候选=${mergedCandidates.length}, 通过=${merged.length}, 严格模式=${strictRelevance}`)
     const successfulEngineCount = engineRuns.filter(run => run.status === 'ok').length
     const searchUnavailable = engineRuns.length > 0 && successfulEngineCount === 0
@@ -995,6 +1020,8 @@ async function searchWeb(query, count = 5) {
         evidenceKeys: assessment.evidenceKeys,
         sufficientForSensitiveClaims: assessment.sufficientForSensitiveClaims,
         autoFetchCandidate: assessment.autoFetchCandidate,
+        autoFetchCandidates: assessment.autoFetchCandidates,
+        searchVariants: officialVariants,
         engineStatus: engineRuns.map(run => ({ name: run.name, status: run.status, reason: run.reason || '' })),
         successfulEngineCount,
         searchUnavailable,
@@ -1010,6 +1037,7 @@ async function searchWeb(query, count = 5) {
             independentDomains: assessment.independentDomains,
             evidenceKeys: assessment.evidenceKeys,
             sufficientForSensitiveClaims: assessment.sufficientForSensitiveClaims,
+            searchVariants: officialVariants,
             searchUnavailable,
             transportFailure
         },
@@ -1171,7 +1199,10 @@ export const webSearchTool = {
             independentSourceCount: aggregateIndependentSourceCount,
             independentDomains: [...new Set(targets.flatMap(target => target.independentDomains || []))],
             sufficientForSensitiveClaims: targets.every(target => target.sufficientForSensitiveClaims === true),
-            autoFetchCandidate: null,
+            autoFetchCandidate: targets.map(target => target.autoFetchCandidate).find(Boolean) || null,
+            autoFetchCandidates: targets.flatMap(target => Array.isArray(target.autoFetchCandidates)
+                ? target.autoFetchCandidates
+                : (target.autoFetchCandidate ? [target.autoFetchCandidate] : [])),
             engineStatus: [],
             successfulEngineCount: targets.reduce((sum, target) => sum + (Number(target.successfulEngineCount) || 0), 0),
             searchUnavailable: allUnavailable,
