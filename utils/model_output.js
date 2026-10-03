@@ -100,11 +100,14 @@ export function buildFinalAnswerRetryInstruction(options = {}) {
     const visualAudit = options.hasVisualEvidence === true
         ? '本轮包含图片或视觉摘要，可以描述图片中明确可见的终端、界面或文字状态，但必须使用“截图显示”“从图中看”“终端中可见”等限定；不得声称机器人或插件自己执行了图片中的命令，也不能把截图当作截图之外的实时状态、最终成功或后续结果。'
         : ''
+    const webAudit = options.unsupportedWebClaim === true
+        ? '上一条输出声称已经联网核查或引用了通报，但本轮没有任何真实网页工具结果；只能说明图片中的待核查说法，不能说已经证实、属实、虚假或经过核查。'
+        : ''
     const issue = options.unsupportedToolClaim === true
         ? '上一条输出声称完成了工具操作，但本轮没有对应的真实工具执行证据。'
         : '上一条输出是内部思考或行动规划，不是可发送给用户的最终答复。'
     const completionAudit = options.hasTaskCompletionEvidence === false
         ? '虽然可能已有部分工具结果，但任务验证器尚未确认全部成功标准完成；可以描述已经取得的具体结果，不能扩大表述为任务完成、修复成功、部署成功或全部处理完毕。'
         : ''
-    return `${issue}上一条异常输出本身不可信，不能把其中声称的工具调用或结果当作事实。${toolAudit}${visualAudit}${completionAudit}请重新基于原始上下文直接回答用户的问题。不要输出 Thinking、Analysis、思考过程、工具规划或下一步计划；不要声称执行了尚未执行的工具。如果缺少完成请求所需的真实结果，请明确说明目前无法确认，不能猜测。`
+    return `${issue}上一条异常输出本身不可信，不能把其中声称的工具调用或结果当作事实。${toolAudit}${visualAudit}${webAudit}${completionAudit}请重新基于原始上下文直接回答用户的问题。不要输出 Thinking、Analysis、思考过程、工具规划或下一步计划；不要声称执行了尚未执行的工具。如果缺少完成请求所需的真实结果，请明确说明目前无法确认，不能猜测。`
 }

@@ -68,7 +68,7 @@ const { selectWorkspaceSurveyFiles } = await import('../utils/workspace_survey.j
 const { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resolvePersistedAgentStatus } = await import('../utils/agent_completion.js')
 const { trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
 const { getPureImageReplyPolicy, isReferentialBotKeywordMention, resolveFastChatImageDelivery, resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
-const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, classifyWebUrl, hasOverconfidentLowEvidenceAnswer, updateWebEvidenceState } = await import('../utils/web_evidence.js')
+const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, classifyWebUrl, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, updateWebEvidenceState } = await import('../utils/web_evidence.js')
 const { extractMessageSendError, isContentModerationSendError } = await import('../utils/message_delivery.js')
 const { cancelAgentExecutionsByRecalledMessage, getActiveAgentExecutionCount, registerAgentExecution } = await import('../utils/agent_cancellation.js')
 
@@ -217,6 +217,21 @@ check('搜索失败时允许明确说明无法核实', !hasOverconfidentLowEvide
     '当前搜索源不可用，暂时无法核实这场空战是否发生。',
     '搜索一下2025年5月7日印巴空战是否真实发生过',
     { searchCount: 1, searchUnavailable: true, sufficientForSensitiveClaims: false }
+))
+check('无网页工具结果会拦截伪造联网核查结论', hasUnsupportedWebResearchClaim(
+    '经过对相关信息和通报的核查，可以明确这件事确实属实。',
+    '联网查查有没有这回事',
+    { searchCount: 0, fetchCount: 0 }
+))
+check('无网页工具结果允许明确说明无法核实', !hasUnsupportedWebResearchClaim(
+    '目前没有拿到网页搜索结果，暂时无法核实图片中的说法。',
+    '联网查查有没有这回事',
+    { searchCount: 0, fetchCount: 0 }
+))
+check('真实网页工具结果允许基于核查汇报', !hasUnsupportedWebResearchClaim(
+    '根据搜索结果和原始通报，可以确认该说法属实。',
+    '联网查查有没有这回事',
+    { searchCount: 1, fetchCount: 1 }
 ))
 
 check('QQNT faceText 会转换为模型可读语义', formatQQFaceSegment({
@@ -1131,6 +1146,7 @@ check('视觉证据不能直接证明最终刷机成功', hasUnsupportedToolResu
 ))
 check('视觉证据纠正提示保留截图边界', buildFinalAnswerRetryInstruction({ hasVisualEvidence: true }).includes('截图显示')
     && buildFinalAnswerRetryInstruction({ hasVisualEvidence: true }).includes('不得声称机器人或插件自己执行了图片中的命令'))
+check('伪造联网核查纠正提示要求真实网页证据', buildFinalAnswerRetryInstruction({ unsupportedWebClaim: true }).includes('没有任何真实网页工具结果'))
 check('操作建议不会被状态成功检查误伤', !hasUnsupportedToolResultClaim(
     '现在你可以在设置里修改难度，调整配置后再重启服务。',
     { hasActualToolResults: false }

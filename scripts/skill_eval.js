@@ -38,6 +38,8 @@ check('代码维护请求命中项目维护技能', maintenance.includes('projec
 
 const research = await selectNames('搜索最新版本并打开官方来源核实', ['web_search', 'web_fetch'])
 check('联网核验请求命中网页研究技能', research.includes('web-research'))
+const researchSkill = catalog.find(skill => skill.name === 'web-research')
+check('网页研究技能覆盖图片引用核查', researchSkill?.body.includes('图片/引用消息核查') && researchSkill.body.includes('视觉摘要只是待核查线索'))
 
 const weather = await selectNames('查一下深圳明天会不会下雨', ['weather'])
 check('天气请求命中网页研究技能', weather.includes('web-research'))

@@ -273,6 +273,17 @@ function hasDefinitivePublicFactDenial(text = '') {
     return /(?:不存在|没有发生|没发生过|从未发生|根本没发生|完全是虚构|纯属虚构|现实中不存在|没有任何真实记录|从未报道|没有报道过|确定是谣言|必然是假的|事实不存在|不可能发生)/i.test(String(text || ''))
 }
 
+export function hasUnsupportedWebResearchClaim(answer = '', instruction = '', evidenceState = {}) {
+    const value = String(answer || '')
+    const request = String(instruction || '')
+    const hasWebRequest = /(?:联网|上网|搜索|搜一下|查一下|查询|检索|核查|查证|查查|搜查)/i.test(request)
+    if (!hasWebRequest) return false
+    const hasEvidence = Number(evidenceState?.searchCount || 0) > 0 || Number(evidenceState?.fetchCount || 0) > 0
+    if (hasEvidence) return false
+    if (/(?:无法|不能|没法|没有办法|暂时不能|尚未|未能|未找到|没有找到|缺少|不足|不确定|无法确认|不能确认).{0,24}(?:联网|搜索|核查|查证|确认|核实)/i.test(value)) return false
+    return /(?:经过|根据|结合|通过).{0,24}(?:联网|网络|搜索|相关信息|相关通报|资料|核查|查证|调查).{0,30}(?:可以明确|可以确认|明确|证实|证明|属实|真实|是真的|是假的|虚假|谣言|不实|发生过|没有发生)|(?:已经|已|刚刚|刚才)(?:联网|搜索|核查|查证|调查).{0,24}(?:到|出|确认|发现|证实|证明)|(?:官方|相关部门|新闻媒体|正规媒体).{0,20}(?:通报|证实|确认|证明).{0,20}(?:属实|真实|发生|不存在|虚假|谣言|不实)/i.test(value)
+}
+
 export function hasOverconfidentLowEvidenceAnswer(answer = '', instruction = '', evidenceState = {}) {
     const hasEvidenceAttempt = Number(evidenceState?.searchCount || 0) > 0 || Number(evidenceState?.fetchCount || 0) > 0
     if (evidenceState?.sufficientForSensitiveClaims === true) return false
