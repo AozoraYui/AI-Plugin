@@ -45,6 +45,7 @@ const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
 const { buildBingImageSearchUrl, extractPageImageUrls, filterRelevantSearchResults, normalizeWebSearchQueries, parseSo360ImageResults, parseSogouSearchResults, parseYahooSearchResults, prepareSearchResults, scoreSearchResultRelevance, scoreSearchSourceAuthority, webSearchTool } = await import('../tools/search.js')
 const { createHeadersLike, getProxyCandidates } = await import('../utils/common.js')
+const { webFetchTool } = await import('../tools/web_fetch.js')
 const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
 const { executePendingShellExec, shellExecTool } = await import('../tools/shell_exec.js')
@@ -69,7 +70,7 @@ const { selectWorkspaceSurveyFiles } = await import('../utils/workspace_survey.j
 const { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resolvePersistedAgentStatus } = await import('../utils/agent_completion.js')
 const { trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
 const { getPureImageReplyPolicy, isReferentialBotKeywordMention, resolveFastChatImageDelivery, resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
-const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, scoreWebSourceCandidate, updateWebEvidenceState } = await import('../utils/web_evidence.js')
+const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, getWebSourceAuthority, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, scoreWebSourceCandidate, updateWebEvidenceState } = await import('../utils/web_evidence.js')
 const { extractMessageSendError, isContentModerationSendError } = await import('../utils/message_delivery.js')
 const { cancelAgentExecutionsByRecalledMessage, getActiveAgentExecutionCount, registerAgentExecution } = await import('../utils/agent_cancellation.js')
 
@@ -248,7 +249,7 @@ check('缺少正文时不能完成官方完整名单任务', hasInsufficientWebE
     buildWebResearchRequirements('联网查一下澎湃OS4官方全部升级名单')
 ))
 check('官方正文抓取后允许完成名单任务', !hasInsufficientWebEvidenceForRequirements(
-    { searchCount: 1, usableFetchCount: 1, fetchedAuthoritativeDomains: ['example.gov.cn'] },
+    { searchCount: 1, usableFetchCount: 1, fetchedAuthoritativeDomains: ['example.gov.cn'], coverage: 'complete', coverageSources: 1 },
     buildWebResearchRequirements('联网查一下澎湃OS4官方全部升级名单')
 ))
 check('官方域名短摘要仍进入自动抓取候选', (() => {
@@ -2029,19 +2030,36 @@ check('完整名单来源会记录覆盖状态', (() => {
     const body = '完整名单如下，共 12 款机型。' + '每一项都包含版本、时间和适配说明，正文用于验证名单覆盖状态。'.repeat(30)
     return assessFetchedContent('https://source.example/notice/list', body).facts.coverage === 'complete'
 })())
+check('二手长文不会被误判为官方高质量证据', (() => {
+    const body = '完整名单如下，共 105 款设备。' + '这是媒体整理的长篇转述内容，正文足够长但没有官方原始公告。'.repeat(30)
+    const result = assessFetchedContent('https://m.sohu.com/a/1077463302_99943945/', body)
+    return result.facts.sourceAuthority === 'media'
+        && result.facts.authoritativeDomain === false
+        && result.facts.quality !== 'high'
+})())
+check('搜索引擎中转链接在分类层不可作为直接来源', classifyWebUrl('https://www.baidu.com/link?url=abc').category === 'search_redirect')
+check('网页抓取入口拒绝搜索引擎中转链接', (await webFetchTool.execute({ url: 'https://www.baidu.com/link?url=abc' })).ok === false)
+check('官方厂商域名会被识别为官方来源', getWebSourceAuthority('os.mi.com').tier === 'official')
+check('完整名单要求必须有官方来源和明确覆盖', hasInsufficientWebEvidenceForRequirements(
+    { usableFetchCount: 1, fetchedSourceCount: 1, fetchedSourceDomains: ['sohu.com'], coverage: 'complete', coverageSources: 1 },
+    buildWebResearchRequirements('搜索澎湃OS4官方全部升级名单')
+) && !hasInsufficientWebEvidenceForRequirements(
+    { usableFetchCount: 1, fetchedSourceCount: 1, fetchedSourceDomains: ['mi.com'], fetchedAuthoritativeDomains: ['mi.com'], coverage: 'complete', coverageSources: 1 },
+    buildWebResearchRequirements('搜索澎湃OS4官方全部升级名单')
+))
 check('完整名单但正文覆盖未知时仍不能声称完成', hasInsufficientWebEvidenceForRequirements(
-    { usableFetchCount: 2, fetchedSourceCount: 2, coverage: 'unknown' },
+    { usableFetchCount: 2, fetchedSourceCount: 2, fetchedSourceDomains: ['a.example', 'b.example'], coverage: 'unknown', coverageSources: 0 },
     buildWebResearchRequirements('联网查一下某版本的全部升级名单')
 ))
 check('完整名单覆盖明确且正文来源可用时允许完成', !hasInsufficientWebEvidenceForRequirements(
-    { usableFetchCount: 2, fetchedSourceCount: 2, coverage: 'complete' },
+    { usableFetchCount: 2, fetchedSourceCount: 2, fetchedSourceDomains: ['a.example', 'b.example'], fetchedAuthoritativeDomains: ['a.example'], coverage: 'complete', coverageSources: 1 },
     buildWebResearchRequirements('联网查一下某版本的全部升级名单')
 ))
 check('事实核查至少需要两个独立正文来源', hasInsufficientWebEvidenceForRequirements(
-    { usableFetchCount: 1, fetchedSourceCount: 1, coverage: 'unknown' },
+    { usableFetchCount: 1, fetchedSourceCount: 1, fetchedSourceDomains: ['a.example'], coverage: 'unknown' },
     buildWebResearchRequirements('联网核查这条消息是否属实')
 ) && !hasInsufficientWebEvidenceForRequirements(
-    { usableFetchCount: 2, fetchedSourceCount: 2, coverage: 'unknown' },
+    { usableFetchCount: 2, fetchedSourceCount: 2, fetchedSourceDomains: ['a.example', 'b.example'], coverage: 'unknown' },
     buildWebResearchRequirements('联网核查这条消息是否属实')
 ))
 check('最终回复收尾不会把 continue 任务遗留为 active', resolvePersistedAgentStatus({ completionStatus: 'continue', finalized: true }) === 'completed')

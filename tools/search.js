@@ -1298,7 +1298,7 @@ export const webSearchTool = {
         if (Array.isArray(data?.recommendedSources) && data.recommendedSources.length > 0) {
             text += '\n【来源选择】已按相关性、直接性、正文路径、权威信号和多引擎交叉命中情况评分；建议优先抓取：\n'
             data.recommendedSources.slice(0, 5).forEach((item, index) => {
-                text += (index + 1) + '. ' + (item.title || item.domain || '候选来源') + '；域名: ' + (item.domain || '未知') + '；评分: ' + (item.score ?? '未知') + '；理由: ' + ((item.reasons || []).join('、') || '综合评分') + '\n   来源: ' + item.url + '\n'
+                text += (index + 1) + '. ' + (item.title || item.domain || '候选来源') + '；域名: ' + (item.domain || '未知') + '；来源级别: ' + (item.authorityTier || 'unknown') + '；评分: ' + (item.score ?? '未知') + '；理由: ' + ((item.reasons || []).join('、') || '综合评分') + '\n   来源: ' + item.url + '\n'
             })
         }
         if (!Array.isArray(data)) {

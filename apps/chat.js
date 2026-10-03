@@ -3764,6 +3764,11 @@ ${visualDescription}`
                 let rawResponseText = String(result.data || '').trim()
                 let finalResponseText = sanitizeModelOutput(rawResponseText, { showThinking: Config.show_thinking })
                 let usedSafeFallbackReply = false
+                const insufficientResearchEvidence = webResearchUsed
+                    && hasInsufficientWebEvidenceForRequirements(webEvidenceState, webResearchRequirements)
+                if (insufficientResearchEvidence && agentTaskFinalStatus !== 'waiting') {
+                    agentTaskFinalStatus = 'blocked'
+                }
                 const hasTaskCompletionEvidence = agentTaskFinalStatus === 'ready' && !agentPendingMandatoryVerification
                 const hasVisualEvidence = currentImageParts.length > 0 || Boolean(visionRelayDescription)
                 let unsupportedToolClaim = hasUnsupportedToolResultClaim(finalResponseText, {
@@ -3774,7 +3779,11 @@ ${visualDescription}`
                 })
                 let lowEvidenceOverclaim = hasOverconfidentLowEvidenceAnswer(finalResponseText, currentToolInstruction, webEvidenceState)
                 let unsupportedWebClaim = hasUnsupportedWebResearchClaim(finalResponseText, currentToolInstruction, webEvidenceState)
-                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || lowEvidenceOverclaim || unsupportedWebClaim) {
+                const hasResearchUncertainty = /(?:未能核实|无法核实|尚未找到|没有找到|只能确认|暂不能确定|证据不足|原始材料缺失|可靠来源不足|无法确认|不能确认|尚未证实)/i.test(finalResponseText)
+                const blockedResearchClaim = insufficientResearchEvidence
+                    && !hasResearchUncertainty
+                    && /(?:官方|正式|最新|当前|截至|全部|完整|所有|名单|价格|版本|政策|公告|已经|可以确认|明确|确定|属实|真实|存在|支持|不支持|发生|没有)/i.test(finalResponseText)
+                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || lowEvidenceOverclaim || unsupportedWebClaim || blockedResearchClaim) {
                     logger.warn(`[AI-Plugin] 最终回复缺少可验证依据，触发一次纠正重试: ${rawResponseText.slice(0, 180)}`)
                     const retryPayload = {
                         contents: [
@@ -3788,7 +3797,7 @@ ${visualDescription}`
                                         hasVisualEvidence,
                                         unsupportedToolClaim,
                                         unsupportedWebClaim
-                                    }) + (lowEvidenceOverclaim
+                                    }) + ((lowEvidenceOverclaim || blockedResearchClaim)
                                         ? '\n本轮联网证据不足或搜索链路不可用。请重写：只列出能够由直接来源支持的内容；搜索摘要、转述和网传必须明确标注；若没有足够原始材料就直接说无法核实。不得把搜索失败、熔断或零结果解释为目标不存在、事件未发生、从未报道或纯属虚构，也不得断言具体日期、金额、违法违规、动机、因果、他人反应或后续影响。'
                                         : '')
                                 }]
@@ -3812,10 +3821,10 @@ ${visualDescription}`
                         unsupportedWebClaim = hasUnsupportedWebResearchClaim(finalResponseText, currentToolInstruction, webEvidenceState)
                     }
                 }
-                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || lowEvidenceOverclaim || unsupportedWebClaim) {
+                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || lowEvidenceOverclaim || unsupportedWebClaim || blockedResearchClaim) {
                     logger.warn('[AI-Plugin] 最终回复纠正失败，使用安全提示替代无依据的完成声明')
-                    finalResponseText = lowEvidenceOverclaim
-                        ? '这次联网没有拿到足够可靠的直接来源，或搜索链路当前不可用，所以我不能把“没搜到/搜索失败”解释成目标不存在或事件未发生。你可以稍后重试，或把原帖、视频、截图和明确来源发来，我再基于原始材料核对。'
+                    finalResponseText = lowEvidenceOverclaim || blockedResearchClaim
+                        ? '这次联网没有拿到足够可靠、足够权威或覆盖完整范围的直接来源，所以我不能把部分结果包装成官方或完整结论。你可以稍后重试，或提供原始公告/链接，我再继续核对。'
                         : '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。请再试一次；我会先真正调用工具并确认结果，再向你汇报。'
                     usedSafeFallbackReply = true
                 }

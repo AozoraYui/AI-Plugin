@@ -34,6 +34,21 @@ const AUTHORITATIVE_DOMAIN_SUFFIXES = [
     '.mil.cn'
 ]
 
+const KNOWN_OFFICIAL_DOMAINS = new Set([
+    'mi.com',
+    'xiaomi.com',
+    'apple.com',
+    'microsoft.com',
+    'windows.com',
+    'google.com',
+    'android.com',
+    'openai.com',
+    'huawei.com',
+    'honor.com',
+    'tencent.com',
+    'qq.com'
+])
+
 const WEAK_LANDING_PATHS = new Set(['', '/', '/home', '/index', '/index.html', '/default.html'])
 
 function normalizeHost(hostname = '') {
@@ -43,15 +58,35 @@ function normalizeHost(hostname = '') {
 export function isLikelyAuthoritativeWebDomain(domain = '') {
     const host = normalizeHost(domain)
     if (!host) return false
-    return AUTHORITATIVE_DOMAIN_SUFFIXES.some(suffix => host.endsWith(suffix) || host.includes(`${suffix}.`))
-        || host.split('.').some(part => /^(?:official|gov|government|edu|university|museum)$/i.test(part))
+    return getWebSourceAuthority(host).tier === 'official'
+}
+
+export function getWebSourceAuthority(domain = '') {
+    const host = normalizeHost(domain)
+    if (!host) return { tier: 'unknown', score: 0, reason: '缺少有效域名' }
+    if (KNOWN_OFFICIAL_DOMAINS.has(host) || [...KNOWN_OFFICIAL_DOMAINS].some(root => host.endsWith(`.${root}`))) {
+        return { tier: 'official', score: 100, reason: '已知厂商或产品官方域名' }
+    }
+    if (AUTHORITATIVE_DOMAIN_SUFFIXES.some(suffix => host === suffix.slice(1) || host.endsWith(suffix) || host.includes(`${suffix}.`))) {
+        return { tier: 'official', score: 100, reason: '公共机构、教育或军事权威域名' }
+    }
+    if (host.split('.').some(part => /^(?:official|gov|government|edu|university|museum)$/i.test(part))) {
+        return { tier: 'claimed_official', score: 55, reason: '域名包含疑似官方标识，但未能确认所属机构' }
+    }
+    if (/(?:^|\.)(?:news|finance|tech|media|sohu|sina|toutiao|weibo|zhihu)\./i.test(host)) {
+        return { tier: 'media', score: 25, reason: '媒体或内容平台域名，需回溯原始来源' }
+    }
+    return { tier: 'unknown', score: 10, reason: '未识别为权威或原始发布域名' }
 }
 
 export function buildWebResearchRequirements(instruction = '') {
     const value = String(instruction || '').replace(/\s+/g, ' ').trim()
     const asksCompleteList = /(?:全部|完整|所有|全量|全名单|完整名单|全部名单|所有机型|每一款|每个机型)/i.test(value)
     const asksOfficialSource = /(?:官方|正式|公告|通报|发布|升级|适配|名单|推送)/i.test(value)
+    const asksHighCredibility = /(?:可信|可靠|权威|原始|高质量|准确|严谨)/i.test(value)
     const requiresAuthoritativeSource = /(?:官方|正式(?:发布|公告|来源)?|官方来源|官方名单|官方说明)/i.test(value)
+        || (asksCompleteList && /(?:升级|适配|名单|推送|公告|通报|版本)/i.test(value))
+        || asksHighCredibility
     const asksSourceBackedFact = /(?:发布|升级|适配|名单|推送|版本|价格|政策|公告|通报|计划)/i.test(value)
     const asksFreshness = /(?:最新|目前|现在|当前|截至|实时|近期|今天|今日|昨天|明天|最近)/i.test(value)
     const asksFactCheck = /(?:核实|核查|查证|查真|真假|是否真实|是否属实|有没有发生|是否发生|是否存在)/i.test(value)
@@ -65,23 +100,28 @@ export function buildWebResearchRequirements(instruction = '') {
         asksSourceBackedFact,
         asksFreshness,
         asksFactCheck,
+        asksHighCredibility,
         requiresFetch,
         preserveScope: scopeTerms.length > 0 || asksCompleteList,
-        requiresIndependentConfirmation: asksFactCheck
+        requiresIndependentConfirmation: asksFactCheck || asksHighCredibility
     }
 }
 
 export function hasInsufficientWebEvidenceForRequirements(state = {}, requirements = {}) {
     if (!requirements?.requiresFetch) return false
     if (Number(state.usableFetchCount) <= 0) return true
-    const fetchedSourceCount = Number(state.fetchedSourceCount || state.usableFetchCount || 0)
-    if (requirements.requiresIndependentConfirmation && fetchedSourceCount < 2) return true
+    const independentFetchedDomainCount = Number(
+        state.independentFetchedDomainCount
+        || (Array.isArray(state.fetchedSourceDomains) ? state.fetchedSourceDomains.length : 0)
+    )
+    if (requirements.requiresIndependentConfirmation && independentFetchedDomainCount < 2) return true
     if (requirements.requiresAuthoritativeSource || (requirements.asksOfficialSource && requirements.asksCompleteList && state.authoritativeSourceRequired === true)) {
         const authoritativeDomains = state.fetchedAuthoritativeDomains || state.fetchedOfficialDomains || []
         if (!Array.isArray(authoritativeDomains) || authoritativeDomains.length === 0) return true
     }
-    if (requirements.asksCompleteList && Object.prototype.hasOwnProperty.call(state, 'coverage')) {
+    if (requirements.asksCompleteList) {
         if (state.coverage !== 'complete') return true
+        if (Number(state.coverageSources || 0) < 1) return true
     }
     return false
 }
@@ -151,6 +191,7 @@ export function scoreWebSourceCandidate(item = {}, query = '') {
     const parsed = safeUrl(url)
     const normalizedQuery = compactText(query).toLowerCase()
     const haystack = (title + ' ' + snippet).toLowerCase()
+    const authority = getWebSourceAuthority(urlInfo.domain)
     let score = 20
     const reasons = ['直接来源']
     const relevanceScore = Number(item?.relevanceScore)
@@ -170,9 +211,14 @@ export function scoreWebSourceCandidate(item = {}, query = '') {
     if (snippet.length >= 80) score += 8
     else if (snippet.length >= 24) score += 3
     else reasons.push('摘要较短')
-    if (isLikelyAuthoritativeWebDomain(urlInfo.domain)) {
-        score += 28
-        reasons.push('域名带有公共权威信号')
+    if (authority.tier === 'official') {
+        score += 35
+        reasons.push('已识别为官方或公共权威域名')
+    } else if (authority.tier === 'claimed_official') {
+        score += 8
+        reasons.push('域名带有疑似官方标识，仍需核验')
+    } else if (authority.tier === 'media') {
+        reasons.push('媒体或内容平台，仅作转述线索')
     }
     if (parsed && WEAK_LANDING_PATHS.has(parsed.pathname.toLowerCase())) {
         score -= 30
@@ -185,10 +231,12 @@ export function scoreWebSourceCandidate(item = {}, query = '') {
         score += 6
         reasons.push('标题或摘要带研究任务信号')
     }
-    const tier = isLikelyAuthoritativeWebDomain(urlInfo.domain)
+    const tier = authority.tier === 'official'
         ? 'authoritative'
+        : authority.tier === 'media'
+            ? 'media'
         : (parsed && !WEAK_LANDING_PATHS.has(parsed.pathname.toLowerCase()) ? 'direct' : 'landing')
-    return { score, tier, reasons }
+    return { score, tier, authorityTier: authority.tier, authorityScore: authority.score, reasons }
 }
 
 export function classifyWebUrl(rawUrl = '') {
@@ -233,6 +281,8 @@ export function assessSearchResults(results = [], query = '') {
             usableEvidence,
             sourceScore: sourceScore.score,
             sourceTier: sourceScore.tier,
+            authorityTier: sourceScore.authorityTier,
+            authorityScore: sourceScore.authorityScore,
             sourceReasons: sourceScore.reasons,
             qualityReason: usableEvidence ? '直接来源且搜索摘要包含有效文本' : (urlInfo.reason || '摘要过短'),
             evidenceKey
@@ -267,6 +317,7 @@ export function assessSearchResults(results = [], query = '') {
             domain: item.domain,
             score: item.sourceScore,
             tier: item.sourceTier,
+            authorityTier: item.authorityTier,
             reasons: item.sourceReasons
         })),
         // 搜索摘要只能用于发现来源，不能单独支撑人物/组织争议等敏感结论。
@@ -314,23 +365,32 @@ export function assessFetchedContent(requestedUrl = '', content = '') {
 
     const evidenceKey = usableEvidence ? stableUrlKey(effectiveUrl) : ''
     const truncated = /(?:已截断|内容过长已截断|超过.{0,12}字符上限)/i.test(raw)
-    const hasCompleteListLanguage = /(?:完整名单|全部名单|名单如下|共\s*\d+\s*(?:款|个|项|台|部)|包括以下(?:机型|项目|内容))/i.test(text)
+    const hasCompleteListLanguage = /(?:完整名单|全部名单|完整列表|全部列表|名单如下|以下为[^。；\n]{0,20}(?:全部|完整)|完整的?[^。；\n]{0,20}(?:名单|列表))/i.test(text)
     const hasPartialListLanguage = /(?:首批|部分|其中|例如|代表|陆续|后续|第一批|第二批|部分机型|仅列出|不完整)/i.test(text)
     const negatesCompleteLanguage = /(?:并非|不是|不等于|不能视为|仅为|仅包含).{0,10}(?:完整|全部)/i.test(text)
-    const coverage = truncated || negatesCompleteLanguage
+    const embeddedListOnly = /(?:详见(?:下图|配图|图片|表格)|如下图|见图|图中|图片显示|表格如下)/i.test(text)
+    const coverage = truncated || negatesCompleteLanguage || embeddedListOnly
         ? 'partial'
         : (hasCompleteListLanguage && !hasPartialListLanguage ? 'complete' : (hasPartialListLanguage ? 'partial' : 'unknown'))
-    const authoritativeDomain = isLikelyAuthoritativeWebDomain(urlInfo.domain)
+    const authority = getWebSourceAuthority(urlInfo.domain)
+    const authoritativeDomain = authority.tier === 'official'
     const authoritySignals = [
-        authoritativeDomain ? '域名带公共权威后缀' : '',
+        authority.tier === 'official' ? authority.reason : '',
         /(?:官方公告|官方通知|正式公告|发布说明)/i.test(text) ? '正文包含官方发布语义' : ''
     ].filter(Boolean)
+    const contentQuality = quality
+    const evidenceQuality = usableEvidence
+        ? (authoritativeDomain && coverage !== 'partial' && contentQuality === 'high' ? 'high' : 'medium')
+        : 'none'
     return {
         ok: usableEvidence,
         recoverable: !usableEvidence,
-        summary: usableEvidence ? `网页正文可用，证据质量=${quality}` : `网页内容不可作为可靠证据：${reason}`,
+        summary: usableEvidence ? `网页正文可用，证据质量=${evidenceQuality}` : `网页内容不可作为可靠证据：${reason}`,
         content: raw,
-        quality,
+        quality: usableEvidence ? evidenceQuality : contentQuality,
+        contentQuality,
+        sourceAuthority: authority.tier,
+        authorityScore: authority.score,
         usableEvidence,
         reason,
         requestedUrl,
@@ -340,6 +400,7 @@ export function assessFetchedContent(requestedUrl = '', content = '') {
         contentChars: text.length,
         coverage,
         truncated,
+        embeddedListOnly,
         authoritativeDomain,
         authoritySignals,
         evidenceKey,
@@ -348,17 +409,25 @@ export function assessFetchedContent(requestedUrl = '', content = '') {
             effectiveUrl,
             domain: urlInfo.domain,
             sourceCategory: urlInfo.category,
-            quality,
+            quality: usableEvidence ? evidenceQuality : contentQuality,
+            contentQuality,
+            sourceAuthority: authority.tier,
+            authorityScore: authority.score,
             usableEvidence,
             contentChars: text.length,
             coverage,
             truncated,
+            embeddedListOnly,
             authoritativeDomain,
             authoritySignals,
             reason,
             evidenceKey
         },
-        next_hints: usableEvidence ? [] : ['换用原始页面、直接来源或其他独立来源，不要把当前页面内容当作已核实事实。']
+        next_hints: usableEvidence
+            ? (authority.tier === 'official'
+                ? []
+                : ['当前来源不是可确认的官方原始来源；如任务要求官方或完整名单，继续寻找官方公告并交叉比对。'])
+            : ['换用原始页面、直接来源或其他独立来源，不要把当前页面内容当作已核实事实。']
     }
 }
 
@@ -369,6 +438,8 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
         domains: [...new Set(state.domains || [])],
         fetchedAuthoritativeDomains: [...new Set(state.fetchedAuthoritativeDomains || state.fetchedOfficialDomains || [])],
         fetchedOfficialDomains: [...new Set(state.fetchedOfficialDomains || state.fetchedAuthoritativeDomains || [])],
+        fetchedSourceDomains: [...new Set(state.fetchedSourceDomains || [])],
+        independentFetchedDomainCount: Math.max(0, Number(state.independentFetchedDomainCount) || 0),
         usableFetchCount: Math.max(0, Number(state.usableFetchCount) || 0),
         fetchedSourceCount: Math.max(0, Number(state.fetchedSourceCount) || 0),
         coverage: state.coverage || 'unknown',
@@ -387,6 +458,7 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
     const domains = new Set(current.domains)
     const fetchedAuthoritativeDomains = new Set(current.fetchedAuthoritativeDomains)
     const fetchedOfficialDomains = new Set(current.fetchedOfficialDomains)
+    const fetchedSourceDomains = new Set(current.fetchedSourceDomains)
     if (toolName === 'web_search') {
         current.searchCount++
         if (data?.searchUnavailable === true) current.searchUnavailableCount++
@@ -406,6 +478,7 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
                 fetchedKeys.add(String(facts.evidenceKey))
             }
             if (facts.domain) domains.add(String(facts.domain))
+            if (facts.domain) fetchedSourceDomains.add(String(facts.domain))
             if (facts.domain && (facts.authoritativeDomain === true || isLikelyAuthoritativeWebDomain(facts.domain))) {
                 fetchedAuthoritativeDomains.add(String(facts.domain))
                 fetchedOfficialDomains.add(String(facts.domain))
@@ -426,12 +499,17 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
     current.domains = [...domains].sort()
     current.fetchedAuthoritativeDomains = [...fetchedAuthoritativeDomains].sort()
     current.fetchedOfficialDomains = [...fetchedOfficialDomains].sort()
+    current.fetchedSourceDomains = [...fetchedSourceDomains].sort()
+    current.independentFetchedDomainCount = current.fetchedSourceDomains.length
     current.usableFetchCount = current.fetchedEvidenceKeys.length
     current.fetchedSourceCount = current.fetchedEvidenceKeys.length
-    current.quality = current.usableFetchCount >= 2 && current.domains.length >= 2
+    current.quality = current.fetchedAuthoritativeDomains.length > 0
+        && current.usableFetchCount >= 1
+        && current.coverage !== 'partial'
         ? 'high'
         : (current.usableFetchCount >= 1 ? 'medium' : 'low')
-    current.sufficientForSensitiveClaims = current.quality === 'high'
+    current.sufficientForSensitiveClaims = current.usableFetchCount >= 2
+        && current.independentFetchedDomainCount >= 2
     return current
 }
 
@@ -441,6 +519,8 @@ export function buildWebEvidenceFingerprint(state = {}) {
         fetchedEvidenceKeys: [...new Set(state.fetchedEvidenceKeys || [])].sort(),
         domains: [...new Set(state.domains || [])].sort(),
         fetchedAuthoritativeDomains: [...new Set(state.fetchedAuthoritativeDomains || [])].sort(),
+        fetchedSourceDomains: [...new Set(state.fetchedSourceDomains || [])].sort(),
+        independentFetchedDomainCount: Number(state.independentFetchedDomainCount) || 0,
         coverage: state.coverage || 'unknown',
         coverageSources: Number(state.coverageSources) || 0,
         usableFetchCount: Math.max(0, Number(state.usableFetchCount) || 0),
