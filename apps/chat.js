@@ -14,7 +14,7 @@ import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, compactConversationHistory, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldLoadPrivateMemoryContext, shouldPrioritizeCurrentMultimodalTurn } from '../utils/message_context.js'
 import { collectQQFaceImageUrls, describeQQFaceSegment, formatQQFaceSegments } from '../utils/qq_face.js'
-import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parsePluginUpdateRequest, parseQQUserLookupRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
+import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitHumanizeIntent, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parsePluginUpdateRequest, parseQQUserLookupRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { clearPendingAction, loadPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } from '../utils/pending_actions.js'
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
@@ -1171,9 +1171,11 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         const characters = explicitDrawIntent ? detectCharactersFromText(drawRouteText) : []
         const character = characters.length === 1 ? characters[0] : ''
         const drawIntent = !negatedDrawIntent && explicitDrawIntent
+        const humanizeIntent = !negatedDrawIntent && hasImageContext && hasExplicitHumanizeIntent(drawRouteText)
         const imageEditIntent = !negatedDrawIntent && hasImageContext
-            && /(?:去掉|去除|移除|擦除|消除|抹掉|清理|删掉|去水印|水印|二维码|改成|变成|转成|风格化|手办化|inpaint|inpainting)/i.test(drawRouteText)
-            && /(?:图片|照片|图|原图|参考图|这张|那张|水印|二维码|手办化|风格化)/i.test(drawRouteText)
+            && (humanizeIntent
+                || /(?:去掉|去除|移除|擦除|消除|抹掉|清理|删掉|去水印|水印|二维码|改成|变成|转成|风格化|手办化|inpaint|inpainting)/i.test(drawRouteText))
+            && /(?:图片|照片|图|原图|参考图|这张|那张|刚才|刚刚|水印|二维码|手办化|风格化|真人化|真人版|写实化|二次元|动漫)/i.test(drawRouteText)
         if (drawIntent) {
             const selfPortrait = /(?:你自己|你本人|AI本人|自画像|你长什么样|你的样子|你现在的样子)/i.test(drawRouteText) && characters.length <= 1
             const args = {
@@ -1193,7 +1195,11 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
             }
         }
         if (imageEditIntent) {
-            const args = { prompt: drawRouteText }
+            const args = {
+                prompt: humanizeIntent
+                    ? '将参考图中的动漫角色转换为自然、真实的人类摄影与写实风格；保留角色的身份特征、发型、服装、配色、表情、姿态、构图和背景，不要改变主体或添加无关元素。'
+                    : drawRouteText
+            }
             const quality = parseQualityFromText(drawRouteText)
             if (quality) args.quality = quality
             return {

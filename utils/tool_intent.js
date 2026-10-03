@@ -240,7 +240,14 @@ export function isExplicitGroupLeaveRequest(text) {
 
 export function hasNegatedDrawIntent(text) {
     const value = String(text || '')
-    return /(?:不是|并不是|不是要|不是让你|别|不要|不用|无需|别给我|别再|别急着|先别).{0,18}(?:画图|画画|画|绘制|生成图|生成图片|作图|做图|创作图片)/i.test(value)
+    return /(?:不是|并不是|不是要|不是让你|别|不要|不用|无需|别给我|别再|别急着|先别).{0,18}(?:画图|画画|画|绘制|生成图|生成图片|作图|做图|创作图片|真人化|真人版|写实化|二次元转真人|动漫转真人)/i.test(value)
+}
+
+export function hasExplicitHumanizeIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+    if (/(?:怎么|如何|能不能|可以吗|是什么|什么意思|教程|方法|支持不支持).{0,24}(?:真人化|真人版|真人写实|写实真人|写实化|二次元转真人|动漫转真人)|(?:真人化|真人版|真人写实|写实真人|写实化|二次元转真人|动漫转真人).{0,24}(?:是什么|什么意思|怎么做|如何做|教程|方法|吗|么|？|\?)/i.test(value)) return false
+    return /(?:真人化|真人版|真人写实|写实真人|写实化|二次元.{0,10}(?:转|变|改).{0,10}真人|动漫.{0,10}(?:转|变|改).{0,10}真人|变成真人|转成真人)/i.test(value)
 }
 
 function isQuestionAboutTool(text = '', keywordPattern = '') {
@@ -269,8 +276,9 @@ export function hasExplicitDrawIntent(text, options = {}) {
         || /(?:看看|给我看看)(?:你长什么样|你的样子)/i.test(value)
     const modelGroupDrawIntent = /(?:用|使用|指定|切换到|选择|调用)\s*(?:模型组\s*)?(?:flash|pro|ultra|快速|专业|旗舰)\s*(?:模型组|模型)?[，,。；;：:\s]*(?:再|重新)?\s*(?:画|绘制|生成|创作|生图|作图|做图|做)(?:个|一张|一下|张)?[\s\S]{1,100}/i.test(value)
     const imageEditIntent = hasImageContext
-        && /(?:去掉|去除|移除|擦除|消除|抹掉|清理|删掉|去水印|水印|二维码|改成|变成|转成|风格化|手办化|inpaint|inpainting|修图|处理图片|p图|P图)/i.test(value)
-        && /(?:图片|照片|图|原图|参考图|这张|那张|刚才|刚刚|水印|二维码|手办化|风格化|修图|p图|P图)/i.test(value)
+        && (hasExplicitHumanizeIntent(value)
+            || /(?:去掉|去除|移除|擦除|消除|抹掉|清理|删掉|去水印|水印|二维码|改成|变成|转成|风格化|手办化|inpaint|inpainting|修图|处理图片|p图|P图)/i.test(value))
+        && /(?:图片|照片|图|原图|参考图|这张|那张|刚才|刚刚|水印|二维码|手办化|风格化|修图|p图|P图|真人化|真人版|写实化|二次元|动漫)/i.test(value)
     return generationIntent || modelGroupDrawIntent || imageEditIntent
 }
 

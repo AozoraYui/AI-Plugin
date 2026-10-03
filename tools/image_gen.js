@@ -148,7 +148,7 @@ function shouldUseCachedReferenceImage(args = {}, event = {}) {
         event.raw_message,
         event.msg
     ].filter(Boolean).join('\n')
-    return /(刚才|上次|之前|上一张|这张|那张|原图|参考图|图片|图里|截图|处理|修改|编辑|去掉|去除|移除|擦除|消除|水印|二维码|背景|重绘|修图|绘图功能|画图功能|调用绘图|调用画图|p模型|pro模型|inpaint|inpainting)/i.test(text)
+    return /(刚才|上次|之前|上一张|这张|那张|原图|参考图|图片|图里|截图|处理|修改|编辑|去掉|去除|移除|擦除|消除|水印|二维码|背景|重绘|修图|真人化|真人版|真人写实|写实真人|写实化|二次元转真人|动漫转真人|绘图功能|画图功能|调用绘图|调用画图|p模型|pro模型|inpaint|inpainting)/i.test(text)
 }
 
 async function loadCachedReferenceImages(event, args = {}) {
@@ -211,7 +211,7 @@ export const imageGenTool = {
                     },
                     preset: {
                         type: 'string',
-                        description: '可选，预设风格名或指令名（如"手办化"）。用户明确提到某种已有风格时填写，否则留空。'
+                        description: '可选，已配置的预设风格名或指令名（如"手办化"）。只有用户明确提到已有预设时填写；“真人化”、“写实化”等自然语言效果必须写入 prompt。'
                     },
                     quality: {
                         type: 'string',
@@ -244,8 +244,8 @@ export const imageGenTool = {
         const client = global.AIPluginClient
         if (!client) return '【画图失败】AI 客户端未初始化。'
 
-        const prompt = String(args.prompt || '').trim()
-        const presetName = String(args.preset || '').trim()
+        let prompt = String(args.prompt || '').trim()
+        let presetName = String(args.preset || '').trim()
         const modelGroupKey = ['flash', 'pro', 'ultra'].includes(args.quality) ? args.quality : 'flash'
         const isSelfPortrait = args.self_portrait === true || args.self_portrait === 'true'
         const rawCharacters = Array.isArray(args.characters) ? args.characters : []
@@ -277,7 +277,14 @@ export const imageGenTool = {
         let preset = null
         if (presetName) {
             preset = findPreset(presetName)
-            if (!preset) {
+            if (!preset && /(?:真人化|真人版|真人写实|写实真人|写实化|二次元.{0,10}(?:转|变|改).{0,10}真人|动漫.{0,10}(?:转|变|改).{0,10}真人)/i.test(presetName)) {
+                logger.warn(`[AI-Plugin] 画图工具：将未配置的“${presetName}”降级为参考图真人化提示词，不当作预设处理`)
+                prompt = [
+                    prompt,
+                    '将参考图中的动漫角色转换为自然、真实的人类摄影与写实风格；保留角色的身份特征、发型、服装、配色、表情、姿态、构图和背景，不要改变主体或添加无关元素。'
+                ].filter(Boolean).join(' ')
+                presetName = ''
+            } else if (!preset) {
                 return `【画图失败】未找到名为「${presetName}」的预设。可用 #画图预设列表 查看，或直接用文字描述画图。`
             }
         }

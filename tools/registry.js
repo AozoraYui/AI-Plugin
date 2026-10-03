@@ -470,14 +470,14 @@ const TOOL_USAGE_GUIDES = {
             '支持角色参考图库：character、characters、self_portrait。'
         ],
         useWhen: [
-            '用户明确要求“画/生成图片/做张图/套预设/手办化/把这张图改成…”时使用。'
+            '用户明确要求“画/生成图片/做张图/套预设/手办化/真人化/把这张图改成…”时使用。'
         ],
         avoid: [
             '用户只是发图让你看、描述、回答图片问题时不要调用；交给多模态最终回复。',
             '不要承诺精准像素级编辑，工具只能尝试图像生成/重绘。'
         ],
         rules: [
-            'prompt 写用户想画或想怎么改；preset 只在用户明确提到已有预设时填。',
+            'prompt 写用户想画或想怎么改；preset 只在用户明确提到已有预设时填。真人化、真人版、写实化、二次元转真人都写入 prompt，绝不能把这些自然语言效果名伪装成 preset。',
             '用户要求画 AI 本人/你自己时 self_portrait=true；单角色用 character，多角色用 characters。'
         ]
     },
@@ -1189,7 +1189,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - shell_exec/shell_session 若返回目录安全检查阻止执行，后续不要再编译新的 Shell 命令绕过检查，应让主模型反问主人。
 - file_download 用于下载当前消息或引用消息里的媒体，不需要 URL；web_fetch 才需要完整 URL。
 - 如果当前指令是“看/分析/描述”服务器本地图片路径（如 /root/.../xxx.jpg），对话流程会在工具路由前把白名单内图片作为多模态输入附加；不要再编译 shell_exec 或 shell_session 去读取同一张图片。
-- draw_image 的参考图由工具自动提取（当前图、引用图、@头像、最近图片缓存）；角色参考图库参数按计划填写 character/characters/self_portrait。主模型已经计划 draw_image 时，不要仅因当前消息没有图片就丢弃调用；如果最近图片缓存可用，工具会按“刚才那张/这张图/用 p 模型处理/修图/去水印”等语义自行复用。
+- draw_image 的参考图由工具自动提取（当前图、引用图、@头像、最近图片缓存）；角色参考图库参数按计划填写 character/characters/self_portrait。主模型已经计划 draw_image 时，不要仅因当前消息没有图片就丢弃调用；如果最近图片缓存可用，工具会按“刚才那张/这张图/用 p 模型处理/修图/去水印”等语义自行复用。对于“把这张图真人化/转成真人版/写实化”这类参考图编辑，必须把效果写进 prompt，不要填写 preset=“真人化”之类未确认存在的预设名。
 - group_chat_context 的 scope 必须按主模型计划保留：当前群短前情用 current_group；主人问机器人加了哪些群/能看到哪些群用 group_list；用户问自己在别的群/其他群刚发了什么用 other_group_messages 并设置 exclude_current_group=true；用户问自己跨群最近消息但未排除当前群用 my_recent_messages；主人要求所有群或指定群才用 all_groups/specific_group。普通用户不要编译其他人的 user_id。主人按群名问指定群但没有明确 group_id 时，可把群名放 query，工具会尝试解析为群号。普通 #c 中，用户问“他们刚才说了啥/群里刚刚发生了什么/最近前情”也可以编译 current_group；跨群/所有群流水仍只给主人编译。
 - group_chat_digest 用于长时间范围群聊总结：最近几天/昨天/今天/最近几小时/我不在的时候/从我上次发言后/帮我补课。短前情仍优先 group_chat_context。当前群 scope=current_group；“我不在/上次发言后”填 range=since_last_message；“最近 N 天/小时”填 range=recent_days/recent_hours 和 days/hours；用户问自己在别的群/其他群这段时间聊了什么，用 scope=my_recent_messages 且 exclude_current_group=true；主人指定群可填 group_id 或 target，所有群填 scope=all_groups。
 - memory_search 用于只读语义检索历史/记忆/旧对话/相关片段；不要用于写入或提炼个人档案。用户只问当前群刚才聊了什么且需要原始流水时优先 group_chat_context。query 填检索主题；主人明确全局/跨群时 scope=all，当前群语义检索 scope=current_group，个人记忆 scope=my_memory，指定用户/群才填 user_id/group_id。

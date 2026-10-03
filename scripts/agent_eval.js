@@ -9,6 +9,7 @@ const {
     hasExplicitGroupFileDownloadIntent,
     hasExplicitGroupFileListIntent,
     hasExplicitDrawIntent,
+    hasExplicitHumanizeIntent,
     hasExplicitMemorySearchIntent,
     hasExplicitQQUserLookupIntent,
     parseQQUserLookupRequest,
@@ -808,6 +809,7 @@ const candidateCases = [
     ['普通人物评价不触发QQ来源查询', '#c这个人怎么样', []],
     ['写进我的资料命中档案更新', '#c把我住中山写进我的资料', ['user_profile_update']],
     ['整张角色图命中绘图', '#c给我整张诺亚在海边的图', ['draw_image']],
+    ['引用图片真人化命中绘图', '#c使用绘图工具把这张图给真人化', ['draw_image'], { hasImages: true }],
     ['口语离开指定群命中退群', '#c别在测试群待了，退掉吧', ['group_leave']],
     ['群文件查看只命中列表', '#c看看群文件里有什么', ['group_file_list']],
     ['群文件下载同时允许先列表后下载', '#c把群文件 foo.zip 下载下来', ['group_file_list', 'group_file_download']],
@@ -833,6 +835,12 @@ check('指定 Ultra 模型组绘图不会被安全门拦截', (() => {
     return hasExplicitDrawIntent('#c用 ultra 模型组画一只猫') && guarded.tools.length === 1 && guarded.blocked.length === 0
 })())
 check('模型组绘图能力问句不会误触发绘图', !hasExplicitDrawIntent('#c怎么用 ultra 模型组画图'))
+check('真人化能力问句不会误触发绘图', !hasExplicitHumanizeIntent('#c真人化是什么意思'))
+check('否定真人化不会触发绘图', !hasExplicitDrawIntent('#c不要把这张图真人化', { hasImages: true }))
+check('真人化绘图即使误填同名预设也能通过意图安全门', (() => {
+    const guarded = filterToolCallsByIntent([{ name: 'draw_image', args: { prompt: '', preset: '真人化' } }], '#c使用绘图工具把这张图给真人化', { hasImages: true })
+    return guarded.tools.length === 1 && guarded.blocked.length === 0
+})())
 check('明确更新当前插件可生成规划失败降级参数', (() => {
     const request = parsePluginUpdateRequest('#c诺亚更新一下插件')
     return request?.command === 'git pull' && request?.cwd === 'plugins/AI-Plugin'
