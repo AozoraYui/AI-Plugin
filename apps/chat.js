@@ -2801,7 +2801,7 @@ ${visualDescription}`
                                 failedImageSearchAttempts = 0
                             }
                             const results = Array.isArray(searchData) ? searchData : (searchData.results || [])
-                            if (results.length > 0) {
+                            if (results.length > 0 || (webResearchRequirements.requiresFetch && candidateUrls.length > 0)) {
                                 const seenUrls = new Set()
                                 const uniqueResults = results.filter(item => {
                                     if (seenUrls.has(item.url)) return false
@@ -2822,6 +2822,14 @@ ${visualDescription}`
 
                                 // 图片搜索已经经过候选页与视觉复核，不再自动抓取首条网页污染后续判断。
                                 const isImageSearch = !Array.isArray(searchData) && Number(searchData.requestedImages || 0) > 0
+                                const explicitUrlCandidates = webResearchRequirements.requiresFetch
+                                    ? candidateUrls.map(url => ({
+                                        url,
+                                        title: '用户提供的原始链接',
+                                        snippet: '用户在当前请求中明确提供的待核查来源',
+                                        source: '用户消息'
+                                    }))
+                                    : []
                                 const structuredCandidates = !Array.isArray(searchData)
                                     ? [
                                         ...(Array.isArray(searchData.autoFetchCandidates) ? searchData.autoFetchCandidates : []),
@@ -2831,10 +2839,10 @@ ${visualDescription}`
                                 const fallbackCandidates = webResearchRequirements.requiresFetch
                                     ? results.filter(item => item?.directSource === true)
                                     : []
-                                const fetchCandidates = [...structuredCandidates, ...fallbackCandidates]
+                                const fetchCandidates = [...explicitUrlCandidates, ...structuredCandidates, ...fallbackCandidates]
                                     .filter(item => item?.url)
                                     .filter((item, index, list) => list.findIndex(candidate => candidate.url === item.url) === index)
-                                    .slice(0, webResearchRequirements.requiresFetch ? 3 : 1)
+                                    .slice(0, webResearchRequirements.requiresFetch ? 5 : 1)
                                 if (e.isMaster && !isImageSearch && fetchCandidates.length > 0) {
                                     for (const candidate of fetchCandidates) {
                                         const topUrl = candidate.url
@@ -3392,7 +3400,7 @@ ${visualDescription}`
             if (webResearchUsed) {
                 const domains = (webEvidenceState.domains || []).join('、') || '无'
                 const fetchedAuthoritativeDomains = (webEvidenceState.fetchedAuthoritativeDomains || []).join('、') || '无'
-                userMessage += `\n\n【联网证据账本】证据质量=${webEvidenceState.quality || 'low'}；可用正文抓取=${webEvidenceState.usableFetchCount || 0}；独立直接来源=${(webEvidenceState.domains || []).length}（${domains}）；已抓取高可信域名=${fetchedAuthoritativeDomains}；低质量/失败页面=${webEvidenceState.lowQualityCount || 0}；搜索不可用次数=${webEvidenceState.searchUnavailableCount || 0}。搜索摘要只是线索，不等于原文。若证据质量不足或搜索链路不可用，必须明确说无法核实；不得把失败、熔断或零结果解释为目标不存在、事件未发生、从未报道或纯属虚构，也不得自行补全具体日期、金额、动机、违法性质、因果关系、他人反应和事件后续。`
+                userMessage += `\n\n【联网证据账本】证据质量=${webEvidenceState.quality || 'low'}；可用正文抓取=${webEvidenceState.usableFetchCount || 0}；已抓取独立来源=${webEvidenceState.fetchedSourceCount || webEvidenceState.usableFetchCount || 0}；独立域名=${(webEvidenceState.domains || []).length}（${domains}）；已抓取高可信域名=${fetchedAuthoritativeDomains}；名单覆盖=${webEvidenceState.coverage || 'unknown'}；低质量/失败页面=${webEvidenceState.lowQualityCount || 0}；搜索不可用次数=${webEvidenceState.searchUnavailableCount || 0}。搜索摘要只是线索，不等于原文。必须优先比较多个独立直接来源，严格区分官方原文、媒体转述和搜索摘要；若证据质量不足或搜索链路不可用，必须明确说无法核实；不得把失败、熔断或零结果解释为目标不存在、事件未发生、从未报道或纯属虚构，也不得自行补全具体日期、金额、动机、违法性质、因果关系、他人反应和事件后续。`
                 if (hasInsufficientWebEvidenceForRequirements(webEvidenceState, webResearchRequirements)) {
                     userMessage += '\n【联网研究硬门控】本任务仍缺少用户指定范围、时效性、官方核验或完整结果所需的可用正文。最终只能如实说明证据不足，不能擅自替换目标、断言目标不存在或把部分结果包装成完整结果。'
                 }
@@ -3952,7 +3960,8 @@ ${visualDescription}`
                     const finalStatus = resolvePersistedAgentStatus({
                         completionStatus: agentTaskFinalStatus,
                         pendingVerification: agentPendingMandatoryVerification,
-                        usedSafeFallback: usedSafeFallbackReply
+                        usedSafeFallback: usedSafeFallbackReply,
+                        finalized: true
                     })
                     const finalSummary = agentTaskLatestSummary || truncateForPrompt(finalResponseText, AGENT_TASK_SUMMARY_MAX_CHARS)
                     const finalObservation = agentTaskLatestObservation || truncateForPrompt(finalResponseText, AGENT_TASK_OBSERVATION_MAX_CHARS)

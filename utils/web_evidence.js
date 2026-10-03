@@ -34,6 +34,8 @@ const AUTHORITATIVE_DOMAIN_SUFFIXES = [
     '.mil.cn'
 ]
 
+const WEAK_LANDING_PATHS = new Set(['', '/', '/home', '/index', '/index.html', '/default.html'])
+
 function normalizeHost(hostname = '') {
     return String(hostname || '').toLowerCase().replace(/^www\./, '')
 }
@@ -48,25 +50,40 @@ export function isLikelyAuthoritativeWebDomain(domain = '') {
 export function buildWebResearchRequirements(instruction = '') {
     const value = String(instruction || '').replace(/\s+/g, ' ').trim()
     const asksCompleteList = /(?:全部|完整|所有|全量|全名单|完整名单|全部名单|所有机型|每一款|每个机型)/i.test(value)
-    const asksOfficialSource = /(?:官方|正式|公告|发布|升级|适配|名单|推送|是否存在|有没有|真假|核实)/i.test(value)
+    const asksOfficialSource = /(?:官方|正式|公告|通报|发布|升级|适配|名单|推送)/i.test(value)
+    const requiresAuthoritativeSource = /(?:官方|正式(?:发布|公告|来源)?|官方来源|官方名单|官方说明)/i.test(value)
+    const asksSourceBackedFact = /(?:发布|升级|适配|名单|推送|版本|价格|政策|公告|通报|计划)/i.test(value)
     const asksFreshness = /(?:最新|目前|现在|当前|截至|实时|近期|今天|今日|昨天|明天|最近)/i.test(value)
     const asksFactCheck = /(?:核实|核查|查证|查真|真假|是否真实|是否属实|有没有发生|是否发生|是否存在)/i.test(value)
     const scopeTerms = extractResearchScopeTerms(value)
-    const requiresFetch = asksCompleteList || asksOfficialSource || asksFreshness || asksFactCheck
+    const requiresFetch = asksCompleteList || asksOfficialSource || asksSourceBackedFact || asksFreshness || asksFactCheck
     return {
         scopeTerms,
         asksCompleteList,
         asksOfficialSource,
+        requiresAuthoritativeSource,
+        asksSourceBackedFact,
         asksFreshness,
         asksFactCheck,
         requiresFetch,
-        preserveScope: scopeTerms.length > 0 || asksCompleteList
+        preserveScope: scopeTerms.length > 0 || asksCompleteList,
+        requiresIndependentConfirmation: asksFactCheck
     }
 }
 
 export function hasInsufficientWebEvidenceForRequirements(state = {}, requirements = {}) {
     if (!requirements?.requiresFetch) return false
-    return Number(state.usableFetchCount) <= 0
+    if (Number(state.usableFetchCount) <= 0) return true
+    const fetchedSourceCount = Number(state.fetchedSourceCount || state.usableFetchCount || 0)
+    if (requirements.requiresIndependentConfirmation && fetchedSourceCount < 2) return true
+    if (requirements.requiresAuthoritativeSource || (requirements.asksOfficialSource && requirements.asksCompleteList && state.authoritativeSourceRequired === true)) {
+        const authoritativeDomains = state.fetchedAuthoritativeDomains || state.fetchedOfficialDomains || []
+        if (!Array.isArray(authoritativeDomains) || authoritativeDomains.length === 0) return true
+    }
+    if (requirements.asksCompleteList && Object.prototype.hasOwnProperty.call(state, 'coverage')) {
+        if (state.coverage !== 'complete') return true
+    }
+    return false
 }
 
 export function extractResearchScopeTerms(text = '') {
@@ -121,6 +138,59 @@ function stableUrlKey(rawUrl = '') {
     return url.toString()
 }
 
+export function normalizeWebUrlKey(rawUrl = '') {
+    return stableUrlKey(rawUrl)
+}
+
+export function scoreWebSourceCandidate(item = {}, query = '') {
+    const url = item?.url || item?.pageUrl || ''
+    const urlInfo = classifyWebUrl(url)
+    if (!urlInfo.direct) return { score: -1000, tier: 'unusable', reasons: [urlInfo.reason] }
+    const title = compactText(item?.title || '')
+    const snippet = compactText(item?.snippet || '')
+    const parsed = safeUrl(url)
+    const normalizedQuery = compactText(query).toLowerCase()
+    const haystack = (title + ' ' + snippet).toLowerCase()
+    let score = 20
+    const reasons = ['直接来源']
+    const relevanceScore = Number(item?.relevanceScore)
+    if (Number.isFinite(relevanceScore)) {
+        score += Math.min(45, Math.max(0, relevanceScore))
+        reasons.push('相关性' + Math.round(relevanceScore))
+    }
+    const engineHits = Number(item?.engineHits || 0)
+    if (engineHits > 1) {
+        score += Math.min(12, (engineHits - 1) * 4)
+        reasons.push('多个搜索引擎同时命中' + engineHits + '次')
+    }
+    if (normalizedQuery && haystack.includes(normalizedQuery)) {
+        score += 8
+        reasons.push('标题或摘要覆盖完整查询')
+    }
+    if (snippet.length >= 80) score += 8
+    else if (snippet.length >= 24) score += 3
+    else reasons.push('摘要较短')
+    if (isLikelyAuthoritativeWebDomain(urlInfo.domain)) {
+        score += 28
+        reasons.push('域名带有公共权威信号')
+    }
+    if (parsed && WEAK_LANDING_PATHS.has(parsed.pathname.toLowerCase())) {
+        score -= 30
+        reasons.push('站点首页或落地页')
+    } else if (parsed && /\/(?:article|news|post|detail|content|report|notice|announcement|p|a|docs?)\b/i.test(parsed.pathname)) {
+        score += 6
+        reasons.push('疑似正文路径')
+    }
+    if (/(?:官方|公告|通报|通知|发布说明|完整名单|升级名单|适配名单)/i.test(title + ' ' + snippet)) {
+        score += 6
+        reasons.push('标题或摘要带研究任务信号')
+    }
+    const tier = isLikelyAuthoritativeWebDomain(urlInfo.domain)
+        ? 'authoritative'
+        : (parsed && !WEAK_LANDING_PATHS.has(parsed.pathname.toLowerCase()) ? 'direct' : 'landing')
+    return { score, tier, reasons }
+}
+
 export function classifyWebUrl(rawUrl = '') {
     const url = safeUrl(rawUrl)
     if (!url || !['http:', 'https:'].includes(url.protocol)) {
@@ -145,7 +215,7 @@ export function classifyWebUrl(rawUrl = '') {
     return { category: 'direct', domain, direct: true, autoFetchEligible: true, reason: '直接网页来源' }
 }
 
-export function assessSearchResults(results = []) {
+export function assessSearchResults(results = [], query = '') {
     const enriched = (Array.isArray(results) ? results : []).map(item => {
         const urlInfo = classifyWebUrl(item?.url || item?.pageUrl || '')
         const snippet = compactText(item?.snippet || '')
@@ -153,6 +223,7 @@ export function assessSearchResults(results = []) {
         const hasUsefulSnippet = snippet.length >= 24
         const usableEvidence = urlInfo.direct && hasUsefulSnippet
         const evidenceKey = usableEvidence ? stableUrlKey(item?.url || item?.pageUrl || '') : ''
+        const sourceScore = scoreWebSourceCandidate({ ...item, title, snippet }, query)
         return {
             ...item,
             domain: urlInfo.domain,
@@ -160,21 +231,28 @@ export function assessSearchResults(results = []) {
             directSource: urlInfo.direct,
             autoFetchEligible: urlInfo.autoFetchEligible,
             usableEvidence,
+            sourceScore: sourceScore.score,
+            sourceTier: sourceScore.tier,
+            sourceReasons: sourceScore.reasons,
             qualityReason: usableEvidence ? '直接来源且搜索摘要包含有效文本' : (urlInfo.reason || '摘要过短'),
             evidenceKey
         }
     })
-    const usable = enriched.filter(item => item.usableEvidence)
+    const ranked = [...enriched].sort((left, right) => {
+        if (right.sourceScore !== left.sourceScore) return right.sourceScore - left.sourceScore
+        return Number(right.relevanceScore || 0) - Number(left.relevanceScore || 0)
+    })
+    const usable = ranked.filter(item => item.usableEvidence)
     const independentDomains = [...new Set(usable.map(item => item.domain).filter(Boolean))]
     const evidenceKeys = [...new Set(usable.map(item => item.evidenceKey).filter(Boolean))]
     const quality = independentDomains.length >= 3 && evidenceKeys.length >= 3
         ? 'high'
         : (independentDomains.length >= 2 && evidenceKeys.length >= 2 ? 'medium' : 'low')
-    const directCandidates = enriched.filter(item => item.autoFetchEligible)
-    const autoFetchCandidates = enriched.filter(item => item.autoFetchEligible && (item.usableEvidence || isLikelyAuthoritativeWebDomain(item.domain)))
+    const directCandidates = ranked.filter(item => item.autoFetchEligible)
+    const autoFetchCandidates = directCandidates.filter(item => item.usableEvidence || isLikelyAuthoritativeWebDomain(item.domain))
     const autoFetchCandidate = autoFetchCandidates[0] || null
     return {
-        results: enriched,
+        results: ranked,
         quality,
         usableEvidenceCount: usable.length,
         independentSourceCount: independentDomains.length,
@@ -183,6 +261,14 @@ export function assessSearchResults(results = []) {
         autoFetchCandidate,
         autoFetchCandidates,
         directCandidates,
+        recommendedSources: autoFetchCandidates.slice(0, 8).map(item => ({
+            url: item.url,
+            title: item.title,
+            domain: item.domain,
+            score: item.sourceScore,
+            tier: item.sourceTier,
+            reasons: item.sourceReasons
+        })),
         // 搜索摘要只能用于发现来源，不能单独支撑人物/组织争议等敏感结论。
         sufficientForSensitiveClaims: false
     }
@@ -226,7 +312,19 @@ export function assessFetchedContent(requestedUrl = '', content = '') {
         reason = `正文较短（${text.length} 字），只能作为有限证据`
     }
 
-    const evidenceKey = usableEvidence ? stableUrlKey(requestedUrl) : ''
+    const evidenceKey = usableEvidence ? stableUrlKey(effectiveUrl) : ''
+    const truncated = /(?:已截断|内容过长已截断|超过.{0,12}字符上限)/i.test(raw)
+    const hasCompleteListLanguage = /(?:完整名单|全部名单|名单如下|共\s*\d+\s*(?:款|个|项|台|部)|包括以下(?:机型|项目|内容))/i.test(text)
+    const hasPartialListLanguage = /(?:首批|部分|其中|例如|代表|陆续|后续|第一批|第二批|部分机型|仅列出|不完整)/i.test(text)
+    const negatesCompleteLanguage = /(?:并非|不是|不等于|不能视为|仅为|仅包含).{0,10}(?:完整|全部)/i.test(text)
+    const coverage = truncated || negatesCompleteLanguage
+        ? 'partial'
+        : (hasCompleteListLanguage && !hasPartialListLanguage ? 'complete' : (hasPartialListLanguage ? 'partial' : 'unknown'))
+    const authoritativeDomain = isLikelyAuthoritativeWebDomain(urlInfo.domain)
+    const authoritySignals = [
+        authoritativeDomain ? '域名带公共权威后缀' : '',
+        /(?:官方公告|官方通知|正式公告|发布说明)/i.test(text) ? '正文包含官方发布语义' : ''
+    ].filter(Boolean)
     return {
         ok: usableEvidence,
         recoverable: !usableEvidence,
@@ -240,6 +338,10 @@ export function assessFetchedContent(requestedUrl = '', content = '') {
         domain: urlInfo.domain,
         sourceCategory: urlInfo.category,
         contentChars: text.length,
+        coverage,
+        truncated,
+        authoritativeDomain,
+        authoritySignals,
         evidenceKey,
         facts: {
             requestedUrl,
@@ -249,6 +351,10 @@ export function assessFetchedContent(requestedUrl = '', content = '') {
             quality,
             usableEvidence,
             contentChars: text.length,
+            coverage,
+            truncated,
+            authoritativeDomain,
+            authoritySignals,
             reason,
             evidenceKey
         },
@@ -261,8 +367,13 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
         evidenceKeys: [...new Set(state.evidenceKeys || [])],
         fetchedEvidenceKeys: [...new Set(state.fetchedEvidenceKeys || [])],
         domains: [...new Set(state.domains || [])],
-        fetchedAuthoritativeDomains: [...new Set(state.fetchedAuthoritativeDomains || [])],
+        fetchedAuthoritativeDomains: [...new Set(state.fetchedAuthoritativeDomains || state.fetchedOfficialDomains || [])],
+        fetchedOfficialDomains: [...new Set(state.fetchedOfficialDomains || state.fetchedAuthoritativeDomains || [])],
         usableFetchCount: Math.max(0, Number(state.usableFetchCount) || 0),
+        fetchedSourceCount: Math.max(0, Number(state.fetchedSourceCount) || 0),
+        coverage: state.coverage || 'unknown',
+        coverageSources: Math.max(0, Number(state.coverageSources) || 0),
+        truncatedFetchCount: Math.max(0, Number(state.truncatedFetchCount) || 0),
         lowQualityCount: Math.max(0, Number(state.lowQualityCount) || 0),
         searchCount: Math.max(0, Number(state.searchCount) || 0),
         fetchCount: Math.max(0, Number(state.fetchCount) || 0),
@@ -275,6 +386,7 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
     const fetchedKeys = new Set(current.fetchedEvidenceKeys)
     const domains = new Set(current.domains)
     const fetchedAuthoritativeDomains = new Set(current.fetchedAuthoritativeDomains)
+    const fetchedOfficialDomains = new Set(current.fetchedOfficialDomains)
     if (toolName === 'web_search') {
         current.searchCount++
         if (data?.searchUnavailable === true) current.searchUnavailableCount++
@@ -294,7 +406,17 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
                 fetchedKeys.add(String(facts.evidenceKey))
             }
             if (facts.domain) domains.add(String(facts.domain))
-            if (facts.domain && isLikelyAuthoritativeWebDomain(facts.domain)) fetchedAuthoritativeDomains.add(String(facts.domain))
+            if (facts.domain && (facts.authoritativeDomain === true || isLikelyAuthoritativeWebDomain(facts.domain))) {
+                fetchedAuthoritativeDomains.add(String(facts.domain))
+                fetchedOfficialDomains.add(String(facts.domain))
+            }
+            if (facts.coverage === 'complete') {
+                current.coverage = 'complete'
+                current.coverageSources++
+            } else if (facts.coverage === 'partial' || facts.truncated === true) {
+                if (current.coverage !== 'complete') current.coverage = 'partial'
+                if (facts.truncated === true) current.truncatedFetchCount++
+            }
         } else {
             current.lowQualityCount++
         }
@@ -303,10 +425,12 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
     current.fetchedEvidenceKeys = [...fetchedKeys].sort()
     current.domains = [...domains].sort()
     current.fetchedAuthoritativeDomains = [...fetchedAuthoritativeDomains].sort()
+    current.fetchedOfficialDomains = [...fetchedOfficialDomains].sort()
     current.usableFetchCount = current.fetchedEvidenceKeys.length
-    current.quality = current.usableFetchCount >= 1 && current.domains.length >= 2
+    current.fetchedSourceCount = current.fetchedEvidenceKeys.length
+    current.quality = current.usableFetchCount >= 2 && current.domains.length >= 2
         ? 'high'
-        : (current.evidenceKeys.length >= 2 && current.domains.length >= 2 ? 'medium' : 'low')
+        : (current.usableFetchCount >= 1 ? 'medium' : 'low')
     current.sufficientForSensitiveClaims = current.quality === 'high'
     return current
 }
@@ -317,6 +441,8 @@ export function buildWebEvidenceFingerprint(state = {}) {
         fetchedEvidenceKeys: [...new Set(state.fetchedEvidenceKeys || [])].sort(),
         domains: [...new Set(state.domains || [])].sort(),
         fetchedAuthoritativeDomains: [...new Set(state.fetchedAuthoritativeDomains || [])].sort(),
+        coverage: state.coverage || 'unknown',
+        coverageSources: Number(state.coverageSources) || 0,
         usableFetchCount: Math.max(0, Number(state.usableFetchCount) || 0),
         quality: state.quality || 'low',
         searchUnavailable: state.searchUnavailable === true
@@ -344,7 +470,7 @@ function scopeFamily(term = '') {
 
 function hasResearchScopeMismatch(answer = '', instruction = '', evidenceState = {}) {
     const requirements = buildWebResearchRequirements(instruction)
-    if (!requirements.preserveScope || Number(evidenceState?.usableFetchCount || 0) > 0) return false
+    if (!requirements.preserveScope) return false
     const requestedTerms = new Set(requirements.scopeTerms)
     const answerTerms = extractResearchScopeTerms(answer)
     const alternateScope = answerTerms.some(term => {
@@ -368,7 +494,8 @@ export function hasUnsupportedWebResearchClaim(answer = '', instruction = '', ev
 
 export function hasOverconfidentLowEvidenceAnswer(answer = '', instruction = '', evidenceState = {}) {
     const hasEvidenceAttempt = Number(evidenceState?.searchCount || 0) > 0 || Number(evidenceState?.fetchCount || 0) > 0
-    if (evidenceState?.sufficientForSensitiveClaims === true) return false
+    const requirements = buildWebResearchRequirements(instruction)
+    if (evidenceState?.sufficientForSensitiveClaims === true && !hasInsufficientWebEvidenceForRequirements(evidenceState, requirements)) return false
     const value = String(answer || '')
     const uncertainty = /(?:未能核实|无法核实|尚未找到|没有找到|只能确认|搜索摘要|网传|据称|有人声称|暂不能确定|证据不足|原始材料缺失|可靠来源不足)/i.test(value)
     const sensitivePersonClaim = isSensitivePersonResearch(instruction)
@@ -377,13 +504,12 @@ export function hasOverconfidentLowEvidenceAnswer(answer = '', instruction = '',
     const unavailableClaim = evidenceState?.searchUnavailable === true
         && /(?:搜索失败|搜索源|网络搜索|联网|没有搜到|未找到结果|查不到)/i.test(value)
     const scopeMismatch = hasResearchScopeMismatch(value, instruction, evidenceState)
-    const requirements = buildWebResearchRequirements(instruction)
     const incompleteResearchClaim = requirements.requiresFetch
-        && Number(evidenceState?.usableFetchCount || 0) <= 0
+        && hasInsufficientWebEvidenceForRequirements(evidenceState, requirements)
         && !uncertainty
         && /(?:官方|正式|最新|当前|截至|全部|完整|所有|名单|价格|版本|政策|公告|已经|可以确认|明确|确定|属实|真实|存在|支持|不支持|发生|没有)/i.test(value)
     const unverifiedScopeDenial = requirements.preserveScope
-        && Number(evidenceState?.usableFetchCount || 0) <= 0
+        && hasInsufficientWebEvidenceForRequirements(evidenceState, requirements)
         && /(?:官方|正式).{0,16}(?:不存在|未发布|没有发布|尚未发布)|(?:不存在|未发布|没有发布|尚未发布).{0,16}(?:官方|正式)/i.test(value)
     return (sensitivePersonClaim || publicFactClaim || unavailableClaim || scopeMismatch || incompleteResearchClaim || unverifiedScopeDenial) && !uncertainty
 }

@@ -10,7 +10,7 @@ import net from 'node:net'
 import sharp from 'sharp'
 import { hasExplicitImageSearchIntent } from '../utils/tool_intent.js'
 import { assertPublicUrl, fetchWithProxy } from '../utils/common.js'
-import { assessSearchResults, classifyWebUrl } from '../utils/web_evidence.js'
+import { assessSearchResults, classifyWebUrl, normalizeWebUrlKey, scoreWebSourceCandidate } from '../utils/web_evidence.js'
 
 const SEARCH_TIMEOUT_MS = 15000
 const IMAGE_DOWNLOAD_TIMEOUT_MS = 18000
@@ -831,18 +831,24 @@ async function searchYahoo(query, count) {
     return results
 }
 
-function rankSearchResults(results = []) {
-    return [...results].sort((left, right) => {
-        const leftInfo = classifyWebUrl(left?.url || '')
-        const rightInfo = classifyWebUrl(right?.url || '')
-        if (leftInfo.direct !== rightInfo.direct) return leftInfo.direct ? -1 : 1
+function rankSearchResults(results = [], query = '') {
+    return [...results].map(item => {
+        const source = scoreWebSourceCandidate(item, query)
+        return {
+            ...item,
+            sourceScore: source.score,
+            sourceTier: source.tier,
+            sourceReasons: source.reasons
+        }
+    }).sort((left, right) => {
+        if (right.sourceScore !== left.sourceScore) return right.sourceScore - left.sourceScore
         return Number(right?.relevanceScore || 0) - Number(left?.relevanceScore || 0)
     })
 }
 
 export function prepareSearchResults(query, candidates = [], count = 5) {
     const relevant = filterRelevantSearchResults(query, candidates)
-    return rankSearchResults(relevant).slice(0, count)
+    return rankSearchResults(relevant, query).slice(0, count)
 }
 
 async function searchSo360(query, count) {
@@ -898,17 +904,24 @@ async function searchSogou(query, count) {
 
 function mergeSearchResults(resultGroups, limit) {
     const merged = []
-    const seen = new Set()
+    const byUrl = new Map()
     const maxLen = Math.max(...resultGroups.map(group => group.length), 0)
 
     for (let i = 0; i < maxLen && merged.length < limit; i++) {
         for (const group of resultGroups) {
             const item = group[i]
             if (!item) continue
-            const key = item.url.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, '')
-            if (seen.has(key)) continue
-            seen.add(key)
-            merged.push(item)
+            const key = normalizeWebUrlKey(item.url) || item.url.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, '')
+            const source = String(item.source || '未知搜索源')
+            const existing = byUrl.get(key)
+            if (existing) {
+                existing.engineHits = (existing.engineHits || 1) + (existing.searchEngines.includes(source) ? 0 : 1)
+                if (!existing.searchEngines.includes(source)) existing.searchEngines.push(source)
+                continue
+            }
+            const normalized = { ...item, engineHits: 1, searchEngines: [source] }
+            byUrl.set(key, normalized)
+            merged.push(normalized)
             if (merged.length >= limit) break
         }
     }
@@ -952,9 +965,13 @@ function buildResearchSearchVariants(query = '') {
  * @returns {Promise<object>} 结构化搜索结果与证据质量信息
  */
 async function searchWeb(query, count = 5) {
-    logger.info(`[AI-Plugin] 搜索关键词: "${query}"`)
+    logger.info('[AI-Plugin] 搜索关键词: "' + query + '"')
     const strictRelevance = extractQueryRelevanceProfile(query).strict
-    const candidateCount = strictRelevance ? Math.min(20, Math.max(count * 3, 10)) : count
+    const researchLike = /(?:官方|正式|公告|通报|发布|升级|适配|名单|推送|计划|版本|最新|当前|截至|核实|核查|真假|完整|全部|所有|价格|政策)/i.test(query)
+    const candidateCount = strictRelevance || researchLike
+        ? Math.min(24, Math.max(count * 4, 12))
+        : Math.min(16, Math.max(count * 2, 8))
+    const assessmentCount = Math.min(20, Math.max(count, researchLike ? 10 : count))
     const engineRuns = []
 
     const mainRuns = await Promise.all([
@@ -965,12 +982,13 @@ async function searchWeb(query, count = 5) {
     const mainGroups = mainRuns.map(run => run.results)
 
     let mergedCandidates = mergeSearchResults(mainGroups, candidateCount)
-    let merged = prepareSearchResults(query, mergedCandidates, count)
-    let assessment = assessSearchResults(merged)
+    let merged = prepareSearchResults(query, mergedCandidates, assessmentCount)
+    let assessment = assessSearchResults(merged, query)
     let fallbackGroups = []
+    const shouldBroaden = researchLike || assessment.directCandidates.length < Math.min(4, Math.max(2, count))
 
-    if (assessment.usableEvidenceCount < count) {
-        logger.info(`[AI-Plugin] 主搜索直接来源不足 (${assessment.usableEvidenceCount}/${count})，启用冗余搜索源补位`)
+    if (shouldBroaden) {
+        logger.info('[AI-Plugin] 多源研究扩展搜索：主搜索直接候选=' + assessment.directCandidates.length + '，继续补充独立搜索源')
         const fallbackRuns = await Promise.all([
             runSearchEngine('DuckDuckGo', () => searchDuckDuckGo(query, candidateCount)),
             runSearchEngine('Yahoo', () => searchYahoo(query, candidateCount)),
@@ -979,47 +997,57 @@ async function searchWeb(query, count = 5) {
         ])
         fallbackGroups = fallbackRuns.map(run => run.results)
         engineRuns.push(...fallbackRuns)
-
         mergedCandidates = mergeSearchResults([...mainGroups, ...fallbackGroups], candidateCount)
-        merged = prepareSearchResults(query, mergedCandidates, count)
-        assessment = assessSearchResults(merged)
+        merged = prepareSearchResults(query, mergedCandidates, assessmentCount)
+        assessment = assessSearchResults(merged, query)
     }
 
     const researchVariants = buildResearchSearchVariants(query)
     for (const variant of researchVariants) {
-        if (assessment.autoFetchCandidates?.length > 0) break
-        logger.info(`[AI-Plugin] 研究任务来源补充搜索: "${variant}"`)
+        logger.info('[AI-Plugin] 研究任务来源补充搜索: "' + variant + '"')
         const variantRuns = await Promise.all([
             runSearchEngine('Bing', () => searchBing(variant, candidateCount)),
             runSearchEngine('百度', () => searchBaidu(variant, candidateCount)),
             runSearchEngine('搜狗', () => searchSogou(variant, candidateCount))
         ])
         engineRuns.push(...variantRuns)
-        mergedCandidates = mergeSearchResults([...variantRuns.map(run => run.results), ...mainGroups, ...fallbackGroups], candidateCount)
-        merged = prepareSearchResults(query, mergedCandidates, count)
-        assessment = assessSearchResults(merged)
+        mergedCandidates = mergeSearchResults([
+            ...variantRuns.map(run => run.results),
+            ...mainGroups,
+            ...fallbackGroups
+        ], candidateCount)
+        merged = prepareSearchResults(query, mergedCandidates, assessmentCount)
+        assessment = assessSearchResults(merged, query)
     }
 
-    logger.info(`[AI-Plugin] 搜索相关性过滤: 候选=${mergedCandidates.length}, 通过=${merged.length}, 严格模式=${strictRelevance}`)
+    logger.info('[AI-Plugin] 搜索相关性与来源评分完成: 候选=' + mergedCandidates.length + ', 展示=' + assessment.results.length + ', 直接候选=' + assessment.directCandidates.length + ', 严格模式=' + strictRelevance)
     const successfulEngineCount = engineRuns.filter(run => run.status === 'ok').length
     const searchUnavailable = engineRuns.length > 0 && successfulEngineCount === 0
     const transportFailure = searchUnavailable
+    const visibleResults = assessment.results.slice(0, count)
     const summary = searchUnavailable
         ? '搜索链路当前不可用：所有搜索源均失败或处于熔断冷却，未获得任何搜索证据；这不代表目标不存在。'
         : assessment.results.length > 0
-            ? `搜索返回 ${assessment.results.length} 条结果，可用直接来源 ${assessment.usableEvidenceCount} 条，独立域名 ${assessment.independentSourceCount} 个，证据质量=${assessment.quality}`
+            ? '搜索返回 ' + assessment.results.length + ' 条候选，来源评分已优先排列直接正文；可用直接来源 ' + assessment.usableEvidenceCount + ' 条，独立域名 ' + assessment.independentSourceCount + ' 个，证据质量=' + assessment.quality
             : '搜索已完成，但没有找到相关结果；这不等于目标不存在。'
     return {
         query,
-        results: assessment.results,
+        results: visibleResults,
         evidenceQuality: assessment.quality,
         usableEvidenceCount: assessment.usableEvidenceCount,
+        directCandidateCount: assessment.directCandidates.length,
         independentSourceCount: assessment.independentSourceCount,
         independentDomains: assessment.independentDomains,
         evidenceKeys: assessment.evidenceKeys,
         sufficientForSensitiveClaims: assessment.sufficientForSensitiveClaims,
         autoFetchCandidate: assessment.autoFetchCandidate,
         autoFetchCandidates: assessment.autoFetchCandidates,
+        recommendedSources: assessment.recommendedSources,
+        sourceSelection: {
+            strategy: '相关性、直接性、正文路径、权威信号和来源独立性综合评分',
+            candidatesCompared: assessment.directCandidates.length,
+            recommended: assessment.recommendedSources
+        },
         searchVariants: researchVariants,
         engineStatus: engineRuns.map(run => ({ name: run.name, status: run.status, reason: run.reason || '' })),
         successfulEngineCount,
@@ -1032,19 +1060,18 @@ async function searchWeb(query, count = 5) {
             query,
             evidenceQuality: assessment.quality,
             usableEvidenceCount: assessment.usableEvidenceCount,
+            directCandidateCount: assessment.directCandidates.length,
             independentSourceCount: assessment.independentSourceCount,
             independentDomains: assessment.independentDomains,
             evidenceKeys: assessment.evidenceKeys,
-            sufficientForSensitiveClaims: assessment.sufficientForSensitiveClaims,
+            recommendedSources: assessment.recommendedSources,
             searchVariants: researchVariants,
             searchUnavailable,
             transportFailure
         },
         next_hints: searchUnavailable
             ? ['检查代理或网络后再重试；搜索失败不能证明目标不存在。']
-            : assessment.sufficientForSensitiveClaims
-                ? []
-                : ['优先寻找原始页面或至少两个独立直接来源；不要把搜索摘要当作已核实事实。']
+            : ['优先抓取来源评分最高的多个直接页面，再比较正文中的时间、范围、数字和结论；搜索摘要不能单独作为最终证据。']
     }
 }
 
@@ -1268,6 +1295,12 @@ export const webSearchTool = {
             const source = item.source ? ` (${item.source})` : ''
             text += `\n${i + 1}. ${item.title}${source}\n   来源: ${item.url}\n   摘要: ${item.snippet}\n`
         })
+        if (Array.isArray(data?.recommendedSources) && data.recommendedSources.length > 0) {
+            text += '\n【来源选择】已按相关性、直接性、正文路径、权威信号和多引擎交叉命中情况评分；建议优先抓取：\n'
+            data.recommendedSources.slice(0, 5).forEach((item, index) => {
+                text += (index + 1) + '. ' + (item.title || item.domain || '候选来源') + '；域名: ' + (item.domain || '未知') + '；评分: ' + (item.score ?? '未知') + '；理由: ' + ((item.reasons || []).join('、') || '综合评分') + '\n   来源: ' + item.url + '\n'
+            })
+        }
         if (!Array.isArray(data)) {
             const quality = data?.evidenceQuality || 'low'
             const usableCount = Math.max(0, Number(data?.usableEvidenceCount) || 0)

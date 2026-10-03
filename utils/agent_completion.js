@@ -15,6 +15,7 @@ export function resolvePersistedAgentStatus(options = {}) {
     if (completionStatus === 'ready') return 'completed'
     if (completionStatus === 'waiting') return 'waiting'
     if (completionStatus === 'blocked') return 'blocked'
+    if (options.finalized === true) return 'completed'
     return 'active'
 }
 

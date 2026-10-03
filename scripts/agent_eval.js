@@ -69,7 +69,7 @@ const { selectWorkspaceSurveyFiles } = await import('../utils/workspace_survey.j
 const { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resolvePersistedAgentStatus } = await import('../utils/agent_completion.js')
 const { trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
 const { getPureImageReplyPolicy, isReferentialBotKeywordMention, resolveFastChatImageDelivery, resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
-const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, updateWebEvidenceState } = await import('../utils/web_evidence.js')
+const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, scoreWebSourceCandidate, updateWebEvidenceState } = await import('../utils/web_evidence.js')
 const { extractMessageSendError, isContentModerationSendError } = await import('../utils/message_delivery.js')
 const { cancelAgentExecutionsByRecalledMessage, getActiveAgentExecutionCount, registerAgentExecution } = await import('../utils/agent_cancellation.js')
 
@@ -2019,6 +2019,33 @@ check('低证据人物争议回答允许明确表达无法核实', !hasOverconfi
     { sufficientForSensitiveClaims: false }
 ))
 check('未完成任务在最大轮次耗尽后应持久化为 blocked', resolvePersistedAgentStatus({ completionStatus: 'blocked' }) === 'blocked')
+check('来源评分会压低站点首页并优先正文页', (() => {
+    const homepage = scoreWebSourceCandidate({ url: 'https://source.example/', title: '主题首页', snippet: '这是足够长的搜索摘要，用于测试首页和正文页的来源选择。', relevanceScore: 50 }, '主题')
+    const article = scoreWebSourceCandidate({ url: 'https://source.example/article/123', title: '主题完整报道', snippet: '这是足够长的搜索摘要，用于测试首页和正文页的来源选择。', relevanceScore: 50 }, '主题')
+    return article.score > homepage.score && article.tier === 'direct' && homepage.tier === 'landing'
+})())
+check('多引擎同时命中的来源会获得交叉验证加权', scoreWebSourceCandidate({ url: 'https://source.example/article', title: '主题报道', snippet: '这是足够长的搜索摘要，用于测试多引擎交叉命中评分。', relevanceScore: 20, engineHits: 2 }, '主题').score > scoreWebSourceCandidate({ url: 'https://other.example/article', title: '主题报道', snippet: '这是足够长的搜索摘要，用于测试多引擎交叉命中评分。', relevanceScore: 20, engineHits: 1 }, '主题').score)
+check('完整名单来源会记录覆盖状态', (() => {
+    const body = '完整名单如下，共 12 款机型。' + '每一项都包含版本、时间和适配说明，正文用于验证名单覆盖状态。'.repeat(30)
+    return assessFetchedContent('https://source.example/notice/list', body).facts.coverage === 'complete'
+})())
+check('完整名单但正文覆盖未知时仍不能声称完成', hasInsufficientWebEvidenceForRequirements(
+    { usableFetchCount: 2, fetchedSourceCount: 2, coverage: 'unknown' },
+    buildWebResearchRequirements('联网查一下某版本的全部升级名单')
+))
+check('完整名单覆盖明确且正文来源可用时允许完成', !hasInsufficientWebEvidenceForRequirements(
+    { usableFetchCount: 2, fetchedSourceCount: 2, coverage: 'complete' },
+    buildWebResearchRequirements('联网查一下某版本的全部升级名单')
+))
+check('事实核查至少需要两个独立正文来源', hasInsufficientWebEvidenceForRequirements(
+    { usableFetchCount: 1, fetchedSourceCount: 1, coverage: 'unknown' },
+    buildWebResearchRequirements('联网核查这条消息是否属实')
+) && !hasInsufficientWebEvidenceForRequirements(
+    { usableFetchCount: 2, fetchedSourceCount: 2, coverage: 'unknown' },
+    buildWebResearchRequirements('联网核查这条消息是否属实')
+))
+check('最终回复收尾不会把 continue 任务遗留为 active', resolvePersistedAgentStatus({ completionStatus: 'continue', finalized: true }) === 'completed')
+
 
 console.log(`\nAgent eval: ${passed} passed, ${failures.length} failed`)
 if (failures.length > 0) process.exit(1)
