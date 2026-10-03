@@ -1117,6 +1117,20 @@ check('图片中的不确定完成描述不会被误判为任务完成', !hasUns
     '图片里能确认的是：随后执行 adb reboot recovery 后，再次执行 adb sideload，升级包传输进度大约为 3%，说明刷机包还在传输中，暂时不能判断升级是否已经完成。',
     { hasActualToolResults: false }
 ))
+check('视觉证据允许描述截图内已经显示完成的步骤', !hasUnsupportedToolResultClaim(
+    '从截图看，设备已经进入 ADB Sideload 模式；截图显示前面的 payload 解包、init_boot 提取和镜像修补步骤已经完成，终端当前显示 OTA 传输约为 0%。',
+    { hasActualToolResults: false, hasVisualEvidence: true }
+))
+check('视觉证据仍拦截机器人冒充执行命令', hasUnsupportedToolResultClaim(
+    '我已经为你运行 adb sideload，刷机完成。',
+    { hasActualToolResults: false, hasVisualEvidence: true }
+))
+check('视觉证据不能直接证明最终刷机成功', hasUnsupportedToolResultClaim(
+    '刷机已经成功完成。',
+    { hasActualToolResults: false, hasVisualEvidence: true }
+))
+check('视觉证据纠正提示保留截图边界', buildFinalAnswerRetryInstruction({ hasVisualEvidence: true }).includes('截图显示')
+    && buildFinalAnswerRetryInstruction({ hasVisualEvidence: true }).includes('不得声称机器人或插件自己执行了图片中的命令'))
 check('操作建议不会被状态成功检查误伤', !hasUnsupportedToolResultClaim(
     '现在你可以在设置里修改难度，调整配置后再重启服务。',
     { hasActualToolResults: false }

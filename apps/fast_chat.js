@@ -2093,9 +2093,14 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             : ''
         let usedSafeFallbackReply = false
         const hasTaskCompletionEvidence = fastAgentCompletionStatus === 'ready' && !fastAgentPendingMandatoryVerification
+        const hasVisualEvidence = imageParts.length > 0
+            || localImageInput.imageParts.length > 0
+            || avatarImageInput.imageParts.length > 0
+            || Boolean(finalVisionRelayDescription)
         let unsupportedToolClaim = hasUnsupportedToolResultClaim(replyText, {
             hasActualToolResults: hasSuccessfulToolResult,
-            hasTaskCompletionEvidence
+            hasTaskCompletionEvidence,
+            hasVisualEvidence
         })
         if (!replyText || isPlanOnlyResponse(replyText) || unsupportedToolClaim) {
             logger.warn(`[AI-Plugin] [畅聊] 最终回复缺少可验证依据，触发一次纠正重试: ${String(result.data).slice(0, 180)}`)
@@ -2108,6 +2113,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                             text: buildFinalAnswerRetryInstruction({
                                 hasActualToolResults: hasSuccessfulToolResult,
                                 hasTaskCompletionEvidence,
+                                hasVisualEvidence,
                                 unsupportedToolClaim
                             })
                         }]
@@ -2120,7 +2126,8 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                 replyText = cleanModelText(retryResult.data)
                 unsupportedToolClaim = hasUnsupportedToolResultClaim(replyText, {
                     hasActualToolResults: hasSuccessfulToolResult,
-                    hasTaskCompletionEvidence
+                    hasTaskCompletionEvidence,
+                    hasVisualEvidence
                 })
             }
         }

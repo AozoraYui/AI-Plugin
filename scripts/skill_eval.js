@@ -52,6 +52,9 @@ check('图片请求命中图像工作流技能', image.includes('image-workflow'
 
 const imageQuestion = await selectNames('请描述这张图里有什么，不要生成图片', ['draw_image', 'vision_relay'], { hasImages: true })
 check('看图请求仍命中图像理解技能', imageQuestion.includes('image-workflow'))
+const imageSkill = catalog.find(skill => skill.name === 'image-workflow')
+check('图像技能明确视觉证据边界', imageSkill?.body.includes('视觉证据') && imageSkill.body.includes('截图显示'))
+check('图像技能禁止冒充执行和扩大成功结论', imageSkill?.body.includes('不得把“截图中的命令已经执行”改写成“我已经为你执行”') && imageSkill.body.includes('不得仅凭截图声称刷机、升级、部署、修复或任务最终成功'))
 
 const memory = await selectNames('请记住我的长期偏好并更新个人档案', ['memory_search', 'user_profile_update'])
 check('记忆请求命中记忆整理技能', memory.includes('memory-curation'))

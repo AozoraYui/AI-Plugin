@@ -3675,10 +3675,12 @@ export class ChatHandler extends plugin {
                 let finalResponseText = sanitizeModelOutput(rawResponseText, { showThinking: Config.show_thinking })
                 let usedSafeFallbackReply = false
                 const hasTaskCompletionEvidence = agentTaskFinalStatus === 'ready' && !agentPendingMandatoryVerification
+                const hasVisualEvidence = currentImageParts.length > 0 || Boolean(visionRelayDescription)
                 let unsupportedToolClaim = hasUnsupportedToolResultClaim(finalResponseText, {
                     showThinking: Config.show_thinking,
                     hasActualToolResults: successfulToolResultCount > 0,
-                    hasTaskCompletionEvidence
+                    hasTaskCompletionEvidence,
+                    hasVisualEvidence
                 })
                 let lowEvidenceOverclaim = hasOverconfidentLowEvidenceAnswer(finalResponseText, currentToolInstruction, webEvidenceState)
                 if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || lowEvidenceOverclaim) {
@@ -3692,6 +3694,7 @@ export class ChatHandler extends plugin {
                                     text: buildFinalAnswerRetryInstruction({
                                         hasActualToolResults: successfulToolResultCount > 0,
                                         hasTaskCompletionEvidence,
+                                        hasVisualEvidence,
                                         unsupportedToolClaim
                                     }) + (lowEvidenceOverclaim
                                         ? '\n本轮联网证据不足或搜索链路不可用。请重写：只列出能够由直接来源支持的内容；搜索摘要、转述和网传必须明确标注；若没有足够原始材料就直接说无法核实。不得把搜索失败、熔断或零结果解释为目标不存在、事件未发生、从未报道或纯属虚构，也不得断言具体日期、金额、违法违规、动机、因果、他人反应或后续影响。'
@@ -3710,7 +3713,8 @@ export class ChatHandler extends plugin {
                         unsupportedToolClaim = hasUnsupportedToolResultClaim(finalResponseText, {
                             showThinking: Config.show_thinking,
                             hasActualToolResults: successfulToolResultCount > 0,
-                            hasTaskCompletionEvidence
+                            hasTaskCompletionEvidence,
+                            hasVisualEvidence
                         })
                         lowEvidenceOverclaim = hasOverconfidentLowEvidenceAnswer(finalResponseText, currentToolInstruction, webEvidenceState)
                     }
