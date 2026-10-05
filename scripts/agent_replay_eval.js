@@ -21,7 +21,7 @@ const {
 
 const replayEnabledTools = [
     'web_search', 'web_fetch', 'shell_exec', 'config_manage', 'file_send', 'file_download',
-    'workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch', 'workspace_verify',
+    'workspace_list', 'workspace_survey', 'workspace_search', 'workspace_read', 'workspace_patch', 'workspace_verify',
     'group_file_list', 'group_file_download', 'draw_image', 'user_profile_update', 'memory_search',
     'group_chat_context', 'group_send_message', 'group_leave', 'group_mute', 'group_kick',
     'group_request_list', 'group_request_handle'

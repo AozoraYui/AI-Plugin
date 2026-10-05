@@ -16,6 +16,7 @@ triggers:
   - 文件内容
 tools:
   - workspace_list
+  - workspace_survey
   - workspace_search
   - workspace_read
   - workspace_patch
@@ -28,11 +29,12 @@ audience: master
 适用范围：用户要阅读、定位、修改、验证插件代码或 YAML/JSON 配置，或者明确要求查看仓库、日志和测试结果。先判断目标属于工作区文件、结构化配置、普通 Shell/仓库操作还是运行时状态；不要为了“查一个文件”直接编造命令。
 
 标准顺序：
-1. 目标路径已知且要读正文，用 workspace_read；路径未知先用 workspace_list 或 workspace_search。目录探索用 workspace_list，按文件名或内容找目标用 workspace_search。
-2. YAML/JSON 的全文、字段、语法和字段更新优先用 config_manage：read/get/validate/update。update 必须填写 key_path、operation、value；列表增删优先 append/remove，保留 backup=true。
-3. 普通文本代码的精确修改使用 workspace_patch，old_text 必须来自刚读到的真实内容且默认只允许唯一匹配；不要把大段猜测内容当补丁。
-4. workspace_patch 成功后使用 workspace_verify；它只证明语法和 git diff --check，不代表测试或运行时行为通过。再按成功标准运行相关测试、构建或明确的只读复现命令。
-5. 只有用户明确要求执行命令、读取特殊日志、查询 git 历史/状态或工具无法完成的系统操作时才使用 shell_exec。短命令优先 shell_exec，长时间或持续输出转 system-operations 技能中的 shell_session。
+1. 用户要求“读遍/看完/评估整个项目”或“全部某类源码”时，且操作者是主人，优先用 workspace_survey 做一次性静态普查；它返回全量文件覆盖、语法状态和结构摘要，不执行源码。需要理解具体实现时，再按 focusFiles 和真实依赖关系用 workspace_read。
+2. 目标路径已知且只要读一个文件，用 workspace_read；路径未知先用 workspace_list 或 workspace_search。目录探索用 workspace_list，按文件名或内容找目标用 workspace_search。
+3. YAML/JSON 的全文、字段、语法和字段更新优先用 config_manage：read/get/validate/update。update 必须填写 key_path、operation、value；列表增删优先 append/remove，保留 backup=true。
+4. 普通文本代码的精确修改使用 workspace_patch，old_text 必须来自刚读到的真实内容且默认只允许唯一匹配；不要把大段猜测内容当补丁。
+5. workspace_patch 成功后使用 workspace_verify；它只证明语法和 git diff --check，不代表测试或运行时行为通过。再按成功标准运行相关测试、构建或明确的只读复现命令。
+6. 只有用户明确要求执行命令、读取特殊日志、查询 git 历史/状态或工具无法完成的系统操作时才使用 shell_exec。短命令优先 shell_exec，长时间或持续输出转 system-operations 技能中的 shell_session。
 
 参数与证据：path、query、old_text、new_text 必须来自用户指令或工具已返回的事实，不要凭空猜路径。修改完成至少要看到 workspace_patch 的 verified=true；配置更新要看到 config_manage 的 verified=true；测试完成要以测试命令实际 exit code/输出为准。只看到“已写入”或模型计划不能宣称完成。
 

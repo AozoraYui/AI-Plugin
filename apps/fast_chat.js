@@ -55,6 +55,7 @@ const FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS = [
     'shell_exec',
     'config_manage',
     'workspace_list',
+    'workspace_survey',
     'workspace_search',
     'workspace_read',
     'workspace_patch',
@@ -1130,7 +1131,7 @@ async function buildFastChatEnabledTools(e, client) {
     const shellEnabled = e.isMaster && client.enableShellExec
     if (shellEnabled) {
         enabledTools.push('config_manage')
-        enabledTools.push('workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch', 'workspace_verify')
+        enabledTools.push('workspace_list', 'workspace_survey', 'workspace_search', 'workspace_read', 'workspace_patch', 'workspace_verify')
         enabledTools.push('shell_exec')
     }
     if (e.isMaster && client.enableShellSession) {
@@ -1544,7 +1545,10 @@ export class FastChatHandler extends plugin {
                     ? parseWorkspaceSurveyRequest(toolRoutingText)
                     : null
                 const allowSingleToolPreRoute = !candidateSelection.compound || routeByRecentTask
-                if (allowSingleToolPreRoute && workspaceSurveyArgs) {
+                if (allowSingleToolPreRoute && workspaceSurveyArgs?.exhaustive && planningEnabledTools.includes('workspace_survey')) {
+                    toolCalls = [{ name: 'workspace_survey', args: workspaceSurveyArgs }]
+                    logger.info('[AI-Plugin] [畅聊] 规则预路由命中: workspace_survey - 先执行结构化源码普查')
+                } else if (allowSingleToolPreRoute && workspaceSurveyArgs) {
                     toolCalls = [{ name: 'workspace_list', args: workspaceSurveyArgs }]
                     logger.info('[AI-Plugin] [畅聊] 规则预路由命中: workspace_list - 先递归获取项目结构，再读取关键文件')
                 } else if (allowSingleToolPreRoute && webSearchArgs?.image_count > 0) {
@@ -1690,6 +1694,9 @@ export class FastChatHandler extends plugin {
                         }, { logger, logPrefix: '[AI-Plugin] [畅聊] Agent任务' })
                         if (result.success) {
                             let injection = formatFastChatToolInjection(call.name, result.data)
+                            if (call.name === 'workspace_survey') {
+                                injection += '\n【源码普查边界】这是静态扫描摘要；必须依据 facts.coverage 和 syntaxErrorCount 汇报覆盖范围，不得把摘要冒充逐行代码审查，也不得声称执行了源码。'
+                            }
                             if (call.name === 'group_chat_context' && shouldReadGroupContextImages(toolRoutingText, result.data?.logs || [])) {
                                 try {
                                     const imageSummary = await buildGroupContextImageSummary(this.client, result.data.logs, toolRoutingText)

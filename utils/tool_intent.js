@@ -830,16 +830,21 @@ export function hasExplicitLocalFileReadIntent(text) {
 export function parseWorkspaceSurveyRequest(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value || isCapabilityOrUsageQuestion(value, '了解项目|熟悉项目|浏览目录|目录结构|项目结构')) return null
-    const hasSurveyAction = /(?:过目(?:一遍|一下)?|熟悉(?:一下)?|了解(?:一下)?|浏览(?:一下)?|通读(?:一下)?|看(?:一遍|一下)?|扫(?:一遍|一下)?|梳理(?:一下)?|摸清)/i.test(value)
-    const hasWorkspaceScope = /(?:目录(?:下)?|项目|仓库|代码库|源码|文件结构|目录结构|tree\s*结构|文件(?:先)?)/i.test(value)
+    const exhaustive = /(?:所有|全部|全量|每个|每一份).{0,24}(?:源码|代码|文件|脚本|js|javascript)|(?:源码|代码|文件|脚本|js|javascript).{0,24}(?:所有|全部|全量|每个|每一份)/i.test(value)
+    const hasSurveyAction = /(?:过目(?:一遍|一下)?|熟悉(?:一下)?|了解(?:一下)?|浏览(?:一下)?|通读(?:一下)?|读(?:一遍|一下)?|读取(?:一遍|一下)?|看(?:一遍|一下)?|扫(?:一遍|一下)?|梳理(?:一下)?|摸清)/i.test(value)
+    const hasWorkspaceScope = /(?:目录(?:下)?|项目|仓库|代码库|源码|代码|脚本|文件结构|目录结构|tree\s*结构|文件(?:先)?)/i.test(value)
     if (!hasSurveyAction || !hasWorkspaceScope) return null
     const absolutePath = value.match(/\/(?:root|home|etc|var|opt|usr|data|srv|tmp|mnt)(?:\/[A-Za-z0-9_.@+~-]+)+/i)?.[0]
     const relativePath = value.match(/(?:^|[\s，,])((?:\.\.?\/)[^\s，。；;]+)/)?.[1]
+    const javascriptOnly = exhaustive && /(?:js|javascript)/i.test(value)
     return {
         path: absolutePath || relativePath || '.',
-        depth: 3,
-        limit: 300,
-        include_hidden: true
+        depth: exhaustive ? 5 : 3,
+        limit: exhaustive ? 1000 : 300,
+        include_hidden: true,
+        exhaustive,
+        extensions: javascriptOnly ? ['js', 'mjs', 'cjs'] : undefined,
+        glob: javascriptOnly ? '**/*.{js,mjs,cjs}' : undefined
     }
 }
 
@@ -989,7 +994,7 @@ export function selectToolCandidates(enabledTools = [], text = '', options = {})
     if (families.has('web_search')) add(['web_search', 'web_fetch'])
     if (families.has('web_fetch')) add(['web_fetch'])
     if (families.has('system')) add(['system_info', 'shell_exec', 'shell_session'])
-    if (families.has('local_file')) add(['workspace_list', 'workspace_search', 'workspace_read', 'shell_exec'])
+    if (families.has('local_file')) add(['workspace_survey', 'workspace_list', 'workspace_search', 'workspace_read', 'shell_exec'])
     if (families.has('local_file_mutation')) add(['workspace_read', 'workspace_patch', 'workspace_verify', 'config_manage', 'shell_exec'])
     if (families.has('system_operation')) add(['shell_exec', 'shell_session'])
     if (families.has('file_send')) add(['file_send', 'workspace_list', 'workspace_search', 'shell_exec'])
@@ -1079,6 +1084,7 @@ export function isExplicitToolIntent(toolName, text, options = {}) {
             return hasExplicitLocalFileReadIntent(text) || hasExplicitLocalFileMutationIntent(text)
         }
         case 'workspace_list':
+        case 'workspace_survey':
         case 'workspace_search':
         case 'workspace_read':
             return hasExplicitLocalFileReadIntent(text)

@@ -89,6 +89,12 @@ const TOOL_USAGE_GUIDES = {
         useWhen: ['需要了解项目结构、目录内容或定位下一步读取范围时优先使用。'],
         avoid: ['不要用来读取文件正文；正文使用 workspace_read。']
     },
+    workspace_survey: {
+        capabilities: ['一次性递归扫描主人指定项目的源码文件，返回文件规模、依赖、导出、声明、工具名和 JavaScript 语法状态。'],
+        useWhen: ['主人明确要求读遍、看完、评估整个项目或全部某类源码时优先使用，避免 workspace_list/search/read 多轮重复往返。'],
+        avoid: ['仅需看一个文件或几个匹配位置时不要使用；不要对普通用户开放，也不要把扫描摘要误当作完整逐行代码审查。'],
+        rules: ['工具只做静态读取和语法检查，不执行源码；facts.coverage=partial 时必须明确说明扫描不完整；需要理解具体实现时再读取 focusFiles 或相关文件。']
+    },
     workspace_search: {
         capabilities: ['按文件名或文本内容搜索工作区，返回文件、行号、列号和匹配片段。'],
         useWhen: ['寻找源码定义、配置字段、日志关键词或不知道准确文件路径时使用。'],

@@ -32,7 +32,7 @@ check('技能引用的工具都已注册', declaredTools.every(name => registere
 check('所有注册工具至少有一个 Skill 说明', registeredTools.every(name => declaredTools.includes(name)), JSON.stringify(registeredTools.filter(name => !declaredTools.includes(name))))
 
 const maintenance = await selectNames('请读取这个插件的代码，修改配置后运行测试', [
-    'workspace_read', 'workspace_patch', 'workspace_verify', 'config_manage', 'shell_exec'
+    'workspace_survey', 'workspace_read', 'workspace_patch', 'workspace_verify', 'config_manage', 'shell_exec'
 ], { isMaster: true })
 check('代码维护请求命中项目维护技能', maintenance.includes('project-maintenance'))
 

@@ -91,6 +91,7 @@ const CONTINUATION_ALLOWED_TOOLS = [
     'shell_exec',
     'config_manage',
     'workspace_list',
+    'workspace_survey',
     'workspace_search',
     'workspace_read',
     'workspace_patch',
@@ -131,6 +132,7 @@ const AGENT_LOOP_ALLOWED_TOOLS = [
     'shell_exec',
     'config_manage',
     'workspace_list',
+    'workspace_survey',
     'workspace_search',
     'workspace_read',
     'workspace_patch',
@@ -156,6 +158,7 @@ const TASK_CONTEXT_CONTINUATION_TOOLS = [
     'shell_exec',
     'config_manage',
     'workspace_list',
+    'workspace_survey',
     'workspace_search',
     'workspace_read',
     'workspace_patch',
@@ -1106,6 +1109,13 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
 
     if (isMaster && hasTool(enabledTools, 'workspace_list')) {
         const workspaceSurveyArgs = parseWorkspaceSurveyRequest(routeText)
+        if (workspaceSurveyArgs?.exhaustive && hasTool(enabledTools, 'workspace_survey')) {
+            return {
+                intent: '规则预路由：主人要求全量审查源码，先执行一次结构化源码普查，避免逐轮重复列目录和分段读取。',
+                tools: [{ name: 'workspace_survey', args: workspaceSurveyArgs }],
+                routedBy: 'rule'
+            }
+        }
         if (workspaceSurveyArgs) {
             return {
                 intent: '规则预路由：主人要求系统性了解目录或项目，先递归获取目录树，再读取关键文件。',
@@ -1639,7 +1649,8 @@ ${researchRequirementsBlock}
 - 如果提供了【近期工具任务语境】，它只用于理解当前指令中的续接、省略和数量改写；不要仅因语境里有工具名或命令而计划工具。对于“再看 N 条/多查一点/换成 N 条”这类明显续接，可以在不改变任务类型的前提下计划对应的只读工具。
 - 如果用户说“看看这个/总结上面/下载引用文件/打开这个链接”，可以把引用/转发内容当作工具参数来源；否则不要因为引用内容本身包含工具词而计划工具。
     - 了解项目结构、浏览目录树、查找源码和读取文本文件时优先使用 workspace_list/workspace_search/workspace_read；只有这些结构化工具无法完成或用户明确要求命令时才使用 shell_exec。
-    - 用户要求“过目/熟悉/了解整个目录或项目”属于多步任务：先用 workspace_list depth=3 左右取得递归结构，再实际读取至少 4 个 README、项目清单、入口文件或不同子目录的代表性源码。仅执行顶层 ls 不足以宣称已经了解项目。
+    - 用户明确要求“所有/全部/全量源码”或评估整个项目时，优先使用 workspace_survey 做一次性静态普查；它会返回全量文件覆盖、依赖/导出/声明摘要和 JavaScript 语法状态，不执行源码。只有需要理解具体实现时，才继续读取 focusFiles 或相关文件；coverage=partial 时不得声称已完成全量扫描。
+    - 用户要求“过目/熟悉/了解整个目录或项目”但没有要求全量源码时，属于多步任务：先用 workspace_list depth=3 左右取得递归结构，再实际读取至少 4 个 README、项目清单、入口文件或不同子目录的代表性源码。仅执行顶层 ls 不足以宣称已经了解项目。
     - YAML/JSON 配置文件的读取、字段查询、语法校验和修改优先使用 config_manage；普通代码和文本文件优先 workspace_read，日志或特殊系统文件再使用 shell_exec。
 - 主人明确要求把内容写入/添加到/删除自服务器配置字段、disable/enable/白名单/黑名单时，应计划 config_manage(action=update)，不要误判为 file_send，也不要现场生成 sed/Python 文本修改命令。若目标路径可从刚刚完成的配置读取任务或近期任务语境明确解析，可以沿用该路径。
 - 代码修改必须遵循“读取真实内容 → workspace_patch → workspace_verify → 相关测试/构建（若适用）”的顺序。workspace_patch 的写后重读只证明文本写入成功；workspace_verify 只证明静态语法和 Git diff 检查通过；两者都不能冒充项目测试或实际行为通过。
@@ -2217,7 +2228,7 @@ export class ChatHandler extends plugin {
             const shellEnabled = e.isMaster && this.client.enableShellExec
             if (shellEnabled) {
                 enabledTools.push('config_manage')
-                enabledTools.push('workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch', 'workspace_verify')
+                enabledTools.push('workspace_list', 'workspace_survey', 'workspace_search', 'workspace_read', 'workspace_patch', 'workspace_verify')
                 enabledTools.push('shell_exec')
             }
             if (e.isMaster && this.client.enableShellSession) {
@@ -2960,10 +2971,13 @@ ${visualDescription}`
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为修改文件的确定性静态校验结果。只有 verified=true 才能声称静态校验通过；静态校验不等于项目测试、构建或实际行为已经通过。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
-                        } else if (['workspace_list', 'workspace_search', 'workspace_read'].includes(call.name)) {
+                        } else if (['workspace_list', 'workspace_search', 'workspace_read', 'workspace_survey'].includes(call.name)) {
                             suppressAutoFastChatContext = true
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
-                            userMessage = userMessage + '\n\n【重要指令】以上为工作区工具读取到的真实目录或文件内容。项目结构不能只凭顶层目录猜测；总结时必须区分“目录树中看到的路径”和“已经实际读取正文的文件”。' + formattedResult
+                            const surveyInstruction = call.name === 'workspace_survey'
+                                ? '源码普查摘要只代表静态扫描结果；请根据 facts.coverage、syntaxErrorCount 和 files/focusFiles 判断覆盖范围，不要把摘要冒充逐行审查，也不要声称执行了源码。'
+                                : '项目结构不能只凭顶层目录猜测；总结时必须区分“目录树中看到的路径”和“已经实际读取正文的文件”。'
+                            userMessage = userMessage + `\n\n【重要指令】以上为工作区工具读取到的真实目录、源码普查或文件内容。${surveyInstruction}` + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结构化结果已注入`)
                         } else if (call.name === 'memory_search') {
                             memorySearchToolUsed = true

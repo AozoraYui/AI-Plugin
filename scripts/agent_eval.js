@@ -407,6 +407,13 @@ check('Yahoo 通用结果卡片结构可以解析', (() => {
         && results[0].title === '目标搜索结果'
         && results[0].snippet.includes('备用结果摘要')
 })())
+check('全量源码请求会进入一次性工作区普查', (() => {
+    const request = parseWorkspaceSurveyRequest('#uc读一下/root/Yunzai/plugins/AI-Plugin下的所有js代码')
+    return request?.exhaustive === true
+        && request.path === '/root/Yunzai/plugins/AI-Plugin'
+        && request.extensions.includes('js')
+        && request.limit >= 1000
+})())
 check('过目整个目录会解析为递归工作区调查', (() => {
     const request = parseWorkspaceSurveyRequest('#c测试时间到啦，诺亚你把/root/Yunzai目录下的文件先过目一遍吧')
     return request?.path === '/root/Yunzai'
@@ -1616,9 +1623,10 @@ const structuredProtocol = normalizeToolResult('demo', {
 })
 check('统一工具协议保留事实、产物和下一步提示', structuredProtocol.facts.path === '/tmp/example.log' && structuredProtocol.artifacts.length === 1 && structuredProtocol.nextHints[0] === '可以发送文件')
 
-check('结构化工作区工具已完整注册', ['workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch', 'workspace_verify'].every(name => toolRegistry.get(name)))
+check('结构化工作区工具已完整注册', ['workspace_list', 'workspace_survey', 'workspace_search', 'workspace_read', 'workspace_patch', 'workspace_verify'].every(name => toolRegistry.get(name)))
+check('源码普查工具仅限主人且风险为低风险只读', toolRegistry.get('workspace_survey')?.permission === 'master' && classifyToolCallRisk({ name: 'workspace_survey', args: { path: '/tmp/project' } }) === 'low')
 const workspaceCandidates = selectToolCandidates(
-    ['workspace_list', 'workspace_search', 'workspace_read', 'workspace_patch', 'workspace_verify', 'shell_exec'],
+    ['workspace_list', 'workspace_survey', 'workspace_search', 'workspace_read', 'workspace_patch', 'workspace_verify', 'shell_exec'],
     '#c帮我在项目里找一下handleChat的定义并读一下相关代码'
 )
 check('代码查找请求优先召回结构化工作区工具', workspaceCandidates.tools.includes('workspace_search') && workspaceCandidates.tools.includes('workspace_read'), JSON.stringify(workspaceCandidates))

@@ -282,6 +282,144 @@ export const workspaceReadTool = {
     }
 }
 
+function extractCaptureMatches(source = '', pattern, limit = 24) {
+    const matches = []
+    for (const match of String(source || '').matchAll(pattern)) {
+        const value = match.slice(1).find(item => item)
+        if (value && !matches.includes(value)) matches.push(value)
+        if (matches.length >= limit) break
+    }
+    return matches
+}
+
+function summarizeJavaScriptSource(source = '') {
+    return {
+        imports: extractCaptureMatches(source, /(?:import\s+(?:[\s\S]*?\s+from\s+|)["']([^"']+)["']|require\(\s*["']([^"']+)["']\s*\))/g),
+        exports: extractCaptureMatches(source, /export\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var)\s+([A-Za-z_$][\w$]*)/g),
+        declarations: extractCaptureMatches(source, /(?:async\s+)?function\s+([A-Za-z_$][\w$]*)|class\s+([A-Za-z_$][\w$]*)/g, 32),
+        toolNames: extractCaptureMatches(source, /name\s*:\s*["']([^"']+)["']/g, 32)
+    }
+}
+
+async function walkWorkspaceFiles(root, options = {}) {
+    const files = []
+    const requestedMaxFiles = normalizeLimit(options.maxFiles, 500, 1000)
+    const maxFiles = Math.min(1001, requestedMaxFiles + 1)
+    const includeHidden = options.includeHidden === true
+    const extensions = new Set((Array.isArray(options.extensions) ? options.extensions : ['js'])
+        .map(item => String(item || '').replace(/^\./, '').toLowerCase()).filter(Boolean))
+    async function walk(directory) {
+        if (files.length >= maxFiles) return
+        let children = []
+        try { children = await fsp.readdir(directory, { withFileTypes: true }) } catch { return }
+        children.sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
+        for (const child of children) {
+            if (files.length >= maxFiles) break
+            if (!includeHidden && child.name.startsWith('.')) continue
+            if (child.isDirectory() && (child.name === '.git' || child.name === 'node_modules')) continue
+            const fullPath = path.join(directory, child.name)
+            const relativePath = path.relative(root, fullPath).split(path.sep).join('/')
+            if (child.isDirectory() && (relativePath === 'data/chroma_db' || relativePath.startsWith('data/chroma_db/'))) continue
+            if (child.isDirectory()) {
+                await walk(fullPath)
+                continue
+            }
+            if (!child.isFile()) continue
+            const extension = path.extname(child.name).replace(/^\./, '').toLowerCase()
+            if (extensions.size > 0 && !extensions.has(extension)) continue
+            files.push(fullPath)
+        }
+    }
+    await walk(root)
+    return { files: files.slice(0, requestedMaxFiles), truncated: files.length > requestedMaxFiles }
+}
+
+export const workspaceSurveyTool = {
+    name: 'workspace_survey',
+    permission: 'master',
+    description: '对主人指定的工作区进行一次性源码普查：递归扫描匹配文件，提取文件规模、导入导出、声明、工具名和 JavaScript 语法状态，避免 Agent 逐轮重复列目录和读文件。',
+    functionSchema: {
+        name: 'workspace_survey',
+        description: '递归扫描项目源码并返回结构化概览，适合“看完/读遍/评估整个项目”任务。不会执行源码。',
+        parameters: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: '项目或目录路径。' },
+                extensions: { type: 'array', items: { type: 'string' }, description: '要扫描的扩展名，默认只扫描 js/mjs/cjs。' },
+                max_files: { type: 'integer', description: '最多扫描文件数，默认 500，最大 1000。' },
+                include_hidden: { type: 'boolean', description: '是否包含隐藏路径，默认 false。' }
+            },
+            required: ['path']
+        }
+    },
+    async execute(args = {}, context = {}) {
+        const target = resolveAllowedPath(args.path, context)
+        if (!target.ok) return { ok: false, recoverable: true, error: target.error }
+        let stat
+        try { stat = await fsp.stat(target.path) } catch (err) { return { ok: false, recoverable: true, error: err.message } }
+        if (!stat.isDirectory()) return { ok: false, recoverable: true, error: `扫描根路径不是目录: ${target.path}` }
+
+        const extensions = (Array.isArray(args.extensions) && args.extensions.length > 0 ? args.extensions : ['js', 'mjs', 'cjs'])
+            .map(item => String(item || '').replace(/^\./, '').toLowerCase()).filter(Boolean)
+        const walkResult = await walkWorkspaceFiles(target.path, {
+            extensions,
+            maxFiles: args.max_files,
+            includeHidden: args.include_hidden
+        })
+        const paths = walkResult.files
+        const summaries = []
+        for (const filePath of paths) {
+            let source = ''
+            let fileStat
+            try {
+                [source, fileStat] = await Promise.all([fsp.readFile(filePath, 'utf8'), fsp.stat(filePath)])
+            } catch (err) {
+                summaries.push({ path: filePath, relativePath: path.relative(target.path, filePath), error: err.message })
+                continue
+            }
+            const syntax = ['.js', '.mjs', '.cjs'].includes(path.extname(filePath).toLowerCase())
+                ? await runFile(process.execPath, ['--check', filePath], { timeout: 30000 })
+                : null
+            summaries.push({
+                path: filePath,
+                relativePath: path.relative(target.path, filePath),
+                bytes: fileStat.size,
+                lines: source.split(/\r?\n/).length,
+                syntax: syntax ? { ok: syntax.ok, error: syntax.ok ? '' : (syntax.stderr || syntax.error).slice(0, 500) } : undefined,
+                ...summarizeJavaScriptSource(source)
+            })
+        }
+        const focusFiles = [...summaries]
+            .filter(item => !item.error)
+            .sort((left, right) => {
+                const score = item => (/^(?:index|main|app|server|cli)\./i.test(path.basename(item.relativePath)) ? 1000000 : 0) + Number(item.bytes || 0)
+                return score(right) - score(left)
+            })
+            .slice(0, 12)
+        const syntaxErrors = summaries.filter(item => item.syntax?.ok === false)
+        const maxFiles = normalizeLimit(args.max_files, 500, 1000)
+        return {
+            ok: true,
+            verified: true,
+            summary: `已完成 ${target.path} 的源码普查，共扫描 ${summaries.length} 个文件${walkResult.truncated ? '（达到文件上限，结果可能不完整）' : ''}。`,
+            facts: {
+                root: target.path,
+                extensions,
+                fileCount: summaries.length,
+                truncated: walkResult.truncated,
+                syntaxErrorCount: syntaxErrors.length,
+                coverage: walkResult.truncated ? 'partial' : 'complete'
+            },
+            artifacts: summaries.slice(0, 100).map(item => ({ type: 'file', path: item.path })),
+            files: summaries,
+            focusFiles
+        }
+    },
+    formatResult(data) {
+        return JSON.stringify(data, null, 2)
+    }
+}
+
 export const workspacePatchTool = {
     name: 'workspace_patch',
     permission: 'master',
@@ -453,5 +591,6 @@ export const workspaceVerifyTool = {
 toolRegistry.register(workspaceListTool)
 toolRegistry.register(workspaceSearchTool)
 toolRegistry.register(workspaceReadTool)
+toolRegistry.register(workspaceSurveyTool)
 toolRegistry.register(workspacePatchTool)
 toolRegistry.register(workspaceVerifyTool)

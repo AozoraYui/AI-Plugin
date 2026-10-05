@@ -26,6 +26,7 @@ const masterArgs = {
     shell_exec: { command: 'true' },
     config_manage: { action: 'read', path: '/tmp/not-used-by-permission-test.yml' },
     workspace_list: { path: '/tmp/not-used-by-permission-test' },
+    workspace_survey: { path: '/tmp/not-used-by-permission-test' },
     workspace_search: { path: '/tmp/not-used-by-permission-test', query: 'x', mode: 'filename' },
     workspace_read: { path: '/tmp/not-used-by-permission-test' },
     workspace_patch: { path: '/tmp/not-used-by-permission-test', old_text: 'x', new_text: 'y' },
