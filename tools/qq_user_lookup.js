@@ -7,10 +7,10 @@
 import { toolRegistry } from './registry.js'
 import { formatDBTimestampToBeijing } from '../utils/common.js'
 
-const DEFAULT_LIMIT = 20
-const MAX_LIMIT = 60
-const DEFAULT_MAX_GROUPS = 200
-const MAX_GROUPS = 300
+const DEFAULT_LIMIT = 60
+const MAX_LIMIT = 300
+const DEFAULT_MAX_GROUPS = 500
+const MAX_GROUPS = 1000
 const MEMBER_QUERY_CONCURRENCY = 4
 
 function normalizeUserId(value) {
@@ -22,6 +22,12 @@ function normalizeLimit(value) {
     const limit = Number(value)
     if (!Number.isFinite(limit) || limit <= 0) return DEFAULT_LIMIT
     return Math.min(Math.max(Math.floor(limit), 1), MAX_LIMIT)
+}
+
+function normalizeOffset(value) {
+    const offset = Number(value)
+    if (!Number.isFinite(offset) || offset < 0) return 0
+    return Math.floor(offset)
 }
 
 function normalizeMaxGroups(value) {
@@ -87,11 +93,11 @@ async function mapWithConcurrency(items, concurrency, worker) {
     return results
 }
 
-async function findCommonGroups(event, userId, maxGroups) {
+async function findCommonGroups(event, userId, maxGroups, offset = 0) {
     const live = await fetchLiveGroups(event)
     if (live.groups.length === 0) return { ...live, checkedGroups: 0, failedGroups: 0, truncated: false, commonGroups: [] }
 
-    const groups = live.groups.slice(0, maxGroups)
+    const groups = live.groups.slice(offset, offset + maxGroups)
     const results = await mapWithConcurrency(groups, MEMBER_QUERY_CONCURRENCY, async group => {
         try {
             const member = await callBotApi(event?.bot, 'get_group_member_info', {
@@ -123,8 +129,10 @@ async function findCommonGroups(event, userId, maxGroups) {
         groups: live.groups,
         error: live.error,
         checkedGroups: groups.length,
+        groupOffset: offset,
         failedGroups,
-        truncated: live.groups.length > groups.length,
+        truncated: offset + groups.length < live.groups.length,
+        nextGroupOffset: offset + groups.length < live.groups.length ? offset + groups.length : null,
         commonGroups
     }
 }
@@ -190,11 +198,19 @@ export const qqUserLookupTool = {
                     },
                     limit: {
                         type: 'number',
-                        description: '每类本地记录最多返回多少条，默认 20，最多 60。'
+                        description: '每类本地记录最多返回多少条，默认 60，最多 300；结果可用 offset 分页。'
                     },
                     max_groups: {
                         type: 'number',
-                        description: '实时检查的群数量上限，默认 200，最多 300；群很多时可分批查询。'
+                        description: '实时检查的群数量上限，默认 500，最多 1000；结果可用 group_offset 分页。'
+                    },
+                    group_offset: {
+                        type: 'number',
+                        description: '实时群查询起始偏移，默认 0；结果提示 nextGroupOffset 时可继续查询。'
+                    },
+                    offset: {
+                        type: 'number',
+                        description: '本地群聊/私聊流水分页偏移，默认 0；结果提示 nextOffset 时可继续查询。'
                     }
                 },
                 required: ['user_id']
@@ -213,6 +229,8 @@ export const qqUserLookupTool = {
         const mode = normalizeMode(args.mode)
         const limit = normalizeLimit(args.limit)
         const maxGroups = normalizeMaxGroups(args.max_groups)
+        const groupOffset = normalizeOffset(args.group_offset)
+        const offset = normalizeOffset(args.offset)
         const manager = global.AIPluginConversationManager
         const db = manager?.db
         const result = {
@@ -224,15 +242,23 @@ export const qqUserLookupTool = {
             directMessages: [],
             aiConversation: { available: false, turnCount: 0, dates: [] },
             coverage: [],
-            warnings: []
+            warnings: [],
+            offset,
+            nextOffset: null,
+            nextGroupMessageOffset: null,
+            nextDirectMessageOffset: null,
+            nextGroupOffset: null,
+            truncated: false
         }
 
         let liveGroupResult = { groups: [], error: '未执行实时群查询' }
         if (mode === 'all' || mode === 'common_groups') {
-            liveGroupResult = await findCommonGroups(context.event, userId, maxGroups)
+            liveGroupResult = await findCommonGroups(context.event, userId, maxGroups, groupOffset)
             result.commonGroups = liveGroupResult.commonGroups
+            result.nextGroupOffset = liveGroupResult.nextGroupOffset
+            result.truncated = result.truncated || liveGroupResult.truncated
             result.coverage.push(`已实时检查 ${liveGroupResult.checkedGroups} 个机器人所在群`)
-            if (liveGroupResult.truncated) result.warnings.push(`机器人可见群共 ${liveGroupResult.groups.length} 个，本次只检查前 ${liveGroupResult.checkedGroups} 个。`)
+            if (liveGroupResult.truncated) result.warnings.push(`机器人可见群共 ${liveGroupResult.groups.length} 个，本次检查偏移 ${liveGroupResult.groupOffset} 起的 ${liveGroupResult.checkedGroups} 个。`)
             if (liveGroupResult.error) result.warnings.push(`实时共同群查询失败：${liveGroupResult.error}`)
             if (liveGroupResult.failedGroups > 0) result.warnings.push(`${liveGroupResult.failedGroups} 个群的成员查询失败，结果可能不完整。`)
         }
@@ -243,8 +269,11 @@ export const qqUserLookupTool = {
                 result.warnings.push('本地群聊流水数据库不可用。')
             } else {
                 try {
-                    const logs = await db.getGroupMessageLogs({ userId, limit })
+                    const logs = await db.getGroupMessageLogs({ userId, limit, offset })
                     result.groupMessages = logs.map(record => formatGroupMessageRecord(record, groupNames))
+                    result.nextGroupMessageOffset = logs.length >= limit ? offset + logs.length : null
+                    result.nextOffset = result.nextGroupMessageOffset
+                    result.truncated = result.truncated || result.nextGroupMessageOffset !== null
                     result.coverage.push(`本地群聊流水命中 ${logs.length} 条`)
                     for (const log of logs) {
                         const groupId = String(log.groupId || '')
@@ -261,8 +290,11 @@ export const qqUserLookupTool = {
                 result.warnings.push('私聊/临时会话流水表不可用；只能依赖已有 AI 对话记忆。')
             } else {
                 try {
-                    const logs = await db.getDirectMessageLogs({ userId, limit })
+                    const logs = await db.getDirectMessageLogs({ userId, limit, offset })
                     result.directMessages = logs.map(formatDirectMessageRecord)
+                    result.nextDirectMessageOffset = logs.length >= limit ? offset + logs.length : null
+                    result.nextOffset = result.nextDirectMessageOffset
+                    result.truncated = result.truncated || result.nextDirectMessageOffset !== null
                     result.coverage.push(`本地好友私聊/临时会话流水命中 ${logs.length} 条`)
                 } catch (error) {
                     result.warnings.push(`私聊/临时会话流水查询失败：${error.message || String(error)}`)
@@ -334,6 +366,7 @@ export const qqUserLookupTool = {
         }
         if (data.aiConversation?.available) lines.push(`AI 对话历史：有 ${data.aiConversation.turnCount} 条历史记录，日期覆盖 ${data.aiConversation.dates.join('、') || '未知'}。`)
         if (data.coverage?.length > 0) lines.push(`查询覆盖：${data.coverage.join('；')}`)
+        if (data.truncated) lines.push(`结果已分页截断；群聊流水下一页 offset=${data.nextGroupMessageOffset ?? '无'}，私聊/临时会话下一页 offset=${data.nextDirectMessageOffset ?? '无'}，共同群下一页 group_offset=${data.nextGroupOffset ?? '无'}。不要把本页当作完整结果。`)
         if (data.warnings?.length > 0) lines.push(`查询提示：${data.warnings.join('；')}`)
         lines.push('以上只代表当前接口和本地记录能确认的范围，不代表目标 QQ 的完整社交关系。')
         return lines.join('\n')

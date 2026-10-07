@@ -77,7 +77,7 @@ export function shouldContinueAgentRound(options = {}) {
     const names = new Set(toolCalls.map(call => call?.name).filter(Boolean))
     if (names.size === 0 || [...names].some(name => stopTools.has(name))) return false
     if (protocols.some(protocol => protocol.pending || protocol.needsConfirmation)) return false
-    if (protocols.some(protocol => !protocol.ok && protocol.recoverable)) return true
+    if (protocols.some(protocol => !protocol.ok && (protocol.retryable || protocol.recoverable))) return true
 
     const instruction = String(options.instruction || '').trim()
     const contextTail = String(options.accumulatedText || '').slice(-12000)
@@ -109,6 +109,8 @@ export function buildAgentRoundFingerprint(observations = [], decision = {}) {
         ok: item?.protocol?.ok,
         pending: item?.protocol?.pending,
         recoverable: item?.protocol?.recoverable,
+        retryable: item?.protocol?.retryable,
+        verified: item?.protocol?.verified,
         summary: String(item?.protocol?.summary || '').slice(0, 600),
         error: String(item?.protocol?.error || '').slice(0, 600),
         result: String(item?.text || '').slice(-1200)
@@ -131,33 +133,247 @@ export function updateAgentStagnationState(state = {}, fingerprint = '') {
     }
 }
 
+export function createAgentTelemetry(options = {}) {
+    return {
+        startedAt: Number(options.startedAt) || Date.now(),
+        calls: 0,
+        successes: 0,
+        failures: 0,
+        verified: 0,
+        pending: 0,
+        partial: 0,
+        elapsedMs: 0,
+        byTool: {}
+    }
+}
+
+export function recordAgentTelemetry(telemetry, execution = {}) {
+    if (!telemetry) return telemetry
+    const toolName = String(execution.call?.name || execution.protocol?.tool || 'unknown')
+    const elapsedMs = Math.max(0, Number(execution.metrics?.elapsedMs || execution.protocol?.metrics?.elapsedMs) || 0)
+    const pending = execution.pending === true
+        || execution.protocol?.pending === true
+        || execution.protocol?.needsConfirmation === true
+        || execution.protocol?.requiresConfirmation === true
+    const successful = execution.result?.success === true && execution.protocol?.ok === true && !pending
+    telemetry.calls = Math.max(0, Number(telemetry.calls) || 0) + 1
+    telemetry.elapsedMs = Math.max(0, Number(telemetry.elapsedMs) || 0) + elapsedMs
+    if (successful) telemetry.successes = Math.max(0, Number(telemetry.successes) || 0) + 1
+    if (!execution.result?.success || execution.protocol?.ok === false) telemetry.failures = Math.max(0, Number(telemetry.failures) || 0) + 1
+    if (execution.protocol?.verified === true && !pending) telemetry.verified = Math.max(0, Number(telemetry.verified) || 0) + 1
+    if (pending) telemetry.pending = Math.max(0, Number(telemetry.pending) || 0) + 1
+    if (execution.protocol?.partial === true || execution.protocol?.status === 'partial') telemetry.partial = Math.max(0, Number(telemetry.partial) || 0) + 1
+    if (!telemetry.byTool[toolName]) telemetry.byTool[toolName] = { calls: 0, successes: 0, failures: 0, verified: 0, elapsedMs: 0 }
+    const toolStats = telemetry.byTool[toolName]
+    toolStats.calls++
+    toolStats.elapsedMs += elapsedMs
+    if (successful) toolStats.successes++
+    if (!execution.result?.success || execution.protocol?.ok === false) toolStats.failures++
+    if (execution.protocol?.verified === true && !pending) toolStats.verified++
+    return telemetry
+}
+
+export function getAgentTelemetrySnapshot(telemetry = null) {
+    if (!telemetry) return { calls: 0, successes: 0, failures: 0, verified: 0, pending: 0, partial: 0, elapsedMs: 0, wallClockMs: 0, byTool: {} }
+    return {
+        calls: Math.max(0, Number(telemetry.calls) || 0),
+        successes: Math.max(0, Number(telemetry.successes) || 0),
+        failures: Math.max(0, Number(telemetry.failures) || 0),
+        verified: Math.max(0, Number(telemetry.verified) || 0),
+        pending: Math.max(0, Number(telemetry.pending) || 0),
+        partial: Math.max(0, Number(telemetry.partial) || 0),
+        elapsedMs: Math.max(0, Number(telemetry.elapsedMs) || 0),
+        wallClockMs: Math.max(0, Date.now() - (Number(telemetry.startedAt) || Date.now())),
+        byTool: Object.fromEntries(Object.entries(telemetry.byTool || {}).map(([name, stats]) => [name, { ...stats }]))
+    }
+}
+
+export function summarizeAgentExecutions(executions = [], options = {}) {
+    const items = Array.isArray(executions) ? executions.filter(Boolean) : []
+    const isPending = execution => execution.pending === true
+        || execution.protocol?.pending === true
+        || execution.protocol?.needsConfirmation === true
+        || execution.protocol?.requiresConfirmation === true
+    const pending = items.filter(isPending)
+    const successful = items.filter(execution => execution.result?.success === true
+        && execution.protocol?.ok === true
+        && !isPending(execution))
+    const failures = items.filter(execution => execution.result?.success !== true || execution.protocol?.ok !== true)
+    const partial = items.filter(execution => execution.protocol?.partial === true || execution.protocol?.status === 'partial')
+    const retryableFailures = failures.filter(execution => execution.protocol?.retryable === true || execution.protocol?.recoverable === true)
+    const elapsedMs = items.reduce((total, execution) => total + Math.max(
+        0,
+        Number(execution.metrics?.elapsedMs || execution.protocol?.metrics?.elapsedMs) || 0
+    ), 0)
+    const budgetExhausted = items.some(execution => execution.budgetExhausted === true)
+        || options.budget?.exhausted === true
+    return {
+        calls: items.length,
+        successes: successful.length,
+        failures: failures.length,
+        verified: items.filter(execution => execution.protocol?.verified === true && !isPending(execution)).length,
+        pending: pending.length,
+        partial: partial.length,
+        retryableFailures: retryableFailures.length,
+        terminalFailures: Math.max(0, failures.length - retryableFailures.length),
+        budgetExhausted,
+        elapsedMs,
+        protocols: items.map(execution => execution.protocol).filter(Boolean),
+        allFailed: items.length > 0 && failures.length === items.length,
+        hasSuccessfulResult: successful.length > 0
+    }
+}
+
+export function resolveAgentRoundCompletion(options = {}) {
+    const summary = options.summary || {}
+    const verificationStatus = String(options.verification?.completionStatus || '').trim().toLowerCase()
+    const allowedStatuses = new Set(['ready', 'continue', 'waiting', 'blocked'])
+    if (options.pending === true || summary.pending > 0 || verificationStatus === 'waiting') return 'waiting'
+    if (summary.budgetExhausted === true) return 'blocked'
+    if (options.researchEvidenceIncomplete === true) return 'continue'
+    if (allowedStatuses.has(verificationStatus)) return verificationStatus
+    if (summary.allFailed === true && summary.retryableFailures === 0) return 'blocked'
+    if (summary.partial > 0 || summary.retryableFailures > 0 || summary.hasSuccessfulResult === true) return 'continue'
+    return 'blocked'
+}
+
+export function createAgentBudget(options = {}) {
+    return {
+        startedAt: Number(options.startedAt) || Date.now(),
+        maxToolCalls: Math.max(1, Number(options.maxToolCalls) || 32),
+        toolCalls: 0,
+        byTool: {},
+        exhausted: false
+    }
+}
+
+export function getAgentBudgetSnapshot(budget = null) {
+    if (!budget) return { toolCalls: 0, maxToolCalls: 0, elapsedMs: 0, exhausted: false, byTool: {} }
+    return {
+        toolCalls: Math.max(0, Number(budget.toolCalls) || 0),
+        maxToolCalls: Math.max(0, Number(budget.maxToolCalls) || 0),
+        elapsedMs: Math.max(0, Date.now() - (Number(budget.startedAt) || Date.now())),
+        exhausted: budget.exhausted === true,
+        byTool: { ...(budget.byTool || {}) }
+    }
+}
+
+function reserveAgentBudget(budget, toolName) {
+    if (!budget) return { allowed: true, used: 0, max: 0 }
+    const maxToolCalls = Math.max(1, Number(budget.maxToolCalls) || 32)
+    if (Number(budget.toolCalls) >= maxToolCalls) {
+        budget.exhausted = true
+        return { allowed: false, used: budget.toolCalls, max: maxToolCalls }
+    }
+    budget.toolCalls = Math.max(0, Number(budget.toolCalls) || 0) + 1
+    const name = String(toolName || 'unknown')
+    budget.byTool[name] = Math.max(0, Number(budget.byTool[name]) || 0) + 1
+    return { allowed: true, used: budget.toolCalls, max: maxToolCalls }
+}
+
+function buildBudgetExceededExecution(call, budget) {
+    const error = `Agent 工具调用预算已用尽（${budget.toolCalls}/${budget.maxToolCalls}），已停止继续执行 ${call?.name || '未知工具'}`
+    const result = { success: false, error }
+    const protocol = normalizeToolResult(call?.name, {
+        ok: false,
+        status: 'blocked',
+        error,
+        retryable: false,
+        facts: { budgetExhausted: true }
+    })
+    return {
+        result,
+        protocol,
+        formattedResult: error,
+        status: 'failed',
+        protocolStatus: protocol.status,
+        pending: false,
+        budgetExhausted: true
+    }
+}
+
 export async function* executeAgentToolCalls(options = {}) {
     const registry = options.registry
     const toolCalls = Array.isArray(options.toolCalls) ? options.toolCalls : []
+    const budget = options.budget || null
     if (!registry?.execute) throw new Error('Agent runtime requires a tool registry')
 
     for (let index = 0; index < toolCalls.length; index++) {
         const call = toolCalls[index]
+        const reservation = reserveAgentBudget(budget, call?.name)
+        if (!reservation.allowed) {
+            const execution = {
+                index: index + 1,
+                call: { ...call, args: call?.args || {} },
+                key: agentToolCallKey({ ...call, args: call?.args || {} }),
+                ...buildBudgetExceededExecution(call, budget)
+            }
+            recordAgentTelemetry(options.telemetry, execution)
+            yield execution
+            return
+        }
         const args = call?.args && typeof call.args === 'object' ? call.args : {}
-        const baseContext = typeof options.contextFactory === 'function'
-            ? await options.contextFactory(call, index + 1)
-            : (options.context || {})
-        const context = createAgentToolContext(baseContext, call, index + 1)
-        const result = await registry.execute(call.name, args, options.isMaster === true, context)
-        const protocol = result.protocol || normalizeToolResult(call.name, result.success ? result.data : { ok: false, error: result.error })
-        const formattedResult = result.success
-            ? registry.formatToolResult(call.name, result.data)
-            : `工具 ${call.name} 执行失败：${result.error || '未知错误'}`
+        const toolName = String(call?.name || 'unknown')
+        const startedAt = Date.now()
+        let result
+        try {
+            const baseContext = typeof options.contextFactory === 'function'
+                ? await options.contextFactory(call, index + 1)
+                : (options.context || {})
+            const context = createAgentToolContext(baseContext, call, index + 1)
+            result = await registry.execute(toolName, args, options.isMaster === true, context)
+            if (!result || typeof result !== 'object' || Array.isArray(result)) {
+                result = { success: false, error: '工具返回了无效结果' }
+            }
+        } catch (error) {
+            result = { success: false, error: error?.message || String(error) }
+        }
+        const rawProtocol = result.protocol && typeof result.protocol === 'object'
+            ? result.protocol
+            : normalizeToolResult(toolName, result.success ? result.data : { ok: false, error: result.error }, {
+            elapsedMs: Date.now() - startedAt,
+            attempt: budget?.byTool?.[toolName] || 1
+            })
+        const protocol = {
+            ...rawProtocol,
+            metrics: {
+                ...(rawProtocol.metrics || {}),
+                elapsedMs: Math.max(0, Date.now() - startedAt),
+                attempt: budget?.byTool?.[toolName] || 1
+            }
+        }
+        let formattedResult
+        if (!result.success) {
+            formattedResult = `工具 ${toolName} 执行失败：${result.error || '未知错误'}`
+        } else {
+            try {
+                const formatted = typeof registry.formatToolResult === 'function'
+                    ? registry.formatToolResult(toolName, result.data)
+                    : result.data
+                formattedResult = typeof formatted === 'string' ? formatted : JSON.stringify(formatted ?? '')
+            } catch (error) {
+                formattedResult = `工具 ${toolName} 已执行，但结果格式化失败：${error?.message || String(error)}`
+            }
+        }
         const status = !result.success ? 'failed' : (protocol.ok ? 'ok' : 'tool_failed')
-        yield {
+        const protocolStatus = protocol.status || (protocol.ok ? 'success_unverified' : 'failed')
+        const execution = {
             index: index + 1,
-            call: { ...call, args },
-            key: agentToolCallKey({ ...call, args }),
+            call: { ...call, name: toolName, args },
+            key: agentToolCallKey({ ...call, name: toolName, args }),
             result,
             protocol,
             formattedResult,
             status,
-            pending: protocol.pending || protocol.needsConfirmation
+            protocolStatus,
+            pending: protocol.pending || protocol.needsConfirmation || protocol.requiresConfirmation,
+            metrics: {
+                elapsedMs: Math.max(0, Date.now() - startedAt),
+                budgetUsed: budget?.toolCalls || 0,
+                budgetLimit: budget?.maxToolCalls || 0
+            }
         }
+        recordAgentTelemetry(options.telemetry, execution)
+        yield execution
     }
 }

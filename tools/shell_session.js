@@ -43,9 +43,9 @@ async function executeShellSessionNow(args = {}, context = {}) {
     const action = normalizeAction(args.action)
     let result
     if (action === 'status') {
-        result = await ensureShellSession({ cwd: args.cwd })
+        result = await ensureShellSession({ cwd: args.cwd, signal: context.signal })
     } else if (action === 'read') {
-        result = await captureShellSession({ cwd: args.cwd, lines: limitLines(args.lines), maxOutputChars: Config.SHELL_SESSION_MAX_OUTPUT_CHARS })
+        result = await captureShellSession({ cwd: args.cwd, lines: limitLines(args.lines), maxOutputChars: Config.SHELL_SESSION_MAX_OUTPUT_CHARS, signal: context.signal })
     } else if (action === 'send') {
         result = await sendToShellSession({
             cwd: args.cwd,
@@ -57,16 +57,17 @@ async function executeShellSessionNow(args = {}, context = {}) {
             afterSendTimeoutMs: args.after_send_timeout_ms,
             afterSendPollMs: args.after_send_poll_ms,
             lines: limitLines(args.lines),
-            maxOutputChars: Config.SHELL_SESSION_MAX_OUTPUT_CHARS
+            maxOutputChars: Config.SHELL_SESSION_MAX_OUTPUT_CHARS,
+            signal: context.signal
         })
     } else if (action === 'interrupt') {
-        result = await interruptShellSession({ cwd: args.cwd })
+        result = await interruptShellSession({ cwd: args.cwd, signal: context.signal })
     } else if (action === 'clear') {
-        result = await clearShellSession({ cwd: args.cwd })
+        result = await clearShellSession({ cwd: args.cwd, signal: context.signal })
     } else if (action === 'restart') {
-        result = await restartShellSession({ cwd: args.cwd })
+        result = await restartShellSession({ cwd: args.cwd, signal: context.signal })
     } else if (action === 'close') {
-        result = await closeShellSession()
+        result = await closeShellSession({ signal: context.signal })
     }
     return { action, actionLabel: ACTION_LABELS[action] || action, ...result }
 }

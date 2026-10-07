@@ -109,6 +109,8 @@ const defaultConfig = {
     SHELL_EXEC_FOLLOWUP_MAX_ROUNDS: 5,
     // 通用 Agent 工具循环最大轮数；硬上限 8，防止失控循环
     AGENT_LOOP_MAX_ROUNDS: 8,
+    // 单个 Agent 任务最多执行的工具调用次数，防止多轮规划失控
+    AGENT_MAX_TOOL_CALLS: 32,
     // Shell 补查决策上下文最大字符数
     SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS: 24000,
     // child_process exec 最大缓冲区
@@ -481,6 +483,12 @@ export const Config = {
     },
     set AGENT_LOOP_MAX_ROUNDS(val) {
         config.AGENT_LOOP_MAX_ROUNDS = Math.max(1, Math.min(8, Math.floor(Number(val) || defaultConfig.AGENT_LOOP_MAX_ROUNDS)))
+    },
+    get AGENT_MAX_TOOL_CALLS() {
+        return Math.max(1, Math.min(128, Math.floor(Number(config.AGENT_MAX_TOOL_CALLS ?? defaultConfig.AGENT_MAX_TOOL_CALLS) || defaultConfig.AGENT_MAX_TOOL_CALLS)))
+    },
+    set AGENT_MAX_TOOL_CALLS(val) {
+        config.AGENT_MAX_TOOL_CALLS = Math.max(1, Math.min(128, Math.floor(Number(val) || defaultConfig.AGENT_MAX_TOOL_CALLS)))
     },
     get SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS() { return config.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS ?? defaultConfig.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS },
     set SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS(val) { config.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS = Number(val) || defaultConfig.SHELL_EXEC_FOLLOWUP_CONTEXT_CHARS },

@@ -11,7 +11,7 @@ import path from 'node:path'
 import { toolRegistry } from './registry.js'
 import { checkPathAllowed } from '../utils/file_access.js'
 import { Config } from '../utils/config.js'
-import { takeSourceMsg } from '../utils/common.js'
+import { fetchWithProxy, takeSourceMsg } from '../utils/common.js'
 
 const GF_MAX_DEPTH = 3          // 递归遍历群文件夹的最大深度
 const GF_DL_MAX_RETRIES = 3     // 下载重试次数
@@ -56,8 +56,7 @@ function fmtTime(ts) {
     const ms = ts < 1e12 ? ts * 1000 : ts // 兼容秒/毫秒
     const d = new Date(ms)
     if (Number.isNaN(d.getTime())) return ''
-    const p = n => String(n).padStart(2, '0')
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+    return d.toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai', hour12: false }).slice(0, 16)
 }
 
 // 规范化单个文件夹对象
@@ -148,7 +147,7 @@ function resolveSaveDir(inputDir) {
 }
 
 // 下载单个 URL 到目标目录，返回保存结果
-async function downloadUrl(url, targetDir, fileName) {
+async function downloadUrl(url, targetDir, fileName, signal) {
     // 防目录穿越
     let safeName = path.basename(String(fileName || 'group_file'))
     let filePath = path.join(targetDir, safeName)
@@ -164,8 +163,15 @@ async function downloadUrl(url, targetDir, fileName) {
     for (let attempt = 1; attempt <= GF_DL_MAX_RETRIES; attempt++) {
         const controller = new AbortController()
         const timer = setTimeout(() => controller.abort(), GF_DL_TIMEOUT_MS)
+        const abortFromParent = () => controller.abort()
+        if (signal?.aborted) return { ok: false, reason: '任务已取消' }
+        signal?.addEventListener('abort', abortFromParent, { once: true })
         try {
-            const res = await fetch(url, { signal: controller.signal })
+            const res = await fetchWithProxy(url, {
+                signal: controller.signal,
+                autoDetectProxy: true,
+                family: 4
+            })
             clearTimeout(timer)
             if (!res.ok) {
                 if (attempt < GF_DL_MAX_RETRIES) { await new Promise(r => setTimeout(r, GF_DL_RETRY_DELAYS[attempt - 1])); continue }
@@ -176,11 +182,14 @@ async function downloadUrl(url, targetDir, fileName) {
             return { ok: true, fileName: safeName, filePath, size: buf.length }
         } catch (err) {
             clearTimeout(timer)
+            if (signal?.aborted) return { ok: false, reason: '任务已取消' }
             if (attempt < GF_DL_MAX_RETRIES) {
                 await new Promise(r => setTimeout(r, GF_DL_RETRY_DELAYS[attempt - 1]))
             } else {
                 return { ok: false, reason: err.message }
             }
+        } finally {
+            signal?.removeEventListener('abort', abortFromParent)
         }
     }
     return { ok: false, reason: '未知错误' }
@@ -431,7 +440,7 @@ export const groupFileDownloadTool = {
                 return `【群文件下载失败】未能获取到文件「${target.name}」的下载链接。`
             }
 
-            const dl = await downloadUrl(url, dirResult.dir, target.name)
+            const dl = await downloadUrl(url, dirResult.dir, target.name, context.signal)
             if (!dl.ok) {
                 return `【群文件下载失败】文件「${target.name}」下载失败: ${dl.reason}`
             }

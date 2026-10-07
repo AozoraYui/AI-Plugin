@@ -27,6 +27,10 @@ async function updateTaskWithOptimisticLock(db, task, updates, options = {}) {
 
     const latest = await db.getAgentTask?.(task.taskId)
     if (!latest?.taskId) throw new Error(`Agent任务版本冲突，且无法重新加载任务 ${task.taskId}`)
+    if (isTerminalAgentStatus(latest.status) && latest.status !== updates.status) {
+        taskLogger(options)?.warn?.(`${taskLogPrefix(options)}拒绝覆盖终态任务: ${task.taskId}, latest=${latest.status}, requested=${updates.status || 'unchanged'}`)
+        return latest
+    }
     const retryVersion = Math.max(1, Math.floor(Number(latest.version) || 1))
     const retryUpdates = { ...updates }
     if (retryUpdates.riskLevel) retryUpdates.riskLevel = mergeAgentRisk(latest.riskLevel, retryUpdates.riskLevel)
@@ -34,6 +38,10 @@ async function updateTaskWithOptimisticLock(db, task, updates, options = {}) {
     if (!retried) throw new Error(`Agent任务版本连续冲突: ${task.taskId}`)
     taskLogger(options)?.warn?.(`${taskLogPrefix(options)}检测到并发版本冲突，已重新加载并合并更新: ${task.taskId}`)
     return { ...latest, ...retryUpdates, version: retryVersion + 1 }
+}
+
+function isTerminalAgentStatus(status) {
+    return ['completed', 'blocked', 'cancelled'].includes(String(status || '').trim().toLowerCase())
 }
 
 export function mergeAgentRisk(previous = 'low', next = 'low') {
@@ -68,6 +76,11 @@ export async function createOrResumeAgentTask(db, options = {}) {
             logger?.warn?.(`${prefix}创建失败: ${err.message}`)
             return null
         }
+    }
+
+    if (isTerminalAgentStatus(currentTask.status) && !isTerminalAgentStatus(options.status)) {
+        logger?.info?.(`${prefix}不续接已结束任务: ${currentTask.taskId}, status=${currentTask.status}`)
+        return currentTask
     }
 
     const riskLevel = mergeAgentRisk(currentTask.riskLevel, options.riskLevel || 'low')
@@ -117,6 +130,7 @@ export async function finalizeAgentTask(db, task, options = {}) {
     if (!task?.taskId) return task || null
     const preserveWaiting = options.preserveWaiting !== false
     const requestedStatus = options.status || 'completed'
+    if (isTerminalAgentStatus(task.status) && task.status !== requestedStatus) return task
     const status = preserveWaiting && task.status === 'waiting' && requestedStatus === 'completed'
         ? 'waiting'
         : requestedStatus

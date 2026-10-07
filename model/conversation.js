@@ -4,6 +4,8 @@ import { HISTORY_DIR, CHECKPOINT_DIR, SUMMARY_CACHE_DIR, Config } from '../utils
 import { AIDatabase } from '../utils/database.js'
 import { getTodayDateStr, ensureDir } from '../utils/common.js'
 
+const historySaveQueues = new Map()
+
 export class ConversationManager {
     constructor() {
         this.db = new AIDatabase()
@@ -296,6 +298,19 @@ export class ConversationManager {
     }
 
     async saveUserHistory(userId, history) {
+        const key = String(userId || '')
+        const previous = historySaveQueues.get(key) || Promise.resolve()
+        const current = previous
+            .catch(() => {})
+            .then(() => this._saveUserHistoryNow(key, history))
+        const tracked = current.finally(() => {
+            if (historySaveQueues.get(key) === tracked) historySaveQueues.delete(key)
+        })
+        historySaveQueues.set(key, tracked)
+        return current
+    }
+
+    async _saveUserHistoryNow(userId, history) {
         const redisKey = `ai-plugin:history:${userId}`
         const cacheExpire = Config.REDIS_CACHE_EXPIRE_SECONDS
 

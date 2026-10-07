@@ -28,6 +28,30 @@ export function isAIErrorResponse(text) {
 
 export const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
+export function mergeAbortSignals(...signals) {
+    const activeSignals = signals.filter(Boolean)
+    if (activeSignals.length === 0) return undefined
+    if (activeSignals.length === 1) return activeSignals[0]
+    const controller = new AbortController()
+    const abort = (signal) => {
+        if (!controller.signal.aborted) controller.abort(signal.reason)
+    }
+    for (const signal of activeSignals) {
+        if (signal.aborted) {
+            abort(signal)
+            break
+        }
+        signal.addEventListener('abort', () => abort(signal), { once: true })
+    }
+    return controller.signal
+}
+
+export function createTimeoutSignal(timeoutMs, parentSignal) {
+    const timeout = Number(timeoutMs)
+    if (!Number.isFinite(timeout) || timeout <= 0) return parentSignal
+    return mergeAbortSignals(parentSignal, AbortSignal.timeout(timeout))
+}
+
 export async function setMsgEmojiLike(e, emojiID) {
     if (e.isPrivate) return
     if (!e || !e.bot || !e.message_id || emojiID === undefined || emojiID === null) {
@@ -308,11 +332,14 @@ export function getImageMimeType(buffer) {
 }
 
 export function getTodayDateStr() {
-    const now = new Date()
-    const year = now.getFullYear()
-    const month = String(now.getMonth() + 1).padStart(2, '0')
-    const day = String(now.getDate()).padStart(2, '0')
-    return `${year}-${month}-${day}`
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).formatToParts(new Date())
+    const values = Object.fromEntries(parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value]))
+    return `${values.year}-${values.month}-${values.day}`
 }
 
 export function getBeijingTime() {

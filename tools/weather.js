@@ -4,6 +4,7 @@
  */
 
 import { toolRegistry } from './registry.js'
+import { createTimeoutSignal, fetchWithProxy } from '../utils/common.js'
 
 /**
  * 判断是否为英文/国际城市名称。
@@ -17,11 +18,11 @@ function isLatinCityName(city) {
 /**
  * OpenWeatherMap 天气查询
  */
-async function queryOpenWeatherMap(city, apiKey) {
+async function queryOpenWeatherMap(city, apiKey, signal) {
     try {
         // 当前天气
         const currUrl = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(city)}&appid=${apiKey}&units=metric&lang=zh_cn`
-        const currRes = await fetch(currUrl, { signal: AbortSignal.timeout(10000) })
+        const currRes = await fetchWithProxy(currUrl, { signal: createTimeoutSignal(10000, signal), autoDetectProxy: true })
         const currData = await currRes.json()
 
         if (currData.cod !== 200) {
@@ -39,7 +40,7 @@ async function queryOpenWeatherMap(city, apiKey) {
         // 预报（5天/3小时）
         try {
             const forecastUrl = `https://api.openweathermap.org/data/2.5/forecast?q=${encodeURIComponent(city)}&appid=${apiKey}&units=metric&lang=zh_cn&cnt=16`
-            const fcRes = await fetch(forecastUrl, { signal: AbortSignal.timeout(10000) })
+            const fcRes = await fetchWithProxy(forecastUrl, { signal: createTimeoutSignal(10000, signal), autoDetectProxy: true })
             const fcData = await fcRes.json()
 
             if (fcData.cod === '200' && fcData.list) {
@@ -66,7 +67,7 @@ async function queryOpenWeatherMap(city, apiKey) {
  * @param {string} owmKey - OpenWeatherMap API Key（可选）
  * @returns {Promise<string>}
  */
-async function queryWeather(city, amapKey, owmKey = null) {
+async function queryWeather(city, amapKey, owmKey = null, signal) {
     if (!city || !city.trim()) {
         return '\n\n【天气查询失败】未指定城市名称。\n'
     }
@@ -76,14 +77,14 @@ async function queryWeather(city, amapKey, owmKey = null) {
     // 英文/国际城市优先使用 OpenWeatherMap，避免高德误匹配国内城市
     if (owmKey && isLatinCityName(cityName)) {
         logger.info(`[AI-Plugin] 天气查询 检测到英文/国际城市 "${cityName}"，优先使用 OpenWeatherMap`)
-        return await queryOpenWeatherMap(cityName, owmKey)
+        return await queryOpenWeatherMap(cityName, owmKey, signal)
     }
 
     // Step 1: 高德 extensions=all（城市名）
     if (amapKey) {
         try {
             const url = `https://restapi.amap.com/v3/weather/weatherInfo?key=${amapKey}&city=${encodeURIComponent(cityName)}&extensions=all`
-            const res = await fetch(url, { signal: AbortSignal.timeout(10000) })
+            const res = await fetchWithProxy(url, { signal: createTimeoutSignal(10000, signal), autoDetectProxy: true })
             const data = await res.json()
 
             if (data.status === '1' && data.forecasts && data.forecasts.length > 0) {
@@ -102,7 +103,7 @@ async function queryWeather(city, amapKey, owmKey = null) {
                 // all 成功但无预报数据，直接降级 base
                 logger.warn(`[AI-Plugin] 天气查询 高德all返回空预报，降级到 base`)
                 const baseUrl = `https://restapi.amap.com/v3/weather/weatherInfo?key=${amapKey}&city=${encodeURIComponent(cityName)}&extensions=base`
-                const baseRes = await fetch(baseUrl, { signal: AbortSignal.timeout(10000) })
+                const baseRes = await fetchWithProxy(baseUrl, { signal: createTimeoutSignal(10000, signal), autoDetectProxy: true })
                 const baseData = await baseRes.json()
                 if (baseData.status === '1' && baseData.lives && baseData.lives.length > 0) {
                     const live = baseData.lives[0]
@@ -121,13 +122,13 @@ async function queryWeather(city, amapKey, owmKey = null) {
             // Step 2: 地理编码获取 adcode 后重试
             logger.warn(`[AI-Plugin] 天气查询 高德all城市名失败: ${data.info}，尝试地理编码`)
             const geoUrl = `https://restapi.amap.com/v3/geocode/geo?key=${amapKey}&address=${encodeURIComponent(cityName)}`
-            const geoRes = await fetch(geoUrl, { signal: AbortSignal.timeout(5000) })
+            const geoRes = await fetchWithProxy(geoUrl, { signal: createTimeoutSignal(5000, signal), autoDetectProxy: true })
             const geoData = await geoRes.json()
 
             if (geoData.status === '1' && geoData.geocodes && geoData.geocodes.length > 0) {
                 const adcode = geoData.geocodes[0].adcode
                 const retryUrl = `https://restapi.amap.com/v3/weather/weatherInfo?key=${amapKey}&city=${adcode}&extensions=all`
-                const retryRes = await fetch(retryUrl, { signal: AbortSignal.timeout(10000) })
+                const retryRes = await fetchWithProxy(retryUrl, { signal: createTimeoutSignal(10000, signal), autoDetectProxy: true })
                 const retryData = await retryRes.json()
 
                 if (retryData.status === '1' && retryData.forecasts && retryData.forecasts.length > 0) {
@@ -149,7 +150,7 @@ async function queryWeather(city, amapKey, owmKey = null) {
             // Step 3: 降级到 base 实时天气
             logger.warn(`[AI-Plugin] 天气查询 高德地理编码也失败，降级到 base`)
             const baseUrl = `https://restapi.amap.com/v3/weather/weatherInfo?key=${amapKey}&city=${encodeURIComponent(cityName)}&extensions=base`
-            const baseRes = await fetch(baseUrl, { signal: AbortSignal.timeout(10000) })
+            const baseRes = await fetchWithProxy(baseUrl, { signal: createTimeoutSignal(10000, signal), autoDetectProxy: true })
             const baseData = await baseRes.json()
 
             if (baseData.status === '1' && baseData.lives && baseData.lives.length > 0) {
@@ -173,7 +174,7 @@ async function queryWeather(city, amapKey, owmKey = null) {
     // Step 4: 降级到 OpenWeatherMap
     if (owmKey) {
         logger.info(`[AI-Plugin] 天气查询 高德全部失败，降级到 OpenWeatherMap`)
-        return await queryOpenWeatherMap(cityName, owmKey)
+        return await queryOpenWeatherMap(cityName, owmKey, signal)
     }
 
     return `\n\n【天气查询失败】未能查询到 "${cityName}" 的天气信息，所有数据源均不可用。\n`
@@ -202,14 +203,14 @@ export const weatherTool = {
         }
     },
 
-    async execute(args) {
+    async execute(args, context = {}) {
         const amapKey = toolRegistry.weatherApiKey
         const owmKey = toolRegistry.openWeatherMapApiKey
         if (!amapKey && !owmKey) {
             return '\n\n【天气查询失败】未配置任何天气 API Key，请联系管理员。\n'
         }
         const city = args.city || args.query || ''
-        return await queryWeather(city, amapKey, owmKey)
+        return await queryWeather(city, amapKey, owmKey, context.signal)
     },
 
     formatResult(data) {

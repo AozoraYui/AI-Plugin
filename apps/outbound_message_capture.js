@@ -92,7 +92,6 @@ async function persistOutboundMessage(e, message, response) {
     const messageScope = getMessageScope(e)
     if (!messageScope || replyFailed(response)) return
     const db = global.AIPluginConversationManager?.db
-    if (!db?.saveGroupMessageLog) return
 
     const normalized = normalizeOutboundMessage(message)
     if (!normalized.normalizedText && normalized.imageMeta.length === 0 && normalized.forwardNodes.length === 0) return
@@ -100,18 +99,33 @@ async function persistOutboundMessage(e, message, response) {
     const createdAt = getDBTimestamp()
     const messageIds = getReplyMessageIds(response)
     const messageId = messageIds[0]
-    const userId = getBotUserId(e)
-    await db.saveGroupMessageLog({
-        groupId: messageScope,
-        messageId,
-        userId,
-        nickname: Config.AI_NAME,
-        normalizedText: normalized.normalizedText,
-        imageMeta: normalized.imageMeta,
-        createdAt,
-        isCommand: false,
-        isBot: true
-    })
+    const directScope = getDirectMessageScope(e)
+    if (directScope) {
+        if (!db?.saveDirectMessageLog || !e.user_id) return
+        await db.saveDirectMessageLog({
+            userId: String(e.user_id),
+            groupId: e.group_id ? String(e.group_id) : '',
+            scopeType: directScope,
+            messageId,
+            nickname: Config.AI_NAME,
+            normalizedText: normalized.normalizedText,
+            imageMeta: normalized.imageMeta,
+            createdAt
+        })
+    } else {
+        if (!db?.saveGroupMessageLog) return
+        await db.saveGroupMessageLog({
+            groupId: messageScope,
+            messageId,
+            userId: getBotUserId(e),
+            nickname: Config.AI_NAME,
+            normalizedText: normalized.normalizedText,
+            imageMeta: normalized.imageMeta,
+            createdAt,
+            isCommand: false,
+            isBot: true
+        })
+    }
 
     if (normalized.forwardNodes.length > 0 && db.saveOutboundForwardMessage) {
         for (const forwardMessageId of messageIds) {

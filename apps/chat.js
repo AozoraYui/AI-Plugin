@@ -15,16 +15,18 @@ import { buildAutoSemanticMemoryContext, compactConversationHistory, loadUserMem
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldLoadPrivateMemoryContext, shouldPrioritizeCurrentMultimodalTurn } from '../utils/message_context.js'
 import { collectQQFaceImageUrls, describeQQFaceSegment, formatQQFaceSegments } from '../utils/qq_face.js'
 import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitHumanizeIntent, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parsePluginUpdateRequest, parseQQUserLookupRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
-import { clearPendingAction, loadPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision } from '../utils/pending_actions.js'
+import { claimPendingAction, clearPendingAction, loadPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision, releasePendingActionClaim } from '../utils/pending_actions.js'
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
 import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } from '../utils/model_output.js'
-import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, retainAgentContinuationTools, shouldContinueAgentRound, shouldStopRepeatedImageSearch, stableAgentStringify, updateAgentStagnationState } from '../utils/agent_runtime.js'
+import { formatToolProtocol } from '../utils/tool_result.js'
+import { executeAgentRound, planAgentContinuation } from '../utils/agent_orchestrator.js'
+import { buildAgentRoundFingerprint, createAgentBudget, createAgentTelemetry, getAgentBudgetSnapshot, getAgentTelemetrySnapshot, deferDependentSideEffectCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, retainAgentContinuationTools, resolveAgentRoundCompletion, shouldContinueAgentRound, shouldStopRepeatedImageSearch, stableAgentStringify, summarizeAgentExecutions, updateAgentStagnationState } from '../utils/agent_runtime.js'
 import { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resolvePersistedAgentStatus } from '../utils/agent_completion.js'
 import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK_SUMMARY_MAX_CHARS, mergeAgentRisk, recordAgentTaskStep, updateAgentTaskProgress } from '../utils/agent_task_runtime.js'
 import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../utils/agent_plan.js'
-import { isAgentExecutionCancelled, registerAgentExecution } from '../utils/agent_cancellation.js'
+import { cancelAgentExecutionsByTask, isAgentExecutionCancelled, registerAgentExecution } from '../utils/agent_cancellation.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { createPendingGroupSendAction, executePendingGroupSend, parseGroupSendDisambiguationSelection } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
@@ -446,11 +448,19 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
         }
     }
 
-    if (pending.type === 'shell_exec' || pending.type === 'shell_session') {
+    const claim = await claimPendingAction(e.user_id, pending.id)
+    if (!claim.ok) {
+        await e.reply(claim.error || '这项待确认操作正在处理中，请稍候再试。', true)
+        return true
+    }
+
+    try {
+        if (pending.type === 'shell_exec' || pending.type === 'shell_session') {
         await clearPendingAction(e.user_id, pending.id)
         const result = pending.type === 'shell_exec'
             ? await executePendingShellExec(pending, e)
             : await executePendingShellSession(pending, e)
+        await releasePendingActionClaim(e.user_id, pending.id)
         await updatePendingActionAgentTask(e, pending, result, 'confirm')
         const summary = await summarizeShellResultForReply(client, modelGroupKey, pending.type, pending, result)
         await e.reply(summary, true)
@@ -460,6 +470,7 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
     if (pending.type === 'tool_call') {
         await clearPendingAction(e.user_id, pending.id)
         const execution = await executeConfirmedPendingToolCall(pending, e, toolRegistry)
+        await releasePendingActionClaim(e.user_id, pending.id)
         const result = execution.success ? execution.data : { ok: false, error: execution.error || '工具执行失败' }
         const formatted = execution.success
             ? toolRegistry.formatToolResult(pending.toolName, result).trim()
@@ -487,6 +498,7 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
             }
             const currentResult = await executePendingGroupLeave({ ...pending, groups: currentGroups }, e)
             executionResults.push(currentResult)
+            await releasePendingActionClaim(e.user_id, pending.id)
             await updatePendingActionAgentTask(e, pending, mergePendingActionResults(executionResults, pending), 'confirm')
             if (!currentResult.ok) {
                 const formatted = toolRegistry.formatToolResult(pending.type, currentResult).trim()
@@ -506,10 +518,14 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
     }
 
     await clearPendingAction(e.user_id, pending.id)
+    await releasePendingActionClaim(e.user_id, pending.id)
     const formatted = toolRegistry.formatToolResult(pending.type, result).trim()
     await updatePendingActionAgentTask(e, pending, result, 'confirm')
-    await e.reply(formatted || (result.ok ? '已执行待确认操作。' : `执行失败：${result.error || '未知错误'}`), true)
-    return true
+        await e.reply(formatted || (result.ok ? '已执行待确认操作。' : `执行失败：${result.error || '未知错误'}`), true)
+        return true
+    } finally {
+        await releasePendingActionClaim(e.user_id, pending.id)
+    }
 }
 
 function mergePendingActionResults(results = [], pending = {}) {
@@ -2150,6 +2166,12 @@ export class ChatHandler extends plugin {
                     await e.reply('当前没有正在进行的 Agent 任务。', true)
                     return true
                 }
+                const cancelledExecutions = cancelAgentExecutionsByTask({
+                    taskId: activeTask.taskId,
+                    userId: e.user_id,
+                    groupId: e.group_id,
+                    reason: '用户取消当前 Agent 任务'
+                })
                 const taskWithSteps = await this.conversationManager.db.getAgentTask(activeTask.taskId)
                 const observation = '用户取消当前 Agent 任务。'
                 await recordAgentStep(this.conversationManager.db, taskWithSteps, {
@@ -2164,7 +2186,7 @@ export class ChatHandler extends plugin {
                     lastObservation: observation,
                     completedAt: getDBTimestamp()
                 }, { logger, logPrefix: '[AI-Plugin] Agent任务' })
-                await e.reply('已取消当前 Agent 任务。', true)
+                await e.reply(`已取消当前 Agent 任务${cancelledExecutions.length > 0 ? `，已中止 ${cancelledExecutions.length} 个正在运行的执行` : ''}。`, true)
                 return true
             }
             if (agentControl.action === 'continue') {
@@ -2352,6 +2374,8 @@ ${visualDescription}`
             }
 
             let agentTaskFinalStatus = ''
+            const agentBudget = createAgentBudget({ maxToolCalls: Config.AGENT_MAX_TOOL_CALLS })
+            const agentTelemetry = createAgentTelemetry()
             let agentPendingMandatoryVerification = false
             let agentTaskLatestSummary = agentTask?.summary || ''
             let agentTaskLatestObservation = agentTask?.lastObservation || ''
@@ -2686,12 +2710,14 @@ ${visualDescription}`
                     let roundPendingConfirmation = false
                     let roundHadUnfulfilledImageSearch = false
                     const roundObservations = []
-                    for await (const execution of executeAgentToolCalls({
+                    const roundExecutionResult = await executeAgentRound({
                         registry: toolRegistry,
                         toolCalls: roundToolCalls,
                         isMaster: e.isMaster,
-                        context: { userId: e.user_id, groupId: e.group_id, event: e, client: this.client, userMessage: originalUserMessage, originalUserMessage, agentTaskId: agentTask?.taskId || '' }
-                    })) {
+                        budget: agentBudget,
+                        telemetry: agentTelemetry,
+                        context: { userId: e.user_id, groupId: e.group_id, event: e, client: this.client, signal: cancellationHandle?.signal, userMessage: originalUserMessage, originalUserMessage, agentTaskId: agentTask?.taskId || '' },
+                        onExecution: async (execution) => {
                         throwIfExecutionCancelled()
                         const { call, index: roundCallIndex, key, result, protocol, formattedResult: runtimeFormattedResult, status: runtimeStatus, pending } = execution
                         seenToolCalls.add(key)
@@ -2711,7 +2737,7 @@ ${visualDescription}`
                         }
                         if (!result.success) {
                             logger.warn(`[AI-Plugin] ${call.name} 失败: ${result.error}`)
-                            const failureText = runtimeFormattedResult
+                            const failureText = `${formatToolProtocol(protocol)}\n${runtimeFormattedResult}`
                             if (call.name === 'web_search') {
                                 webResearchUsed = true
                                 suppressAutoFastChatContext = true
@@ -2720,7 +2746,7 @@ ${visualDescription}`
                                     transportFailure: true
                                 })
                             }
-                            userMessage = userMessage + `\n\n【工具执行失败：${call.name}】${result.error || '未知错误'}`
+                            userMessage = userMessage + `\n\n【工具执行失败：${call.name}】${failureText}`
                             roundObservations.push({
                                 tool: call.name,
                                 args: call.args,
@@ -2737,14 +2763,14 @@ ${visualDescription}`
                                 status: 'failed',
                                 content: failureText
                             })
-                            continue
+                            return
                         }
 
-                        roundExecuted++
                         if (protocol.ok && !pending) successfulToolResultCount++
                         if (protocol.ok && protocol.verified && !pending) verifiedToolResultCount++
-                        const agentFormattedResult = runtimeFormattedResult
+                        const agentFormattedResult = `${formatToolProtocol(protocol)}\n${runtimeFormattedResult}`
                         const toolStatus = runtimeStatus
+                        userMessage += `\n\n${formatToolProtocol(protocol)}`
                         if (pending) roundPendingConfirmation = true
                         roundObservations.push({
                             tool: call.name,
@@ -3019,6 +3045,12 @@ ${visualDescription}`
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         }
                     }
+                    })
+
+                    const roundExecutions = roundExecutionResult.executions
+                    const roundExecutionSummary = roundExecutionResult.summary
+                    roundExecuted = roundExecutionSummary.successes
+                    logger.info(`[AI-Plugin] Agent 第 ${agentRound} 轮执行汇总: 调用=${roundExecutionSummary.calls}, 成功=${roundExecutionSummary.successes}, 失败=${roundExecutionSummary.failures}, 可重试失败=${roundExecutionSummary.retryableFailures}, 终止失败=${roundExecutionSummary.terminalFailures}, 已验证=${roundExecutionSummary.verified}, 待确认=${roundExecutionSummary.pending}, 部分结果=${roundExecutionSummary.partial}, 预算耗尽=${roundExecutionSummary.budgetExhausted}`)
 
                     agentObservationHistory.push(...roundObservations)
 
@@ -3068,11 +3100,12 @@ ${visualDescription}`
                         throwIfExecutionCancelled()
                         const researchEvidenceIncomplete = webResearchUsed
                             && hasInsufficientWebEvidenceForRequirements(webEvidenceState, webResearchRequirements)
-                        const completionStatus = roundPendingConfirmation
-                            ? 'waiting'
-                            : (researchEvidenceIncomplete
-                                ? 'continue'
-                                : (roundSummary?.completionStatus || (roundExecuted > 0 ? 'continue' : 'blocked')))
+                        const completionStatus = resolveAgentRoundCompletion({
+                            summary: roundExecutionSummary,
+                            pending: roundPendingConfirmation,
+                            researchEvidenceIncomplete,
+                            verification: roundSummary
+                        })
                         roundCompletionStatus = completionStatus
                         agentTaskLatestSummary = roundSummary?.summary || agentTaskLatestSummary
                         agentTaskLatestObservation = roundSummary?.lastObservation
@@ -3164,6 +3197,10 @@ ${visualDescription}`
                         agentTaskFinalStatus = 'continue'
                         agentTaskLatestObservation = `${agentTaskLatestObservation}\n代码已修改，但轮次预算耗尽，必需的静态校验尚未执行。`.trim()
                     }
+                    const budgetSnapshot = getAgentBudgetSnapshot(agentBudget)
+                    logger.info(`[AI-Plugin] Agent资源预算: 工具调用=${budgetSnapshot.toolCalls}/${budgetSnapshot.maxToolCalls}, 已耗时=${budgetSnapshot.elapsedMs}ms, exhausted=${budgetSnapshot.exhausted}`)
+                    const telemetrySnapshot = getAgentTelemetrySnapshot(agentTelemetry)
+                    logger.info(`[AI-Plugin] Agent执行指标: 调用=${telemetrySnapshot.calls}, 成功=${telemetrySnapshot.successes}, 失败=${telemetrySnapshot.failures}, 已验证=${telemetrySnapshot.verified}, 待确认=${telemetrySnapshot.pending}, 部分结果=${telemetrySnapshot.partial}, 工具耗时=${telemetrySnapshot.elapsedMs}ms`)
                     if (agentRound >= AGENT_LOOP_MAX_ROUNDS) {
                         if (agentTaskFinalStatus !== 'ready' && agentTaskFinalStatus !== 'waiting') {
                             agentTaskFinalStatus = 'blocked'
@@ -3248,48 +3285,61 @@ ${visualDescription}`
                     })
                     throwIfExecutionCancelled()
                     if (!nextPlan?.need_tools) {
+                        if (deferredBatch.deferred.length > 0) {
+                            const deferredNames = deferredBatch.deferred.map(call => call.name).join(', ')
+                            agentTaskFinalStatus = 'blocked'
+                            agentTaskLatestObservation = `已有读取结果，但延后的动作工具未重新获得明确规划，未执行：${deferredNames}`
+                            userMessage += `\n\n【安全提示】以下动作工具因需要先确认读取结果而被延后，但后续规划没有再次明确授权，因此本轮未执行：${deferredNames}。请如实告知用户，不要声称这些动作已完成。`
+                            logger.warn(`[AI-Plugin] Agent 延后动作未重新获得明确规划，已阻止执行: ${deferredNames}`)
+                        }
                         logger.info(`[AI-Plugin] Agent 后续规划结束: ${String(nextPlan?.reason || '信息已足够').slice(0, 180)}`)
                         break
                     }
 
-                    const nextAnalysis = await toolRegistry.compileToolPlan(nextPlan, this.client, nextEnabledTools, {
-                        userMessage,
-                        candidateUrls: nextCandidateUrls,
-                        mentionedUserIds,
-                        hasImages: allImages.length > 0 || hasLocalImageInput,
-                        hasRecentImages: recentImageInfo.available,
-                        maxTools: 2,
-                        currentInstruction: currentToolInstruction,
-                        allowContinuation: true,
-                        continuationTools: AGENT_LOOP_ALLOWED_TOOLS
+                    const continuationPlan = await planAgentContinuation({
+                        analyze: () => toolRegistry.compileToolPlan(nextPlan, this.client, nextEnabledTools, {
+                            userMessage,
+                            candidateUrls: nextCandidateUrls,
+                            mentionedUserIds,
+                            hasImages: allImages.length > 0 || hasLocalImageInput,
+                            hasRecentImages: recentImageInfo.available,
+                            maxTools: 2,
+                            currentInstruction: currentToolInstruction,
+                            allowContinuation: true,
+                            continuationTools: AGENT_LOOP_ALLOWED_TOOLS
+                        }),
+                        extractTools: analysis => Array.isArray(analysis?.tools) ? analysis.tools : [],
+                        filterTools: calls => filterToolCallsByIntent(calls, currentToolInstruction, {
+                            hasImages: allImages.length > 0 || hasLocalImageInput,
+                            hasRecentImages: recentImageInfo.available,
+                            candidateUrls: nextCandidateUrls,
+                            strictWebSearch: false,
+                            allowContinuation: true,
+                            continuationTools: AGENT_LOOP_ALLOWED_TOOLS,
+                            allowModelPlannedLowRisk: true
+                        }),
+                        normalizeTools: calls => {
+                            if (!hasLocalImageInput) return calls
+                            const attachedPaths = new Set(localImageInput.paths.flatMap(item => [item.requestedPath, item.realPath]).filter(Boolean))
+                            return calls.filter(call => {
+                                if (!['shell_exec', 'shell_session'].includes(call.name)) return true
+                                const argsText = JSON.stringify(call.args || {})
+                                return ![...attachedPaths].some(filePath => argsText.includes(filePath))
+                            })
+                        },
+                        allowedTools: AGENT_LOOP_ALLOWED_TOOLS,
+                        enabledTools: nextEnabledTools,
+                        seenToolCalls,
+                        maxTools: 2
                     })
-                    const guardedNextCalls = filterToolCallsByIntent(Array.isArray(nextAnalysis?.tools) ? nextAnalysis.tools : [], currentToolInstruction, {
-                        hasImages: allImages.length > 0 || hasLocalImageInput,
-                        hasRecentImages: recentImageInfo.available,
-                        candidateUrls: nextCandidateUrls,
-                        strictWebSearch: false,
-                        allowContinuation: true,
-                        continuationTools: AGENT_LOOP_ALLOWED_TOOLS,
-                        allowModelPlannedLowRisk: true
-                    })
-                    if (guardedNextCalls.blocked.length > 0) {
-                        logger.warn(`[AI-Plugin] [Agent安全] 已拦截后续工具: ${guardedNextCalls.blocked.map(call => call.name).join(', ')}`)
+                    if (continuationPlan.blocked.length > 0) {
+                        logger.warn(`[AI-Plugin] [Agent安全] 已拦截后续工具: ${continuationPlan.blocked.map(call => call.name).join(', ')}`)
                     }
-                    let nextCalls = guardedNextCalls.tools.filter(call => AGENT_LOOP_ALLOWED_TOOLS.includes(call.name))
-                    if (hasLocalImageInput) {
-                        const attachedPaths = new Set(localImageInput.paths.flatMap(item => [item.requestedPath, item.realPath]).filter(Boolean))
-                        nextCalls = nextCalls.filter(call => {
-                            if (!['shell_exec', 'shell_session'].includes(call.name)) return true
-                            const argsText = JSON.stringify(call.args || {})
-                            return ![...attachedPaths].some(filePath => argsText.includes(filePath))
-                        })
+                    if (continuationPlan.skipped.length > 0) {
+                        logger.info(`[AI-Plugin] Agent 后续去重跳过重复工具: ${continuationPlan.skipped.map(call => call.name).join(', ')}`)
                     }
-                    const dedupedNext = filterRepeatedAgentToolCalls(nextCalls, seenToolCalls)
-                    if (dedupedNext.skipped.length > 0) {
-                        logger.info(`[AI-Plugin] Agent 后续去重跳过重复工具: ${dedupedNext.skipped.map(call => call.name).join(', ')}`)
-                    }
-                    toolCalls = dedupedNext.tools
-                    currentToolIntent = nextAnalysis?.intent || nextPlan.reason || ''
+                    toolCalls = continuationPlan.tools
+                    currentToolIntent = continuationPlan.intent || nextPlan.reason || ''
                     currentAgentPlan = nextPlan
                     currentPlanMetadata = normalizeAgentPlan(nextPlan)
                     if (toolCalls.length > 0) {

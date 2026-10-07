@@ -15,7 +15,8 @@ import { detectToolIntentFamilies, filterToolCallsByIntent, hasExplicitDrawInten
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { relayImagesToVision } from '../tools/vision_relay.js'
 import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
-import { buildAgentRoundFingerprint, deferDependentSideEffectCalls, executeAgentToolCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } from '../utils/agent_runtime.js'
+import { formatToolProtocol } from '../utils/tool_result.js'
+import { buildAgentRoundFingerprint, createAgentBudget, createAgentTelemetry, getAgentBudgetSnapshot, getAgentTelemetrySnapshot, isUnfulfilledImageSearch, resolveAgentRoundCompletion, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } from '../utils/agent_runtime.js'
 import { findPendingWorkspaceVerification, resolvePersistedAgentStatus } from '../utils/agent_completion.js'
 import { classifyAgentRisk } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
@@ -26,6 +27,7 @@ import { selectWorkspaceSurveyFiles } from '../utils/workspace_survey.js'
 import { getPureImageReplyPolicy, resolveFastChatImageDelivery, resolveFastChatTrigger } from '../utils/fast_chat_trigger.js'
 import { extractMessageSendError, isContentModerationSendError, rewriteRejectedReply } from '../utils/message_delivery.js'
 import { sendTextInChunks } from '../utils/reply_delivery.js'
+import { executeAgentRound, planAgentContinuation, prepareAgentRound } from '../utils/agent_orchestrator.js'
 
 const replyCooldown = new Map()
 const PERSONAL_MEMORY_MAX_CHARS = 2600
@@ -1435,6 +1437,8 @@ export class FastChatHandler extends plugin {
         let hasSuccessfulToolResult = false
         let hasVerifiedToolResult = false
         let fastAgentTask = null
+        const agentBudget = createAgentBudget({ maxToolCalls: Config.AGENT_MAX_TOOL_CALLS })
+        const agentTelemetry = createAgentTelemetry()
         let fastAgentTaskStatus = ''
         let fastAgentCompletionStatus = ''
         let fastAgentPendingMandatoryVerification = false
@@ -1617,14 +1621,13 @@ export class FastChatHandler extends plugin {
                             return !redundant
                         })
                     }
-                    const dedupedToolCalls = filterRepeatedAgentToolCalls(toolCalls, seenToolCalls)
-                    if (dedupedToolCalls.skipped.length > 0) {
-                        logger.info(`[AI-Plugin] [畅聊] 第 ${agentRound} 轮已跳过重复工具调用: ${dedupedToolCalls.skipped.map(call => call.name).join(', ')}`)
+                    const preparedRound = prepareAgentRound(toolCalls, { seenToolCalls, sideEffectTools: FAST_CHAT_AGENT_SIDE_EFFECT_TOOLS })
+                    if (preparedRound.skipped.length > 0) {
+                        logger.info(`[AI-Plugin] [畅聊] 第 ${agentRound} 轮已跳过重复工具调用: ${preparedRound.skipped.map(call => call.name).join(', ')}`)
                     }
-                    toolCalls = dedupedToolCalls.tools
+                    toolCalls = preparedRound.tools
                     if (toolCalls.length === 0) break
-                    const deferredBatch = deferDependentSideEffectCalls(toolCalls, FAST_CHAT_AGENT_SIDE_EFFECT_TOOLS)
-                    toolCalls = deferredBatch.tools
+                    const deferredBatch = { tools: preparedRound.tools, deferred: preparedRound.deferred }
                     if (deferredBatch.deferred.length > 0) {
                         logger.info(`[AI-Plugin] [畅聊] Agent 第 ${agentRound} 轮延后依赖真实结果的动作工具: ${deferredBatch.deferred.map(call => call.name).join(', ')}`)
                     }
@@ -1654,11 +1657,12 @@ export class FastChatHandler extends plugin {
                         fastAgentPlanRecorded = true
                     }
 
-                    const roundExecutions = []
-                    for await (const execution of executeAgentToolCalls({
+                    const roundExecutionResult = await executeAgentRound({
                         registry: toolRegistry,
                         toolCalls,
                         isMaster: e.isMaster,
+                        budget: agentBudget,
+                        telemetry: agentTelemetry,
                         context: {
                             userId: normalized.userId,
                             groupId: normalized.groupId,
@@ -1667,11 +1671,10 @@ export class FastChatHandler extends plugin {
                             userMessage: toolRoutingText,
                             originalUserMessage: toolRoutingText,
                             agentTaskId: fastAgentTask?.taskId || ''
-                        }
-                    })) {
+                        },
+                        onExecution: async (execution) => {
                         const { call, result, protocol } = execution
                         seenToolCalls.add(execution.key)
-                        roundExecutions.push(execution)
                         if (result.success && protocol.ok && !execution.pending) hasSuccessfulToolResult = true
                         if (result.success && protocol.ok && protocol.verified && !execution.pending) hasVerifiedToolResult = true
                         if (result.success && isUnfulfilledImageSearch(call, result.data)) {
@@ -1694,7 +1697,7 @@ export class FastChatHandler extends plugin {
                             content: execution.formattedResult
                         }, { logger, logPrefix: '[AI-Plugin] [畅聊] Agent任务' })
                         if (result.success) {
-                            let injection = formatFastChatToolInjection(call.name, result.data)
+                            let injection = `${formatToolProtocol(protocol)}\n${formatFastChatToolInjection(call.name, result.data)}`
                             if (call.name === 'workspace_survey') {
                                 injection += '\n【源码普查边界】这是静态扫描摘要；必须依据 facts.coverage 和 syntaxErrorCount 汇报覆盖范围，不得把摘要冒充逐行代码审查，也不得声称执行了源码。'
                             }
@@ -1712,10 +1715,15 @@ export class FastChatHandler extends plugin {
                             toolContextText = truncateMiddleText(toolContextText + injection, FAST_CHAT_TOOL_CONTEXT_MAX_CHARS)
                             logger.info(`[AI-Plugin] [畅聊] ${call.name} ${protocol.ok ? '完成' : '业务失败'}，结果已注入${protocol.pending ? '（等待确认）' : ''}`)
                         } else {
-                            toolContextText = truncateMiddleText(toolContextText + `\n\n【畅聊工具失败：${call.name}】${result.error || '未知错误'}`, FAST_CHAT_TOOL_CONTEXT_MAX_CHARS)
+                            toolContextText = truncateMiddleText(toolContextText + `\n\n${formatToolProtocol(protocol)}\n【畅聊工具失败：${call.name}】${result.error || '未知错误'}`, FAST_CHAT_TOOL_CONTEXT_MAX_CHARS)
                             logger.warn(`[AI-Plugin] [畅聊] ${call.name} 失败: ${result.error}`)
                         }
                     }
+                    })
+
+                    const roundExecutions = roundExecutionResult.executions
+                    const roundExecutionSummary = roundExecutionResult.summary
+                    logger.info(`[AI-Plugin] [畅聊] Agent 第 ${agentRound} 轮执行汇总: 调用=${roundExecutionSummary.calls}, 成功=${roundExecutionSummary.successes}, 失败=${roundExecutionSummary.failures}, 可重试失败=${roundExecutionSummary.retryableFailures}, 终止失败=${roundExecutionSummary.terminalFailures}, 已验证=${roundExecutionSummary.verified}, 待确认=${roundExecutionSummary.pending}, 部分结果=${roundExecutionSummary.partial}, 预算耗尽=${roundExecutionSummary.budgetExhausted}`)
 
                     fastAgentObservationHistory.push(...roundExecutions.map(item => ({
                         tool: item.call.name,
@@ -1728,8 +1736,6 @@ export class FastChatHandler extends plugin {
 
                     if (roundExecutions.length > 0 && fastAgentTask?.taskId) {
                         const pendingExecution = roundExecutions.find(item => item.pending)
-                        const failedExecutions = roundExecutions.filter(item => !item.result.success || !item.protocol.ok)
-                        const recoverableFailure = failedExecutions.some(item => item.protocol.recoverable)
                         const verification = pendingExecution ? null : await verifyAgentRound({
                             client: this.client,
                             modelGroupKey: 'flash',
@@ -1738,6 +1744,7 @@ export class FastChatHandler extends plugin {
                                 task_kind: fastAgentTask.plan?.steps?.length > 1 ? 'multi_step' : 'single_step',
                                 success_criteria: fastAgentTask.plan?.constraints || []
                             },
+                            signal: cancellationHandle?.signal,
                             observations: roundExecutions.map(item => ({
                                 tool: item.call.name,
                                 args: item.call.args,
@@ -1746,10 +1753,11 @@ export class FastChatHandler extends plugin {
                                 text: item.formattedResult
                             }))
                         })
-                        fastAgentCompletionStatus = pendingExecution
-                            ? 'waiting'
-                            : (verification?.completionStatus
-                                || (failedExecutions.length === roundExecutions.length && !recoverableFailure ? 'blocked' : 'continue'))
+                        fastAgentCompletionStatus = resolveAgentRoundCompletion({
+                            summary: roundExecutionSummary,
+                            pending: Boolean(pendingExecution),
+                            verification
+                        })
                         fastAgentTaskStatus = resolvePersistedAgentStatus({ completionStatus: fastAgentCompletionStatus })
                         fastAgentLatestObservation = verification?.lastObservation
                             || roundExecutions.map(item => `${item.call.name}: ${item.pending ? 'waiting' : item.status}`).join('；')
@@ -1850,6 +1858,10 @@ export class FastChatHandler extends plugin {
                         fastAgentLatestObservation = `${fastAgentLatestObservation}\n代码已修改，但轮次预算耗尽，必需的静态校验尚未执行。`.trim()
                     }
                     if (agentRound >= FAST_CHAT_AGENT_MAX_ROUNDS) break
+                    const budgetSnapshot = getAgentBudgetSnapshot(agentBudget)
+                    logger.info(`[AI-Plugin] [畅聊] Agent资源预算: 工具调用=${budgetSnapshot.toolCalls}/${budgetSnapshot.maxToolCalls}, 已耗时=${budgetSnapshot.elapsedMs}ms, exhausted=${budgetSnapshot.exhausted}`)
+                    const telemetrySnapshot = getAgentTelemetrySnapshot(agentTelemetry)
+                    logger.info(`[AI-Plugin] [畅聊] Agent执行指标: 调用=${telemetrySnapshot.calls}, 成功=${telemetrySnapshot.successes}, 失败=${telemetrySnapshot.failures}, 已验证=${telemetrySnapshot.verified}, 待确认=${telemetrySnapshot.pending}, 部分结果=${telemetrySnapshot.partial}, 工具耗时=${telemetrySnapshot.elapsedMs}ms`)
                     const shouldContinue = deferredBatch.deferred.length > 0 || shouldContinueAgentRound({
                         toolCalls,
                         protocols: roundExecutions.map(item => item.protocol),
@@ -1864,28 +1876,27 @@ export class FastChatHandler extends plugin {
                     const roundObservationText = roundExecutions.map(item => `${item.call.name}(${JSON.stringify(item.call.args || {})}) [${item.status}]\n${item.formattedResult}`).join('\n\n')
                     const followupText = `${toolRoutingText}\n\n【Agent 第 ${agentRound} 轮真实工具结果】\n${truncateMiddleText(roundObservationText, 18000)}\n\n【继续规划要求】只有当前结果仍不足以完成原始请求时才调用工具；不要重复相同调用，不要追加无意义验证。`
                     logger.info(`[AI-Plugin] [畅聊] Agent 第 ${agentRound} 轮触发后续规划: 候选=${followupEnabledTools.join(', ')}`)
-                    const nextAnalysis = await toolRegistry.analyzeToolIntent(
-                        followupText,
-                        this.client,
-                        followupEnabledTools,
-                        [],
-                        toolMemorySummary,
-                        extractUrlsFromText(followupText, 10),
-                        {
-                            hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0 || hasLocalImageInput,
-                            hasRecentImages: imageContext.processedCount > 0 || hasLocalImageInput,
-                            mentionedUserIds,
-                            currentInstruction: toolRoutingText,
-                            allowContinuation: true,
-                            allowTaskContextContinuation: true,
-                            continuationTools: FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS,
-                            allowModelPlannedLowRisk: true
-                        }
-                    )
-                    toolCalls = filterFastChatToolCalls(
-                        Array.isArray(nextAnalysis?.tools) ? nextAnalysis.tools.slice(0, 2) : [],
-                        toolRoutingText,
-                        {
+                    const continuationPlan = await planAgentContinuation({
+                        analyze: () => toolRegistry.analyzeToolIntent(
+                            followupText,
+                            this.client,
+                            followupEnabledTools,
+                            [],
+                            toolMemorySummary,
+                            extractUrlsFromText(followupText, 10),
+                            {
+                                hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0 || hasLocalImageInput,
+                                hasRecentImages: imageContext.processedCount > 0 || hasLocalImageInput,
+                                mentionedUserIds,
+                                currentInstruction: toolRoutingText,
+                                allowContinuation: true,
+                                allowTaskContextContinuation: true,
+                                continuationTools: FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS,
+                                allowModelPlannedLowRisk: true
+                            }
+                        ),
+                        extractTools: analysis => Array.isArray(analysis?.tools) ? analysis.tools : [],
+                        filterTools: calls => filterFastChatToolCalls(calls, toolRoutingText, {
                             hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0 || hasLocalImageInput,
                             hasRecentImages: imageContext.processedCount > 0 || hasLocalImageInput,
                             candidateUrls: extractUrlsFromText(followupText, 10),
@@ -1893,8 +1904,31 @@ export class FastChatHandler extends plugin {
                             allowContinuation: true,
                             allowTaskContextContinuation: true,
                             continuationTools: FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS
+                        }),
+                        allowedTools: FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS,
+                        enabledTools: followupEnabledTools,
+                        seenToolCalls,
+                        maxTools: 2
+                    })
+                    if (continuationPlan.blocked.length > 0) {
+                        logger.warn(`[AI-Plugin] [畅聊][Agent安全] 已拦截后续工具: ${continuationPlan.blocked.map(call => call.name).join(', ')}`)
+                    }
+                    toolCalls = continuationPlan.tools
+                    if (toolCalls.length === 0 && deferredBatch.deferred.length > 0) {
+                        const deferredNames = deferredBatch.deferred.map(call => call.name).join(', ')
+                        fastAgentCompletionStatus = 'blocked'
+                        fastAgentTaskStatus = 'blocked'
+                        fastAgentLatestObservation = `已有读取结果，但延后的动作工具未重新获得明确规划，未执行：${deferredNames}`
+                        fastAgentLatestSummary = fastAgentLatestObservation
+                        if (fastAgentTask?.taskId) {
+                            fastAgentTask = await updateAgentTaskProgress(this.conversationManager.db, fastAgentTask, {
+                                status: 'blocked',
+                                summary: fastAgentLatestSummary,
+                                lastObservation: fastAgentLatestObservation
+                            }, { logger, logPrefix: '[AI-Plugin] [畅聊] Agent任务' })
                         }
-                    )
+                        logger.warn(`[AI-Plugin] [畅聊] 延后动作未重新获得明确规划，已阻止执行: ${deferredNames}`)
+                    }
                     if (toolCalls.length > 0 && fastAgentTask?.taskId) {
                         fastAgentTask = await createOrResumeAgentTask(this.conversationManager.db, {
                             task: fastAgentTask,

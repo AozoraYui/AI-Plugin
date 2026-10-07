@@ -31,6 +31,8 @@ function runShellCommand(command, options = {}) {
     const timeout = Math.min(Math.max(Number(options.timeoutMs) || Config.SHELL_EXEC_TIMEOUT_MS, 1000), Config.SHELL_EXEC_MAX_TIMEOUT_MS)
     const maxBuffer = Math.max(Config.SHELL_EXEC_MAX_BUFFER || 10485760, 1048576)
     const cwd = options.cwd || process.cwd()
+    const signal = options.signal
+    if (signal?.aborted) return Promise.resolve({ command, cwd, success: false, code: null, signal: 'AGENT_CANCELLED', timedOut: false, elapsed: '0.00', stdout: '', stderr: '', error: '请求已取消', cancelled: true })
 
     return new Promise((resolve) => {
         const startedAt = Date.now()
@@ -39,7 +41,8 @@ function runShellCommand(command, options = {}) {
             timeout,
             maxBuffer,
             shell: '/bin/bash',
-            windowsHide: true
+            windowsHide: true,
+            signal
         }, (error, stdout = '', stderr = '') => {
             const elapsed = ((Date.now() - startedAt) / 1000).toFixed(2)
             resolve({
@@ -52,7 +55,8 @@ function runShellCommand(command, options = {}) {
                 elapsed,
                 stdout,
                 stderr,
-                error: error?.message || ''
+                error: error?.message || '',
+                cancelled: error?.code === 'ABORT_ERR' || signal?.aborted
             })
         })
     })
@@ -91,7 +95,7 @@ export async function executeShellExecNow(args = {}, context = {}) {
         Config.SHELL_EXEC_MAX_OUTPUT_CHARS
     )
     const offset = Math.max(Number(args.offset_chars) || 0, 0)
-    const result = await runShellCommand(command, { cwd, timeoutMs: args.timeout_ms })
+    const result = await runShellCommand(command, { cwd, timeoutMs: args.timeout_ms, signal: context.signal })
     const stdoutPage = paginateText(result.stdout, offset, pageSize)
     const stderrPage = paginateText(result.stderr, offset, pageSize)
 

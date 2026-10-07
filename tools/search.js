@@ -9,7 +9,7 @@ import { setDefaultResultOrder } from 'node:dns'
 import net from 'node:net'
 import sharp from 'sharp'
 import { hasExplicitImageSearchIntent } from '../utils/tool_intent.js'
-import { assertPublicUrl, fetchWithProxy } from '../utils/common.js'
+import { assertPublicUrl, createTimeoutSignal, fetchWithProxy } from '../utils/common.js'
 import { assessSearchResults, classifyWebUrl, getOfficialSearchDomains, normalizeWebUrlKey, scoreWebSourceCandidate } from '../utils/web_evidence.js'
 
 const SEARCH_TIMEOUT_MS = 15000
@@ -26,17 +26,23 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
 const searchEngineHealth = new Map()
 
-async function runSearchEngine(name, searchFn) {
+function throwIfAborted(signal) {
+    if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { code: 'AGENT_CANCELLED' })
+}
+
+async function runSearchEngine(name, searchFn, signal) {
     const state = searchEngineHealth.get(name) || { failures: 0, unavailableUntil: 0 }
     if (state.unavailableUntil > Date.now()) {
         logger.warn(`[AI-Plugin] ${name} 搜索源处于熔断冷却，跳过本轮`)
         return { name, status: 'skipped', results: [], reason: 'circuit_open' }
     }
     try {
-        const results = await searchFn()
+        if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { code: 'AGENT_CANCELLED' })
+        const results = await searchFn(signal)
         searchEngineHealth.set(name, { failures: 0, unavailableUntil: 0 })
         return { name, status: 'ok', results: Array.isArray(results) ? results : [] }
     } catch (err) {
+        if (signal?.aborted || err?.code === 'AGENT_CANCELLED') throw err
         const failures = state.failures + 1
         const unavailableUntil = failures >= SEARCH_ENGINE_FAILURE_THRESHOLD
             ? Date.now() + SEARCH_ENGINE_COOLDOWN_MS
@@ -217,7 +223,7 @@ export function filterRelevantSearchResults(query, results = []) {
         .sort((left, right) => right.relevanceScore - left.relevanceScore)
 }
 
-async function fetchSearchHtml(url, engineName) {
+async function fetchSearchHtml(url, engineName, signal) {
     const headers = {
         'User-Agent': USER_AGENT,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -230,6 +236,7 @@ async function fetchSearchHtml(url, engineName) {
         try {
             res = await fetchWithProxy(targetUrl, {
                 headers,
+                signal: createTimeoutSignal(SEARCH_TIMEOUT_MS, signal),
                 timeout: SEARCH_TIMEOUT_MS,
                 autoDetectProxy: true,
                 maxResponseBytes: MAX_PREVIEW_PAGE_BYTES
@@ -246,7 +253,7 @@ async function fetchSearchHtml(url, engineName) {
                     res = await fetch(currentUrl, {
                         method: 'GET',
                         headers,
-                        signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+                        signal: createTimeoutSignal(SEARCH_TIMEOUT_MS, signal),
                         redirect: 'manual'
                     })
                     const location = res.headers.get('location')
@@ -283,9 +290,9 @@ async function fetchSearchHtml(url, engineName) {
     throw lastError || new Error(`${engineName} 没有可用搜索入口`)
 }
 
-async function searchBing(query, count) {
+async function searchBing(query, count, signal) {
     const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${count}`
-    const html = await fetchSearchHtml(url, 'Bing')
+    const html = await fetchSearchHtml(url, 'Bing', signal)
     const results = []
     const itemRegex = /<li class="b_algo"[^>]*>([\s\S]*?)(?=<li class="b_algo"|<\/ol>|$)/gi
     let match
@@ -342,9 +349,9 @@ export function buildBingImageSearchUrl(query = '') {
     return `https://cn.bing.com/images/search?q=${encodeURIComponent(String(query || '').trim())}&form=HDRSC2&first=1`
 }
 
-async function searchBingImages(query, count = 10) {
+async function searchBingImages(query, count = 10, signal) {
     const url = buildBingImageSearchUrl(query)
-    const html = await fetchSearchHtml(url, 'Bing 图片')
+    const html = await fetchSearchHtml(url, 'Bing 图片', signal)
     const parsed = parseBingImageResults(html, Math.max(count * 3, 20))
     const results = filterRelevantSearchResults(query, parsed).slice(0, count)
     logger.info(`[AI-Plugin] Bing 图片搜索返回 ${parsed.length} 条候选，相关性过滤后 ${results.length} 条`)
@@ -375,9 +382,9 @@ function extractDuckDuckGoVqd(html = '') {
         || ''
 }
 
-async function searchDuckDuckGoImages(query, count = 10) {
+async function searchDuckDuckGoImages(query, count = 10, signal) {
     const landingUrl = `https://duckduckgo.com/?q=${encodeURIComponent(query)}`
-    const html = await fetchSearchHtml(landingUrl, 'DuckDuckGo 图片令牌')
+    const html = await fetchSearchHtml(landingUrl, 'DuckDuckGo 图片令牌', signal)
     const vqd = extractDuckDuckGoVqd(html)
     if (!vqd) throw new Error('DuckDuckGo 图片搜索令牌提取失败')
     const imageApiUrl = `https://duckduckgo.com/i.js?l=wt-wt&o=json&q=${encodeURIComponent(query)}&vqd=${encodeURIComponent(vqd)}&f=,,,`
@@ -391,21 +398,23 @@ async function searchDuckDuckGoImages(query, count = 10) {
     }
     let response
     try {
-        response = await fetch(imageApiUrl, {
+        response = await fetchWithProxy(imageApiUrl, {
             headers,
-            signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS)
+            signal: createTimeoutSignal(SEARCH_TIMEOUT_MS, signal),
+            timeout: SEARCH_TIMEOUT_MS,
+            autoDetectProxy: true
         })
     } catch (err) {
-        logger.warn(`[AI-Plugin] DuckDuckGo 图片 API 原生 fetch 失败，强制 IPv4 重试: ${err.message}`)
+        logger.warn(`[AI-Plugin] DuckDuckGo 图片 API 代理通道失败，切换 IPv4 原生 fetch 重试: ${err.message}`)
         setDefaultResultOrder('ipv4first')
         try {
             response = await fetch(imageApiUrl, {
                 headers,
-                signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS)
+                signal: createTimeoutSignal(SEARCH_TIMEOUT_MS, signal)
             })
         } catch (retryErr) {
             logger.warn(`[AI-Plugin] DuckDuckGo 图片 API IPv4 fetch 仍失败，切换 Node HTTP/代理通道: ${retryErr.message}`)
-            response = await fetchWithProxy(imageApiUrl, { headers, timeout: SEARCH_TIMEOUT_MS, autoDetectProxy: true })
+            response = await fetchWithProxy(imageApiUrl, { headers, signal, timeout: SEARCH_TIMEOUT_MS, autoDetectProxy: true })
         }
     }
     if (!response.ok) throw new Error(`DuckDuckGo 图片 HTTP ${response.status}`)
@@ -433,7 +442,7 @@ export function parseSo360ImageResults(data = {}, query = '', count = 10) {
     return filterRelevantSearchResults(query, parsed).slice(0, count)
 }
 
-async function searchSo360Images(query, count = 10) {
+async function searchSo360Images(query, count = 10, signal) {
     const url = `https://image.so.com/j?q=${encodeURIComponent(query)}&pn=${Math.max(20, count * 3)}&sn=0&kn=50&cn=0`
     const headers = {
         'User-Agent': USER_AGENT,
@@ -443,10 +452,10 @@ async function searchSo360Images(query, count = 10) {
     }
     let response
     try {
-        response = await fetch(url, { headers, signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS) })
+        response = await fetchWithProxy(url, { headers, signal: createTimeoutSignal(SEARCH_TIMEOUT_MS, signal), timeout: SEARCH_TIMEOUT_MS, autoDetectProxy: true })
     } catch (err) {
-        logger.warn(`[AI-Plugin] 360 图片 API 原生 fetch 失败，切换 Node HTTP/代理通道: ${err.message}`)
-        response = await fetchWithProxy(url, { headers, timeout: SEARCH_TIMEOUT_MS, autoDetectProxy: true })
+        logger.warn(`[AI-Plugin] 360 图片 API 代理通道失败，重试代理通道: ${err.message}`)
+        response = await fetchWithProxy(url, { headers, signal, timeout: SEARCH_TIMEOUT_MS, autoDetectProxy: true })
     }
     if (!response.ok) throw new Error(`360 图片 HTTP ${response.status}`)
     const data = await response.json()
@@ -482,19 +491,21 @@ export function extractPageImageUrls(html = '', pageUrl = '') {
     return specific
 }
 
-async function fetchPagePreviewCandidates(result) {
+async function fetchPagePreviewCandidates(result, signal) {
     let currentUrl = String(result?.url || '').trim()
     if (!currentUrl) return []
     for (let redirectCount = 0; redirectCount <= 3; redirectCount++) {
         const parsed = await assertPublicImageUrl(currentUrl)
-        const response = await fetch(parsed, {
+        const response = await fetchWithProxy(parsed, {
             headers: {
                 'User-Agent': USER_AGENT,
                 'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.7',
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.7'
             },
-            signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-            redirect: 'manual'
+            signal: createTimeoutSignal(SEARCH_TIMEOUT_MS, signal),
+            redirect: 'manual',
+            autoDetectProxy: true,
+            maxResponseBytes: MAX_PREVIEW_PAGE_BYTES
         })
         if (response.status >= 300 && response.status < 400) {
             const location = response.headers.get('location')
@@ -507,22 +518,9 @@ async function fetchPagePreviewCandidates(result) {
         if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) return []
         const declaredSize = Number(response.headers.get('content-length') || 0)
         if (declaredSize > MAX_PREVIEW_PAGE_BYTES) return []
-        if (!response.body) return []
-
-        const chunks = []
-        let total = 0
-        const reader = response.body.getReader()
-        while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            total += value.byteLength
-            if (total > MAX_PREVIEW_PAGE_BYTES) {
-                await reader.cancel().catch(() => {})
-                return []
-            }
-            chunks.push(Buffer.from(value))
-        }
-        const html = Buffer.concat(chunks, total).toString('utf8')
+        const body = Buffer.from(await response.arrayBuffer())
+        if (body.length > MAX_PREVIEW_PAGE_BYTES) return []
+        const html = body.toString('utf8')
         return extractPageImageUrls(html, currentUrl).slice(0, 4).map(imageUrl => ({
             title: result.title,
             imageUrl,
@@ -536,8 +534,9 @@ async function fetchPagePreviewCandidates(result) {
     return []
 }
 
-async function searchResultPageImages(results = [], count = 12) {
-    const settled = await Promise.allSettled(results.slice(0, 8).map(fetchPagePreviewCandidates))
+async function searchResultPageImages(results = [], count = 12, signal) {
+    const settled = await Promise.allSettled(results.slice(0, 8).map(result => fetchPagePreviewCandidates(result, signal)))
+    throwIfAborted(signal)
     const merged = []
     const seen = new Set()
     for (const item of settled) {
@@ -555,36 +554,26 @@ async function searchResultPageImages(results = [], count = 12) {
 async function readImageBuffer(response) {
     const declaredSize = Number(response.headers.get('content-length') || 0)
     if (declaredSize > MAX_IMAGE_DOWNLOAD_BYTES) throw new Error('图片超过大小限制')
-    if (!response.body) throw new Error('图片响应没有正文')
-
-    const chunks = []
-    let total = 0
-    const reader = response.body.getReader()
-    while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        total += value.byteLength
-        if (total > MAX_IMAGE_DOWNLOAD_BYTES) {
-            await reader.cancel().catch(() => {})
-            throw new Error('图片超过大小限制')
-        }
-        chunks.push(Buffer.from(value))
-    }
-    return Buffer.concat(chunks, total)
+    const buffer = Buffer.from(await response.arrayBuffer())
+    if (buffer.length > MAX_IMAGE_DOWNLOAD_BYTES) throw new Error('图片超过大小限制')
+    return buffer
 }
 
-async function downloadImage(url, referer = '') {
+async function downloadImage(url, referer = '', signal) {
     let currentUrl = String(url || '').trim()
     for (let redirectCount = 0; redirectCount <= 4; redirectCount++) {
         const parsed = await assertPublicImageUrl(currentUrl)
-        const response = await fetch(parsed, {
+        const response = await fetchWithProxy(parsed, {
             headers: {
                 'User-Agent': USER_AGENT,
                 'Accept': 'image/avif,image/webp,image/apng,image/png,image/jpeg,image/gif,*/*;q=0.8',
                 ...(referer ? { Referer: referer } : {})
             },
-            signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS),
-            redirect: 'manual'
+            signal: createTimeoutSignal(IMAGE_DOWNLOAD_TIMEOUT_MS, signal),
+            timeout: IMAGE_DOWNLOAD_TIMEOUT_MS,
+            redirect: 'manual',
+            autoDetectProxy: true,
+            maxResponseBytes: MAX_IMAGE_DOWNLOAD_BYTES
         })
         if (response.status >= 300 && response.status < 400) {
             const location = response.headers.get('location')
@@ -608,18 +597,19 @@ function createImageSegment(buffer) {
     return { type: 'image', data: { file } }
 }
 
-async function prepareImageCandidates(imageResults = [], requestedCount = 1) {
+async function prepareImageCandidates(imageResults = [], requestedCount = 1, signal) {
     const count = Math.max(0, Math.min(MAX_IMAGE_SEND_COUNT, Number(requestedCount) || 0))
     if (count === 0) return { prepared: [], failures: [] }
     const prepared = []
     const failures = []
     for (const item of imageResults) {
+        throwIfAborted(signal)
         if (prepared.length >= Math.min(MAX_IMAGE_VERIFY_CANDIDATES, Math.max(count * 3, count))) break
         let lastError = ''
         const candidates = [item.imageUrl, item.thumbnailUrl].filter(Boolean)
         for (const url of candidates) {
             try {
-                const downloaded = await downloadImage(url, item.pageUrl || 'https://www.bing.com/images/')
+                const downloaded = await downloadImage(url, item.pageUrl || 'https://www.bing.com/images/', signal)
                 prepared.push({
                     buffer: downloaded.buffer,
                     title: item.title,
@@ -668,7 +658,7 @@ async function buildVisionPart(item) {
     }
 }
 
-async function verifyImagesWithVision(client, query, prepared = []) {
+async function verifyImagesWithVision(client, query, prepared = [], signal) {
     if (prepared.length === 0) return { selected: [], used: false, reason: 'no_candidates' }
     if (!client?.makeRequest) return { selected: [], used: false, reason: 'vision_unavailable' }
     try {
@@ -682,7 +672,7 @@ async function verifyImagesWithVision(client, query, prepared = []) {
         })
         const response = await client.makeRequest('chat', {
             contents: [{ role: 'user', parts }]
-        }, 'flash', 1200)
+        }, 'flash', 1200, { signal })
         if (!response?.success) throw new Error(response?.error || '视觉模型调用失败')
         const selectedIndexes = parseVisionSelection(response.data, prepared.length)
         if (!selectedIndexes) throw new Error('视觉模型返回格式无法解析')
@@ -706,9 +696,9 @@ async function sendPreparedImages(event, prepared = [], requestedCount = 1) {
     return selected.map(({ buffer, ...item }) => item)
 }
 
-async function searchBaidu(query, count) {
+async function searchBaidu(query, count, signal) {
     const url = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&rn=${count}`
-    const html = await fetchSearchHtml(url, '百度')
+    const html = await fetchSearchHtml(url, '百度', signal)
     const results = []
     const itemRegex = /<h3[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?=<h3|<div id="page"|$)/gi
     let match
@@ -729,14 +719,14 @@ async function searchBaidu(query, count) {
     return results
 }
 
-async function searchDuckDuckGo(query, count) {
+async function searchDuckDuckGo(query, count, signal) {
     const encodedQuery = encodeURIComponent(query)
     const urls = [
         `https://html.duckduckgo.com/html/?q=${encodedQuery}`,
         `https://duckduckgo.com/html/?q=${encodedQuery}`,
         `https://lite.duckduckgo.com/lite/?q=${encodedQuery}`
     ]
-    const html = await fetchSearchHtml(urls, 'DuckDuckGo')
+    const html = await fetchSearchHtml(urls, 'DuckDuckGo', signal)
     const results = []
     const itemRegex = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?=<a[^>]*class="[^"]*result__a|<\/body>|$)/gi
     let match
@@ -818,13 +808,13 @@ export function parseYahooSearchResults(html = '', count = 10) {
     return results
 }
 
-async function searchYahoo(query, count) {
+async function searchYahoo(query, count, signal) {
     const encodedQuery = encodeURIComponent(query)
     const urls = [
         `https://search.yahoo.co.jp/search?p=${encodedQuery}&ei=UTF-8`,
         `https://search.yahoo.com/search?p=${encodedQuery}`
     ]
-    const html = await fetchSearchHtml(urls, 'Yahoo')
+    const html = await fetchSearchHtml(urls, 'Yahoo', signal)
     const results = parseYahooSearchResults(html, count)
 
     logger.info(`[AI-Plugin] Yahoo 搜索返回 ${results.length} 条结果`)
@@ -851,9 +841,9 @@ export function prepareSearchResults(query, candidates = [], count = 5) {
     return rankSearchResults(relevant, query).slice(0, count)
 }
 
-async function searchSo360(query, count) {
+async function searchSo360(query, count, signal) {
     const url = `https://www.so.com/s?q=${encodeURIComponent(query)}`
-    const html = await fetchSearchHtml(url, '360搜索')
+    const html = await fetchSearchHtml(url, '360搜索', signal)
     const results = []
     const itemRegex = /<h3[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?=<h3|<\/body>|$)/gi
     let match
@@ -894,9 +884,9 @@ export function parseSogouSearchResults(html = '', count = 10, baseUrl = 'https:
     return results
 }
 
-async function searchSogou(query, count) {
+async function searchSogou(query, count, signal) {
     const url = `https://www.sogou.com/web?query=${encodeURIComponent(query)}`
-    const html = await fetchSearchHtml(url, '搜狗')
+    const html = await fetchSearchHtml(url, '搜狗', signal)
     const results = parseSogouSearchResults(html, count, url)
     logger.info(`[AI-Plugin] 搜狗搜索返回 ${results.length} 条结果`)
     return results
@@ -967,7 +957,8 @@ function buildResearchSearchVariants(query = '') {
  * @param {number} count - 返回结果数量
  * @returns {Promise<object>} 结构化搜索结果与证据质量信息
  */
-async function searchWeb(query, count = 5) {
+async function searchWeb(query, count = 5, signal) {
+    throwIfAborted(signal)
     logger.info('[AI-Plugin] 搜索关键词: "' + query + '"')
     const strictRelevance = extractQueryRelevanceProfile(query).strict
     const researchLike = /(?:官方|正式|公告|通报|发布|升级|适配|名单|推送|计划|版本|最新|当前|截至|核实|核查|真假|完整|全部|所有|价格|政策)/i.test(query)
@@ -978,8 +969,8 @@ async function searchWeb(query, count = 5) {
     const engineRuns = []
 
     const mainRuns = await Promise.all([
-        runSearchEngine('Bing', () => searchBing(query, candidateCount)),
-        runSearchEngine('百度', () => searchBaidu(query, candidateCount))
+        runSearchEngine('Bing', () => searchBing(query, candidateCount, signal), signal),
+        runSearchEngine('百度', () => searchBaidu(query, candidateCount, signal), signal)
     ])
     engineRuns.push(...mainRuns)
     const mainGroups = mainRuns.map(run => run.results)
@@ -993,10 +984,10 @@ async function searchWeb(query, count = 5) {
     if (shouldBroaden) {
         logger.info('[AI-Plugin] 多源研究扩展搜索：主搜索直接候选=' + assessment.directCandidates.length + '，继续补充独立搜索源')
         const fallbackRuns = await Promise.all([
-            runSearchEngine('DuckDuckGo', () => searchDuckDuckGo(query, candidateCount)),
-            runSearchEngine('Yahoo', () => searchYahoo(query, candidateCount)),
-            runSearchEngine('360搜索', () => searchSo360(query, candidateCount)),
-            runSearchEngine('搜狗', () => searchSogou(query, candidateCount))
+            runSearchEngine('DuckDuckGo', () => searchDuckDuckGo(query, candidateCount, signal), signal),
+            runSearchEngine('Yahoo', () => searchYahoo(query, candidateCount, signal), signal),
+            runSearchEngine('360搜索', () => searchSo360(query, candidateCount, signal), signal),
+            runSearchEngine('搜狗', () => searchSogou(query, candidateCount, signal), signal)
         ])
         fallbackGroups = fallbackRuns.map(run => run.results)
         engineRuns.push(...fallbackRuns)
@@ -1007,11 +998,12 @@ async function searchWeb(query, count = 5) {
 
     const researchVariants = buildResearchSearchVariants(query)
     for (const variant of researchVariants) {
+        throwIfAborted(signal)
         logger.info('[AI-Plugin] 研究任务来源补充搜索: "' + variant + '"')
         const variantRuns = await Promise.all([
-            runSearchEngine('Bing', () => searchBing(variant, candidateCount)),
-            runSearchEngine('百度', () => searchBaidu(variant, candidateCount)),
-            runSearchEngine('搜狗', () => searchSogou(variant, candidateCount))
+            runSearchEngine('Bing', () => searchBing(variant, candidateCount, signal), signal),
+            runSearchEngine('百度', () => searchBaidu(variant, candidateCount, signal), signal),
+            runSearchEngine('搜狗', () => searchSogou(variant, candidateCount, signal), signal)
         ])
         engineRuns.push(...variantRuns)
         mergedCandidates = mergeSearchResults([
@@ -1140,14 +1132,15 @@ export const webSearchTool = {
         }
 
         const searchTarget = async query => {
-            if (imageCount === 0) return await searchWeb(query, count)
+            if (imageCount === 0) return await searchWeb(query, count, context.signal)
 
-            const expandedWebSearch = await searchWeb(query, Math.max(count, 8))
+            throwIfAborted(context.signal)
+            const expandedWebSearch = await searchWeb(query, Math.max(count, 8), context.signal)
             const expandedWebResults = expandedWebSearch.results || []
             const webResults = expandedWebResults.slice(0, count)
             const directImageResults = await Promise.allSettled([
-                searchBingImages(query, Math.max(8, imageCount * 4)),
-                searchSo360Images(query, Math.max(8, imageCount * 4))
+                searchBingImages(query, Math.max(8, imageCount * 4), context.signal),
+                searchSo360Images(query, Math.max(8, imageCount * 4), context.signal)
             ])
             const bingResults = directImageResults[0].status === 'fulfilled' ? directImageResults[0].value : []
             const so360Results = directImageResults[1].status === 'fulfilled' ? directImageResults[1].value : []
@@ -1155,19 +1148,20 @@ export const webSearchTool = {
             if (directImageResults[1].status === 'rejected') logger.warn(`[AI-Plugin] 360 图片搜索失败: ${directImageResults[1].reason?.message || directImageResults[1].reason}`)
             let imageSearchResult = mergeImageCandidateGroups([bingResults, so360Results])
             if (imageSearchResult.length < MAX_IMAGE_VERIFY_CANDIDATES) {
-                const pageImageResults = await searchResultPageImages(expandedWebResults, Math.max(8, imageCount * 4))
+                const pageImageResults = await searchResultPageImages(expandedWebResults, Math.max(8, imageCount * 4), context.signal)
                 imageSearchResult = mergeImageCandidateGroups([imageSearchResult, pageImageResults])
             }
             if (imageSearchResult.length < MAX_IMAGE_VERIFY_CANDIDATES) {
-                const duckDuckGoResults = await searchDuckDuckGoImages(query, Math.max(8, imageCount * 4)).catch(err => {
+                const duckDuckGoResults = await searchDuckDuckGoImages(query, Math.max(8, imageCount * 4), context.signal).catch(err => {
+                    throwIfAborted(context.signal)
                     logger.warn(`[AI-Plugin] DuckDuckGo 图片搜索失败: ${err.message}`)
                     return []
                 })
                 imageSearchResult = mergeImageCandidateGroups([imageSearchResult, duckDuckGoResults])
             }
             imageSearchResult = filterRelevantSearchResults(query, imageSearchResult)
-            const preparedResult = await prepareImageCandidates(imageSearchResult, imageCount)
-            const visionResult = await verifyImagesWithVision(context.client, query, preparedResult.prepared)
+            const preparedResult = await prepareImageCandidates(imageSearchResult, imageCount, context.signal)
+            const visionResult = await verifyImagesWithVision(context.client, query, preparedResult.prepared, context.signal)
             const sentImages = await sendPreparedImages(context.event, visionResult.selected, imageCount)
             return {
                 ...expandedWebSearch,

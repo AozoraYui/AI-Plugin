@@ -5,7 +5,7 @@
 
 import { toolRegistry } from './registry.js'
 import { assessFetchedContent, classifyWebUrl } from '../utils/web_evidence.js'
-import { assertPublicUrl, fetchWithProxy } from '../utils/common.js'
+import { assertPublicUrl, createTimeoutSignal, fetchWithProxy } from '../utils/common.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -161,7 +161,7 @@ function formatSparkReport(data, originalUrl, rawUrl, maxChars) {
     return `\n\n【spark 报告「${originalUrl}」】\n数据接口: ${rawUrl}\n${summary}\n\n【spark 原始 JSON 预览】\n${rawPreview}\n【spark 报告结束】\n`
 }
 
-async function fetchSparkReport(spark, originalUrl, maxChars = DEFAULT_MAX_CHARS) {
+async function fetchSparkReport(spark, originalUrl, maxChars = DEFAULT_MAX_CHARS, signal) {
     try {
         const res = await fetchPublicHttp(spark.rawUrl, {
             method: 'GET',
@@ -170,7 +170,7 @@ async function fetchSparkReport(spark, originalUrl, maxChars = DEFAULT_MAX_CHARS
                 'Accept': 'application/json,text/plain,*/*',
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.5',
             },
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            signal: createTimeoutSignal(REQUEST_TIMEOUT_MS, signal),
         })
         if (!res.ok) {
             logger.warn(`[AI-Plugin] WebFetch spark raw 返回非200: ${spark.rawUrl} - ${res.status}`)
@@ -325,7 +325,7 @@ function canUseReaderFallback(rawUrl) {
     }
 }
 
-async function fetchWebPageWithReader(url, maxChars = DEFAULT_MAX_CHARS, reason = '常规抓取失败') {
+async function fetchWebPageWithReader(url, maxChars = DEFAULT_MAX_CHARS, reason = '常规抓取失败', signal) {
     if (!canUseReaderFallback(url)) {
         return { ok: false, error: 'Reader 降级已跳过：目标是本地/内网地址或不适合交给外部文本化服务' }
     }
@@ -350,7 +350,7 @@ async function fetchWebPageWithReader(url, maxChars = DEFAULT_MAX_CHARS, reason 
         const res = await fetchPublicHttp(readerUrl, {
             method: 'GET',
             headers,
-            signal: AbortSignal.timeout(READER_TIMEOUT_MS),
+            signal: createTimeoutSignal(READER_TIMEOUT_MS, signal),
         })
         if (res.status === 429) {
             readerUnavailableUntil = Date.now() + 60 * 1000
@@ -382,11 +382,11 @@ async function fetchWebPageWithReader(url, maxChars = DEFAULT_MAX_CHARS, reason 
     }
 }
 
-async function tryBrowserThenReader(url, maxChars, reason) {
-    const browserResult = await fetchWebPageWithBrowser(url, maxChars, reason)
+async function tryBrowserThenReader(url, maxChars, reason, signal) {
+    const browserResult = await fetchWebPageWithBrowser(url, maxChars, reason, signal)
     if (browserResult.ok) return browserResult
 
-    const readerResult = await fetchWebPageWithReader(url, maxChars, `${reason}；浏览器降级失败: ${browserResult.error}`)
+    const readerResult = await fetchWebPageWithReader(url, maxChars, `${reason}；浏览器降级失败: ${browserResult.error}`, signal)
     if (readerResult.ok) return readerResult
 
     return {
@@ -452,7 +452,7 @@ async function createBrowserPage() {
     return null
 }
 
-async function fetchWebPageWithBrowser(url, maxChars = DEFAULT_MAX_CHARS, reason = 'HTTP 抓取失败') {
+async function fetchWebPageWithBrowser(url, maxChars = DEFAULT_MAX_CHARS, reason = 'HTTP 抓取失败', signal) {
     const browserPage = await createBrowserPage()
     if (!browserPage?.page) {
         return {
@@ -585,7 +585,7 @@ async function fetchWebPageWithBrowser(url, maxChars = DEFAULT_MAX_CHARS, reason
  * 短链是 302 跳转，跟随重定向即可拿到真实地址，方便后续抓取/解析。
  * @returns {Promise<string>} 还原后的 URL，失败则原样返回
  */
-async function resolveBiliShortLink(rawUrl) {
+async function resolveBiliShortLink(rawUrl, signal) {
     let u
     try {
         u = new URL(rawUrl)
@@ -600,7 +600,7 @@ async function resolveBiliShortLink(rawUrl) {
             headers: {
                 'User-Agent': BROWSER_USER_AGENT
             },
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+            signal: createTimeoutSignal(REQUEST_TIMEOUT_MS, signal)
         })
         // res.url 为跟随重定向后的最终地址；去掉跟踪参数保持干净
         const finalUrl = res.url || rawUrl
@@ -710,7 +710,7 @@ function formatGitHubJson(kind, json) {
  * 通过 GitHub API/raw 抓取，带 429 退避重试与可选 token
  * 列表类资源（commits/issues/pulls/releases）自动跟随 Link 头翻页，拉取全部数据
  */
-async function fetchGitHubApi(gh, originalUrl, maxChars) {
+async function fetchGitHubApi(gh, originalUrl, maxChars, signal) {
     const isRaw = gh.kind === 'raw'
     const headers = {
         'User-Agent': 'AI-Plugin-WebFetch',
@@ -730,7 +730,7 @@ async function fetchGitHubApi(gh, originalUrl, maxChars) {
                 res = await fetchPublicHttp(url, {
                     method: 'GET',
                     headers,
-                    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+                    signal: createTimeoutSignal(REQUEST_TIMEOUT_MS, signal),
                 })
             } catch (err) {
                 logger.warn(`[AI-Plugin] WebFetch GitHub API 请求失败: ${url} - ${err.message}`)
@@ -912,6 +912,7 @@ function extractSameOriginClientRedirect(html, baseUrl) {
  * @returns {Promise<string>}
  */
 async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
+    const signal = options.signal
     if (!url || typeof url !== 'string' || !url.trim()) {
         return '\n\n【网页抓取失败】未指定 URL。\n'
     }
@@ -936,7 +937,7 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
     }
 
     // B站短链先还原为完整链接，便于后续抓取/识别
-    let resolvedUrl = await resolveBiliShortLink(targetUrl)
+    let resolvedUrl = await resolveBiliShortLink(targetUrl, signal)
     if (resolvedUrl !== targetUrl) {
         logger.info(`[AI-Plugin] WebFetch: B站短链还原 ${targetUrl} -> ${resolvedUrl}`)
     }
@@ -945,7 +946,7 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
     const gh = resolveGitHubApi(resolvedUrl)
     if (gh) {
         logger.info(`[AI-Plugin] WebFetch: GitHub 链接改走 API (${gh.kind}) -> ${gh.apiUrl}`)
-        return await fetchGitHubApi(gh, resolvedUrl, maxChars)
+        return await fetchGitHubApi(gh, resolvedUrl, maxChars, signal)
     }
 
     // spark viewer 是 React 单页应用；页面正文可能只显示错误提示。
@@ -953,7 +954,7 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
     const spark = resolveSparkReport(resolvedUrl)
     if (spark) {
         logger.info(`[AI-Plugin] WebFetch: spark 链接改走 raw JSON -> ${spark.rawUrl}`)
-        return await fetchSparkReport(spark, resolvedUrl, maxChars)
+        return await fetchSparkReport(spark, resolvedUrl, maxChars, signal)
     }
 
     logger.info(`[AI-Plugin] WebFetch: 开始抓取 ${resolvedUrl}`)
@@ -963,11 +964,11 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
         res = await fetchPublicHttp(resolvedUrl, {
             method: 'GET',
             headers: buildHttpHeaders(resolvedUrl),
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+            signal: createTimeoutSignal(REQUEST_TIMEOUT_MS, signal)
         })
     } catch (err) {
         logger.warn(`[AI-Plugin] WebFetch 请求失败: ${targetUrl} - ${err.message}`)
-        const fallbackResult = await tryBrowserThenReader(resolvedUrl, maxChars, `HTTP 请求异常: ${err.message}`)
+        const fallbackResult = await tryBrowserThenReader(resolvedUrl, maxChars, `HTTP 请求异常: ${err.message}`, signal)
         if (fallbackResult.ok) return fallbackResult.content
         return `\n\n【网页抓取失败】请求出错: ${err.message}；${fallbackResult.error}。\n`
     }
@@ -978,7 +979,7 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
             return `\n\n【网页抓取失败】HTTP 429：目标站点请求过于频繁（触发了频率限制）。请稍后再试，通常几分钟后即可恢复。\n`
         }
         if (isBrowserFallbackStatus(res.status)) {
-            const fallbackResult = await tryBrowserThenReader(resolvedUrl, maxChars, `HTTP ${res.status}`)
+            const fallbackResult = await tryBrowserThenReader(resolvedUrl, maxChars, `HTTP ${res.status}`, signal)
             if (fallbackResult.ok) return fallbackResult.content
             return `\n\n【网页抓取失败】HTTP ${res.status}，并且降级抓取也失败：${fallbackResult.error}。\n`
         }
@@ -1018,7 +1019,7 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
         html = await readResponseTextLimited(res)
     } catch (err) {
         logger.warn(`[AI-Plugin] WebFetch 读取响应失败: ${targetUrl} - ${err.message}`)
-        const fallbackResult = await tryBrowserThenReader(resolvedUrl, maxChars, `读取 HTTP 响应失败: ${err.message}`)
+        const fallbackResult = await tryBrowserThenReader(resolvedUrl, maxChars, `读取 HTTP 响应失败: ${err.message}`, signal)
         if (fallbackResult.ok) return fallbackResult.content
         return `\n\n【网页抓取失败】读取响应出错: ${err.message}；${fallbackResult.error}。\n`
     }
@@ -1028,7 +1029,8 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
     if (clientRedirectUrl && clientRedirectDepth < MAX_CLIENT_REDIRECTS) {
         logger.info(`[AI-Plugin] WebFetch: 跟随同源客户端跳转 ${finalUrl} -> ${clientRedirectUrl}`)
         const redirectedContent = await fetchWebPage(clientRedirectUrl, maxChars, {
-            clientRedirectDepth: clientRedirectDepth + 1
+            clientRedirectDepth: clientRedirectDepth + 1,
+            signal
         })
         return `\n\n【网页客户端重定向】\n请求地址: ${targetUrl}\n跳转来源: ${finalUrl}\n跳转目标: ${clientRedirectUrl}\n${redirectedContent}`
     }
@@ -1045,7 +1047,8 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
         const fallbackResult = await tryBrowserThenReader(
             resolvedUrl,
             maxChars,
-            likelyBotWall ? '页面疑似反爬/验证页' : (emptyText ? 'HTTP 提取文本为空' : '页面疑似需要浏览器渲染')
+            likelyBotWall ? '页面疑似反爬/验证页' : (emptyText ? 'HTTP 提取文本为空' : '页面疑似需要浏览器渲染'),
+            signal
         )
         if (fallbackResult.ok) return fallbackResult.content
         if (likelyBotWall) {
@@ -1093,8 +1096,8 @@ export const webFetchTool = {
         }
     },
 
-    async execute(args) {
-        const content = await fetchWebPage(args.url, args.max_chars)
+    async execute(args, context = {}) {
+        const content = await fetchWebPage(args.url, args.max_chars, { signal: context.signal })
         return assessFetchedContent(args.url, content)
     },
 

@@ -9,7 +9,9 @@ import { toolRegistry } from './registry.js'
 import { parseExplicitGroupRequestDecision } from '../utils/tool_intent.js'
 
 // 入群申请缓存 redis key（与 apps/group_request.js 保持一致）
-export const GROUP_REQUEST_KEY = (groupId, userId) => `AI-Plugin:groupAdd:${groupId}:${userId}`
+export const GROUP_REQUEST_KEY = (groupId, userId, flag = '') => flag
+    ? `AI-Plugin:groupAdd:${groupId}:${userId}:${encodeURIComponent(String(flag))}`
+    : `AI-Plugin:groupAdd:${groupId}:${userId}`
 export const GROUP_REQUEST_SCAN = (groupId) => `AI-Plugin:groupAdd:${groupId}:*`
 export const GROUP_REQUEST_TTL_SECONDS = 24 * 60 * 60
 export const GROUP_INCREASE_KEY = (groupId, userId, timestamp) => `AI-Plugin:groupIncrease:${groupId}:${timestamp}:${userId}`
@@ -199,11 +201,47 @@ async function getGroupMembers(event, group) {
     return []
 }
 
+async function scanRedisKeys(pattern, maxKeys = 2000) {
+    if (typeof redis === 'undefined' || !redis.get) return []
+    if (typeof redis.scanStream === 'function') {
+        const keys = []
+        for await (const batch of redis.scanStream({ match: pattern, count: 100 })) {
+            for (const key of batch || []) {
+                keys.push(key)
+                if (keys.length >= maxKeys) return keys
+            }
+        }
+        return keys
+    }
+    if (typeof redis.scan !== 'function') {
+        if (typeof redis.keys !== 'function') return []
+        return await redis.keys(pattern)
+    }
+    const keys = []
+    let cursor = '0'
+    do {
+        let response
+        try {
+            response = await redis.scan(cursor, { MATCH: pattern, COUNT: 100 })
+        } catch {
+            response = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100)
+        }
+        const nextCursor = Array.isArray(response) ? response[0] : response?.cursor
+        const batch = Array.isArray(response) ? response[1] : response?.keys
+        for (const key of batch || []) {
+            keys.push(key)
+            if (keys.length >= maxKeys) return keys
+        }
+        cursor = String(nextCursor ?? '0')
+    } while (cursor !== '0')
+    return keys
+}
+
 async function getGroupIncreaseHistory(groupId) {
-    if (!groupId || typeof redis === 'undefined' || !redis.keys || !redis.get) return []
+    if (!groupId || typeof redis === 'undefined' || !redis.get) return []
     const records = []
     try {
-        const keys = await redis.keys(GROUP_INCREASE_SCAN(groupId))
+        const keys = await scanRedisKeys(GROUP_INCREASE_SCAN(groupId))
         for (const key of keys) {
             try {
                 const raw = await redis.get(key)
@@ -691,13 +729,13 @@ export const groupMemberResolveTool = {
 
 // 扫描某群下所有待审入群申请
 async function scanPendingRequests(groupId) {
-    if (typeof redis === 'undefined' || !redis.keys) return []
-    const keys = await redis.keys(GROUP_REQUEST_SCAN(groupId))
+    if (typeof redis === 'undefined' || !redis.get) return []
+    const keys = await scanRedisKeys(GROUP_REQUEST_SCAN(groupId))
     const list = []
     for (const k of keys) {
         try {
             const raw = await redis.get(k)
-            if (raw) list.push(JSON.parse(raw))
+            if (raw) list.push({ ...JSON.parse(raw), _redisKey: k })
         } catch { /* 忽略损坏记录 */ }
     }
     // 按申请时间排序
@@ -796,6 +834,7 @@ export const groupRequestHandleTool = {
                 type: 'object',
                 properties: {
                     user_id: { type: 'string', description: '申请人的 QQ 号。只有一条待审申请且用户说"刚才那个/他/那个人"时可省略。' },
+                    request_flag: { type: 'string', description: '可选的 OneBot 入群申请 flag；同一 QQ 存在多条申请时必须提供。' },
                     target: { type: 'string', description: '申请人的昵称、QQ号、留言关键词或用户原话。多条待审申请时可用来模糊匹配，例如"幸福的"。' },
                     approve: { type: 'boolean', description: 'true 通过，false 拒绝。必须明确填写。' },
                     reason: { type: 'string', description: '拒绝理由（仅 approve=false 时有意义），可选。' }
@@ -813,6 +852,7 @@ export const groupRequestHandleTool = {
         if (!await botIsAdmin(event, group)) return '【处理申请失败】机器人不是该群管理员，无法处理加群申请。'
 
         let userId = String(args.user_id || '').trim()
+        const requestFlag = String(args.request_flag || args.flag || '').trim()
         const target = String(args.target || '').trim()
         if (typeof args.approve !== 'boolean') return '【处理申请失败】请明确说明是通过还是拒绝该申请。'
         const decision = parseExplicitGroupRequestDecision(context.originalUserMessage || context.userMessage || '')
@@ -844,12 +884,32 @@ export const groupRequestHandleTool = {
             }
             if (!/^\d{5,}$/.test(userId)) userId = String(pending[0].user_id)
         }
-        const key = GROUP_REQUEST_KEY(event.group_id, userId)
-        const raw = await redis.get(key)
+        let key = ''
+        let raw = ''
+        let record
+        if (requestFlag) {
+            key = GROUP_REQUEST_KEY(event.group_id, userId, requestFlag)
+            raw = await redis.get(key)
+        } else {
+            const matches = (await scanPendingRequests(event.group_id)).filter(item => String(item.user_id) === userId)
+            if (matches.length > 1) {
+                const choices = matches.map(item => `${item.nickname || '未知'}(${item.user_id}) flag=${item.flag || '未知'}`).join('、')
+                return `【处理申请失败】QQ ${userId} 当前有多条待审核申请，请提供具体 request_flag：${choices}`
+            }
+            if (matches.length === 1) {
+                record = matches[0]
+                key = record._redisKey || GROUP_REQUEST_KEY(event.group_id, userId, record.flag)
+                raw = JSON.stringify(record)
+            } else {
+                key = GROUP_REQUEST_KEY(event.group_id, userId)
+                raw = await redis.get(key)
+            }
+        }
         if (!raw) return `【处理申请失败】没有找到 ${userId} 的待审核加群申请，可能已过期或已被处理。`
 
-        let record
-        try { record = JSON.parse(raw) } catch { return '【处理申请失败】申请记录已损坏。' }
+        if (!record) {
+            try { record = JSON.parse(raw) } catch { return '【处理申请失败】申请记录已损坏。' }
+        }
 
         const approve = args.approve
         const reason = approve ? '' : String(args.reason || '')

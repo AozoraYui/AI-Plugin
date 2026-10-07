@@ -46,7 +46,7 @@ export class AIGroupRequest extends plugin {
                 time: Date.now()
             }
             // 申请记录保留 24 小时；实际是否仍可处理由协议端最终决定。
-            await redis.set(GROUP_REQUEST_KEY(e.group_id, e.user_id), JSON.stringify(record), { EX: GROUP_REQUEST_TTL_SECONDS })
+            await redis.set(GROUP_REQUEST_KEY(e.group_id, e.user_id, e.flag), JSON.stringify(record), { EX: GROUP_REQUEST_TTL_SECONDS })
             logger.info(`[AI-Plugin] 已记录加群申请：群 ${e.group_id} 用户 ${e.user_id}`)
 
             try {

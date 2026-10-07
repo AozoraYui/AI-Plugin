@@ -368,7 +368,9 @@ export const imageGenTool = {
 
             const payload = { contents: [{ parts }] }
             const startTime = Date.now()
-            const result = await client.makeRequest('image', payload, modelGroupKey, 8192)
+            const result = await client.makeRequest('image', payload, modelGroupKey, 8192, {
+                signal: context.signal
+            })
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
 
             if (!result.success || !result.data) {

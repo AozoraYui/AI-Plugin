@@ -106,6 +106,32 @@ export function cancelAgentExecutionsByRecalledMessage({ messageId = '', groupId
     return cancelled
 }
 
+export function cancelAgentExecutionsByTask({ taskId = '', userId = '', groupId = '', reason = '用户取消 Agent 任务' } = {}) {
+    const normalizedTaskId = normalizeId(taskId)
+    const normalizedUserId = normalizeId(userId)
+    const normalizedGroupId = normalizeId(groupId)
+    if (!normalizedTaskId) return []
+
+    const cancelled = []
+    for (const record of ACTIVE_EXECUTIONS.values()) {
+        if (record.taskId !== normalizedTaskId) continue
+        if (normalizedUserId && record.userId !== normalizedUserId) continue
+        if (normalizedGroupId && record.groupId !== normalizedGroupId) continue
+        record.cancelled = true
+        record.reason = reason
+        record.controller.abort(reason)
+        cancelled.push({
+            executionId: record.executionId,
+            taskId: record.taskId,
+            messageId: record.messageId,
+            groupId: record.groupId,
+            userId: record.userId,
+            reason
+        })
+    }
+    return cancelled
+}
+
 export function isAgentExecutionCancelled(error) {
     return Boolean(error?.code === AGENT_CANCELLED_CODE || error?.name === 'AbortError')
 }

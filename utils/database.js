@@ -853,6 +853,11 @@ export class AIDatabase {
             }
 
             query = appendLimitClause(`${query} ORDER BY id DESC`, params, options.limit, 60, 300)
+            const offset = Math.max(0, Math.floor(Number(options.offset) || 0))
+            if (offset > 0) {
+                query += ' OFFSET ?'
+                params.push(offset)
+            }
 
             this.db.all(query, params, (err, rows) => {
                 if (err) {

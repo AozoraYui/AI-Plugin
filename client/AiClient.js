@@ -1240,7 +1240,7 @@ export class AiClient {
             
             let res
             try {
-                res = await fetchWithProxy(url, { ...options, autoDetectProxy: true, family: 4 })
+                res = await fetchWithProxy(url, { ...options, signal, autoDetectProxy: true, family: 4 })
             } catch (error) {
                 if (requestOptions.signal?.aborted || error?.code === 'AGENT_CANCELLED') {
                     return { success: false, cancelled: true, error: '请求已取消', code: 'AGENT_CANCELLED' }
@@ -1252,7 +1252,7 @@ export class AiClient {
                     return { success: false, cancelled: true, error: '请求已取消', code: 'AGENT_CANCELLED' }
                 }
                 logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 传输失败，重试当前请求一次`)
-                res = await fetchWithProxy(url, { ...options, autoDetectProxy: true, family: 4 })
+                res = await fetchWithProxy(url, { ...options, signal, autoDetectProxy: true, family: 4 })
             }
 
             if (!res.ok) {
@@ -1262,7 +1262,7 @@ export class AiClient {
                     if (/\/images\/generations|\/images\/edits/.test(errBody)) {
                         logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 需要 /images/generations，自动重试`)
                         try {
-                            return await this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout)
+                            return await this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout, requestOptions.signal)
                         } catch (retryErr) {
                             throw new Error(`自动重试失败: ${retryErr.message}`)
                         }
@@ -1300,7 +1300,7 @@ export class AiClient {
                 if (type === 'image' && /\/images\/generations|\/images\/edits/.test(result.error || '')) {
                     logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 需要 /images/generations，自动重试`)
                     try {
-                        return await this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout)
+                        return await this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout, requestOptions.signal)
                     } catch (retryErr) {
                         throw new Error(`自动重试失败: ${retryErr.message}`)
                     }
@@ -1380,7 +1380,7 @@ export class AiClient {
     }
 
     /** 用 images/generations 或 images/edits 端点重试绘图请求 */
-    async _retryWithImageEndpoint(payload, provider, modelId, _maxTokens, timeout) {
+    async _retryWithImageEndpoint(payload, provider, modelId, _maxTokens, timeout, signal) {
         const parts = payload.contents?.[0]?.parts || []
         const prompt = parts.map(p => p.text).filter(Boolean).join('\n') || ''
         const images = this._extractImageBuffers(parts)
@@ -1414,7 +1414,7 @@ export class AiClient {
             options.allowPrivateNetwork = true
 
             logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 使用 /images/edits（${images.length} 张参考图）`)
-            const res = await fetchWithProxy(url, { ...options, autoDetectProxy: true, family: 4 })
+            const res = await fetchWithProxy(url, { ...options, signal, autoDetectProxy: true, family: 4 })
             if (!res.ok) throw new Error(`HTTP状态码: ${res.status}`)
 
             const responseText = await res.text()
@@ -1447,7 +1447,7 @@ export class AiClient {
         if (timeout > 0) options.timeout = timeout
         options.allowPrivateNetwork = true
 
-        const res = await fetchWithProxy(url, { ...options, autoDetectProxy: true, family: 4 })
+        const res = await fetchWithProxy(url, { ...options, signal, autoDetectProxy: true, family: 4 })
         if (!res.ok) throw new Error(`HTTP状态码: ${res.status}`)
 
         const responseText = await res.text()

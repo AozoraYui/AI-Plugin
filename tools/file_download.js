@@ -9,6 +9,7 @@ import path from 'node:path'
 import { toolRegistry } from './registry.js'
 import { checkPathAllowed } from '../utils/file_access.js'
 import { Config } from '../utils/config.js'
+import { fetchWithProxy } from '../utils/common.js'
 
 const MAX_FORWARD_DEPTH = 3
 const DL_MAX_RETRIES = 3
@@ -172,16 +173,23 @@ function resolveSaveDir(inputDir) {
 // 下载单个媒体（带重试 + 超时）
 // 文件统一按序号命名：0.后缀、1.后缀…（index 从 0 起）
 // 后缀默认保持每个文件原本的类型；forceExt 非空时统一改用该后缀（如 '.gif'）
-async function downloadOne(item, index, targetDir, forceExt = '') {
+async function downloadOne(item, index, targetDir, forceExt = '', signal) {
     for (let attempt = 1; attempt <= DL_MAX_RETRIES; attempt++) {
         const controller = new AbortController()
         const timer = setTimeout(() => controller.abort(), DL_TIMEOUT_MS)
+        const abortFromParent = () => controller.abort()
+        if (signal?.aborted) return { ok: false, reason: '任务已取消' }
+        signal?.addEventListener('abort', abortFromParent, { once: true })
         try {
-            const res = await fetch(item.url, { signal: controller.signal })
+            const res = await fetchWithProxy(item.url, {
+                signal: controller.signal,
+                autoDetectProxy: true,
+                family: 4
+            })
             clearTimeout(timer)
             if (!res.ok) {
                 logger.warn(`[AI-Plugin] 文件下载失败 HTTP ${res.status}: ${item.url}`)
-                return { ok: false }
+                return { ok: false, reason: `HTTP ${res.status}` }
             }
             // 推断原后缀：优先消息段自带名的扩展名，其次按 content-type
             const ct = (res.headers.get('content-type') || '').split(';')[0].trim()
@@ -198,12 +206,15 @@ async function downloadOne(item, index, targetDir, forceExt = '') {
             return { ok: true, fileName, filePath, size: buf.length, type: item.type }
         } catch (err) {
             clearTimeout(timer)
+            if (signal?.aborted) return { ok: false, reason: '任务已取消' }
             if (attempt < DL_MAX_RETRIES) {
                 await new Promise(r => setTimeout(r, DL_RETRY_DELAYS[attempt - 1]))
             } else {
                 logger.warn(`[AI-Plugin] 文件下载失败（已重试${DL_MAX_RETRIES}次）: ${err.message} - ${item.url}`)
-                return { ok: false }
+                return { ok: false, reason: err.message }
             }
+        } finally {
+            signal?.removeEventListener('abort', abortFromParent)
         }
     }
     return { ok: false }
@@ -259,12 +270,15 @@ export const fileDownloadTool = {
         }
 
         const results = []
+        const failures = []
         let index = 0
         for (const item of media) {
-            const r = await downloadOne(item, index, targetDir, forceExt)
+            const r = await downloadOne(item, index, targetDir, forceExt, context.signal)
             if (r.ok) {
                 results.push(r)
                 index++
+            } else {
+                failures.push({ name: item.name || `${item.type || 'media'}_${index}`, reason: r.reason || '未知错误' })
             }
         }
 
@@ -284,16 +298,23 @@ export const fileDownloadTool = {
             saved: results.length,
             files: results.map(r => ({ name: r.fileName, path: r.filePath, type: r.type, size: r.size })),
             facts: { directory: targetDir, discovered: media.length, saved: results.length },
-            artifacts: results.map(r => ({ type: 'file', path: r.filePath, mediaType: r.type }))
+            artifacts: results.map(r => ({ type: 'file', path: r.filePath, mediaType: r.type })),
+            partial: results.length < media.length,
+            failures
         }
     },
 
     formatResult(data) {
         if (typeof data === 'string') return data
         if (!data || !data.ok) return String(data || '')
-        let out = `\n\n【文件下载成功】已保存 ${data.saved}/${data.total} 个文件到：\n${data.dir}\n`
+        const state = data.saved === data.total ? '成功' : '部分成功'
+        let out = `\n\n【文件下载${state}】已保存 ${data.saved}/${data.total} 个文件到：\n${data.dir}\n`
         for (const f of data.files) {
             out += `- ${f.name}（${f.type}, ${(f.size / 1024).toFixed(1)}KB）\n`
+        }
+        if (data.failures?.length > 0) {
+            out += '\n失败项目：\n'
+            for (const failure of data.failures) out += `- ${failure.name}：${failure.reason}\n`
         }
         return out
     }

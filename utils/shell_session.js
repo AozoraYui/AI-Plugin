@@ -42,7 +42,8 @@ function execTmux(args = [], options = {}) {
         execFile('tmux', args, {
             timeout: options.timeoutMs || TMUX_TIMEOUT_MS,
             maxBuffer: options.maxBuffer || 1024 * 1024,
-            windowsHide: true
+            windowsHide: true,
+            signal: options.signal
         }, (error, stdout = '', stderr = '') => {
             if (error) {
                 error.stdout = stdout
@@ -55,8 +56,20 @@ function execTmux(args = [], options = {}) {
     })
 }
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms))
+function sleep(ms, signal) {
+    if (signal?.aborted) return Promise.reject(Object.assign(new Error('请求已取消'), { code: 'AGENT_CANCELLED' }))
+    return new Promise((resolve, reject) => {
+        let timer
+        const abort = () => {
+            clearTimeout(timer)
+            reject(Object.assign(new Error('请求已取消'), { code: 'AGENT_CANCELLED' }))
+        }
+        timer = setTimeout(() => {
+            signal?.removeEventListener('abort', abort)
+            resolve()
+        }, ms)
+        signal?.addEventListener('abort', abort, { once: true })
+    })
 }
 
 function normalizeDelay(ms) {
@@ -111,7 +124,7 @@ async function waitForShellSessionOutput(options = {}) {
     let attempts = 0
     let snapshot = null
 
-    if (initialDelayMs > 0) await sleep(initialDelayMs)
+    if (initialDelayMs > 0) await sleep(initialDelayMs, options.signal)
 
     while (true) {
         attempts++
@@ -119,7 +132,8 @@ async function waitForShellSessionOutput(options = {}) {
             sessionName: options.sessionName,
             cwd: options.cwd,
             lines: options.lines,
-            maxOutputChars: options.maxOutputChars
+            maxOutputChars: options.maxOutputChars,
+            signal: options.signal
         })
         if (!snapshot.ok) return { snapshot, attempts, outputChanged: false, outputDelta: '', waitTimedOut: false, elapsedMs: Date.now() - startedAt }
 
@@ -132,7 +146,7 @@ async function waitForShellSessionOutput(options = {}) {
         if (remainingMs <= 0 || timeoutMs <= 0) {
             return { snapshot, attempts, outputChanged: false, outputDelta: '', waitTimedOut: true, elapsedMs: Date.now() - startedAt }
         }
-        await sleep(Math.min(pollMs, remainingMs))
+        await sleep(Math.min(pollMs, remainingMs), options.signal)
     }
 }
 
@@ -153,10 +167,10 @@ async function readPaneCurrentPath(sessionName, fallback = process.cwd()) {
     }
 }
 
-export async function hasShellSession(sessionName = Config.SHELL_SESSION_NAME) {
+export async function hasShellSession(sessionName = Config.SHELL_SESSION_NAME, signal) {
     const name = normalizeShellSessionName(sessionName)
     try {
-        await execTmux(['has-session', '-t', name])
+        await execTmux(['has-session', '-t', name], { signal })
         return { ok: true, exists: true, sessionName: name }
     } catch (err) {
         if (err.code === 'ENOENT') {
@@ -172,7 +186,7 @@ export async function hasShellSession(sessionName = Config.SHELL_SESSION_NAME) {
 export async function ensureShellSession(options = {}) {
     const sessionName = normalizeShellSessionName(options.sessionName || Config.SHELL_SESSION_NAME)
     const cwd = path.resolve(options.cwd || process.cwd())
-    const status = await hasShellSession(sessionName)
+    const status = await hasShellSession(sessionName, options.signal)
     if (!status.ok) return status
     if (status.exists) {
         const currentDirectory = await readPaneCurrentPath(sessionName, cwd)
@@ -180,7 +194,7 @@ export async function ensureShellSession(options = {}) {
     }
 
     try {
-        await execTmux(['new-session', '-d', '-s', sessionName, '-c', cwd])
+        await execTmux(['new-session', '-d', '-s', sessionName, '-c', cwd], { signal: options.signal })
         return { ok: true, exists: true, created: true, sessionName, cwd, currentDirectory: cwd }
     } catch (err) {
         if (err.code === 'ENOENT') {
@@ -193,11 +207,12 @@ export async function ensureShellSession(options = {}) {
 export async function captureShellSession(options = {}) {
     const sessionName = normalizeShellSessionName(options.sessionName || Config.SHELL_SESSION_NAME)
     const lines = Math.min(Math.max(Number(options.lines) || Config.SHELL_SESSION_CAPTURE_LINES, 20), 2000)
-    const ensured = await ensureShellSession({ sessionName, cwd: options.cwd })
+    const ensured = await ensureShellSession({ sessionName, cwd: options.cwd, signal: options.signal })
     if (!ensured.ok) return ensured
 
     try {
         const { stdout } = await execTmux(['capture-pane', '-t', sessionName, '-p', '-S', `-${lines}`], {
+            signal: options.signal,
             maxBuffer: Math.max(Config.SHELL_SESSION_MAX_OUTPUT_CHARS * 2, 1024 * 1024)
         })
         const cleanedOutput = sanitizeTerminalOutput(stdout)
@@ -223,7 +238,7 @@ export async function captureShellSession(options = {}) {
 
 export async function getShellSessionCurrentPath(options = {}) {
     const sessionName = normalizeShellSessionName(options.sessionName || Config.SHELL_SESSION_NAME)
-    const ensured = await ensureShellSession({ sessionName, cwd: options.cwd })
+    const ensured = await ensureShellSession({ sessionName, cwd: options.cwd, signal: options.signal })
     if (!ensured.ok) return ensured
     const currentDirectory = ensured.currentDirectory || await readPaneCurrentPath(sessionName, ensured.cwd)
     return { ok: true, sessionName, currentDirectory }
@@ -236,9 +251,9 @@ export async function sendToShellSession(options = {}) {
     if (input.length > 4000) return { ok: false, sessionName, error: '输入过长：最多 4000 字符。' }
     if (input.includes('\0')) return { ok: false, sessionName, error: '输入包含非法 NUL 字符。' }
 
-    const ensured = await ensureShellSession({ sessionName, cwd: options.cwd })
+    const ensured = await ensureShellSession({ sessionName, cwd: options.cwd, signal: options.signal })
     if (!ensured.ok) return ensured
-    const pathStatus = await getShellSessionCurrentPath({ sessionName, cwd: options.cwd })
+    const pathStatus = await getShellSessionCurrentPath({ sessionName, cwd: options.cwd, signal: options.signal })
     if (!pathStatus.ok) return pathStatus
 
     const directorySafety = validateShellDirectorySafety({
@@ -262,6 +277,7 @@ export async function sendToShellSession(options = {}) {
     try {
         const beforeSnapshot = options.enter !== false
             ? await captureShellSession({
+                signal: options.signal,
                 sessionName,
                 cwd: options.cwd,
                 lines: options.lines || Config.SHELL_SESSION_CAPTURE_LINES,
@@ -290,9 +306,9 @@ export async function sendToShellSession(options = {}) {
                 lines: beforeSnapshot.lines
             }
         }
-        await execTmux(['send-keys', '-t', sessionName, '-l', '--', input])
+        await execTmux(['send-keys', '-t', sessionName, '-l', '--', input], { signal: options.signal })
         if (options.enter !== false) {
-            await execTmux(['send-keys', '-t', sessionName, 'C-m'])
+            await execTmux(['send-keys', '-t', sessionName, 'C-m'], { signal: options.signal })
         }
         const shouldReadAfterSend = options.readAfterSend !== false && options.enter !== false
         let snapshot = null
@@ -364,10 +380,10 @@ export async function sendToShellSession(options = {}) {
 
 export async function interruptShellSession(options = {}) {
     const sessionName = normalizeShellSessionName(options.sessionName || Config.SHELL_SESSION_NAME)
-    const ensured = await ensureShellSession({ sessionName, cwd: options.cwd })
+    const ensured = await ensureShellSession({ sessionName, cwd: options.cwd, signal: options.signal })
     if (!ensured.ok) return ensured
     try {
-        await execTmux(['send-keys', '-t', sessionName, 'C-c'])
+        await execTmux(['send-keys', '-t', sessionName, 'C-c'], { signal: options.signal })
         return { ok: true, sessionName }
     } catch (err) {
         return { ok: false, sessionName, error: err.stderr || err.message || String(err) }
@@ -379,8 +395,8 @@ export async function clearShellSession(options = {}) {
     const ensured = await ensureShellSession({ sessionName, cwd: options.cwd })
     if (!ensured.ok) return ensured
     try {
-        await execTmux(['send-keys', '-t', sessionName, 'C-l'])
-        await execTmux(['clear-history', '-t', sessionName])
+        await execTmux(['send-keys', '-t', sessionName, 'C-l'], { signal: options.signal })
+        await execTmux(['clear-history', '-t', sessionName], { signal: options.signal })
         return { ok: true, sessionName }
     } catch (err) {
         return { ok: false, sessionName, error: err.stderr || err.message || String(err) }
@@ -389,11 +405,11 @@ export async function clearShellSession(options = {}) {
 
 export async function restartShellSession(options = {}) {
     const sessionName = normalizeShellSessionName(options.sessionName || Config.SHELL_SESSION_NAME)
-    const status = await hasShellSession(sessionName)
+    const status = await hasShellSession(sessionName, options.signal)
     if (!status.ok) return status
     try {
-        if (status.exists) await execTmux(['kill-session', '-t', sessionName])
-        return await ensureShellSession({ sessionName, cwd: options.cwd })
+        if (status.exists) await execTmux(['kill-session', '-t', sessionName], { signal: options.signal })
+        return await ensureShellSession({ sessionName, cwd: options.cwd, signal: options.signal })
     } catch (err) {
         return { ok: false, sessionName, error: err.stderr || err.message || String(err) }
     }
@@ -401,11 +417,11 @@ export async function restartShellSession(options = {}) {
 
 export async function closeShellSession(options = {}) {
     const sessionName = normalizeShellSessionName(options.sessionName || Config.SHELL_SESSION_NAME)
-    const status = await hasShellSession(sessionName)
+    const status = await hasShellSession(sessionName, options.signal)
     if (!status.ok) return status
     if (!status.exists) return { ok: true, sessionName, closed: false, message: 'Shell 会话不存在，无需关闭。' }
     try {
-        await execTmux(['kill-session', '-t', sessionName])
+        await execTmux(['kill-session', '-t', sessionName], { signal: options.signal })
         return { ok: true, sessionName, closed: true }
     } catch (err) {
         return { ok: false, sessionName, error: err.stderr || err.message || String(err) }
