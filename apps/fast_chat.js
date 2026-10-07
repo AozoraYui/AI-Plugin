@@ -25,6 +25,7 @@ import { verifyAgentRound } from '../utils/agent_verifier.js'
 import { selectWorkspaceSurveyFiles } from '../utils/workspace_survey.js'
 import { getPureImageReplyPolicy, resolveFastChatImageDelivery, resolveFastChatTrigger } from '../utils/fast_chat_trigger.js'
 import { extractMessageSendError, isContentModerationSendError, rewriteRejectedReply } from '../utils/message_delivery.js'
+import { sendTextInChunks } from '../utils/reply_delivery.js'
 
 const replyCooldown = new Map()
 const PERSONAL_MEMORY_MAX_CHARS = 2600
@@ -2143,14 +2144,23 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             replyText = '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。你可以再问一次，我会先真正调用工具并确认结果。'
             usedSafeFallbackReply = true
         }
-        let sendResult = await e.reply(replyText, true)
+        const sendFastReply = async text => {
+            const delivery = await sendTextInChunks({
+                text,
+                sendReply: (...args) => e.reply(...args),
+                maxChars: Config.CHECKPOINT_DISPLAY_MAX_LENGTH,
+                maxBytes: 3500
+            })
+            return delivery.error ? { status: 'failed', error: delivery.error } : delivery.result
+        }
+        let sendResult = await sendFastReply(replyText)
         let sendError = extractMessageSendError(sendResult)
         if (sendError) {
             logger.warn(`[AI-Plugin] [畅聊] 最终回复发送失败: ${sendError}`)
             if (isContentModerationSendError(sendError)) {
                 const rewritten = await rewriteRejectedReply(this.client, replyText, 'flash', 2048)
                 if (rewritten) {
-                    const retryResult = await e.reply(rewritten, true)
+                    const retryResult = await sendFastReply(rewritten)
                     const retryError = extractMessageSendError(retryResult)
                     if (!retryError) {
                         replyText = rewritten
@@ -2163,7 +2173,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                 if (sendError) {
                     replyText = '刚才生成的答复被消息发送过滤器拦截，自动改写后仍未能发送。可以换一种说法再问我。'
                     usedSafeFallbackReply = true
-                    sendResult = await e.reply(replyText, true)
+                    sendResult = await sendFastReply(replyText)
                     sendError = extractMessageSendError(sendResult)
                 }
             }

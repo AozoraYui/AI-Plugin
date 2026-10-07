@@ -34,6 +34,7 @@ import { summarizeShellResultForReply } from '../utils/shell_result_summary.js'
 import { selectWorkspaceSurveyFiles } from '../utils/workspace_survey.js'
 import { buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, hasExplicitWebUncertainty, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, normalizeWebUrlKey, updateWebEvidenceState } from '../utils/web_evidence.js'
 import { extractMessageSendError, isContentModerationSendError, rewriteRejectedReply } from '../utils/message_delivery.js'
+import { sendReplyWithForwardFallback } from '../utils/reply_delivery.js'
 import yaml from 'yaml'
 import { formatSkillGuidance, selectRelevantSkills } from '../utils/skill_runtime.js'
 
@@ -3874,7 +3875,7 @@ ${visualDescription}`
                     }
                 }
 
-                // 分段处理：如果回复内容过长，使用合并消息发送
+                // 长回复优先使用合并转发；适配器拒绝时自动降级为安全字节长度的普通分段消息
                 const MAX_LENGTH = Config.CHECKPOINT_DISPLAY_MAX_LENGTH
                 const footerSuffix = isSingleMode ? ' (单次对话)' : ''
                 const footerInfo = `耗时: ${elapsed}s${tokenInfo} @${result.platform}${footerSuffix}`
@@ -3882,63 +3883,28 @@ ${visualDescription}`
 
                 const sendFinalReply = async (responseText, responseReasoning = '') => {
                     throwIfExecutionCancelled()
-                    if (responseReasoning) {
-                        const forwardMsgNodes = []
-                        const pushChunks = (title, text, footer = '') => {
-                            let content = text || ''
-                            let part = 1
-                            while (content.length > 0) {
-                                let splitIndex = Math.min(MAX_LENGTH, content.length)
-                                if (content.length > MAX_LENGTH) {
-                                    const lastNewLine = content.lastIndexOf('\n', MAX_LENGTH)
-                                    if (lastNewLine > MAX_LENGTH * 0.8) splitIndex = lastNewLine + 1
-                                }
-                                const chunk = content.slice(0, splitIndex)
-                                content = content.slice(splitIndex)
-                                const suffix = content.length === 0 && footer ? `\n\n${footer}` : ''
-                                forwardMsgNodes.push({
-                                    user_id: Bot.uin,
-                                    nickname: `${Config.AI_NAME} ${title}${part > 1 ? ` ${part}` : ''}`,
-                                    message: `${chunk}${suffix}`
-                                })
-                                part++
-                            }
-                        }
-                        pushChunks('思考过程', `思考过程\n\n${responseReasoning}`)
-                        pushChunks('最终回复', `最终回复\n\n${responseText}`, footerInfo)
-                        throwIfExecutionCancelled()
-                        const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
-                        throwIfExecutionCancelled()
-                        return e.reply(forwardMsg)
-                    }
-                    if (responseText.length <= MAX_LENGTH) {
+                    if (!responseReasoning && responseText.length <= MAX_LENGTH) {
                         throwIfExecutionCancelled()
                         return e.reply(`${responseText}\n\n${footerInfo}`, true)
                     }
-                    const forwardMsgNodes = []
-                    let content = responseText
-                    let part = 1
-                    while (content.length > 0) {
-                        let splitIndex = MAX_LENGTH
-                        if (content.length > MAX_LENGTH) {
-                            const lastNewLine = content.lastIndexOf('\n', MAX_LENGTH)
-                            if (lastNewLine > MAX_LENGTH * 0.8) splitIndex = lastNewLine + 1
-                        }
-                        const chunk = content.slice(0, splitIndex)
-                        content = content.slice(splitIndex)
-                        forwardMsgNodes.push({
-                            user_id: Bot.uin,
-                            nickname: `${Config.AI_NAME} (Part ${part})`,
-                            message: content.length === 0 ? `${chunk}\n\n${footerInfo}` : chunk
-                        })
-                        part++
-                    }
-                    throwIfExecutionCancelled()
-                    const forwardMsg = await Bot.makeForwardMsg(forwardMsgNodes)
-                    throwIfExecutionCancelled()
-                    return e.reply(forwardMsg)
-                }
 
+                    const delivery = await sendReplyWithForwardFallback({
+                        responseText,
+                        responseReasoning,
+                        footerInfo,
+                        aiName: Config.AI_NAME,
+                        botUin: Bot.uin,
+                        makeForwardMsg: nodes => Bot.makeForwardMsg(nodes),
+                        sendReply: (...args) => e.reply(...args),
+                        logger,
+                        logPrefix: '[AI-Plugin]',
+                        maxChars: MAX_LENGTH,
+                        maxBytes: 3500,
+                        fallbackMaxChars: Math.min(MAX_LENGTH, 1800),
+                        fallbackMaxBytes: 3500
+                    })
+                    return delivery.error ? { status: 'failed', error: delivery.error } : delivery.result
+                }
                 throwIfExecutionCancelled()
                 let sendResult = await sendFinalReply(finalResponseText, reasoningText)
                 throwIfExecutionCancelled()

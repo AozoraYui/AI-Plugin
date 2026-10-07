@@ -6,8 +6,8 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "node scripts/image_eval.js && node scripts/model_config_eval.js && node scripts/resilience_eval.js && node scripts/agent_eval.js && node scripts/agent_replay_eval.js && node scripts/outbound_message_eval.js && node scripts/skill_eval.js && node scripts/tool_permission_eval.js && node scripts/group_request_eval.js && node scripts/group_member_eval.js && node scripts/workspace_search_eval.js",
-    "eval:agent": "node scripts/model_config_eval.js && node scripts/resilience_eval.js && node scripts/agent_eval.js && node scripts/agent_replay_eval.js && node scripts/outbound_message_eval.js && node scripts/skill_eval.js && node scripts/tool_permission_eval.js && node scripts/group_request_eval.js && node scripts/group_member_eval.js && node scripts/workspace_search_eval.js",
+    "test": "node scripts/image_eval.js && node scripts/model_config_eval.js && node scripts/resilience_eval.js && node scripts/agent_eval.js && node scripts/agent_replay_eval.js && node scripts/outbound_message_eval.js && node scripts/reply_delivery_eval.js && node scripts/skill_eval.js && node scripts/tool_permission_eval.js && node scripts/group_request_eval.js && node scripts/group_member_eval.js && node scripts/workspace_search_eval.js",
+    "eval:agent": "node scripts/model_config_eval.js && node scripts/resilience_eval.js && node scripts/agent_eval.js && node scripts/agent_replay_eval.js && node scripts/outbound_message_eval.js && node scripts/reply_delivery_eval.js && node scripts/skill_eval.js && node scripts/tool_permission_eval.js && node scripts/group_request_eval.js && node scripts/group_member_eval.js && node scripts/workspace_search_eval.js",
     "eval:agent:replay": "node scripts/agent_replay_eval.js",
     "update:qq-face-map": "node scripts/update_qq_face_map.js"
   },
