@@ -24,6 +24,7 @@ const {
     hasExplicitWebFetchIntent,
     hasExplicitUserProfileHistoryExtractionIntent,
     hasExplicitUserProfileUpdateIntent,
+    inferAutonomousUserProfileUpdate,
     hasGroupChatContextQuestion,
     hasStrongGroupChatContextQuestion,
     parseGroupLeaveRequest,
@@ -824,6 +825,15 @@ check('QQ来源查询解析用户号和模式', (() => {
     return parsed?.user_id === '3837933930' && parsed.mode === 'private_messages'
 })())
 check('没有QQ号的人物评价不触发来源意图', !hasExplicitQQUserLookupIntent('#c这个人怎么样'))
+check('生日自然告知命中自主档案同步', Boolean(inferAutonomousUserProfileUpdate('我把我的生日告诉你吧，是19991124哦')))
+check('偏好自然告知命中自主档案同步', Boolean(inferAutonomousUserProfileUpdate('我平时使用 Rust 和 Linux')))
+check('档案查询不会触发自主同步', !inferAutonomousUserProfileUpdate('我的个人档案有写我的生日吗？'))
+check('短期状态不会触发自主同步', !inferAutonomousUserProfileUpdate('我今天有点累'))
+check('近期偏好不会触发自主同步', !inferAutonomousUserProfileUpdate('我最近喜欢吃辣'))
+check('精确住址不会触发自主同步', !inferAutonomousUserProfileUpdate('我住在中山市东区某某路12号'))
+check('不确定表达不会触发自主同步', !inferAutonomousUserProfileUpdate('我可能以后想学 Rust'))
+check('他人生日不会触发自主同步', !inferAutonomousUserProfileUpdate('我告诉你他的生日，是19991124'))
+check('敏感字段不会触发自主同步', !inferAutonomousUserProfileUpdate('我的手机号是13800138000'))
 
 const naturalLanguageEnabledTools = [
     'weather', 'web_search', 'web_fetch', 'system_info', 'shell_exec', 'config_manage', 'shell_session',

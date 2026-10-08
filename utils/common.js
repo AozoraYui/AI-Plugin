@@ -52,6 +52,52 @@ export function createTimeoutSignal(timeoutMs, parentSignal) {
     return mergeAbortSignals(parentSignal, AbortSignal.timeout(timeout))
 }
 
+export function isAbortError(error, signal) {
+    if (signal?.aborted && signal.reason?.name !== 'TimeoutError') return true
+    return error?.code === 'AGENT_CANCELLED' || error?.name === 'AbortError'
+}
+
+export function throwIfAborted(signal) {
+    if (!signal?.aborted) return
+    const error = new Error('请求已取消')
+    error.code = 'AGENT_CANCELLED'
+    throw error
+}
+
+export async function readResponseBodyTextLimited(response, maxBytes = DEFAULT_MAX_RESPONSE_BYTES) {
+    const limit = Math.max(1024, Number(maxBytes) || DEFAULT_MAX_RESPONSE_BYTES)
+    const declaredLength = Number(response?.headers?.get?.('content-length'))
+    if (Number.isFinite(declaredLength) && declaredLength > limit) {
+        throw new Error(`响应体超过 ${limit} 字节上限`)
+    }
+
+    if (!response?.body?.getReader) {
+        const text = await response.text()
+        if (Buffer.byteLength(text, 'utf8') > limit) throw new Error(`响应体超过 ${limit} 字节上限`)
+        return text
+    }
+
+    const reader = response.body.getReader()
+    const chunks = []
+    let totalBytes = 0
+    try {
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            const chunk = Buffer.from(value)
+            totalBytes += chunk.length
+            if (totalBytes > limit) {
+                await reader.cancel().catch(() => {})
+                throw new Error(`响应体超过 ${limit} 字节上限`)
+            }
+            chunks.push(chunk)
+        }
+        return Buffer.concat(chunks).toString('utf8')
+    } finally {
+        reader.releaseLock?.()
+    }
+}
+
 export async function setMsgEmojiLike(e, emojiID) {
     if (e.isPrivate) return
     if (!e || !e.bot || !e.message_id || emojiID === undefined || emojiID === null) {
@@ -206,12 +252,13 @@ export async function resolveProxyUrl(options = {}) {
 export async function fetchWithProxy(url, options = {}) {
     const signal = options.signal
     const createAbortError = () => {
-        const error = new Error('请求已取消')
-        error.code = 'AGENT_CANCELLED'
+        const timedOut = signal?.reason?.name === 'TimeoutError'
+        const error = new Error(timedOut ? '请求超时' : '请求已取消')
+        error.code = timedOut ? 'ETIMEDOUT' : 'AGENT_CANCELLED'
         return error
     }
     if (signal?.aborted) throw createAbortError()
-    const proxyUrl = await resolveProxyUrl(options)
+    const proxyUrl = options.disableProxy === true ? '' : await resolveProxyUrl(options)
     if (signal?.aborted) throw createAbortError()
     const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : null
     const requestTimeout = options.timeout || 600000

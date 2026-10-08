@@ -11,10 +11,10 @@ import { buildGroupContextImageSummary, formatGroupContextImageSummary, isExpire
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memory_context.js'
-import { detectToolIntentFamilies, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
+import { detectToolIntentFamilies, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, hasExplicitUserProfileUpdateIntent, inferAutonomousUserProfileUpdate, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { relayImagesToVision } from '../tools/vision_relay.js'
-import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
+import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
 import { formatToolProtocol } from '../utils/tool_result.js'
 import { buildAgentRoundFingerprint, createAgentBudget, createAgentTelemetry, getAgentBudgetSnapshot, getAgentTelemetrySnapshot, isUnfulfilledImageSearch, resolveAgentRoundCompletion, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } from '../utils/agent_runtime.js'
 import { findPendingWorkspaceVerification, resolvePersistedAgentStatus } from '../utils/agent_completion.js'
@@ -1436,6 +1436,7 @@ export class FastChatHandler extends plugin {
         let toolContextText = ''
         let hasSuccessfulToolResult = false
         let hasVerifiedToolResult = false
+        let hasSuccessfulProfileUpdate = false
         let fastAgentTask = null
         const agentBudget = createAgentBudget({ maxToolCalls: Config.AGENT_MAX_TOOL_CALLS })
         const agentTelemetry = createAgentTelemetry()
@@ -1448,6 +1449,7 @@ export class FastChatHandler extends plugin {
         try {
             const enabledTools = await buildFastChatEnabledTools(e, this.client)
             const toolRoutingText = normalized.instructionText || ''
+            const autonomousProfile = inferAutonomousUserProfileUpdate(toolRoutingText)
             const candidateUrls = extractUrlsFromText(toolRoutingText, 10)
             if (normalized.normalizedText !== toolRoutingText) {
                 logger.debug(`[AI-Plugin] [畅聊][安全] 工具路由仅使用当前触发消息文本，完整上下文长度=${normalized.normalizedText.length}, 指令长度=${toolRoutingText.length}`)
@@ -1512,7 +1514,8 @@ export class FastChatHandler extends plugin {
                 }
             }
             const selectedToolSet = new Set([...candidateSelection.tools, ...recentAgentTaskToolCandidates])
-            const routeByKeyword = candidateSelection.tools.length > 0 || shouldRouteFastChatTools(toolRoutingText, candidateUrls)
+            if (autonomousProfile && enabledTools.includes('user_profile_update')) selectedToolSet.add('user_profile_update')
+            const routeByKeyword = candidateSelection.tools.length > 0 || shouldRouteFastChatTools(toolRoutingText, candidateUrls) || Boolean(autonomousProfile)
             const routeByMasterRequest = shouldLetFastChatToolModelJudge(toolRoutingText, e.isMaster)
             const routeByRecentTask = recentAgentTaskToolCandidates.length > 0
             const planningEnabledTools = selectedToolSet.size > 0
@@ -1571,6 +1574,9 @@ export class FastChatHandler extends plugin {
                 } else if (allowSingleToolPreRoute && memorySearchArgs) {
                     toolCalls = [{ name: 'memory_search', args: memorySearchArgs }]
                     logger.info('[AI-Plugin] [畅聊] 规则预路由命中: memory_search - 用户明确要求检索本地语义记忆')
+                } else if (allowSingleToolPreRoute && autonomousProfile) {
+                    toolCalls = [{ name: 'user_profile_update', args: { mode: 'source_text', source_text: autonomousProfile.sourceText } }]
+                    logger.info(`[AI-Plugin] [畅聊] 规则预路由命中: user_profile_update - ${autonomousProfile.reason}`)
                 } else {
                     const toolAnalysisText = recentAgentTaskPlanningContext
                         ? `${toolRoutingText}\n\n${recentAgentTaskPlanningContext}`
@@ -1599,7 +1605,8 @@ export class FastChatHandler extends plugin {
                             allowContinuation: recentAgentTaskPlanningContext.length > 0,
                             allowTaskContextContinuation: recentAgentTaskPlanningContext.length > 0,
                             continuationTools: FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS,
-                            allowModelPlannedLowRisk: true
+                            allowModelPlannedLowRisk: true,
+                            allowAutonomousProfileSync: Boolean(autonomousProfile)
                         }
                     )
                 }
@@ -1677,6 +1684,9 @@ export class FastChatHandler extends plugin {
                         seenToolCalls.add(execution.key)
                         if (result.success && protocol.ok && !execution.pending) hasSuccessfulToolResult = true
                         if (result.success && protocol.ok && protocol.verified && !execution.pending) hasVerifiedToolResult = true
+                        if (call.name === 'user_profile_update' && result.success && protocol.ok && !execution.pending && result.data?.ok === true) {
+                            hasSuccessfulProfileUpdate = true
+                        }
                         if (result.success && isUnfulfilledImageSearch(call, result.data)) {
                             failedImageSearchAttempts++
                         } else if (result.success && call.name === 'web_search' && Number(result.data?.requestedImages || 0) > 0 && result.data?.sentImages?.length > 0) {
@@ -2144,7 +2154,11 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             hasTaskCompletionEvidence,
             hasVisualEvidence
         })
-        if (!replyText || isPlanOnlyResponse(replyText) || unsupportedToolClaim) {
+        let unsupportedProfileClaim = hasUnsupportedUserProfileClaim(replyText, {
+            hasSuccessfulProfileUpdate,
+            shouldAuditProfileUpdate: hasExplicitUserProfileUpdateIntent(toolRoutingText) || Boolean(autonomousProfile)
+        })
+        if (!replyText || isPlanOnlyResponse(replyText) || unsupportedToolClaim || unsupportedProfileClaim) {
             logger.warn(`[AI-Plugin] [畅聊] 最终回复缺少可验证依据，触发一次纠正重试: ${String(result.data).slice(0, 180)}`)
             const retryPayload = {
                 contents: [
@@ -2156,7 +2170,8 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                                 hasActualToolResults: hasSuccessfulToolResult,
                                 hasTaskCompletionEvidence,
                                 hasVisualEvidence,
-                                unsupportedToolClaim
+                                unsupportedToolClaim,
+                                unsupportedProfileClaim
                             })
                         }]
                     }
@@ -2171,9 +2186,13 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                     hasTaskCompletionEvidence,
                     hasVisualEvidence
                 })
+                unsupportedProfileClaim = hasUnsupportedUserProfileClaim(replyText, {
+                    hasSuccessfulProfileUpdate,
+                    shouldAuditProfileUpdate: hasExplicitUserProfileUpdateIntent(toolRoutingText) || Boolean(autonomousProfile)
+                })
             }
         }
-        if (!replyText || isPlanOnlyResponse(replyText) || unsupportedToolClaim) {
+        if (!replyText || isPlanOnlyResponse(replyText) || unsupportedToolClaim || unsupportedProfileClaim) {
             logger.warn('[AI-Plugin] [畅聊] 最终回复纠正失败，使用安全提示替代无依据的完成声明')
             replyText = '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。你可以再问一次，我会先真正调用工具并确认结果。'
             usedSafeFallbackReply = true

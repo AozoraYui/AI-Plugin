@@ -646,6 +646,38 @@ export function hasExplicitUserProfileUpdateIntent(text) {
         || new RegExp(`${memoryAction}.{0,100}${personalSignal}|${personalSignal}.{0,100}${memoryAction}`, 'i').test(value)
 }
 
+export function inferAutonomousUserProfileUpdate(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value || value.length > 800) return null
+    if (hasExplicitUserProfileUpdateIntent(value)) return null
+    if (/(?:@|\[CQ:at|引用|转发|他人|别人|某人|这个人|那个人)/i.test(value)) return null
+    if (/(?:能不能|可以吗|能否|是否|有没有|怎么|如何|为什么|要不要|请问|知道吗|忘了|不记得|测试|示例|比如|假如|如果)/i.test(value)) return null
+    if (/(?:可能|大概|也许|应该|好像|似乎|不确定|不太确定|暂时|考虑一下|想要|准备|打算|希望以后)/i.test(value)) return null
+    if (/(?:今天|刚刚|最近|这几天|这段时间|现在|此刻|暂时|这次|这回|一会儿|刚才)/i.test(value)) return null
+
+    const sensitive = /(?:身份证|证件号|手机号|手机号码|电话号码|微信号|邮箱|密码|口令|token|密钥|银行卡|卡号|详细地址|家庭住址|门牌|病历|病史|诊断|用药|收入|工资|债务|政治立场|宗教信仰|性取向)/i
+    if (sensitive.test(value)) return null
+    if (/(?:住在|居住在|地址是).{0,40}(?:区|县|街道|路|号|栋|单元|室)/i.test(value)) return null
+
+    const dateValue = '(?:19|20)\\d{2}(?:年?\\d{1,2}月?\\d{1,2}日?|[./-]\\d{1,2}[./-]\\d{1,2}|\\d{4}\\d{2}\\d{2})'
+    const stablePatterns = [
+        new RegExp(`(?:我(?:把)?我的|我的|本人(?:的)?)\\s*(?:生日|出生日期|出生年月日).{0,32}(?:是|为|叫|：|:)?\\s*${dateValue}`, 'i'),
+        new RegExp(`(?:我|本人).{0,12}(?:出生于|生日是|出生日期是)\\s*${dateValue}`, 'i'),
+        /(?:^|[，,。；;\s])我(?:叫|名叫|的名字是|昵称是)\s*[^?？\n]{1,80}/i,
+        /(?:^|[，,。；;\s])我(?:喜欢|不喜欢|偏好|习惯|常用|使用|用的是|来自|住在|居住在|从事|职业是|项目是)\s*[^?？\n]{1,120}/i,
+        /(?:^|[，,。；;\s])我(?:平时|一直|通常|主要)\s*(?:喜欢|不喜欢|用|使用|习惯|常用)\s*[^?？\n]{1,120}/i,
+        /(?:^|[，,。；;\s])我把我的(?:生日|出生日期|名字|昵称|偏好|习惯)告诉你.{0,80}/i
+    ]
+    const matched = stablePatterns.some(pattern => pattern.test(value))
+    if (!matched) return null
+
+    return {
+        sourceText: value,
+        confidence: 'high',
+        reason: '检测到当前用户以第一人称明确提供长期稳定个人信息，且未命中敏感字段或不确定表达。'
+    }
+}
+
 export function hasExplicitUserProfileHistoryExtractionIntent(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value) return false
@@ -1121,6 +1153,7 @@ export function isExplicitToolIntent(toolName, text, options = {}) {
             return hasExplicitQQUserLookupIntent(text)
         case 'user_profile_update':
             return hasExplicitUserProfileUpdateIntent(text)
+                || (options.allowAutonomousProfileSync === true && Boolean(inferAutonomousUserProfileUpdate(text)))
         case 'group_mute':
         case 'group_whole_mute':
         case 'group_kick':

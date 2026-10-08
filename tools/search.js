@@ -9,7 +9,7 @@ import { setDefaultResultOrder } from 'node:dns'
 import net from 'node:net'
 import sharp from 'sharp'
 import { hasExplicitImageSearchIntent } from '../utils/tool_intent.js'
-import { assertPublicUrl, createTimeoutSignal, fetchWithProxy } from '../utils/common.js'
+import { assertPublicUrl, createTimeoutSignal, fetchWithProxy, isAbortError, readResponseBodyTextLimited } from '../utils/common.js'
 import { assessSearchResults, classifyWebUrl, getOfficialSearchDomains, normalizeWebUrlKey, scoreWebSourceCandidate } from '../utils/web_evidence.js'
 
 const SEARCH_TIMEOUT_MS = 15000
@@ -279,9 +279,12 @@ async function fetchSearchHtml(url, engineName, signal) {
             lastError = new Error(`${engineName} 响应体超过 ${MAX_PREVIEW_PAGE_BYTES} 字节上限`)
             continue
         }
-        const html = await res.text()
-        if (Buffer.byteLength(html, 'utf8') > MAX_PREVIEW_PAGE_BYTES) {
-            lastError = new Error(`${engineName} 响应体超过 ${MAX_PREVIEW_PAGE_BYTES} 字节上限`)
+        let html
+        try {
+            html = await readResponseBodyTextLimited(res, MAX_PREVIEW_PAGE_BYTES)
+        } catch (err) {
+            if (isAbortError(err, signal)) throw err
+            lastError = err
             continue
         }
         logger.info(`[AI-Plugin] ${engineName} 返回HTML长度: ${html.length}`)

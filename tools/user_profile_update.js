@@ -156,13 +156,13 @@ function buildSourceText({ sourceText, historyText, currentGroupSelfLogText, all
 export const userProfileUpdateTool = {
     name: 'user_profile_update',
     permission: 'everyone',
-    description: '在用户明确要求时，提炼当前补充或最近历史上下文中的长期稳定信息，并合并写入该用户的个人档案 user_profiles。默认只能更新触发者自己的档案；主人可指定 user_id。适合“记到我的个人档案”“从刚才聊天提炼我的档案”“更新我的用户画像”。',
+    description: '在用户明确要求时，或检测到高置信度的本人长期稳定信息时，提炼当前补充或最近历史上下文并合并写入该用户的个人档案 user_profiles。默认只能更新触发者自己的档案；主人可指定 user_id。适合“记到我的个人档案”“从刚才聊天提炼我的档案”“我把我的生日告诉你”。',
 
     functionSchema: {
         type: 'function',
         function: {
             name: 'user_profile_update',
-            description: '按用户明确指令维护个人档案。只记录长期稳定信息，不记录一次性任务、临时命令、短期情绪或群内未经确认的玩笑。',
+            description: '按用户明确指令或高置信度自主同步候选维护个人档案。只记录当前用户本人明确提供的长期稳定信息，不记录一次性任务、临时命令、短期情绪、敏感字段或群内未经确认的玩笑。',
             parameters: {
                 type: 'object',
                 properties: {

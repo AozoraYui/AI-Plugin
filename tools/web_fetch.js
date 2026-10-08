@@ -5,7 +5,7 @@
 
 import { toolRegistry } from './registry.js'
 import { assessFetchedContent, classifyWebUrl } from '../utils/web_evidence.js'
-import { assertPublicUrl, createTimeoutSignal, fetchWithProxy } from '../utils/common.js'
+import { assertPublicUrl, createTimeoutSignal, fetchWithProxy, getProxyCandidates, isAbortError, resolveProxyUrl, throwIfAborted } from '../utils/common.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -17,7 +17,12 @@ const READER_TIMEOUT_MS = 20000
 const READER_FAILURE_COOLDOWN_MS = 5 * 60 * 1000
 const MAX_CLIENT_REDIRECTS = 3
 const MAX_RESPONSE_SIZE = 10 * 1024 * 1024 // 10MB
+const HTTP_PROFILE_RETRY_DELAY_MS = 650
+const DIRECT_FALLBACK_STATUSES = new Set([407, 502, 504])
+const READER_FIRST_STATUSES = new Set([429, 500, 502, 503, 504])
 const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+const COMPATIBLE_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+const MOBILE_USER_AGENT = 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36'
 const DEFAULT_HEADERS = {
     'User-Agent': BROWSER_USER_AGENT,
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -33,7 +38,7 @@ const DEFAULT_HEADERS = {
 }
 
 let yunzaiPuppeteerRenderer = null
-let yunzaiPuppeteerUnavailable = false
+let yunzaiPuppeteerUnavailableUntil = 0
 let directBrowserPromise = null
 let readerUnavailableUntil = 0
 
@@ -163,6 +168,7 @@ function formatSparkReport(data, originalUrl, rawUrl, maxChars) {
 
 async function fetchSparkReport(spark, originalUrl, maxChars = DEFAULT_MAX_CHARS, signal) {
     try {
+        throwIfAborted(signal)
         const res = await fetchPublicHttp(spark.rawUrl, {
             method: 'GET',
             headers: {
@@ -187,6 +193,7 @@ async function fetchSparkReport(spark, originalUrl, maxChars = DEFAULT_MAX_CHARS
         logger.info(`[AI-Plugin] WebFetch 成功(spark raw): ${originalUrl} (${text.length} 字符)`)
         return formatSparkReport(data, originalUrl, spark.rawUrl, maxChars)
     } catch (err) {
+        if (isAbortError(err, signal)) throw err
         logger.warn(`[AI-Plugin] WebFetch spark raw 请求失败: ${spark.rawUrl} - ${err.message}`)
         return `\n\n【网页抓取失败】spark raw 接口请求出错: ${err.message}\n`
     }
@@ -198,7 +205,42 @@ function truncateContent(text, maxChars, suffix = '\n...(已截断)') {
 }
 
 function isBrowserFallbackStatus(status) {
-    return [403, 406, 418, 503].includes(Number(status))
+    return [403, 406, 418, 429, 500, 502, 503, 504].includes(Number(status))
+}
+
+function isReaderFallbackStatus(status) {
+    return READER_FIRST_STATUSES.has(Number(status))
+}
+
+function getRetryAfterMs(response, maxMs = 5000) {
+    const value = response?.headers?.get?.('retry-after')
+    if (!value) return 0
+    const seconds = Number(value)
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, maxMs)
+    const date = Date.parse(value)
+    if (!Number.isFinite(date)) return 0
+    return Math.max(0, Math.min(date - Date.now(), maxMs))
+}
+
+async function waitForRetry(ms, signal) {
+    throwIfAborted(signal)
+    if (!ms) return
+    await new Promise((resolve, reject) => {
+        const onAbort = () => { clearTimeout(timer); reject(signal.reason || new Error('请求已取消')) }
+        const timer = setTimeout(() => {
+            signal?.removeEventListener('abort', onAbort)
+            resolve()
+        }, ms)
+        signal?.addEventListener('abort', onAbort, { once: true })
+    })
+    throwIfAborted(signal)
+}
+
+function isRetryableTransportError(error) {
+    const message = String(error?.message || '').toLowerCase()
+    return !isAbortError(error) && (
+        ['econnreset', 'econnrefused', 'eai_again', 'enotfound', 'etimedout', 'socket hang up', 'fetch failed', '请求超时'].some(pattern => message.includes(pattern))
+    )
 }
 
 function isLikelyBotWall(text = '', html = '') {
@@ -252,6 +294,30 @@ function buildHttpHeaders(rawUrl) {
     return headers
 }
 
+function buildHttpRequestProfiles(rawUrl) {
+    const desktop = buildHttpHeaders(rawUrl)
+    const compatible = {
+        ...desktop,
+        'User-Agent': COMPATIBLE_USER_AGENT,
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    }
+    delete compatible['Sec-Fetch-Dest']
+    delete compatible['Sec-Fetch-Mode']
+    delete compatible['Sec-Fetch-Site']
+    delete compatible['Sec-Fetch-User']
+
+    const mobile = {
+        ...compatible,
+        'User-Agent': MOBILE_USER_AGENT,
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    }
+    return [
+        { name: 'desktop', headers: desktop },
+        { name: 'compatible', headers: compatible },
+        { name: 'mobile', headers: mobile },
+    ]
+}
+
 function isPrivateOrLocalHostname(hostname = '') {
     const host = String(hostname || '').trim().toLowerCase()
     if (!host) return true
@@ -279,14 +345,17 @@ function isPrivateOrLocalHostname(hostname = '') {
 
 async function fetchPublicHttp(url, options = {}, maxRedirects = MAX_CLIENT_REDIRECTS) {
     let currentUrl = String(url || '').trim()
+    let headers = { ...options.headers }
     for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount++) {
         await assertPublicUrl(currentUrl)
         const rawResponse = await fetchWithProxy(currentUrl, {
             ...options,
+            headers,
             redirect: 'manual',
             timeout: options.timeout || REQUEST_TIMEOUT_MS,
             maxRedirects: 0,
-            maxResponseBytes: MAX_RESPONSE_SIZE
+            maxResponseBytes: MAX_RESPONSE_SIZE,
+            autoDetectProxy: options.autoDetectProxy !== false,
         })
         const response = {
             ...rawResponse,
@@ -298,9 +367,83 @@ async function fetchPublicHttp(url, options = {}, maxRedirects = MAX_CLIENT_REDI
         const location = response.headers.get('location')
         if (!location || response.status < 300 || response.status >= 400) return response
         if (redirectCount >= maxRedirects) throw new Error(`网页重定向超过 ${maxRedirects} 次`)
-        currentUrl = new URL(location, currentUrl).toString()
+        const nextUrl = new URL(location, currentUrl)
+        await assertPublicUrl(nextUrl.toString())
+        if (nextUrl.origin !== new URL(currentUrl).origin) {
+            headers = Object.fromEntries(Object.entries(headers).filter(([name]) =>
+                !/^(authorization|proxy-authorization|cookie|referer)$/i.test(name)
+            ))
+        }
+        currentUrl = nextUrl.toString()
     }
     throw new Error('网页重定向失败')
+}
+
+export async function fetchHttpWithRecovery(url, options = {}, request = fetchPublicHttp) {
+    const profiles = options.profiles || buildHttpRequestProfiles(url)
+    const signal = options.signal
+    let lastError
+    let lastResponse
+    let lastProfile = 'unknown'
+    let attempts = 0
+
+    for (let index = 0; index < profiles.length; index++) {
+        throwIfAborted(signal)
+        const profile = profiles[index]
+        try {
+            attempts++
+            const response = await request(url, {
+                ...options,
+                headers: profile.headers,
+            })
+            lastResponse = response
+            lastProfile = profile.name
+            lastError = null
+            const status = Number(response.status)
+            const shouldTryAnotherProfile = isBrowserFallbackStatus(status) && status !== 429 && index < profiles.length - 1
+            if (!shouldTryAnotherProfile) {
+                break
+            }
+            const waitMs = getRetryAfterMs(response, 2500) || HTTP_PROFILE_RETRY_DELAY_MS
+            logger.info(`[AI-Plugin] WebFetch HTTP ${status}，切换请求画像 ${profiles[index + 1].name}，${waitMs}ms 后重试`)
+            await waitForRetry(waitMs, signal)
+        } catch (err) {
+            if (isAbortError(err, signal)) throw err
+            lastError = err
+            const canTryNextProfile = isRetryableTransportError(err) && index < profiles.length - 1
+            if (!canTryNextProfile) break
+            logger.warn(`[AI-Plugin] WebFetch HTTP 请求画像 ${profile.name} 失败，准备切换画像: ${err.message}`)
+            await waitForRetry(HTTP_PROFILE_RETRY_DELAY_MS, signal)
+        }
+    }
+
+    // 本地 Mihomo/Clash 端口可能仍在监听但上游暂时不可用；保留一次安全直连兜底。
+    const autoProxyOnly = getProxyCandidates({ ...options, autoDetectProxy: false }).length === 0
+    const shouldTryDirect = options.allowDirectFallback !== false && autoProxyOnly
+        && (Boolean(lastError) || DIRECT_FALLBACK_STATUSES.has(Number(lastResponse?.status)))
+        && Boolean(await resolveProxyUrl({ ...options, autoDetectProxy: true }))
+    if (shouldTryDirect) {
+        throwIfAborted(signal)
+        try {
+            const profile = profiles[0]
+            const response = await request(url, {
+                ...options,
+                headers: profile.headers,
+                disableProxy: true,
+                autoDetectProxy: false,
+            })
+            logger.info(`[AI-Plugin] WebFetch 代理路径异常，直连兜底完成: ${url} (HTTP ${response.status})`)
+            return { response, profile: `${profile.name}+direct`, attempts: attempts + 1 }
+        } catch (directError) {
+            if (isAbortError(directError, signal)) throw directError
+            if (lastError) {
+                lastError = new Error(`代理路径失败: ${lastError.message}；直连兜底失败: ${directError.message}`)
+            }
+        }
+    }
+
+    if (lastResponse) return { response: lastResponse, profile: lastProfile, attempts }
+    throw lastError || new Error('网页请求失败')
 }
 
 async function readResponseTextLimited(response, maxBytes = MAX_RESPONSE_SIZE) {
@@ -319,6 +462,8 @@ function canUseReaderFallback(rawUrl) {
         if (!/^https?:$/i.test(u.protocol)) return false
         if (isPrivateOrLocalHostname(u.hostname)) return false
         if (u.hostname === 'r.jina.ai' || u.hostname.endsWith('.jina.ai')) return false
+        const sensitiveKeys = /(token|access[_-]?token|api[_-]?key|secret|password|passwd|sig(?:nature)?|authorization|credential)/i
+        if ([...u.searchParams.keys()].some(key => sensitiveKeys.test(key))) return false
         return true
     } catch {
         return false
@@ -376,7 +521,10 @@ async function fetchWebPageWithReader(url, maxChars = DEFAULT_MAX_CHARS, reason 
             content: `\n\n【网页内容「${url}」(Reader 文本降级, ${originalLen} 字符)：】\n${text}\n【网页内容结束】\n`
         }
     } catch (err) {
-        readerUnavailableUntil = Date.now() + READER_FAILURE_COOLDOWN_MS
+        if (isAbortError(err, signal)) throw err
+        if (isRetryableTransportError(err)) {
+            readerUnavailableUntil = Date.now() + READER_FAILURE_COOLDOWN_MS
+        }
         logger.warn(`[AI-Plugin] WebFetch Reader 降级失败: ${url} - ${err.message}`)
         return { ok: false, error: err.message }
     }
@@ -395,6 +543,19 @@ async function tryBrowserThenReader(url, maxChars, reason, signal) {
     }
 }
 
+async function tryReaderThenBrowser(url, maxChars, reason, signal) {
+    const readerResult = await fetchWebPageWithReader(url, maxChars, reason, signal)
+    if (readerResult.ok) return readerResult
+
+    const browserResult = await fetchWebPageWithBrowser(url, maxChars, `${reason}；Reader 文本降级失败: ${readerResult.error}`, signal)
+    if (browserResult.ok) return browserResult
+
+    return {
+        ok: false,
+        error: `Reader 文本降级失败：${readerResult.error}；浏览器降级失败：${browserResult.error}`
+    }
+}
+
 function getYunzaiPuppeteerPath() {
     const candidates = [
         path.join(process.cwd(), 'renderers/puppeteer/lib/puppeteer.js'),
@@ -405,7 +566,7 @@ function getYunzaiPuppeteerPath() {
 }
 
 async function createBrowserPage() {
-    if (!yunzaiPuppeteerUnavailable) {
+    if (Date.now() >= yunzaiPuppeteerUnavailableUntil) {
         try {
             const rendererPath = getYunzaiPuppeteerPath()
             if (rendererPath) {
@@ -421,10 +582,10 @@ async function createBrowserPage() {
                     }
                 }
             } else {
-                yunzaiPuppeteerUnavailable = true
+                yunzaiPuppeteerUnavailableUntil = Date.now() + 60_000
             }
         } catch (err) {
-            yunzaiPuppeteerUnavailable = true
+            yunzaiPuppeteerUnavailableUntil = Date.now() + 60_000
             logger.warn(`[AI-Plugin] WebFetch 浏览器降级: 云崽 puppeteer 不可用 - ${err.message}`)
         }
     }
@@ -453,6 +614,7 @@ async function createBrowserPage() {
 }
 
 async function fetchWebPageWithBrowser(url, maxChars = DEFAULT_MAX_CHARS, reason = 'HTTP 抓取失败', signal) {
+    throwIfAborted(signal)
     const browserPage = await createBrowserPage()
     if (!browserPage?.page) {
         return {
@@ -472,19 +634,22 @@ async function fetchWebPageWithBrowser(url, maxChars = DEFAULT_MAX_CHARS, reason
                 'Pragma': 'no-cache',
             })
         }
-        if (page.setRequestInterception) {
-            try {
-                await page.setRequestInterception(true)
-                page.on('request', req => {
-                    const type = typeof req.resourceType === 'function' ? req.resourceType() : ''
-                    if (['image', 'media', 'font'].includes(type)) {
-                        return void Promise.resolve(req.abort()).catch(() => {})
-                    }
-                    return void Promise.resolve(req.continue()).catch(() => {})
-                })
-            } catch (err) {
-                logger.warn(`[AI-Plugin] WebFetch 浏览器降级: 请求拦截不可用 - ${err.message}`)
-            }
+        if (!page.setRequestInterception) {
+            return { ok: false, error: '浏览器无法校验子请求地址，已停止渲染降级' }
+        }
+        try {
+            await page.setRequestInterception(true)
+            page.on('request', request => {
+                const type = typeof request.resourceType === 'function' ? request.resourceType() : ''
+                if (['image', 'media', 'font'].includes(type)) {
+                    return void Promise.resolve(request.abort()).catch(() => {})
+                }
+                void assertPublicUrl(request.url())
+                    .then(() => request.continue())
+                    .catch(() => request.abort().catch(() => {}))
+            })
+        } catch (err) {
+            return { ok: false, error: `浏览器无法校验子请求地址：${err.message}` }
         }
         if (page.setViewport) await page.setViewport({ width: 1365, height: 900, deviceScaleFactor: 1 })
         if (page.setDefaultNavigationTimeout) page.setDefaultNavigationTimeout(BROWSER_TIMEOUT_MS)
@@ -494,6 +659,7 @@ async function fetchWebPageWithBrowser(url, maxChars = DEFAULT_MAX_CHARS, reason
             waitUntil: 'domcontentloaded',
             timeout: BROWSER_TIMEOUT_MS,
         })
+        throwIfAborted(signal)
 
         try {
             if (page.waitForNetworkIdle) {
@@ -528,6 +694,7 @@ async function fetchWebPageWithBrowser(url, maxChars = DEFAULT_MAX_CHARS, reason
             // 某些页面禁止 evaluate/滚动，忽略即可
         }
 
+        throwIfAborted(signal)
         const data = await page.evaluate(() => {
             const clean = () => {
                 for (const selector of ['script', 'style', 'noscript', 'iframe', 'svg', 'canvas', 'nav', 'footer', 'header', 'aside', 'form']) {
@@ -568,6 +735,7 @@ async function fetchWebPageWithBrowser(url, maxChars = DEFAULT_MAX_CHARS, reason
             content: `\n\n【网页内容「${url}」(浏览器渲染, ${status}, ${originalLen} 字符)：】\n${titleLine}${finalUrlLine}${finalText}\n【网页内容结束】\n`
         }
     } catch (err) {
+        if (isAbortError(err, signal)) throw err
         logger.warn(`[AI-Plugin] WebFetch 浏览器降级失败: ${url} - ${err.message}`)
         return {
             ok: false,
@@ -615,6 +783,7 @@ async function resolveBiliShortLink(rawUrl, signal) {
             return finalUrl
         }
     } catch (err) {
+        if (isAbortError(err, signal)) throw err
         logger.warn(`[AI-Plugin] B站短链还原失败: ${rawUrl} - ${err.message}`)
         return rawUrl
     }
@@ -733,6 +902,7 @@ async function fetchGitHubApi(gh, originalUrl, maxChars, signal) {
                     signal: createTimeoutSignal(REQUEST_TIMEOUT_MS, signal),
                 })
             } catch (err) {
+                if (isAbortError(err, signal)) throw err
                 logger.warn(`[AI-Plugin] WebFetch GitHub API 请求失败: ${url} - ${err.message}`)
                 return { error: `\n\n【网页抓取失败】GitHub 请求出错: ${err.message}\n` }
             }
@@ -766,6 +936,7 @@ async function fetchGitHubApi(gh, originalUrl, maxChars, signal) {
             try {
                 body = await readResponseTextLimited(res)
             } catch (err) {
+                if (isAbortError(err, signal)) throw err
                 return { error: `\n\n【网页抓取失败】读取 GitHub 响应出错: ${err.message}\n` }
             }
             return { body, res }
@@ -913,6 +1084,7 @@ function extractSameOriginClientRedirect(html, baseUrl) {
  */
 async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
     const signal = options.signal
+    throwIfAborted(signal)
     if (!url || typeof url !== 'string' || !url.trim()) {
         return '\n\n【网页抓取失败】未指定 URL。\n'
     }
@@ -961,12 +1133,14 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
 
     let res
     try {
-        res = await fetchPublicHttp(resolvedUrl, {
+        const fetched = await fetchHttpWithRecovery(resolvedUrl, {
             method: 'GET',
-            headers: buildHttpHeaders(resolvedUrl),
             signal: createTimeoutSignal(REQUEST_TIMEOUT_MS, signal)
         })
+        res = fetched.response
+        logger.info(`[AI-Plugin] WebFetch HTTP 请求完成: profile=${fetched.profile}, attempts=${fetched.attempts}, status=${res.status}`)
     } catch (err) {
+        if (isAbortError(err, signal)) throw err
         logger.warn(`[AI-Plugin] WebFetch 请求失败: ${targetUrl} - ${err.message}`)
         const fallbackResult = await tryBrowserThenReader(resolvedUrl, maxChars, `HTTP 请求异常: ${err.message}`, signal)
         if (fallbackResult.ok) return fallbackResult.content
@@ -975,11 +1149,10 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
 
     if (!res.ok) {
         logger.warn(`[AI-Plugin] WebFetch 返回非200: ${targetUrl} - ${res.status}`)
-        if (res.status === 429) {
-            return `\n\n【网页抓取失败】HTTP 429：目标站点请求过于频繁（触发了频率限制）。请稍后再试，通常几分钟后即可恢复。\n`
-        }
         if (isBrowserFallbackStatus(res.status)) {
-            const fallbackResult = await tryBrowserThenReader(resolvedUrl, maxChars, `HTTP ${res.status}`, signal)
+            const fallbackResult = isReaderFallbackStatus(res.status)
+                ? await tryReaderThenBrowser(resolvedUrl, maxChars, `HTTP ${res.status}`, signal)
+                : await tryBrowserThenReader(resolvedUrl, maxChars, `HTTP ${res.status}`, signal)
             if (fallbackResult.ok) return fallbackResult.content
             return `\n\n【网页抓取失败】HTTP ${res.status}，并且降级抓取也失败：${fallbackResult.error}。\n`
         }
@@ -1006,7 +1179,8 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
                 const truncated = truncateContent(json, maxChars)
                 logger.info(`[AI-Plugin] WebFetch 成功(JSON): ${targetUrl} -> ${finalUrl} (${truncated.length} 字符)`)
                 return `\n\n【网页内容「${targetUrl}」(JSON, ${json.length} 字符)】${redirectNote}\n${truncated}\n`
-            } catch {
+            } catch (err) {
+                if (isAbortError(err, signal)) throw err
                 return `\n\n【网页抓取失败】无法解析 JSON 响应\n`
             }
         }
@@ -1018,6 +1192,7 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
     try {
         html = await readResponseTextLimited(res)
     } catch (err) {
+        if (isAbortError(err, signal)) throw err
         logger.warn(`[AI-Plugin] WebFetch 读取响应失败: ${targetUrl} - ${err.message}`)
         const fallbackResult = await tryBrowserThenReader(resolvedUrl, maxChars, `读取 HTTP 响应失败: ${err.message}`, signal)
         if (fallbackResult.ok) return fallbackResult.content
@@ -1056,6 +1231,9 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
         }
         if (emptyText) {
             return `\n\n【网页抓取失败】页面没有提取到可读正文，降级抓取也失败：${fallbackResult.error}。\n`
+        }
+        if (likelyShellHtml) {
+            return `\n\n【网页抓取失败】页面疑似只返回前端应用壳，浏览器/Reader 降级也未提取到正文：${fallbackResult.error}。\n`
         }
         logger.warn(`[AI-Plugin] WebFetch 降级未成功，继续使用 HTTP 提取文本: ${fallbackResult.error}`)
     }

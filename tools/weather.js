@@ -4,7 +4,7 @@
  */
 
 import { toolRegistry } from './registry.js'
-import { createTimeoutSignal, fetchWithProxy } from '../utils/common.js'
+import { createTimeoutSignal, fetchWithProxy, isAbortError } from '../utils/common.js'
 
 /**
  * 判断是否为英文/国际城市名称。
@@ -50,12 +50,16 @@ async function queryOpenWeatherMap(city, apiKey, signal) {
                     text += `   ${dt} | ${item.weather[0].description} | ${Math.round(item.main.temp)}℃\n`
                 }
             }
-        } catch (_) { /* 预报接口失败不影响当前天气 */ }
+        } catch (err) {
+            if (isAbortError(err, signal)) throw err
+            logger.warn(`[AI-Plugin] OpenWeatherMap 预报查询失败，保留当前天气: ${err.message}`)
+        }
 
         text += `\n【天气数据结束】\n`
         return text
 
     } catch (err) {
+        if (isAbortError(err, signal)) throw err
         return `\n\n【OpenWeatherMap 查询失败】网络异常：${err.message}\n`
     }
 }
@@ -167,6 +171,7 @@ async function queryWeather(city, amapKey, owmKey = null, signal) {
 
             logger.warn(`[AI-Plugin] 天气查询 高德base也失败: ${baseData.info}`)
         } catch (err) {
+            if (isAbortError(err, signal)) throw err
             logger.warn(`[AI-Plugin] 天气查询 高德异常: ${err.message}`)
         }
     }

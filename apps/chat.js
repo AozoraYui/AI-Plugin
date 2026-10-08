@@ -14,12 +14,12 @@ import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, compactConversationHistory, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldLoadPrivateMemoryContext, shouldPrioritizeCurrentMultimodalTurn } from '../utils/message_context.js'
 import { collectQQFaceImageUrls, describeQQFaceSegment, formatQQFaceSegments } from '../utils/qq_face.js'
-import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitHumanizeIntent, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parsePluginUpdateRequest, parseQQUserLookupRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
+import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitHumanizeIntent, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, inferAutonomousUserProfileUpdate, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parsePluginUpdateRequest, parseQQUserLookupRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { claimPendingAction, clearPendingAction, loadPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision, releasePendingActionClaim } from '../utils/pending_actions.js'
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
-import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } from '../utils/model_output.js'
+import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } from '../utils/model_output.js'
 import { formatToolProtocol } from '../utils/tool_result.js'
 import { executeAgentRound, planAgentContinuation } from '../utils/agent_orchestrator.js'
 import { buildAgentRoundFingerprint, createAgentBudget, createAgentTelemetry, getAgentBudgetSnapshot, getAgentTelemetrySnapshot, deferDependentSideEffectCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, retainAgentContinuationTools, resolveAgentRoundCompletion, shouldContinueAgentRound, shouldStopRepeatedImageSearch, stableAgentStringify, summarizeAgentExecutions, updateAgentStagnationState } from '../utils/agent_runtime.js'
@@ -1164,6 +1164,14 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
                 routedBy: 'rule'
             }
         }
+        const autonomousProfile = inferAutonomousUserProfileUpdate(routeText)
+        if (autonomousProfile) {
+            return {
+                intent: `规则预路由：检测到高置信度的本人长期信息，自动同步个人档案。${autonomousProfile.reason}`,
+                tools: [{ name: 'user_profile_update', args: { mode: 'source_text', source_text: autonomousProfile.sourceText } }],
+                routedBy: 'autonomous_profile'
+            }
+        }
     }
 
     // 0) 主人明确要求退群：直接走 group_leave，但工具只会创建待确认操作。
@@ -1691,7 +1699,7 @@ ${researchRequirementsBlock}
 - 只有当前操作者是主人且用户明确要求跨群/所有群/指定群的已捕获流水时，才计划 group_chat_context 的 scope=all_groups 或 specific_group；非主人不要计划读取其他人的跨群消息。主人按群名问某个群但你暂时没有群号时，可在 params 里把群名写入 query，工具会尝试解析群号。
 - 用户要求从历史/记忆/旧对话里查找某个话题，或问“以前有没有说过/还记得我之前提过什么/相关记忆/语义检索”时，计划 memory_search；它是只读检索，不会写档案。当前群“刚才聊啥”这种需要原始时间线的问题优先 group_chat_context。
 - 用户问“这个人是谁/@某某有什么外号/谁是杂鱼/谁被叫过xxx/本群怎么称呼某人”时，计划 group_member_aliases 查询本群称呼记忆；这类结果只代表群内公开聊天里的称呼记录，不是真实身份断言。
-- 用户明确要求“记到我的个人档案/写进我的用户画像/更新个人档案/从刚才聊天提炼我的档案”时，计划 user_profile_update；“全面读我们的对话提炼档案/从我在所有群的发言里提炼/结合当前群上下文更新画像”也计划 user_profile_update，让工具按自然语言选择来源。只是询问“能不能写档案/有没有档案”不要计划。普通用户只更新自己的档案，主人明确指定用户时才可带 user_id。
+- 用户明确要求“记到我的个人档案/写进我的用户画像/更新个人档案/从刚才聊天提炼我的档案”时，计划 user_profile_update；当前用户用第一人称明确提供生日、称呼、偏好、习惯、长期技术或项目背景等稳定事实时，也可自主同步，使用 source_text=当前用户原话、mode=source_text。疑问、能力咨询、不确定表达、短期状态、引用/转发中的他人信息和敏感字段不要自动写入，必要时向用户询问。只是询问“能不能写档案/有没有档案”不要计划。普通用户只更新自己的档案，主人明确指定用户时才可带 user_id。
 - 主人明确要求“帮我在某群说/发/转达某段文本”时，才计划 group_send_message；必须有目标群和明确消息内容。支持显式多个目标，但工具会先创建待确认操作，不会直接发送。不要替主人编写、润色或补全要发送的内容，目标群不明确时不要计划。
 - 主人明确要求“退出/离开/退了某群”时，才计划 group_leave；支持群号、唯一群名、本群/当前群，以及显式列出的多个目标。开放式“所有群/全部群/不友好那些群”不要计划，需让主人先明确群号或群名。group_leave 只创建待确认操作，确认后才真正退群。
 - 只计划“可用工具”中列出的工具，最多 5 个。
@@ -2381,6 +2389,7 @@ ${visualDescription}`
             let agentTaskLatestObservation = agentTask?.lastObservation || ''
             let successfulToolResultCount = 0
             let verifiedToolResultCount = 0
+            let hasSuccessfulProfileUpdate = false
             let shellToolExecutionCount = 0
             let shellConnectionLost = false
             let shellCommandOutcomeUnknown = false
@@ -2544,6 +2553,7 @@ ${visualDescription}`
                                 currentInstruction: currentToolInstruction,
                                 allowContinuation: allowToolContinuation,
                                 allowTaskContextContinuation: taskContextContinuation,
+                                allowAutonomousProfileSync: Boolean(inferAutonomousUserProfileUpdate(currentToolInstruction)),
                                 continuationTools: continuationToolsForGuard
                             })
                             toolAnalysis.plan = mainToolPlan
@@ -2601,7 +2611,8 @@ ${visualDescription}`
                     allowContinuation: allowToolContinuation,
                     allowTaskContextContinuation: taskContextContinuation,
                     continuationTools: continuationToolsForGuard,
-                    allowModelPlannedLowRisk: ['main_model_plan', 'main_model_direct'].includes(toolAnalysis?.routedBy)
+                    allowModelPlannedLowRisk: ['main_model_plan', 'main_model_direct'].includes(toolAnalysis?.routedBy),
+                    allowAutonomousProfileSync: Boolean(inferAutonomousUserProfileUpdate(currentToolInstruction))
                 })
                 if (guardedToolCalls.blocked.length > 0) {
                     logger.warn(`[AI-Plugin] [工具安全] 已拦截缺少明确当前指令的工具: ${guardedToolCalls.blocked.map(call => call.name).join(', ')}`)
@@ -2768,6 +2779,9 @@ ${visualDescription}`
 
                         if (protocol.ok && !pending) successfulToolResultCount++
                         if (protocol.ok && protocol.verified && !pending) verifiedToolResultCount++
+                        if (call.name === 'user_profile_update' && protocol.ok && !pending && result.data?.ok === true) {
+                            hasSuccessfulProfileUpdate = true
+                        }
                         const agentFormattedResult = `${formatToolProtocol(protocol)}\n${runtimeFormattedResult}`
                         const toolStatus = runtimeStatus
                         userMessage += `\n\n${formatToolProtocol(protocol)}`
@@ -3316,6 +3330,7 @@ ${visualDescription}`
                             strictWebSearch: false,
                             allowContinuation: true,
                             continuationTools: AGENT_LOOP_ALLOWED_TOOLS,
+                            allowAutonomousProfileSync: Boolean(inferAutonomousUserProfileUpdate(currentToolInstruction)),
                             allowModelPlannedLowRisk: true
                         }),
                         normalizeTools: calls => {
@@ -3847,13 +3862,17 @@ ${visualDescription}`
                     hasTaskCompletionEvidence,
                     hasVisualEvidence
                 })
+                let unsupportedProfileClaim = hasUnsupportedUserProfileClaim(finalResponseText, {
+                    hasSuccessfulProfileUpdate,
+                    shouldAuditProfileUpdate: hasExplicitUserProfileUpdateIntent(currentToolInstruction) || Boolean(inferAutonomousUserProfileUpdate(currentToolInstruction))
+                })
                 let lowEvidenceOverclaim = hasOverconfidentLowEvidenceAnswer(finalResponseText, currentToolInstruction, webEvidenceState)
                 let unsupportedWebClaim = hasUnsupportedWebResearchClaim(finalResponseText, currentToolInstruction, webEvidenceState)
                 const hasResearchUncertainty = hasExplicitWebUncertainty(finalResponseText)
                 let blockedResearchClaim = insufficientResearchEvidence
                     && !hasResearchUncertainty
                     && /(?:官方|正式|最新|当前|截至|全部|完整|所有|名单|价格|版本|政策|公告|已经|可以确认|明确|确定|属实|真实|存在|支持|不支持|发生|没有)/i.test(finalResponseText)
-                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || lowEvidenceOverclaim || unsupportedWebClaim || blockedResearchClaim) {
+                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || unsupportedProfileClaim || lowEvidenceOverclaim || unsupportedWebClaim || blockedResearchClaim) {
                     logger.warn(`[AI-Plugin] 最终回复缺少可验证依据，触发一次纠正重试: ${rawResponseText.slice(0, 180)}`)
                     const retryPayload = {
                         contents: [
@@ -3866,7 +3885,8 @@ ${visualDescription}`
                                         hasTaskCompletionEvidence,
                                         hasVisualEvidence,
                                         unsupportedToolClaim,
-                                        unsupportedWebClaim
+                                        unsupportedWebClaim,
+                                        unsupportedProfileClaim
                                     }) + ((lowEvidenceOverclaim || blockedResearchClaim)
                                         ? '\n本轮联网证据不足或搜索链路不可用。请重写：只列出能够由直接来源支持的内容；搜索摘要、转述和网传必须明确标注；若没有足够原始材料就直接说无法核实。不得把搜索失败、熔断或零结果解释为目标不存在、事件未发生、从未报道或纯属虚构，也不得断言具体日期、金额、违法违规、动机、因果、他人反应或后续影响。'
                                         : '')
@@ -3886,6 +3906,10 @@ ${visualDescription}`
                             hasActualToolResults: successfulToolResultCount > 0,
                             hasTaskCompletionEvidence,
                             hasVisualEvidence
+                        })
+                        unsupportedProfileClaim = hasUnsupportedUserProfileClaim(finalResponseText, {
+                            hasSuccessfulProfileUpdate,
+                            shouldAuditProfileUpdate: hasExplicitUserProfileUpdateIntent(currentToolInstruction) || Boolean(inferAutonomousUserProfileUpdate(currentToolInstruction))
                         })
                         lowEvidenceOverclaim = hasOverconfidentLowEvidenceAnswer(finalResponseText, currentToolInstruction, webEvidenceState)
                         unsupportedWebClaim = hasUnsupportedWebResearchClaim(finalResponseText, currentToolInstruction, webEvidenceState)
