@@ -11,7 +11,7 @@ import { buildGroupContextImageSummary, formatGroupContextImageSummary, isExpire
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memory_context.js'
-import { detectToolIntentFamilies, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, hasExplicitUserProfileUpdateIntent, inferAutonomousUserProfileUpdate, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
+import { detectToolIntentFamilies, extractUrlsFromText, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, hasExplicitUserProfileUpdateIntent, inferAutonomousUserProfileUpdate, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { relayImagesToVision } from '../tools/vision_relay.js'
 import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
@@ -27,6 +27,7 @@ import { selectWorkspaceSurveyFiles } from '../utils/workspace_survey.js'
 import { getPureImageReplyPolicy, resolveFastChatImageDelivery, resolveFastChatTrigger } from '../utils/fast_chat_trigger.js'
 import { extractMessageSendError, isContentModerationSendError, rewriteRejectedReply } from '../utils/message_delivery.js'
 import { sendTextInChunks } from '../utils/reply_delivery.js'
+import { claimMessageDedup } from '../utils/message_dedup.js'
 import { executeAgentRound, planAgentContinuation, prepareAgentRound } from '../utils/agent_orchestrator.js'
 
 const replyCooldown = new Map()
@@ -1078,21 +1079,6 @@ async function compactFastChatFinalTextContext(client, context, normalized, opti
     return { context: working, note: notes.join('\n'), compacted: notes.length > 0 }
 }
 
-function extractUrlsFromText(text, limit = 10) {
-    const urls = []
-    const seen = new Set()
-    const urlRegex = /https?:\/\/[^\s<>'"，。！？、]+/gi
-    let match
-    while ((match = urlRegex.exec(String(text || ''))) !== null && urls.length < limit) {
-        const url = match[0].replace(/[)\]}.,，。!?！？;；:：]+$/g, '')
-        if (!seen.has(url)) {
-            seen.add(url)
-            urls.push(url)
-        }
-    }
-    return urls
-}
-
 function shouldRouteFastChatTools(text, urls = []) {
     return detectToolIntentFamilies(text, { urls }).size > 0
 }
@@ -1244,6 +1230,12 @@ export class FastChatHandler extends plugin {
         const enabled = this.client?.enableFastChat || Config.enable_fast_chat === true
         if (!enabled) return false
         if (!e.group_id || !e.message || !Array.isArray(e.message)) return false
+
+        const dedup = claimMessageDedup(e, 'fast_chat')
+        if (dedup.duplicate) {
+            logger.debug(`[AI-Plugin] [畅聊] 跳过重复消息捕获: message_id=${e.message_id || e.seq || 'unknown'}, group_id=${e.group_id || ''}, user_id=${e.user_id || ''}`)
+            return false
+        }
 
         const captureAllowed = await checkCaptureAccess(e)
         const replyAllowed = await checkAccess(e)

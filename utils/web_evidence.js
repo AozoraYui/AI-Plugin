@@ -21,10 +21,19 @@ const ERROR_PAGE_PATTERNS = [
     /(?:^|\/)(?:404|403|500|error|errors|upgrade|captcha|verify|challenge)(?:\/|$|[?._-])/i
 ]
 
+const TERMINAL_WEB_BLOCK_PATTERNS = [
+    /(?:SSRF|本机或内网|内网地址|私有(?:局域网|网络|IP)|localhost|私有地址|本地地址|局域网地址)[\s\S]{0,80}(?:阻止|拦截|禁止|拒绝|无法访问|不能访问|不允许)/i,
+    /(?:阻止|拦截|禁止|拒绝|无法访问|不能访问|不允许)[\s\S]{0,80}(?:SSRF|本机或内网|内网地址|私有(?:局域网|网络|IP)|localhost|私有地址|本地地址|局域网地址)/i
+]
+
 const ERROR_CONTENT_PATTERNS = [
     /(?:页面不存在|内容不存在|访问异常|访问过于频繁|请完成验证|安全验证|验证码|升级后访问|系统繁忙|请求错误|禁止访问|access denied|page not found|just a moment|enable javascript and cookies)/i,
     /(?:waerrpage|error[_ -]?page|captcha|challenge-platform)/i
 ]
+
+export function hasExplicitTerminalWebBlockResponse(text = '') {
+    return TERMINAL_WEB_BLOCK_PATTERNS.some(pattern => pattern.test(String(text || '')))
+}
 
 const AUTHORITATIVE_DOMAIN_SUFFIXES = [
     '.gov',
@@ -370,6 +379,7 @@ export function assessFetchedContent(requestedUrl = '', content = '') {
     const urlInfo = effectiveUrl !== requestedUrl && effectiveUrlInfo.direct ? effectiveUrlInfo : requestedUrlInfo
     const text = compactText(raw)
     const explicitFailure = /^【[^】]+失败】/.test(text) || /【网页抓取失败】/.test(raw)
+    const securityBlocked = explicitFailure && TERMINAL_WEB_BLOCK_PATTERNS.some(pattern => pattern.test(raw))
     const errorContent = ERROR_CONTENT_PATTERNS.some(pattern => pattern.test(text))
     const isJson = /\(JSON,\s*\d+\s*字符\)/i.test(raw)
     let usableEvidence = true
@@ -379,7 +389,9 @@ export function assessFetchedContent(requestedUrl = '', content = '') {
     if (explicitFailure) {
         usableEvidence = false
         quality = 'none'
-        reason = '网页抓取明确失败'
+        reason = securityBlocked
+            ? '目标地址属于本机或内网地址，已被 SSRF 安全策略阻止'
+            : '网页抓取明确失败'
     } else if (!urlInfo.direct) {
         usableEvidence = false
         quality = 'none'
@@ -418,7 +430,11 @@ export function assessFetchedContent(requestedUrl = '', content = '') {
         : 'none'
     return {
         ok: usableEvidence,
-        recoverable: !usableEvidence,
+        status: securityBlocked ? 'blocked' : undefined,
+        recoverable: !usableEvidence && !securityBlocked,
+        retryable: !usableEvidence && !securityBlocked,
+        securityBlocked,
+        terminal: securityBlocked,
         summary: usableEvidence ? `网页正文可用，证据质量=${evidenceQuality}` : `网页内容不可作为可靠证据：${reason}`,
         content: raw,
         quality: usableEvidence ? evidenceQuality : contentQuality,
@@ -454,6 +470,8 @@ export function assessFetchedContent(requestedUrl = '', content = '') {
             embeddedListOnly,
             authoritativeDomain,
             authoritySignals,
+            securityBlocked,
+            terminal: securityBlocked,
             reason,
             evidenceKey
         },
@@ -485,7 +503,9 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
         searchUnavailableCount: Math.max(0, Number(state.searchUnavailableCount) || 0),
         searchFailureCount: Math.max(0, Number(state.searchFailureCount) || 0),
         searchSuccessCount: Math.max(0, Number(state.searchSuccessCount) || 0),
-        searchUnavailable: state.searchUnavailable === true
+        searchUnavailable: state.searchUnavailable === true,
+        terminalFailure: state.terminalFailure === true,
+        terminalFailureReason: String(state.terminalFailureReason || '')
     }
     const keys = new Set(current.evidenceKeys)
     const fetchedKeys = new Set(current.fetchedEvidenceKeys)
@@ -506,6 +526,10 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
     if (toolName === 'web_fetch') {
         current.fetchCount++
         const facts = data?.facts || data || {}
+        if (facts.securityBlocked === true || facts.terminal === true) {
+            current.terminalFailure = true
+            current.terminalFailureReason = String(facts.reason || data?.reason || '网页访问被安全策略阻止')
+        }
         if (facts.usableEvidence === true) {
             if (facts.evidenceKey) {
                 keys.add(String(facts.evidenceKey))

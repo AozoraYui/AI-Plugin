@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 const {
+    extractUrlsFromText,
     filterToolCallsByIntent,
     hasExplicitGroupFileDownloadIntent,
     hasExplicitGroupFileListIntent,
@@ -46,6 +47,7 @@ const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
 const { buildBingImageSearchUrl, extractPageImageUrls, filterRelevantSearchResults, normalizeWebSearchQueries, parseSo360ImageResults, parseSogouSearchResults, parseYahooSearchResults, prepareSearchResults, scoreSearchResultRelevance, scoreSearchSourceAuthority, webSearchTool } = await import('../tools/search.js')
 const { createHeadersLike, getProxyCandidates } = await import('../utils/common.js')
+const { buildMessageDedupKey, claimMessageDedup, clearMessageDedupForTests } = await import('../utils/message_dedup.js')
 const { webFetchTool } = await import('../tools/web_fetch.js')
 const { groupChatContextTool } = await import('../tools/group_chat_context.js')
 const { configManageTool } = await import('../tools/config_manage.js')
@@ -71,7 +73,7 @@ const { selectWorkspaceSurveyFiles } = await import('../utils/workspace_survey.j
 const { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resolvePersistedAgentStatus } = await import('../utils/agent_completion.js')
 const { trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
 const { getPureImageReplyPolicy, isReferentialBotKeywordMention, resolveFastChatImageDelivery, resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
-const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, getOfficialSearchDomains, getWebSourceAuthority, hasExplicitWebUncertainty, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, scoreWebSourceCandidate, updateWebEvidenceState } = await import('../utils/web_evidence.js')
+const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, getOfficialSearchDomains, getWebSourceAuthority, hasExplicitTerminalWebBlockResponse, hasExplicitWebUncertainty, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, scoreWebSourceCandidate, updateWebEvidenceState } = await import('../utils/web_evidence.js')
 const { extractMessageSendError, isContentModerationSendError } = await import('../utils/message_delivery.js')
 const { cancelAgentExecutionsByRecalledMessage, getActiveAgentExecutionCount, registerAgentExecution } = await import('../utils/agent_cancellation.js')
 
@@ -2106,6 +2108,28 @@ check('事实核查至少需要两个独立正文来源', hasInsufficientWebEvid
     { usableFetchCount: 2, fetchedSourceCount: 2, fetchedSourceDomains: ['a.example', 'b.example'], coverage: 'unknown' },
     buildWebResearchRequirements('联网核查这条消息是否属实')
 ))
+check('URL提取会剥离链接后的中文动作词', (() => {
+    const urls = extractUrlsFromText('#c访问http://192.168.2.194:3001/AozoraYui/AI-Plugin看下')
+    return urls.length === 1 && urls[0] === 'http://192.168.2.194:3001/AozoraYui/AI-Plugin'
+})())
+check('URL提取不会误删合法中文路径', extractUrlsFromText('访问 https://example.com/看下')[0] === 'https://example.com/看下')
+check('SSRF网页失败属于终止失败而非可重试失败', (() => {
+    const result = assessFetchedContent('http://192.168.2.194:3001/repo', '【网页抓取失败】为避免 SSRF，已阻止访问本机或内网地址')
+    const state = updateWebEvidenceState({}, 'web_fetch', result)
+    return result.ok === false && result.recoverable === false && result.retryable === false
+        && result.securityBlocked === true && result.status === 'blocked' && state.terminalFailure === true
+})())
+check('安全阻断回复必须明确说明无法访问', hasExplicitTerminalWebBlockResponse('该链接是内网地址，已被安全策略拦截，无法访问。'))
+check('普通无法核实文案不会冒充安全阻断说明', !hasExplicitTerminalWebBlockResponse('这次没有拿到足够证据，暂时无法核实。'))
+check('相同消息只允许一次处理', (() => {
+    clearMessageDedupForTests()
+    const event = { self_id: 'bot-1', group_id: 'group-1', user_id: 'user-1', message_id: 'msg-1' }
+    const first = claimMessageDedup(event, 'chat', 1000)
+    const second = claimMessageDedup(event, 'chat', 1001)
+    const otherEntry = claimMessageDedup(event, 'fast_chat', 1002)
+    return buildMessageDedupKey(event, 'chat') === 'chat:bot-1:group-1:user-1:msg-1' && first.duplicate === false && second.duplicate === true && otherEntry.duplicate === false
+})())
+
 check('最终回复收尾不会把 continue 任务遗留为 active', resolvePersistedAgentStatus({ completionStatus: 'continue', finalized: true }) === 'completed')
 
 

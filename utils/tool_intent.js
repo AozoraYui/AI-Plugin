@@ -1055,8 +1055,43 @@ export function selectToolCandidates(enabledTools = [], text = '', options = {})
     }
 }
 
+const TRAILING_URL_ACTIONS = /(?:打开(?:一下|下)?|访问(?:一下|下)?|查看(?:一下|下)?|看看|看下|看一下|看一眼|查(?:一下|下)?|读(?:一下|下)?|读取(?:一下|下)?|分析(?:一下|下)?|总结(?:一下|下)?|概括(?:一下|下)?|解释(?:一下|下)?|确认一下|核实一下|一下|下)$/i
+
+function cleanExtractedUrl(candidate = '') {
+    let value = String(candidate || '').replace(/[)\]}.,，。!?！？;；:：]+$/g, '')
+    for (let count = 0; count < 3; count++) {
+        const match = value.match(TRAILING_URL_ACTIONS)
+        if (!match) break
+        const suffix = match[0]
+        const previous = value.slice(0, -suffix.length)
+        if (!/[A-Za-z0-9_#?=&%~-]$/.test(previous)) break
+        value = previous
+    }
+    return value
+}
+
+export function extractUrlsFromText(text, limit = 10) {
+    const urls = []
+    const seen = new Set()
+    const matches = String(text || '').match(/https?:\/\/[^\s<>'"，。！？、]+/gi) || []
+    for (const candidate of matches) {
+        if (urls.length >= limit) break
+        const url = cleanExtractedUrl(candidate)
+        if (!url || seen.has(url)) continue
+        try {
+            const parsed = new URL(url)
+            if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) continue
+        } catch {
+            continue
+        }
+        seen.add(url)
+        urls.push(url)
+    }
+    return urls
+}
+
 function extractUrls(text) {
-    return String(text || '').match(/https?:\/\/[^\s<>'"，。！？、]+/gi) || []
+    return extractUrlsFromText(text)
 }
 
 function normalizeComparableUrl(value = '') {

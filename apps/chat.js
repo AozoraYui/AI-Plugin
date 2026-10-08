@@ -14,7 +14,7 @@ import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, compactConversationHistory, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldLoadPrivateMemoryContext, shouldPrioritizeCurrentMultimodalTurn } from '../utils/message_context.js'
 import { collectQQFaceImageUrls, describeQQFaceSegment, formatQQFaceSegments } from '../utils/qq_face.js'
-import { detectToolIntentFamilies, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitHumanizeIntent, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, inferAutonomousUserProfileUpdate, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parsePluginUpdateRequest, parseQQUserLookupRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
+import { detectToolIntentFamilies, extractUrlsFromText, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitHumanizeIntent, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, inferAutonomousUserProfileUpdate, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parsePluginUpdateRequest, parseQQUserLookupRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { claimPendingAction, clearPendingAction, loadPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision, releasePendingActionClaim } from '../utils/pending_actions.js'
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
@@ -27,6 +27,7 @@ import { findPendingWorkspaceVerification, normalizeAgentCompletionStatus, resol
 import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK_SUMMARY_MAX_CHARS, mergeAgentRisk, recordAgentTaskStep, updateAgentTaskProgress } from '../utils/agent_task_runtime.js'
 import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../utils/agent_plan.js'
 import { cancelAgentExecutionsByTask, isAgentExecutionCancelled, registerAgentExecution } from '../utils/agent_cancellation.js'
+import { claimMessageDedup } from '../utils/message_dedup.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
 import { createPendingGroupSendAction, executePendingGroupSend, parseGroupSendDisambiguationSelection } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
@@ -34,7 +35,7 @@ import { executePendingShellExec } from '../tools/shell_exec.js'
 import { executePendingShellSession } from '../tools/shell_session.js'
 import { summarizeShellResultForReply } from '../utils/shell_result_summary.js'
 import { selectWorkspaceSurveyFiles } from '../utils/workspace_survey.js'
-import { buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, hasExplicitWebUncertainty, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, normalizeWebUrlKey, updateWebEvidenceState } from '../utils/web_evidence.js'
+import { buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, hasExplicitTerminalWebBlockResponse, hasExplicitWebUncertainty, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, normalizeWebUrlKey, updateWebEvidenceState } from '../utils/web_evidence.js'
 import { extractMessageSendError, isContentModerationSendError, rewriteRejectedReply } from '../utils/message_delivery.js'
 import { sendReplyWithForwardFallback } from '../utils/reply_delivery.js'
 import yaml from 'yaml'
@@ -280,23 +281,6 @@ function detectMasterOnlyToolRequest(message, flags = {}) {
     }
 
     return null
-}
-
-function extractUrlsFromText(text, limit = 10) {
-    if (!text || typeof text !== 'string') return []
-
-    const urls = []
-    const seen = new Set()
-    const urlRegex = /https?:\/\/[^\s<>'"，。！？、]+/gi
-    let match
-    while ((match = urlRegex.exec(text)) !== null && urls.length < limit) {
-        const url = match[0].replace(/[)\]}.,，。!?！？;；:：]+$/g, '')
-        if (!seen.has(url)) {
-            seen.add(url)
-            urls.push(url)
-        }
-    }
-    return urls
 }
 
 function formatPendingActionForJudge(record = {}) {
@@ -1879,6 +1863,12 @@ export class ChatHandler extends plugin {
         const chatCmd = Config.CHAT_COMMAND
         const match = e.msg.match(buildChatRegex(chatCmd))
         if (!match) return
+
+        const dedup = claimMessageDedup(e, 'chat')
+        if (dedup.duplicate) {
+            logger.warn(`[AI-Plugin] 跳过重复消息处理: message_id=${e.message_id || e.seq || 'unknown'}, group_id=${e.group_id || ''}, user_id=${e.user_id || ''}`)
+            return true
+        }
 
         const cancellationHandle = registerAgentExecution({
             messageId: e.message_id || e.seq || '',
@@ -3872,7 +3862,12 @@ ${visualDescription}`
                 let blockedResearchClaim = insufficientResearchEvidence
                     && !hasResearchUncertainty
                     && /(?:官方|正式|最新|当前|截至|全部|完整|所有|名单|价格|版本|政策|公告|已经|可以确认|明确|确定|属实|真实|存在|支持|不支持|发生|没有)/i.test(finalResponseText)
-                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || unsupportedProfileClaim || lowEvidenceOverclaim || unsupportedWebClaim || blockedResearchClaim) {
+                const terminalWebAccessBlock = webEvidenceState.terminalFailure === true
+                const explicitTerminalWebBlockResponse = terminalWebAccessBlock
+                    && hasExplicitTerminalWebBlockResponse(finalResponseText)
+                let webEvidenceGuardFailure = (lowEvidenceOverclaim || unsupportedWebClaim || blockedResearchClaim)
+                    || (terminalWebAccessBlock && !explicitTerminalWebBlockResponse)
+                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || unsupportedProfileClaim || webEvidenceGuardFailure) {
                     logger.warn(`[AI-Plugin] 最终回复缺少可验证依据，触发一次纠正重试: ${rawResponseText.slice(0, 180)}`)
                     const retryPayload = {
                         contents: [
@@ -3889,6 +3884,8 @@ ${visualDescription}`
                                         unsupportedProfileClaim
                                     }) + ((lowEvidenceOverclaim || blockedResearchClaim)
                                         ? '\n本轮联网证据不足或搜索链路不可用。请重写：只列出能够由直接来源支持的内容；搜索摘要、转述和网传必须明确标注；若没有足够原始材料就直接说无法核实。不得把搜索失败、熔断或零结果解释为目标不存在、事件未发生、从未报道或纯属虚构，也不得断言具体日期、金额、违法违规、动机、因果、他人反应或后续影响。'
+                                        : '') + ((terminalWebAccessBlock && !explicitTerminalWebBlockResponse)
+                                        ? '\n网页工具已因 SSRF 安全策略阻止访问本机或内网地址。请明确说明无法访问该地址，不得声称已经读取、核实或总结了该网页；如果同一轮存在其他公网来源，只能分别说明哪些来源成功、哪些来源被阻止。'
                                         : '')
                                 }]
                             }
@@ -3917,13 +3914,20 @@ ${visualDescription}`
                         blockedResearchClaim = insufficientResearchEvidence
                             && !retriedResearchUncertainty
                             && /(?:官方|正式|最新|当前|截至|全部|完整|所有|名单|价格|版本|政策|公告|已经|可以确认|明确|确定|属实|真实|存在|支持|不支持|发生|没有)/i.test(finalResponseText)
+                        const retriedExplicitTerminalWebBlockResponse = terminalWebAccessBlock
+                            && hasExplicitTerminalWebBlockResponse(finalResponseText)
+                        webEvidenceGuardFailure = (lowEvidenceOverclaim || unsupportedWebClaim || blockedResearchClaim)
+                            || (terminalWebAccessBlock && !retriedExplicitTerminalWebBlockResponse)
                     }
                 }
-                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || lowEvidenceOverclaim || unsupportedWebClaim || blockedResearchClaim) {
+                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || unsupportedProfileClaim || webEvidenceGuardFailure) {
                     logger.warn('[AI-Plugin] 最终回复纠正失败，使用安全提示替代无依据的完成声明')
-                    finalResponseText = lowEvidenceOverclaim || blockedResearchClaim
-                        ? '本轮搜索确实找到了一些相关线索，但来源之间存在冲突，且没有拿到可直接核验的小米官方原始公告或完整正文。因此目前只能确认网上存在多个非官方版本，不能把其中任何一版当作官方完整升级名单。你可以提供官方链接或公告截图，我再继续逐项核对。'
-                        : '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。请再试一次；我会先真正调用工具并确认结果，再向你汇报。'
+                    const terminalOnlyWebBlock = terminalWebAccessBlock && webEvidenceState.usableFetchCount === 0
+                    finalResponseText = terminalOnlyWebBlock
+                        ? '这个链接指向本机或内网地址，已被 SSRF 安全策略拦截，当前不能通过公开网页工具访问。请提供公网地址、截图或直接粘贴需要查看的内容；如果要开放本机访问，需要单独配置主人专用的本地访问白名单。'
+                        : (lowEvidenceOverclaim || blockedResearchClaim || unsupportedWebClaim
+                            ? '本轮联网检索没有拿到足以支撑确定性结论的直接证据，或部分来源被安全策略阻止。当前只能区分已成功读取的来源与未能访问的来源，不能把搜索摘要、转述或失败结果当作已核实事实。请提供可访问的公网链接、截图或正文，我再继续核对。'
+                            : '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。请再试一次；我会先真正调用工具并确认结果，再向你汇报。')
                     usedSafeFallbackReply = true
                 }
                 if (shellCommandOutcomeUnknown) {
