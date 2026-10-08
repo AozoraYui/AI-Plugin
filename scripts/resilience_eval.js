@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import http from 'node:http'
 
 global.logger = {
     info() {},
@@ -364,6 +365,42 @@ async function testVisionRelayAutoDiscoversUnlistedChatFallback() {
     assert.deepEqual(candidates.map(candidate => candidate.id), ['configured', 'unlisted-vision'])
 }
 
+async function testAttemptRequestPassesCancellationSignal() {
+    const server = http.createServer((_request, response) => {
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({ choices: [{ message: { content: '模型测试通过。' } }] }))
+    })
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+
+    try {
+        const { port } = server.address()
+        const client = Object.create(AiClient.prototype)
+        client.buildRequest = () => ({
+            url: `http://127.0.0.1:${port}/chat/completions`,
+            options: {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: '{}'
+            }
+        })
+        const controller = new AbortController()
+        const result = await client.attemptRequest(
+            'chat',
+            { contents: [] },
+            { name: 'local', api_key: 'test' },
+            'test-model',
+            128,
+            2000,
+            { multimodal: true },
+            { signal: controller.signal }
+        )
+        assert.equal(result.success, true)
+        assert.equal(result.data, '模型测试通过。')
+    } finally {
+        await new Promise(resolve => server.close(resolve))
+    }
+}
+
 await testProviderFailoverBudget()
 await testConfiguredOrderBeatsHealthScore()
 await testModelSpecificFailureKeepsConfiguredOrder()
@@ -380,4 +417,5 @@ await testAllModelTargetsCoverChatAndImage()
 await testAllModelProbeContinuesAfterUnexpectedFailure()
 await testMultimodalVisionRelayDependsOnConfiguration()
 await testVisionRelayAutoDiscoversUnlistedChatFallback()
-console.log('Resilience eval: 14 passed, 0 failed')
+await testAttemptRequestPassesCancellationSignal()
+console.log('Resilience eval: 15 passed, 0 failed')

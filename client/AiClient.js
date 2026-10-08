@@ -1240,7 +1240,7 @@ export class AiClient {
             
             let res
             try {
-                res = await fetchWithProxy(url, { ...options, signal, autoDetectProxy: true, family: 4 })
+                res = await fetchWithProxy(url, { ...options, signal: requestOptions.signal, autoDetectProxy: true, family: 4 })
             } catch (error) {
                 if (requestOptions.signal?.aborted || error?.code === 'AGENT_CANCELLED') {
                     return { success: false, cancelled: true, error: '请求已取消', code: 'AGENT_CANCELLED' }
@@ -1252,7 +1252,7 @@ export class AiClient {
                     return { success: false, cancelled: true, error: '请求已取消', code: 'AGENT_CANCELLED' }
                 }
                 logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 传输失败，重试当前请求一次`)
-                res = await fetchWithProxy(url, { ...options, signal, autoDetectProxy: true, family: 4 })
+                res = await fetchWithProxy(url, { ...options, signal: requestOptions.signal, autoDetectProxy: true, family: 4 })
             }
 
             if (!res.ok) {
