@@ -1438,10 +1438,10 @@ export class FastChatHandler extends plugin {
         let fastAgentLatestSummary = ''
         let fastAgentLatestObservation = ''
         let fastAgentPlanRecorded = false
+        const toolRoutingText = normalized.instructionText || ''
+        const autonomousProfile = inferAutonomousUserProfileUpdate(toolRoutingText)
         try {
             const enabledTools = await buildFastChatEnabledTools(e, this.client)
-            const toolRoutingText = normalized.instructionText || ''
-            const autonomousProfile = inferAutonomousUserProfileUpdate(toolRoutingText)
             const candidateUrls = extractUrlsFromText(toolRoutingText, 10)
             if (normalized.normalizedText !== toolRoutingText) {
                 logger.debug(`[AI-Plugin] [畅聊][安全] 工具路由仅使用当前触发消息文本，完整上下文长度=${normalized.normalizedText.length}, 指令长度=${toolRoutingText.length}`)
