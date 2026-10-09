@@ -88,6 +88,14 @@ export function hasUnsupportedToolResultClaim(text, options = {}) {
     return false
 }
 
+export function shouldAuditUnsupportedToolClaim(instruction = '', options = {}) {
+    if (options.hasActualToolResults === true) return true
+    const value = String(instruction || '').trim()
+    if (!value) return false
+    const action = '(?:执行|运行|调用|查看|读取|检查|搜索|查询|安装|补全|补齐|修复|编译|构建|部署|发送|上传|修改|调整|设置|切换|开启|关闭|重启|停止|下载|抓取|联网(?:查|搜|搜索|核查)?|处理)'
+    return new RegExp(`(?:^(?:请)?\\s*${action}|(?:帮我|请你?|直接|现在|立刻|马上|替我|为我|你来|你去).{0,24}${action}|(?:把|将).{0,32}${action})`, 'i').test(value)
+}
+
 export function hasUnsupportedUserProfileClaim(text, options = {}) {
     const value = sanitizeModelOutput(text, options)
     if (!value || options.shouldAuditProfileUpdate !== true || options.hasSuccessfulProfileUpdate === true) return false

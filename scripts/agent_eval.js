@@ -39,7 +39,7 @@ const {
     selectToolCandidates
 } = await import('../utils/tool_intent.js')
 const { classifyAgentRisk, classifyToolCallRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } = await import('../utils/agent_policy.js')
-const { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } = await import('../utils/model_output.js')
+const { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput, shouldAuditUnsupportedToolClaim } = await import('../utils/model_output.js')
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { buildParticipantIdentityHint, expandInlineContent, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldLoadPrivateMemoryContext, shouldPrioritizeCurrentMultimodalTurn } = await import('../utils/message_context.js')
 const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq_face.js')
@@ -1179,6 +1179,9 @@ check('有工具纠正提示限定系统结果区块', buildFinalAnswerRetryInst
 check('零工具执行会拦截虚构完成声明', hasUnsupportedToolResultClaim('我已经为你运行 pnpm install，依赖补全成功。', { hasActualToolResults: false }))
 check('真实工具结果允许汇报完成', !hasUnsupportedToolResultClaim('我已经为你运行 pnpm install，依赖补全成功。', { hasActualToolResults: true }))
 check('普通建议不会被当成虚构完成声明', !hasUnsupportedToolResultClaim('你可以运行 pnpm install 来补全依赖。', { hasActualToolResults: false }))
+check('帮助说明不会触发工具结果审查', !shouldAuditUnsupportedToolClaim('给大家说一下你的使用方法'))
+check('介绍联网工具不会触发工具结果审查', !shouldAuditUnsupportedToolClaim('介绍一下联网工具怎么用'))
+check('明确执行请求会触发工具结果审查', shouldAuditUnsupportedToolClaim('帮我读取这个文件并总结'))
 check('无工具结果会拦截虚构游戏指令执行', hasUnsupportedToolResultClaim(
     '正在执行指令：/difficulty hard\n完成啦！现在服务器难度已经成功修改为困难模式。',
     { hasActualToolResults: false }

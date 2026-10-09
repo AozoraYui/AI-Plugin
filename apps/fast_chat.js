@@ -14,7 +14,7 @@ import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memo
 import { detectToolIntentFamilies, extractUrlsFromText, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, hasExplicitUserProfileUpdateIntent, inferAutonomousUserProfileUpdate, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { relayImagesToVision } from '../tools/vision_relay.js'
-import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput } from '../utils/model_output.js'
+import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput, shouldAuditUnsupportedToolClaim } from '../utils/model_output.js'
 import { formatToolProtocol } from '../utils/tool_result.js'
 import { buildAgentRoundFingerprint, createAgentBudget, createAgentTelemetry, getAgentBudgetSnapshot, getAgentTelemetrySnapshot, isUnfulfilledImageSearch, resolveAgentRoundCompletion, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } from '../utils/agent_runtime.js'
 import { findPendingWorkspaceVerification, resolvePersistedAgentStatus } from '../utils/agent_completion.js'
@@ -2141,7 +2141,10 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             || localImageInput.imageParts.length > 0
             || avatarImageInput.imageParts.length > 0
             || Boolean(finalVisionRelayDescription)
-        let unsupportedToolClaim = hasUnsupportedToolResultClaim(replyText, {
+        const auditUnsupportedToolClaim = shouldAuditUnsupportedToolClaim(toolRoutingText, {
+            hasActualToolResults: hasSuccessfulToolResult
+        })
+        let unsupportedToolClaim = auditUnsupportedToolClaim && hasUnsupportedToolResultClaim(replyText, {
             hasActualToolResults: hasSuccessfulToolResult,
             hasTaskCompletionEvidence,
             hasVisualEvidence
@@ -2173,7 +2176,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             if (retryResult.success && retryResult.data) {
                 result = retryResult
                 replyText = cleanModelText(retryResult.data)
-                unsupportedToolClaim = hasUnsupportedToolResultClaim(replyText, {
+                unsupportedToolClaim = auditUnsupportedToolClaim && hasUnsupportedToolResultClaim(replyText, {
                     hasActualToolResults: hasSuccessfulToolResult,
                     hasTaskCompletionEvidence,
                     hasVisualEvidence

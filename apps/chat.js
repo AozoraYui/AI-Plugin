@@ -19,7 +19,7 @@ import { claimPendingAction, clearPendingAction, loadPendingAction, parseStandal
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
-import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput } from '../utils/model_output.js'
+import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput, shouldAuditUnsupportedToolClaim } from '../utils/model_output.js'
 import { formatToolProtocol } from '../utils/tool_result.js'
 import { executeAgentRound, planAgentContinuation } from '../utils/agent_orchestrator.js'
 import { buildAgentRoundFingerprint, createAgentBudget, createAgentTelemetry, getAgentBudgetSnapshot, getAgentTelemetrySnapshot, deferDependentSideEffectCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, retainAgentContinuationTools, resolveAgentRoundCompletion, shouldContinueAgentRound, shouldStopRepeatedImageSearch, stableAgentStringify, summarizeAgentExecutions, updateAgentStagnationState } from '../utils/agent_runtime.js'
@@ -3846,7 +3846,10 @@ ${visualDescription}`
                 }
                 const hasTaskCompletionEvidence = agentTaskFinalStatus === 'ready' && !agentPendingMandatoryVerification
                 const hasVisualEvidence = currentImageParts.length > 0 || Boolean(visionRelayDescription)
-                let unsupportedToolClaim = hasUnsupportedToolResultClaim(finalResponseText, {
+                const auditUnsupportedToolClaim = shouldAuditUnsupportedToolClaim(currentToolInstruction, {
+                    hasActualToolResults: successfulToolResultCount > 0
+                })
+                let unsupportedToolClaim = auditUnsupportedToolClaim && hasUnsupportedToolResultClaim(finalResponseText, {
                     showThinking: Config.show_thinking,
                     hasActualToolResults: successfulToolResultCount > 0,
                     hasTaskCompletionEvidence,
@@ -3898,7 +3901,7 @@ ${visualDescription}`
                         result = retryResult
                         rawResponseText = String(retryResult.data).trim()
                         finalResponseText = sanitizeModelOutput(rawResponseText, { showThinking: Config.show_thinking })
-                        unsupportedToolClaim = hasUnsupportedToolResultClaim(finalResponseText, {
+                        unsupportedToolClaim = auditUnsupportedToolClaim && hasUnsupportedToolResultClaim(finalResponseText, {
                             showThinking: Config.show_thinking,
                             hasActualToolResults: successfulToolResultCount > 0,
                             hasTaskCompletionEvidence,
