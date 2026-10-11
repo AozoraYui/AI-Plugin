@@ -91,6 +91,8 @@ const defaultConfig = {
     FAST_CHAT_DIRECT_IMAGE_LIMIT: 4,
     FAST_CHAT_TRIGGER_KEYWORDS: ['诺亚', 'noa'],
     FAST_CHAT_CONTEXT_LIMIT: 60,
+    // 群聊时间范围总结单次最多处理的消息条数
+    GROUP_DIGEST_MAX_LOGS: 2000,
     FAST_CHAT_REPLY_COOLDOWN_MS: 8000,
     FAST_CHAT_MAX_CONTEXT_IMAGES: 3,
     FAST_CHAT_AUTO_READ_IMAGE_LIMIT: 2,
@@ -182,6 +184,12 @@ function parseContextLimit(val, defaultValue) {
 function parsePositiveInteger(val, defaultValue) {
     const num = Number(val)
     return Number.isFinite(num) && num > 0 ? Math.floor(num) : defaultValue
+}
+
+function parseBoundedInteger(val, defaultValue, min, max) {
+    const num = Number(val)
+    if (!Number.isFinite(num)) return defaultValue
+    return Math.min(max, Math.max(min, Math.floor(num)))
 }
 
 export function expandPrompt(template, vars = {}) {
@@ -450,6 +458,12 @@ export const Config = {
     set FAST_CHAT_TRIGGER_KEYWORDS(val) { config.FAST_CHAT_TRIGGER_KEYWORDS = Array.isArray(val) ? val : defaultConfig.FAST_CHAT_TRIGGER_KEYWORDS },
     get FAST_CHAT_CONTEXT_LIMIT() { return parseContextLimit(config.FAST_CHAT_CONTEXT_LIMIT, defaultConfig.FAST_CHAT_CONTEXT_LIMIT) },
     set FAST_CHAT_CONTEXT_LIMIT(val) { config.FAST_CHAT_CONTEXT_LIMIT = parseContextLimit(val, defaultConfig.FAST_CHAT_CONTEXT_LIMIT) },
+    get GROUP_DIGEST_MAX_LOGS() {
+        return parseBoundedInteger(config.GROUP_DIGEST_MAX_LOGS ?? defaultConfig.GROUP_DIGEST_MAX_LOGS, defaultConfig.GROUP_DIGEST_MAX_LOGS, 100, 10000)
+    },
+    set GROUP_DIGEST_MAX_LOGS(val) {
+        config.GROUP_DIGEST_MAX_LOGS = parseBoundedInteger(val, defaultConfig.GROUP_DIGEST_MAX_LOGS, 100, 10000)
+    },
     get FAST_CHAT_REPLY_COOLDOWN_MS() { return config.FAST_CHAT_REPLY_COOLDOWN_MS ?? defaultConfig.FAST_CHAT_REPLY_COOLDOWN_MS },
     set FAST_CHAT_REPLY_COOLDOWN_MS(val) { config.FAST_CHAT_REPLY_COOLDOWN_MS = Number(val) || defaultConfig.FAST_CHAT_REPLY_COOLDOWN_MS },
     get FAST_CHAT_MAX_CONTEXT_IMAGES() { return parseImageLimit(config.FAST_CHAT_MAX_CONTEXT_IMAGES, defaultConfig.FAST_CHAT_MAX_CONTEXT_IMAGES) },

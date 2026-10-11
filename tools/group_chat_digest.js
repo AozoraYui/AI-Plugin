@@ -5,12 +5,12 @@
 
 import { toolRegistry } from './registry.js'
 import { formatDBTimestampToBeijing, getBeijingTimeStr } from '../utils/common.js'
+import { Config } from '../utils/config.js'
 
 const DEFAULT_HOURS = 12
 const DEFAULT_RECENT_DAYS = 3
 const MAX_RANGE_DAYS = 7
 const MAX_RANGE_HOURS = MAX_RANGE_DAYS * 24
-const MAX_LOGS = 2000
 const DB_PAGE_SIZE = 300
 const BATCH_MAX_CHARS = 42000
 const BATCH_MAX_LOGS = 120
@@ -353,7 +353,7 @@ ${source}`
     return truncateText(source, FINAL_SUMMARY_MAX_CHARS)
 }
 
-async function fetchLogs(db, options, maxLogs = MAX_LOGS) {
+async function fetchLogs(db, options, maxLogs = Config.GROUP_DIGEST_MAX_LOGS) {
     const totalCount = await db.countGroupMessageLogs(options)
     const logs = []
     let offset = 0
@@ -526,7 +526,8 @@ export const groupChatDigestTool = {
             scopeLabel = queryOptions.userId ? `全部已捕获群中用户 ${queryOptions.userId}` : '全部已捕获群'
         }
 
-        const fetched = await fetchLogs(db, queryOptions, MAX_LOGS)
+        const maxLogs = Config.GROUP_DIGEST_MAX_LOGS
+        const fetched = await fetchLogs(db, queryOptions, maxLogs)
         const logs = fetched.logs
         if (!logs.length) {
             return {
@@ -562,7 +563,7 @@ export const groupChatDigestTool = {
             summaries.push(await summarizeBatch(client, batches[i], i + 1, batches.length, meta))
         }
         const summary = await mergeSummaries(client, summaries, meta)
-        logger.info(`[AI-Plugin] group_chat_digest 完成: scope=${scope}, ${range.label}, logs=${logs.length}/${fetched.totalCount}, batches=${batches.length}`)
+        logger.info(`[AI-Plugin] group_chat_digest 完成: scope=${scope}, ${range.label}, logs=${logs.length}/${fetched.totalCount}, maxLogs=${maxLogs}, batches=${batches.length}`)
 
         return {
             ok: true,

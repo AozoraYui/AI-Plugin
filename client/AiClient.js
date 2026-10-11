@@ -735,7 +735,7 @@ export class AiClient {
                 Config.enable_group_leave = rawConfig.enable_group_leave === true
                 Config.enable_fast_chat = rawConfig.enable_fast_chat === true
                 Config.enable_vector_memory = rawConfig.enable_vector_memory === true
-                for (const key of ['FAST_CHAT_TRIGGER_ON_IMAGE', 'FAST_CHAT_DIRECT_IMAGE_LIMIT', 'FAST_CHAT_CONTEXT_LIMIT', 'FAST_CHAT_REPLY_COOLDOWN_MS', 'FAST_CHAT_MAX_CONTEXT_IMAGES', 'FAST_CHAT_AUTO_READ_IMAGE_LIMIT', 'FAST_CHAT_IMAGE_BATCH_SIZE', 'FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS']) {
+                for (const key of ['FAST_CHAT_TRIGGER_ON_IMAGE', 'FAST_CHAT_DIRECT_IMAGE_LIMIT', 'FAST_CHAT_CONTEXT_LIMIT', 'GROUP_DIGEST_MAX_LOGS', 'FAST_CHAT_REPLY_COOLDOWN_MS', 'FAST_CHAT_MAX_CONTEXT_IMAGES', 'FAST_CHAT_AUTO_READ_IMAGE_LIMIT', 'FAST_CHAT_IMAGE_BATCH_SIZE', 'FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS']) {
                     if (rawConfig[key] !== undefined) Config[key] = rawConfig[key]
                 }
                 if (Array.isArray(rawConfig.FAST_CHAT_TRIGGER_KEYWORDS)) {

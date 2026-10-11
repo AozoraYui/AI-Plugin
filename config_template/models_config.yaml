@@ -216,6 +216,10 @@ enable_web_fetch: false
 #     “最近几天/我不在的时候/上次说话后”的长时间回顾会走 group_chat_digest 分页摘要，不依赖一次性注入全部流水
 #     注意：unlimited 不代表最终回复会把全库直接喂给模型；数据库保留全部，最终 prompt 会按安全上限截取
 #     该配置只影响本轮上下文，不会删除数据库记录
+#   GROUP_DIGEST_MAX_LOGS: 长时间群聊总结（group_chat_digest）单次最多处理多少条消息；默认 2000
+#     可按机器性能和模型额度调大，例如 5000；只影响本次总结，不会删除数据库记录
+#     数值会自动限制在 100-10000 之间；超过范围会收敛到对应边界，非数字使用默认值
+#     每批摘要仍受工具内部字符数和单批条数限制；调大后会增加处理时间、模型调用次数和费用
 #   FAST_CHAT_REPLY_COOLDOWN_MS: 同一群两次畅聊主动回复之间的冷却时间，避免刷屏
 #   FAST_CHAT_TRIGGER_ON_IMAGE: 纯图片或图文混合消息是否静默识图并写入群聊记忆；默认 true，发图本身不会触发回复
 #   FAST_CHAT_DIRECT_IMAGE_LIMIT: 单条消息最多多少张图直接交给最终多模态模型；默认 4，超过后按 FAST_CHAT_IMAGE_BATCH_SIZE 分批摘要
@@ -255,6 +259,7 @@ enable_web_fetch: false
 # FAST_CHAT_TRIGGER_ON_IMAGE: true       # 纯图片和图文混合消息静默识图入库，不会仅因发图自动回复
 # FAST_CHAT_DIRECT_IMAGE_LIMIT: 4        # 单条消息不超过此数量时直接交给最终多模态模型；超过后走分批图片摘要
 # FAST_CHAT_CONTEXT_LIMIT: 60          # 每次回复/记录查询读取最近 60 条畅聊流水；unlimited / -1 为不限制。普通 #c 自动上下文和畅聊最终回复会内部限量
+# GROUP_DIGEST_MAX_LOGS: 2000          # 长时间群聊总结单次最多处理 2000 条消息，范围 100-10000；调大将增加耗时、模型调用次数和费用
 # FAST_CHAT_REPLY_COOLDOWN_MS: 8000    # 同一群畅聊回复冷却 8000ms，防止连续触发刷屏
 # FAST_CHAT_MAX_CONTEXT_IMAGES: 3      # 本轮最多读 3 张历史上下文图片；当前触发消息不受此数量截断，0 为禁用全部畅聊读图
 # FAST_CHAT_AUTO_READ_IMAGE_LIMIT: 2   # 自动回看单条历史图片消息时最多 2 张；当前触发消息不受此阈值截断
