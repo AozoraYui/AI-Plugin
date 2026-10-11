@@ -115,16 +115,26 @@ export function getWebSourceAuthority(domain = '') {
 export function buildWebResearchRequirements(instruction = '') {
     const value = String(instruction || '').replace(/\s+/g, ' ').trim()
     const asksCompleteList = /(?:全部|完整|所有|全量|全名单|完整名单|全部名单|所有机型|每一款|每个机型)/i.test(value)
-    const asksOfficialSource = /(?:官方|正式|公告|通报|发布|升级|适配|名单|推送)/i.test(value)
-    const asksHighCredibility = /(?:可信|可靠|权威|原始|高质量|准确|严谨)/i.test(value)
-    const requiresAuthoritativeSource = /(?:官方|正式(?:发布|公告|来源)?|官方来源|官方名单|官方说明)/i.test(value)
-        || (asksCompleteList && /(?:升级|适配|名单|推送|公告|通报|版本)/i.test(value))
-        || asksHighCredibility
-    const asksSourceBackedFact = /(?:发布|升级|适配|名单|推送|版本|价格|政策|公告|通报|计划)/i.test(value)
     const asksFreshness = /(?:最新|目前|现在|当前|截至|实时|近期|今天|今日|昨天|明天|最近)/i.test(value)
     const asksFactCheck = /(?:核实|核查|查证|查真|真假|是否真实|是否属实|有没有发生|是否发生|是否存在)/i.test(value)
+    const asksHighCredibility = /(?:可信|可靠|权威|原始|高质量|准确|严谨)/i.test(value)
+    const hasResearchAction = /(?:联网|上网|搜索|搜一下|搜下|搜查|查一下|查下|查询|检索|核实|核查|查证|查真|确认一下|核对一下|找一下|找找)/i.test(value)
+    const hasSourceRequest = /(?:官方(?:文档|说明|公告|来源|链接)|正式(?:文档|说明|公告|来源)|原始来源|权威来源|出处|链接|依据|证据)/i.test(value)
+    const hasCurrentFactTopic = /(?:限制|配额|额度|tpm|rpm|费率|价格|版本|政策|条款|公告|通报|计划|发布|升级|适配|名单|推送|数据|信息|情况|api|接口|文档|说明|配置|用法)/i.test(value)
+    const asksCurrentFact = (asksFreshness || hasSourceRequest) && hasCurrentFactTopic
+    const asksResearchBackedAnalysis = asksHighCredibility
+        && (hasResearchAction || asksCurrentFact || hasSourceRequest || asksFactCheck)
+    const asksOfficialSource = /(?:官方|正式|公告|通报|发布|升级|适配|名单|推送)/i.test(value)
+        && (hasResearchAction || asksCurrentFact || asksCompleteList)
+    const requiresAuthoritativeSource = (
+        /(?:官方|正式(?:发布|公告|来源)?|官方来源|官方名单|官方说明)/i.test(value)
+        && (hasResearchAction || asksCurrentFact || asksCompleteList)
+    ) || (asksCompleteList && /(?:升级|适配|名单|推送|公告|通报|版本)/i.test(value))
+        || asksResearchBackedAnalysis
+    const asksSourceBackedFact = /(?:发布|升级|适配|名单|推送|版本|价格|政策|公告|通报|计划|限制|配额|额度|tpm|rpm|费率|条款)/i.test(value)
+        && (hasResearchAction || asksCurrentFact || asksCompleteList || asksFactCheck)
     const scopeTerms = extractResearchScopeTerms(value)
-    const requiresFetch = asksCompleteList || asksOfficialSource || asksSourceBackedFact || asksFreshness || asksFactCheck
+    const requiresFetch = asksCompleteList || asksOfficialSource || asksSourceBackedFact || asksCurrentFact || asksFactCheck
     return {
         scopeTerms,
         asksCompleteList,
@@ -136,7 +146,7 @@ export function buildWebResearchRequirements(instruction = '') {
         asksHighCredibility,
         requiresFetch,
         preserveScope: scopeTerms.length > 0 || asksCompleteList,
-        requiresIndependentConfirmation: asksFactCheck || asksHighCredibility
+        requiresIndependentConfirmation: asksFactCheck || asksResearchBackedAnalysis
     }
 }
 

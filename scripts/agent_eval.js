@@ -238,6 +238,34 @@ check('真实网页工具结果允许基于核查汇报', !hasUnsupportedWebRese
     '联网查查有没有这回事',
     { searchCount: 1, fetchCount: 1 }
 ))
+check('技术架构咨询不会因提到官方 API 而强制联网核验', (() => {
+    const requirements = buildWebResearchRequirements('DeepSeek官方API有TPM限制，我能不能注册多个账户接入本地New API做负载均衡？有什么风险？')
+    return !requirements.requiresFetch && !requirements.asksOfficialSource && !requirements.asksSourceBackedFact
+})())
+check('明确询问官方当前限制仍会触发联网研究', (() => {
+    const requirements = buildWebResearchRequirements('请查一下DeepSeek官方文档目前的TPM限制和多账户使用条款')
+    return requirements.requiresFetch && requirements.asksOfficialSource && requirements.asksSourceBackedFact
+})())
+check('技术方案建议不会被低证据门禁误纠正', (() => {
+    const instruction = 'DeepSeek官方API有TPM限制，我能不能注册多个账户接入本地New API做负载均衡？有什么风险？'
+    const answer = '从架构上看可以实现，但是否允许多账户聚合要以服务商当前条款为准；还要考虑密钥泄露、请求重试重复计费、限流状态不一致和故障切换问题。'
+    const requirements = buildWebResearchRequirements(instruction)
+    return !hasOverconfidentLowEvidenceAnswer(answer, instruction, { searchCount: 0, fetchCount: 0 })
+        && !hasUnsupportedWebResearchClaim(answer, instruction, { searchCount: 0, fetchCount: 0 })
+        && !requirements.requiresFetch
+})())
+check('严谨架构分析不会单独触发联网证据门禁', (() => {
+    const requirements = buildWebResearchRequirements('请严谨分析本地New API多账户负载均衡的架构、风险和实现建议')
+    return !requirements.requiresFetch && !requirements.requiresIndependentConfirmation
+})())
+check('严谨核实当前官方限制仍要求联网证据', (() => {
+    const requirements = buildWebResearchRequirements('请严谨核实DeepSeek官方API当前TPM限制和多账户条款')
+    return requirements.requiresFetch && requirements.requiresIndependentConfirmation
+})())
+check('架构咨询候选工具不混入联网搜索', (() => {
+    const tools = selectToolCandidates(['web_search', 'web_fetch', 'system_info', 'shell_exec'], 'DeepSeek官方API有TPM限制，我能不能接入本地New API做负载均衡？')
+    return !tools.tools.includes('web_search') && !tools.tools.includes('web_fetch')
+})())
 check('指定澎湃 OS 版本会形成联网研究硬约束', (() => {
     const requirements = buildWebResearchRequirements('查一下红米K60在不在澎湃OS4升级名单内，把澎湃OS4的全部升级名单发给我')
     return requirements.scopeTerms.includes('k60')
