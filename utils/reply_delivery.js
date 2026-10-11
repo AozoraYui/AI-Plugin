@@ -1,4 +1,4 @@
-import { extractMessageSendError } from './message_delivery.js'
+import { extractMessageSendError, isMessageTransportError } from './message_delivery.js'
 
 const DEFAULT_MAX_CHARS = 3500
 const DEFAULT_MAX_BYTES = 3500
@@ -138,13 +138,25 @@ export async function sendReplyWithForwardFallback({
     if (nodes.length === 0) return { result: undefined, error: '', method: 'empty', nodes: 0 }
 
     let forwardError = ''
+    let forwardResult
     try {
         const forwardMsg = await makeForwardMsg(nodes)
-        const result = await sendReply(forwardMsg)
-        forwardError = extractMessageSendError(result)
-        if (!forwardError) return { result, error: '', method: 'forward', nodes: nodes.length }
+        forwardResult = await sendReply(forwardMsg)
+        forwardError = extractMessageSendError(forwardResult)
+        if (!forwardError) return { result: forwardResult, error: '', method: 'forward', nodes: nodes.length }
     } catch (error) {
         forwardError = error?.message || String(error)
+    }
+
+    if (isMessageTransportError(forwardError)) {
+        logger?.warn?.(`${logPrefix} 合并转发遇到传输层错误，停止重复发送: 节点=${nodes.length}, 原因=${forwardError}`)
+        return {
+            result: forwardResult,
+            error: forwardError,
+            method: 'failed',
+            nodes: nodes.length,
+            forwardError
+        }
     }
 
     logger?.warn?.(`${logPrefix} 合并转发发送失败，准备降级为普通分段消息: 节点=${nodes.length}, 原因=${forwardError || '未知错误'}`)

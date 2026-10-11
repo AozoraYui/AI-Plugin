@@ -74,6 +74,21 @@ async function testForwardRetcodeFallsBackToPlainChunks() {
     assert.ok(warnings.some(message => message.includes('1200')))
 }
 
+async function testTransportFailureDoesNotTriggerFallbackRetry() {
+    let attempts = 0
+    const delivery = await sendReplyWithForwardFallback({
+        responseText: '网络失败'.repeat(1200),
+        makeForwardMsg: () => ({ type: 'forward' }),
+        sendReply: async () => {
+            attempts++
+            return { status: 'failed', retcode: 1200, message: '网络连接异常!' }
+        }
+    })
+    assert.equal(delivery.method, 'failed')
+    assert.match(delivery.error, /网络连接异常/)
+    assert.equal(attempts, 1)
+}
+
 async function testPlainSendFailureIsReported() {
     let attempts = 0
     const delivery = await sendReplyWithForwardFallback({
@@ -108,5 +123,6 @@ await testByteSafeSplitting()
 await testForwardSuccess()
 await testForwardRetcodeFallsBackToPlainChunks()
 await testPlainSendFailureIsReported()
+await testTransportFailureDoesNotTriggerFallbackRetry()
 await testFastPathUsesReplyOnlyOnceForShortText()
-console.log('Reply delivery eval: 5 passed, 0 failed')
+console.log('Reply delivery eval: 6 passed, 0 failed')

@@ -1,6 +1,7 @@
 import { sanitizeModelOutput } from './model_output.js'
 
 const CONTENT_REJECTION_RE = /违禁词|敏感词|内容(?:违规|不合规)|消息(?:违规|被拦截)|(?:本地发送)?拦截|风控|risk control|content blocked|content rejected|message is risky/i
+const TRANSPORT_FAILURE_RE = /网络连接异常|网络错误|连接(?:异常|失败|断开)|请求超时|timeout|timed out|ECONN(?:RESET|REFUSED|ABORTED)|socket hang up|network error/i
 
 export function extractMessageSendError(result) {
     if (result === false) return '发送接口返回 false，可能被本地发送拦截器拒绝'
@@ -35,6 +36,10 @@ export function extractMessageSendError(result) {
 
 export function isContentModerationSendError(error) {
     return CONTENT_REJECTION_RE.test(String(error || ''))
+}
+
+export function isMessageTransportError(error) {
+    return TRANSPORT_FAILURE_RE.test(String(error || ''))
 }
 
 export async function rewriteRejectedReply(client, text, modelGroupKey = 'flash', maxTokens = 4096, requestOptions = {}) {
