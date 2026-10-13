@@ -19,7 +19,7 @@ import { claimPendingAction, clearPendingAction, loadPendingAction, parseStandal
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
-import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput, shouldAuditUnsupportedToolClaim } from '../utils/model_output.js'
+import { buildFinalAnswerRetryInstruction, hasLeakedToolCallProtocol, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput, shouldAuditUnsupportedToolClaim } from '../utils/model_output.js'
 import { formatToolProtocol } from '../utils/tool_result.js'
 import { executeAgentRound, planAgentContinuation } from '../utils/agent_orchestrator.js'
 import { buildAgentRoundFingerprint, createAgentBudget, createAgentTelemetry, getAgentBudgetSnapshot, getAgentTelemetrySnapshot, deferDependentSideEffectCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, retainAgentContinuationTools, resolveAgentRoundCompletion, shouldContinueAgentRound, shouldStopRepeatedImageSearch, stableAgentStringify, summarizeAgentExecutions, updateAgentStagnationState } from '../utils/agent_runtime.js'
@@ -3855,6 +3855,7 @@ ${visualDescription}`
                     hasTaskCompletionEvidence,
                     hasVisualEvidence
                 })
+                let leakedToolCallProtocol = hasLeakedToolCallProtocol(finalResponseText)
                 let unsupportedProfileClaim = hasUnsupportedUserProfileClaim(finalResponseText, {
                     hasSuccessfulProfileUpdate,
                     shouldAuditProfileUpdate: hasExplicitUserProfileUpdateIntent(currentToolInstruction) || Boolean(inferAutonomousUserProfileUpdate(currentToolInstruction))
@@ -3870,7 +3871,7 @@ ${visualDescription}`
                     && hasExplicitTerminalWebBlockResponse(finalResponseText)
                 let webEvidenceGuardFailure = (lowEvidenceOverclaim || unsupportedWebClaim || blockedResearchClaim)
                     || (terminalWebAccessBlock && !explicitTerminalWebBlockResponse)
-                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || unsupportedProfileClaim || webEvidenceGuardFailure) {
+                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || leakedToolCallProtocol || unsupportedToolClaim || unsupportedProfileClaim || webEvidenceGuardFailure) {
                     logger.warn(`[AI-Plugin] 最终回复缺少可验证依据，触发一次纠正重试: ${rawResponseText.slice(0, 180)}`)
                     const retryPayload = {
                         contents: [
@@ -3882,6 +3883,7 @@ ${visualDescription}`
                                         hasActualToolResults: successfulToolResultCount > 0,
                                         hasTaskCompletionEvidence,
                                         hasVisualEvidence,
+                                        leakedToolCallProtocol,
                                         unsupportedToolClaim,
                                         unsupportedWebClaim,
                                         unsupportedProfileClaim
@@ -3901,6 +3903,7 @@ ${visualDescription}`
                         result = retryResult
                         rawResponseText = String(retryResult.data).trim()
                         finalResponseText = sanitizeModelOutput(rawResponseText, { showThinking: Config.show_thinking })
+                        leakedToolCallProtocol = hasLeakedToolCallProtocol(finalResponseText)
                         unsupportedToolClaim = auditUnsupportedToolClaim && hasUnsupportedToolResultClaim(finalResponseText, {
                             showThinking: Config.show_thinking,
                             hasActualToolResults: successfulToolResultCount > 0,
@@ -3923,7 +3926,7 @@ ${visualDescription}`
                             || (terminalWebAccessBlock && !retriedExplicitTerminalWebBlockResponse)
                     }
                 }
-                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || unsupportedToolClaim || unsupportedProfileClaim || webEvidenceGuardFailure) {
+                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || leakedToolCallProtocol || unsupportedToolClaim || unsupportedProfileClaim || webEvidenceGuardFailure) {
                     logger.warn('[AI-Plugin] 最终回复纠正失败，使用安全提示替代无依据的完成声明')
                     const terminalOnlyWebBlock = terminalWebAccessBlock && webEvidenceState.usableFetchCount === 0
                     finalResponseText = terminalOnlyWebBlock

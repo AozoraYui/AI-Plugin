@@ -14,7 +14,7 @@ import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memo
 import { detectToolIntentFamilies, extractUrlsFromText, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, hasExplicitUserProfileUpdateIntent, inferAutonomousUserProfileUpdate, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { relayImagesToVision } from '../tools/vision_relay.js'
-import { buildFinalAnswerRetryInstruction, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput, shouldAuditUnsupportedToolClaim } from '../utils/model_output.js'
+import { buildFinalAnswerRetryInstruction, hasLeakedToolCallProtocol, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput, shouldAuditUnsupportedToolClaim } from '../utils/model_output.js'
 import { formatToolProtocol } from '../utils/tool_result.js'
 import { buildAgentRoundFingerprint, createAgentBudget, createAgentTelemetry, getAgentBudgetSnapshot, getAgentTelemetrySnapshot, isUnfulfilledImageSearch, resolveAgentRoundCompletion, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } from '../utils/agent_runtime.js'
 import { findPendingWorkspaceVerification, resolvePersistedAgentStatus } from '../utils/agent_completion.js'
@@ -2149,11 +2149,12 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             hasTaskCompletionEvidence,
             hasVisualEvidence
         })
+        let leakedToolCallProtocol = hasLeakedToolCallProtocol(replyText)
         let unsupportedProfileClaim = hasUnsupportedUserProfileClaim(replyText, {
             hasSuccessfulProfileUpdate,
             shouldAuditProfileUpdate: hasExplicitUserProfileUpdateIntent(toolRoutingText) || Boolean(autonomousProfile)
         })
-        if (!replyText || isPlanOnlyResponse(replyText) || unsupportedToolClaim || unsupportedProfileClaim) {
+        if (!replyText || isPlanOnlyResponse(replyText) || leakedToolCallProtocol || unsupportedToolClaim || unsupportedProfileClaim) {
             logger.warn(`[AI-Plugin] [畅聊] 最终回复缺少可验证依据，触发一次纠正重试: ${String(result.data).slice(0, 180)}`)
             const retryPayload = {
                 contents: [
@@ -2165,6 +2166,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                                 hasActualToolResults: hasSuccessfulToolResult,
                                 hasTaskCompletionEvidence,
                                 hasVisualEvidence,
+                                leakedToolCallProtocol,
                                 unsupportedToolClaim,
                                 unsupportedProfileClaim
                             })
@@ -2176,6 +2178,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             if (retryResult.success && retryResult.data) {
                 result = retryResult
                 replyText = cleanModelText(retryResult.data)
+                leakedToolCallProtocol = hasLeakedToolCallProtocol(replyText)
                 unsupportedToolClaim = auditUnsupportedToolClaim && hasUnsupportedToolResultClaim(replyText, {
                     hasActualToolResults: hasSuccessfulToolResult,
                     hasTaskCompletionEvidence,
@@ -2187,7 +2190,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                 })
             }
         }
-        if (!replyText || isPlanOnlyResponse(replyText) || unsupportedToolClaim || unsupportedProfileClaim) {
+        if (!replyText || isPlanOnlyResponse(replyText) || leakedToolCallProtocol || unsupportedToolClaim || unsupportedProfileClaim) {
             logger.warn('[AI-Plugin] [畅聊] 最终回复纠正失败，使用安全提示替代无依据的完成声明')
             replyText = '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。你可以再问一次，我会先真正调用工具并确认结果。'
             usedSafeFallbackReply = true

@@ -2,6 +2,8 @@ const INTERNAL_TAGS = ['think', 'analysis', 'reasoning']
 const FINAL_SECTION_RE = /^(?:#{1,6}\s*)?(?:final(?:\s+answer|\s+response)?|answer|最终答案|最终回复|答复|结论)\s*[：:]?\s*/i
 const INTERNAL_SECTION_RE = /^(?:#{1,6}\s*)?(?:\*{0,2}(?:thinking|analysis|reasoning)\*{0,2}|思考过程|思维过程|推理过程|分析过程|内部思考|内部推理)\s*[：:]?\s*/i
 const PLAN_HEADING_RE = /^(?:#{1,6}\s*)?(?:【\s*)?(?:工具规划|工具调用规划|行动计划|执行计划|下一步计划)(?:\s*】)?\s*[：:]?\s*/i
+const XML_TOOL_PROTOCOL_RE = /<function_calls\b[\s\S]*?<invoke\b[\s\S]*?<tool_name\b[\s\S]*?<\/function_calls>/i
+const JSON_TOOL_PROTOCOL_RE = /["']tool_calls["']\s*:\s*\[[\s\S]*?["'](?:function|name|arguments)["']\s*:/i
 
 function stripInternalTags(text) {
     let result = text
@@ -73,6 +75,22 @@ export function isPlanOnlyResponse(text) {
     return futureAction && !resultEvidence
 }
 
+export function hasLeakedToolCallProtocol(text, options = {}) {
+    const value = String(text || '').trim()
+    if (!value || options.allowToolProtocolDiscussion === true) return false
+
+    const xmlProtocol = XML_TOOL_PROTOCOL_RE.test(value)
+    const jsonProtocol = JSON_TOOL_PROTOCOL_RE.test(value)
+    if (!xmlProtocol && !jsonProtocol) return false
+
+    const protocolStart = /^(?:```(?:xml|json|text)?\s*)?(?:<function_calls\b|\{\s*["']tool_calls["'])/i.test(value)
+    const protocolLength = xmlProtocol
+        ? (value.match(/<function_calls\b[\s\S]*?<\/function_calls>/i)?.[0]?.length || 0)
+        : (value.match(/\{[\s\S]*?["']tool_calls["'][\s\S]*?\}/i)?.[0]?.length || 0)
+    const mostlyProtocol = protocolLength > 0 && protocolLength / value.length >= 0.7
+    return protocolStart || mostlyProtocol
+}
+
 export function hasUnsupportedToolResultClaim(text, options = {}) {
     const value = sanitizeModelOutput(text, options)
     if (!value) return false
@@ -120,11 +138,16 @@ export function buildFinalAnswerRetryInstruction(options = {}) {
     const profileAudit = options.unsupportedProfileClaim === true
         ? '上一条输出声称个人信息已经记住、写入或同步到个人档案，但本轮没有个人档案工具成功写入证据；必须明确说明尚未写入，不能把模型自己的承诺当成数据库结果。'
         : ''
-    const issue = options.unsupportedToolClaim === true
+    const protocolAudit = options.leakedToolCallProtocol === true
+        ? '上一条输出泄漏了内部工具调用协议；最终回复阶段禁止输出 function_calls、invoke、tool_name、tool_calls 或任何工具参数 JSON。'
+        : ''
+    const issue = options.leakedToolCallProtocol === true
+        ? '上一条输出是内部工具调用协议，不是可发送给用户的最终答复。'
+        : options.unsupportedToolClaim === true
         ? '上一条输出声称完成了工具操作，但本轮没有对应的真实工具执行证据。'
         : '上一条输出是内部思考或行动规划，不是可发送给用户的最终答复。'
     const completionAudit = options.hasTaskCompletionEvidence === false
         ? '虽然可能已有部分工具结果，但任务验证器尚未确认全部成功标准完成；可以描述已经取得的具体结果，不能扩大表述为任务完成、修复成功、部署成功或全部处理完毕。'
         : ''
-    return `${issue}上一条异常输出本身不可信，不能把其中声称的工具调用或结果当作事实。${toolAudit}${visualAudit}${webAudit}${profileAudit}${completionAudit}请重新基于原始上下文直接回答用户的问题。不要输出 Thinking、Analysis、思考过程、工具规划或下一步计划；不要声称执行了尚未执行的工具。如果缺少完成请求所需的真实结果，请明确说明目前无法确认，不能猜测。`
+    return `${issue}上一条异常输出本身不可信，不能把其中声称的工具调用或结果当作事实。${toolAudit}${visualAudit}${webAudit}${profileAudit}${completionAudit}${protocolAudit}请重新基于原始上下文直接回答用户的问题。不要输出 Thinking、Analysis、思考过程、工具规划或下一步计划；不要输出任何 function_calls、invoke、tool_name、tool_calls、参数 JSON 或其他内部工具协议；不要声称执行了尚未执行的工具。如果缺少完成请求所需的真实结果，请明确说明目前无法确认，不能猜测。`
 }
