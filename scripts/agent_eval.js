@@ -47,6 +47,7 @@ const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
 const { buildBingImageSearchUrl, extractPageImageUrls, filterRelevantSearchResults, normalizeWebSearchQueries, parseSo360ImageResults, parseSogouSearchResults, parseYahooSearchResults, prepareSearchResults, scoreSearchResultRelevance, scoreSearchSourceAuthority, webSearchTool } = await import('../tools/search.js')
 const { createHeadersLike, getProxyCandidates } = await import('../utils/common.js')
+const { buildSearchAttemptKey, createSearchHealthManager, classifySearchFailure, parseRetryAfterMs } = await import('../utils/web_search_health.js')
 const { buildMessageDedupKey, claimMessageDedup, clearMessageDedupForTests } = await import('../utils/message_dedup.js')
 const { webFetchTool } = await import('../tools/web_fetch.js')
 const { groupChatContextTool } = await import('../tools/group_chat_context.js')
@@ -171,6 +172,21 @@ const formattedBatchSearch = webSearchTool.formatResult({
     ]
 })
 check('web_search 批量结果按目标分组格式化', formattedBatchSearch.includes('【搜索目标 1】目标 A') && formattedBatchSearch.includes('【搜索目标 2】目标 B') && formattedBatchSearch.indexOf('A 结果') < formattedBatchSearch.indexOf('B 结果'))
+
+check('搜索失败分类能区分限流、拦截和超时', classifySearchFailure({ status: 429 }) === 'rate_limited' && classifySearchFailure({ status: 403 }) === 'blocked' && classifySearchFailure(new Error('请求超时')) === 'timeout')
+check('搜索 Retry-After 支持秒数与日期格式', parseRetryAfterMs('2', 1000) === 2000 && parseRetryAfterMs('invalid', 1000) === 0)
+check('搜索请求键会规范化 provider 和 query', buildSearchAttemptKey(' Bing ', '  澎湃   OS4  ') === 'Bing\u0000澎湃 OS4')
+check('搜索源健康状态按类型冷却且成功后恢复', (() => {
+    const health = createSearchHealthManager({ failureThreshold: 2, cooldownMs: 5000, rateLimitCooldownMs: 3000, blockCooldownMs: 7000 })
+    const first = health.recordFailure('Bing', new Error('网络失败'), 1000)
+    const second = health.recordFailure('Bing', new Error('网络失败'), 2000)
+    const limited = health.recordFailure('百度', { status: 429, retryAfterMs: 9000 }, 3000)
+    const blocked = health.recordFailure('搜狗', { status: 403 }, 4000)
+    const duringCooldown = health.check('Bing', 3000)
+    health.recordSuccess('Bing')
+    const recovered = health.check('Bing', 3000)
+    return first.cooldownMs === 0 && second.cooldownMs === 5000 && limited.cooldownMs === 9000 && blocked.cooldownMs === 7000 && !duringCooldown.allowed && recovered.allowed
+})())
 
 check('Node 响应头兼容 Fetch Headers 的 get 接口', (() => {
     const headers = createHeadersLike({ 'content-type': 'text/html', 'set-cookie': ['a=1', 'b=2'] })

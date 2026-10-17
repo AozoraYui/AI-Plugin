@@ -11,6 +11,7 @@ import sharp from 'sharp'
 import { hasExplicitImageSearchIntent } from '../utils/tool_intent.js'
 import { assertPublicUrl, createTimeoutSignal, fetchWithProxy, isAbortError, readResponseBodyTextLimited } from '../utils/common.js'
 import { assessSearchResults, classifyWebUrl, getOfficialSearchDomains, normalizeWebUrlKey, scoreWebSourceCandidate } from '../utils/web_evidence.js'
+import { buildSearchAttemptKey, createSearchHealthManager, parseRetryAfterMs } from '../utils/web_search_health.js'
 
 const SEARCH_TIMEOUT_MS = 15000
 const IMAGE_DOWNLOAD_TIMEOUT_MS = 18000
@@ -18,42 +19,60 @@ const MAX_IMAGE_DOWNLOAD_BYTES = 10 * 1024 * 1024
 const MAX_PREVIEW_PAGE_BYTES = 3 * 1024 * 1024
 const MAX_IMAGE_SEND_COUNT = 3
 const MAX_IMAGE_VERIFY_CANDIDATES = 6
-const SEARCH_ENGINE_FAILURE_THRESHOLD = 2
-const SEARCH_ENGINE_COOLDOWN_MS = 5 * 60 * 1000
 const MAX_BATCH_SEARCH_TARGETS = 6
 const MAX_SEARCH_QUERY_CHARS = 128
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
-const searchEngineHealth = new Map()
+const searchHealth = createSearchHealthManager()
 
 function throwIfAborted(signal) {
     if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { code: 'AGENT_CANCELLED' })
 }
 
-async function runSearchEngine(name, searchFn, signal) {
-    const state = searchEngineHealth.get(name) || { failures: 0, unavailableUntil: 0 }
-    if (state.unavailableUntil > Date.now()) {
+async function runSearchEngine(name, searchFn, signal, options = {}) {
+    const queryKey = String(options.queryKey || '').trim()
+    const attemptKey = buildSearchAttemptKey(name, queryKey)
+    const attemptedKeys = options.attemptedKeys
+    if (attemptedKeys?.has(attemptKey)) {
+        return { name, status: 'skipped', results: [], reason: 'already_attempted', query: queryKey }
+    }
+    attemptedKeys?.add(attemptKey)
+    const availability = searchHealth.check(name)
+    if (!availability.allowed) {
         logger.warn(`[AI-Plugin] ${name} 搜索源处于熔断冷却，跳过本轮`)
-        return { name, status: 'skipped', results: [], reason: 'circuit_open' }
+        return {
+            name,
+            status: 'skipped',
+            results: [],
+            reason: availability.reason,
+            failureType: availability.state.lastFailureType || '',
+            cooldownUntil: availability.cooldownUntil,
+            query: queryKey
+        }
     }
     try {
         if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { code: 'AGENT_CANCELLED' })
         const results = await searchFn(signal)
-        searchEngineHealth.set(name, { failures: 0, unavailableUntil: 0 })
-        return { name, status: 'ok', results: Array.isArray(results) ? results : [] }
+        searchHealth.recordSuccess(name)
+        return { name, status: 'ok', results: Array.isArray(results) ? results : [], query: queryKey }
     } catch (err) {
         if (signal?.aborted || err?.code === 'AGENT_CANCELLED') throw err
-        const failures = state.failures + 1
-        const unavailableUntil = failures >= SEARCH_ENGINE_FAILURE_THRESHOLD
-            ? Date.now() + SEARCH_ENGINE_COOLDOWN_MS
-            : 0
-        searchEngineHealth.set(name, { failures, unavailableUntil })
-        if (unavailableUntil) {
-            logger.warn(`[AI-Plugin] ${name} 连续失败 ${failures} 次，熔断 ${Math.round(SEARCH_ENGINE_COOLDOWN_MS / 60000)} 分钟: ${err.message}`)
+        const failure = searchHealth.recordFailure(name, err)
+        if (failure.cooldownMs > 0) {
+            logger.warn(`[AI-Plugin] ${name} 搜索失败类型=${failure.failureType}，连续失败 ${failure.failures} 次，熔断 ${Math.round(failure.cooldownMs / 60000)} 分钟: ${err.message}`)
         } else {
-            logger.warn(`[AI-Plugin] ${name} 搜索失败: ${err.message}`)
+            logger.warn(`[AI-Plugin] ${name} 搜索失败类型=${failure.failureType}: ${err.message}`)
         }
-        return { name, status: 'failed', results: [], reason: err.message }
+        return {
+            name,
+            status: 'failed',
+            results: [],
+            reason: err.message,
+            failureType: failure.failureType,
+            cooldownUntil: failure.cooldownUntil,
+            retryAfterMs: failure.retryAfterMs,
+            query: queryKey
+        }
     }
 }
 
@@ -271,6 +290,8 @@ async function fetchSearchHtml(url, engineName, signal) {
         if (!res.ok) {
             const body = await res.text().catch(() => '')
             lastError = new Error(`${engineName} HTTP ${res.status}: ${body.slice(0, 120)}`)
+            lastError.status = res.status
+            lastError.retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'))
             continue
         }
 
@@ -909,10 +930,20 @@ function mergeSearchResults(resultGroups, limit) {
             const existing = byUrl.get(key)
             if (existing) {
                 existing.engineHits = (existing.engineHits || 1) + (existing.searchEngines.includes(source) ? 0 : 1)
-                if (!existing.searchEngines.includes(source)) existing.searchEngines.push(source)
+                if (!existing.searchEngines.includes(source)) {
+                    existing.searchEngines.push(source)
+                    existing.providers.push(source)
+                }
                 continue
             }
-            const normalized = { ...item, engineHits: 1, searchEngines: [source] }
+            const normalized = {
+                ...item,
+                canonicalUrl: key,
+                provider: source,
+                engineHits: 1,
+                searchEngines: [source],
+                providers: [source]
+            }
             byUrl.set(key, normalized)
             merged.push(normalized)
             if (merged.length >= limit) break
@@ -970,10 +1001,11 @@ async function searchWeb(query, count = 5, signal) {
         : Math.min(16, Math.max(count * 2, 8))
     const assessmentCount = Math.min(20, Math.max(count, researchLike ? 10 : count))
     const engineRuns = []
+    const attemptedKeys = new Set()
 
     const mainRuns = await Promise.all([
-        runSearchEngine('Bing', () => searchBing(query, candidateCount, signal), signal),
-        runSearchEngine('百度', () => searchBaidu(query, candidateCount, signal), signal)
+        runSearchEngine('Bing', () => searchBing(query, candidateCount, signal), signal, { queryKey: query, attemptedKeys }),
+        runSearchEngine('百度', () => searchBaidu(query, candidateCount, signal), signal, { queryKey: query, attemptedKeys })
     ])
     engineRuns.push(...mainRuns)
     const mainGroups = mainRuns.map(run => run.results)
@@ -987,10 +1019,10 @@ async function searchWeb(query, count = 5, signal) {
     if (shouldBroaden) {
         logger.info('[AI-Plugin] 多源研究扩展搜索：主搜索直接候选=' + assessment.directCandidates.length + '，继续补充独立搜索源')
         const fallbackRuns = await Promise.all([
-            runSearchEngine('DuckDuckGo', () => searchDuckDuckGo(query, candidateCount, signal), signal),
-            runSearchEngine('Yahoo', () => searchYahoo(query, candidateCount, signal), signal),
-            runSearchEngine('360搜索', () => searchSo360(query, candidateCount, signal), signal),
-            runSearchEngine('搜狗', () => searchSogou(query, candidateCount, signal), signal)
+            runSearchEngine('DuckDuckGo', () => searchDuckDuckGo(query, candidateCount, signal), signal, { queryKey: query, attemptedKeys }),
+            runSearchEngine('Yahoo', () => searchYahoo(query, candidateCount, signal), signal, { queryKey: query, attemptedKeys }),
+            runSearchEngine('360搜索', () => searchSo360(query, candidateCount, signal), signal, { queryKey: query, attemptedKeys }),
+            runSearchEngine('搜狗', () => searchSogou(query, candidateCount, signal), signal, { queryKey: query, attemptedKeys })
         ])
         fallbackGroups = fallbackRuns.map(run => run.results)
         engineRuns.push(...fallbackRuns)
@@ -1004,9 +1036,9 @@ async function searchWeb(query, count = 5, signal) {
         throwIfAborted(signal)
         logger.info('[AI-Plugin] 研究任务来源补充搜索: "' + variant + '"')
         const variantRuns = await Promise.all([
-            runSearchEngine('Bing', () => searchBing(variant, candidateCount, signal), signal),
-            runSearchEngine('百度', () => searchBaidu(variant, candidateCount, signal), signal),
-            runSearchEngine('搜狗', () => searchSogou(variant, candidateCount, signal), signal)
+            runSearchEngine('Bing', () => searchBing(variant, candidateCount, signal), signal, { queryKey: variant, attemptedKeys }),
+            runSearchEngine('百度', () => searchBaidu(variant, candidateCount, signal), signal, { queryKey: variant, attemptedKeys }),
+            runSearchEngine('搜狗', () => searchSogou(variant, candidateCount, signal), signal, { queryKey: variant, attemptedKeys })
         ])
         engineRuns.push(...variantRuns)
         mergedCandidates = mergeSearchResults([
@@ -1020,14 +1052,26 @@ async function searchWeb(query, count = 5, signal) {
 
     logger.info('[AI-Plugin] 搜索相关性与来源评分完成: 候选=' + mergedCandidates.length + ', 展示=' + assessment.results.length + ', 直接候选=' + assessment.directCandidates.length + ', 严格模式=' + strictRelevance)
     const successfulEngineCount = engineRuns.filter(run => run.status === 'ok').length
+    const successfulProviderCount = new Set(engineRuns.filter(run => run.status === 'ok').map(run => run.name)).size
     const searchUnavailable = engineRuns.length > 0 && successfulEngineCount === 0
+    const searchStatus = searchUnavailable
+        ? 'unavailable'
+        : assessment.results.length === 0
+            ? 'empty_result'
+            : assessment.usableEvidenceCount === 0
+                ? 'low_evidence'
+                : successfulEngineCount < engineRuns.filter(run => run.status !== 'skipped').length
+                    ? 'partial_success'
+                    : 'success'
     const transportFailure = searchUnavailable
     const visibleResults = assessment.results.slice(0, count)
     const summary = searchUnavailable
         ? '搜索链路当前不可用：所有搜索源均失败或处于熔断冷却，未获得任何搜索证据；这不代表目标不存在。'
-        : assessment.results.length > 0
-            ? '搜索返回 ' + assessment.results.length + ' 条候选，来源评分已优先排列直接正文；可用直接来源 ' + assessment.usableEvidenceCount + ' 条，独立域名 ' + assessment.independentSourceCount + ' 个，证据质量=' + assessment.quality
-            : '搜索已完成，但没有找到相关结果；这不等于目标不存在。'
+        : searchStatus === 'low_evidence'
+            ? '搜索已返回候选，但没有足够的直接正文证据；不能据此确认目标事实。'
+            : assessment.results.length > 0
+                ? '搜索返回 ' + assessment.results.length + ' 条候选，来源评分已优先排列直接正文；可用直接来源 ' + assessment.usableEvidenceCount + ' 条，独立域名 ' + assessment.independentSourceCount + ' 个，证据质量=' + assessment.quality
+                : '搜索已完成，但没有找到相关结果；这不等于目标不存在。'
     return {
         query,
         results: visibleResults,
@@ -1050,8 +1094,18 @@ async function searchWeb(query, count = 5, signal) {
             recommended: assessment.recommendedSources
         },
         searchVariants: researchVariants,
-        engineStatus: engineRuns.map(run => ({ name: run.name, status: run.status, reason: run.reason || '' })),
+        engineStatus: engineRuns.map(run => ({
+            name: run.name,
+            query: run.query || query,
+            status: run.status,
+            reason: run.reason || '',
+            failureType: run.failureType || '',
+            retryAfterMs: Math.max(0, Number(run.retryAfterMs) || 0),
+            cooldownUntil: Number(run.cooldownUntil) || 0
+        })),
+        searchStatus,
         successfulEngineCount,
+        successfulProviderCount,
         searchUnavailable,
         transportFailure,
         ok: assessment.usableEvidenceCount > 0,
@@ -1068,6 +1122,7 @@ async function searchWeb(query, count = 5, signal) {
             recommendedSources: assessment.recommendedSources,
             authoritativeSourceCount: assessment.authoritativeSourceCount,
             searchVariants: researchVariants,
+            searchStatus,
             searchUnavailable,
             transportFailure
         },
@@ -1195,6 +1250,7 @@ export const webSearchTool = {
                 return {
                     query,
                     results: [],
+                    searchStatus: 'unavailable',
                     evidenceQuality: 'low',
                     usableEvidenceCount: 0,
                     independentSourceCount: 0,
@@ -1202,6 +1258,7 @@ export const webSearchTool = {
                     sufficientForSensitiveClaims: false,
                     engineStatus: [],
                     successfulEngineCount: 0,
+                    successfulProviderCount: 0,
                     searchUnavailable: true,
                     transportFailure: true,
                     ok: false,
@@ -1224,6 +1281,13 @@ export const webSearchTool = {
             queries,
             targets,
             results: targets.flatMap(target => Array.isArray(target.results) ? target.results : []),
+            searchStatus: allUnavailable
+                ? 'unavailable'
+                : usableTargets.length === 0
+                    ? 'low_evidence'
+                    : usableTargets.length < targets.length
+                        ? 'partial_success'
+                        : 'success',
             evidenceQuality: qualities.length === 1 ? qualities[0] : 'mixed',
             usableEvidenceCount: aggregateUsableEvidenceCount,
             independentSourceCount: aggregateIndependentSourceCount,
@@ -1233,8 +1297,9 @@ export const webSearchTool = {
             autoFetchCandidates: targets.flatMap(target => Array.isArray(target.autoFetchCandidates)
                 ? target.autoFetchCandidates
                 : (target.autoFetchCandidate ? [target.autoFetchCandidate] : [])),
-            engineStatus: [],
+            engineStatus: targets.flatMap(target => Array.isArray(target.engineStatus) ? target.engineStatus : []),
             successfulEngineCount: targets.reduce((sum, target) => sum + (Number(target.successfulEngineCount) || 0), 0),
+            successfulProviderCount: targets.reduce((sum, target) => sum + (Number(target.successfulProviderCount) || 0), 0),
             searchUnavailable: allUnavailable,
             transportFailure: allUnavailable,
             ok: usableTargets.length > 0,
@@ -1277,7 +1342,7 @@ export const webSearchTool = {
                     const source = item.source ? ` (${item.source})` : ''
                     text += `${index + 1}. ${item.title}${source}\n   来源: ${item.url}\n   摘要: ${item.snippet}\n`
                 })
-                text += `证据质量：${target.evidenceQuality || 'low'}；可用直接来源 ${Math.max(0, Number(target.usableEvidenceCount) || 0)} 条；独立域名 ${Math.max(0, Number(target.independentSourceCount) || 0)} 个。\n`
+                text += `搜索状态：${target.searchStatus || 'unknown'}；证据质量：${target.evidenceQuality || 'low'}；可用直接来源 ${Math.max(0, Number(target.usableEvidenceCount) || 0)} 条；独立域名 ${Math.max(0, Number(target.independentSourceCount) || 0)} 个。\n`
                 if (target.sufficientForSensitiveClaims !== true) {
                     text += '该目标的搜索摘要不足以单独支撑敏感或精确结论，需要继续读取权威原始来源。\n'
                 }
@@ -1307,11 +1372,12 @@ export const webSearchTool = {
         }
         if (!Array.isArray(data)) {
             const quality = data?.evidenceQuality || 'low'
+            const searchStatus = data?.searchStatus || 'unknown'
             const usableCount = Math.max(0, Number(data?.usableEvidenceCount) || 0)
             const domainCount = Math.max(0, Number(data?.independentSourceCount) || 0)
             const authoritativeCount = Math.max(0, Number(data?.authoritativeSourceCount) || 0)
             const mediaCount = Math.max(0, Number(data?.mediaSourceCount) || 0)
-            text += `\n【搜索证据质量】${quality}；可用直接来源 ${usableCount} 条；独立域名 ${domainCount} 个；可识别官方来源 ${authoritativeCount} 个；媒体来源 ${mediaCount} 个。\n`
+            text += `\n【搜索状态】${searchStatus}；证据质量=${quality}；可用直接来源 ${usableCount} 条；独立域名 ${domainCount} 个；可识别官方来源 ${authoritativeCount} 个；媒体来源 ${mediaCount} 个。\n`
             if (data?.sufficientForSensitiveClaims !== true) {
                 text += '这些搜索摘要不足以单独支撑涉及个人、组织、违法违规、争议经过等敏感结论；必须继续获取原始页面或多个独立直接来源，并明确区分已核实事实与网传说法。\n'
             }
