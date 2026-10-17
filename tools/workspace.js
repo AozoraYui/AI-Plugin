@@ -94,10 +94,10 @@ export function scoreWorkspaceFilenameMatch(fileName = '', query = '') {
 export const workspaceListTool = {
     name: 'workspace_list',
     permission: 'master',
-    description: '结构化列出白名单工作区中的文件和目录，支持有限深度递归；比 Shell ls/find 更适合后续 Agent 规划。',
+    description: '结构化列出主人指定工作区中的文件和目录，支持有限深度递归；比 Shell ls/find 更适合后续 Agent 规划。',
     functionSchema: {
         name: 'workspace_list',
-        description: '列出白名单工作区目录内容。',
+        description: '列出主人指定工作区目录内容。',
         parameters: {
             type: 'object',
             properties: {
@@ -165,7 +165,7 @@ export const workspaceListTool = {
 export const workspaceSearchTool = {
     name: 'workspace_search',
     permission: 'master',
-    description: '在白名单工作区内按文件名或文本内容搜索，返回结构化路径、行号和匹配片段。',
+    description: '在主人指定工作区内按文件名或文本内容搜索，返回结构化路径、行号和匹配片段。',
     functionSchema: {
         name: 'workspace_search',
         description: '搜索工作区文件名或文件内容。',
@@ -242,7 +242,7 @@ export const workspaceSearchTool = {
 export const workspaceReadTool = {
     name: 'workspace_read',
     permission: 'master',
-    description: '按行读取白名单工作区文件，提供稳定行号、分页和文件元信息。',
+    description: '按行读取主人指定工作区文件，提供稳定行号、分页和文件元信息。',
     functionSchema: {
         name: 'workspace_read',
         description: '按行读取工作区文本文件。',
@@ -423,7 +423,7 @@ export const workspaceSurveyTool = {
 export const workspacePatchTool = {
     name: 'workspace_patch',
     permission: 'master',
-    description: '在白名单工作区中执行精确文本替换补丁，要求旧文本真实存在，原子写入并重新读取验证。',
+    description: '在主人指定工作区中执行精确文本替换补丁，要求旧文本真实存在，原子写入并重新读取验证。',
     functionSchema: {
         name: 'workspace_patch',
         description: '对工作区文本文件执行精确替换。',

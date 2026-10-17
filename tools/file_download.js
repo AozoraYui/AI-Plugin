@@ -1,14 +1,12 @@
 /**
  * 文件下载工具
- * 把当前消息 / 引用消息中的图片、视频、语音、文件下载到服务器白名单目录。
- * 仅主人可用；保存目录受 file_roots.yaml 白名单约束。
+ * 把当前消息 / 引用消息中的图片、视频、语音、文件下载到服务器目录。
+ * 仅主人可用；保存目录由主人明确指定或使用插件默认目录。
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { toolRegistry } from './registry.js'
-import { checkPathAllowed } from '../utils/file_access.js'
-import { Config } from '../utils/config.js'
 import { fetchWithProxy } from '../utils/common.js'
 
 const MAX_FORWARD_DEPTH = 3
@@ -127,15 +125,10 @@ async function collectMediaFromEvent(event) {
     })
 }
 
-// 解析保存目录（仍受白名单约束）：
+// 解析保存目录：
 //   - 用户指定了 save_dir：直接存入该目录本身，不套时间戳子目录。
 //   - 未指定：存到机器人根目录 resources/noa/时间戳 子目录（避免默认堆积/覆盖）。
 function resolveSaveDir(inputDir) {
-    const roots = Config.FILE_ROOTS
-    if (!Array.isArray(roots) || roots.length === 0) {
-        return { error: '未配置文件白名单(FILE_ROOTS)，无法确定保存目录' }
-    }
-
     const hasInput = inputDir && String(inputDir).trim()
     let target
     if (hasInput) {
@@ -155,19 +148,12 @@ function resolveSaveDir(inputDir) {
         }
     }
 
-    // 先建目录再校验白名单（checkPathAllowed 需要真实路径）
     try {
         fs.mkdirSync(target, { recursive: true })
     } catch (err) {
         return { error: `创建保存目录失败: ${err.message}` }
     }
-    const check = checkPathAllowed(target)
-    if (!check.allowed) {
-        // 仅清理默认时间戳目录；用户指定目录不删
-        if (!hasInput) { try { fs.rmdirSync(target) } catch { /* ignore */ } }
-        return { error: `保存目录不在白名单内: ${check.reason || target}` }
-    }
-    return { dir: check.realPath, userSpecified: !!hasInput }
+    return { dir: fs.realpathSync(target), userSpecified: !!hasInput }
 }
 
 // 下载单个媒体（带重试 + 超时）
@@ -223,19 +209,19 @@ async function downloadOne(item, index, targetDir, forceExt = '', signal) {
 export const fileDownloadTool = {
     name: 'file_download',
     permission: 'master',
-    description: '把当前消息或引用消息中的图片、视频、语音、文件下载并保存到服务器白名单目录。仅限主人。适合主人说"把这个文件存到服务器""下载我引用的图片/视频"等场景。',
+    description: '把当前消息或引用消息中的图片、视频、语音、文件下载并保存到服务器目录。仅限主人。适合主人说"把这个文件存到服务器""下载我引用的图片/视频"等场景。',
 
     functionSchema: {
         type: 'function',
         function: {
             name: 'file_download',
-            description: '下载消息/引用消息中的媒体到服务器白名单目录。仅限主人。',
+            description: '下载消息/引用消息中的媒体到服务器目录。仅限主人。',
             parameters: {
                 type: 'object',
                 properties: {
                     save_dir: {
                         type: 'string',
-                        description: '可选，保存目录（必须在白名单内）。用户明确指定目录时填写，文件会直接存入该目录；不填则默认存到机器人根目录 resources/noa/时间戳 子目录。'
+                        description: '可选，保存目录。用户明确指定目录时填写，文件会直接存入该目录；不填则默认存到机器人根目录 resources/noa/时间戳 子目录。'
                     },
                     force_ext: {
                         type: 'string',

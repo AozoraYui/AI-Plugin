@@ -2255,7 +2255,7 @@ export class ChatHandler extends plugin {
             if (e.isMaster && this.client.enableShellSession) {
                 enabledTools.push('shell_session')
             }
-            // 文件收发：主人开启 enable_file_transfer 后可上传白名单文件到会话 / 下载会话媒体到白名单目录
+            // 文件收发：主人开启 enable_file_transfer 后可上传本地文件到会话 / 下载会话媒体到服务器目录
             if (e.isMaster && this.client.enableFileTransfer) {
                 enabledTools.push('file_send')
                 enabledTools.push('file_download')
@@ -2721,6 +2721,8 @@ ${visualDescription}`
                         onExecution: async (execution) => {
                         throwIfExecutionCancelled()
                         const { call, index: roundCallIndex, key, result, protocol, formattedResult: runtimeFormattedResult, status: runtimeStatus, pending } = execution
+                        const executionFailed = !result.success || protocol?.ok === false
+                        const failureReason = result.error || protocol?.error || result.data?.error || '工具返回业务失败'
                         seenToolCalls.add(key)
                         if (call.name === 'shell_exec' || call.name === 'shell_session') shellToolExecutionCount++
                         if (call.name === 'shell_session'
@@ -2736,8 +2738,8 @@ ${visualDescription}`
                             shellConnectionLost = false
                             shellCommandOutcomeUnknown = false
                         }
-                        if (!result.success) {
-                            logger.warn(`[AI-Plugin] ${call.name} 失败: ${result.error}`)
+                        if (executionFailed) {
+                            logger.warn(`[AI-Plugin] ${call.name} 失败: ${failureReason}`)
                             const failureText = `${formatToolProtocol(protocol)}\n${runtimeFormattedResult}`
                             if (call.name === 'web_search') {
                                 webResearchUsed = true
@@ -3417,16 +3419,17 @@ ${visualDescription}`
                         logger.warn(`[AI-Plugin] Shell 补查第 ${round} 轮: ${command}${isPaging ? ` (offset=${offsetChars})` : ''}`)
                         const result = await toolRegistry.execute('shell_exec', args, e.isMaster, toolContext)
                         shellToolExecutionCount++
-                        if (!result.success) {
-                            logger.warn(`[AI-Plugin] Shell 补查失败: ${result.error}`)
-                            userMessage += `\n\n【Shell补查失败】命令: ${command}\n错误: ${result.error}\n`
+                        if (!result.success || result.protocol?.ok === false) {
+                            const failureReason = result.error || result.protocol?.error || result.data?.error || '工具返回业务失败'
+                            logger.warn(`[AI-Plugin] Shell 补查失败: ${failureReason}`)
+                            userMessage += `\n\n【Shell补查失败】命令: ${command}\n错误: ${failureReason}\n`
                             await recordAgentStep(this.conversationManager.db, agentTask, {
                                 stepIndex: 8000 + round,
                                 stepType: 'shell_followup',
                                 toolName: 'shell_exec',
                                 toolArgs: args,
                                 status: 'failed',
-                                content: `Shell补查失败：${result.error || '未知错误'}`
+                                content: `Shell补查失败：${failureReason}`
                             })
                             break
                         }

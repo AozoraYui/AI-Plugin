@@ -1673,21 +1673,23 @@ export class FastChatHandler extends plugin {
                         },
                         onExecution: async (execution) => {
                         const { call, result, protocol } = execution
+                        const executionSucceeded = result.success && protocol?.ok === true
+                        const failureReason = result.error || protocol?.error || result.data?.error || '工具返回业务失败'
                         seenToolCalls.add(execution.key)
-                        if (result.success && protocol.ok && !execution.pending) hasSuccessfulToolResult = true
-                        if (result.success && protocol.ok && protocol.verified && !execution.pending) hasVerifiedToolResult = true
-                        if (call.name === 'user_profile_update' && result.success && protocol.ok && !execution.pending && result.data?.ok === true) {
+                        if (executionSucceeded && protocol.ok && !execution.pending) hasSuccessfulToolResult = true
+                        if (executionSucceeded && protocol.ok && protocol.verified && !execution.pending) hasVerifiedToolResult = true
+                        if (call.name === 'user_profile_update' && executionSucceeded && protocol.ok && !execution.pending && result.data?.ok === true) {
                             hasSuccessfulProfileUpdate = true
                         }
-                        if (result.success && isUnfulfilledImageSearch(call, result.data)) {
+                        if (executionSucceeded && isUnfulfilledImageSearch(call, result.data)) {
                             failedImageSearchAttempts++
-                        } else if (result.success && call.name === 'web_search' && Number(result.data?.requestedImages || 0) > 0 && result.data?.sentImages?.length > 0) {
+                        } else if (executionSucceeded && call.name === 'web_search' && Number(result.data?.requestedImages || 0) > 0 && result.data?.sentImages?.length > 0) {
                             failedImageSearchAttempts = 0
                         }
-                        if (workspaceSurveyArgs && result.success && call.name === 'workspace_list' && Array.isArray(result.data?.entries)) {
+                        if (workspaceSurveyArgs && executionSucceeded && call.name === 'workspace_list' && Array.isArray(result.data?.entries)) {
                             workspaceSurveyEntries = result.data.entries
                         }
-                        if (workspaceSurveyArgs && result.success && call.name === 'workspace_read' && result.data?.facts?.path) {
+                        if (workspaceSurveyArgs && executionSucceeded && call.name === 'workspace_read' && result.data?.facts?.path) {
                             workspaceSurveyReadPaths.add(String(result.data.facts.path))
                         }
                         await recordAgentTaskStep(this.conversationManager.db, fastAgentTask, {
@@ -1698,7 +1700,7 @@ export class FastChatHandler extends plugin {
                             status: execution.pending ? 'waiting' : execution.status,
                             content: execution.formattedResult
                         }, { logger, logPrefix: '[AI-Plugin] [畅聊] Agent任务' })
-                        if (result.success) {
+                        if (executionSucceeded) {
                             let injection = `${formatToolProtocol(protocol)}\n${formatFastChatToolInjection(call.name, result.data)}`
                             if (call.name === 'workspace_survey') {
                                 injection += '\n【源码普查边界】这是静态扫描摘要；必须依据 facts.coverage 和 syntaxErrorCount 汇报覆盖范围，不得把摘要冒充逐行代码审查，也不得声称执行了源码。'
@@ -1717,8 +1719,8 @@ export class FastChatHandler extends plugin {
                             toolContextText = truncateMiddleText(toolContextText + injection, FAST_CHAT_TOOL_CONTEXT_MAX_CHARS)
                             logger.info(`[AI-Plugin] [畅聊] ${call.name} ${protocol.ok ? '完成' : '业务失败'}，结果已注入${protocol.pending ? '（等待确认）' : ''}`)
                         } else {
-                            toolContextText = truncateMiddleText(toolContextText + `\n\n${formatToolProtocol(protocol)}\n【畅聊工具失败：${call.name}】${result.error || '未知错误'}`, FAST_CHAT_TOOL_CONTEXT_MAX_CHARS)
-                            logger.warn(`[AI-Plugin] [畅聊] ${call.name} 失败: ${result.error}`)
+                            toolContextText = truncateMiddleText(toolContextText + `\n\n${formatToolProtocol(protocol)}\n【畅聊工具失败：${call.name}】${failureReason}`, FAST_CHAT_TOOL_CONTEXT_MAX_CHARS)
+                            logger.warn(`[AI-Plugin] [畅聊] ${call.name} 失败: ${failureReason}`)
                         }
                     }
                     })

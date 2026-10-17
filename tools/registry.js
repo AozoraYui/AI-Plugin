@@ -49,7 +49,7 @@ const TOOL_USAGE_GUIDES = {
     },
     file_send: {
         capabilities: [
-            '把服务器白名单目录内的文件或文件夹发送到当前 QQ 会话。',
+            '把服务器上的文件或文件夹发送到当前 QQ 会话。',
             '文件夹会自动打包为 tar.gz；图片文件可按用户要求作为图片发送。'
         ],
         useWhen: [
@@ -85,7 +85,7 @@ const TOOL_USAGE_GUIDES = {
         ]
     },
     workspace_list: {
-        capabilities: ['结构化列出白名单工作区目录，返回路径、类型、大小和修改时间。'],
+        capabilities: ['结构化列出主人指定的工作区目录，返回路径、类型、大小和修改时间。'],
         useWhen: ['需要了解项目结构、目录内容或定位下一步读取范围时优先使用。'],
         avoid: ['不要用来读取文件正文；正文使用 workspace_read。']
     },
@@ -119,7 +119,7 @@ const TOOL_USAGE_GUIDES = {
     },
     file_download: {
         capabilities: [
-            '把当前消息或引用消息中的图片、视频、语音、普通文件保存到服务器白名单目录。',
+            '把当前消息或引用消息中的图片、视频、语音、普通文件保存到服务器目录。',
             '不需要 URL，工具会从消息或引用消息里自动提取媒体。'
         ],
         useWhen: [
@@ -150,7 +150,7 @@ const TOOL_USAGE_GUIDES = {
     },
     group_file_download: {
         capabilities: [
-            '把当前 QQ 群文件区里的指定群文件下载到服务器白名单目录。',
+            '把当前 QQ 群文件区里的指定群文件下载到服务器目录。',
             '可按文件名片段匹配；引用群文件消息时 file_name 可留空自动提取。'
         ],
         useWhen: [
@@ -1198,7 +1198,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - nmap/局域网设备扫描：如果主模型计划是先探测本机网络，shell_exec 可编译为 "ip route get 1.1.1.1; ip -o -4 addr show scope global; ip route show default"；如果主模型计划用 shell_session 一步执行，input 必须用 ip route/ip addr 自动推断 iface/cidr 后再 nmap -sn "$cidr"，不要硬编码 192.168.0.0/24 或 192.168.1.0/24。
 - shell_exec/shell_session 若返回目录安全检查阻止执行，后续不要再编译新的 Shell 命令绕过检查，应让主模型反问主人。
 - file_download 用于下载当前消息或引用消息里的媒体，不需要 URL；web_fetch 才需要完整 URL。
-- 如果当前指令是“看/分析/描述”服务器本地图片路径（如 /root/.../xxx.jpg），对话流程会在工具路由前把白名单内图片作为多模态输入附加；不要再编译 shell_exec 或 shell_session 去读取同一张图片。
+- 如果当前指令是“看/分析/描述”服务器本地图片路径（如 /root/.../xxx.jpg），对话流程会在工具路由前把主人明确提供且真实存在的本地图片作为多模态输入附加；不要再编译 shell_exec 或 shell_session 去读取同一张图片。
 - draw_image 的参考图由工具自动提取（当前图、引用图、@头像、最近图片缓存）；角色参考图库参数按计划填写 character/characters/self_portrait。主模型已经计划 draw_image 时，不要仅因当前消息没有图片就丢弃调用；如果最近图片缓存可用，工具会按“刚才那张/这张图/用 p 模型处理/修图/去水印”等语义自行复用。对于“把这张图真人化/转成真人版/写实化”这类参考图编辑，必须把效果写进 prompt，不要填写 preset=“真人化”之类未确认存在的预设名。
 - group_chat_context 的 scope 必须按主模型计划保留：当前群短前情用 current_group；主人问机器人加了哪些群/能看到哪些群用 group_list；用户问自己在别的群/其他群刚发了什么用 other_group_messages 并设置 exclude_current_group=true；用户问自己跨群最近消息但未排除当前群用 my_recent_messages；主人要求所有群或指定群才用 all_groups/specific_group。普通用户不要编译其他人的 user_id。主人按群名问指定群但没有明确 group_id 时，可把群名放 query，工具会尝试解析为群号。普通 #c 中，用户问“他们刚才说了啥/群里刚刚发生了什么/最近前情”也可以编译 current_group；跨群/所有群流水仍只给主人编译。
 - group_chat_digest 用于长时间范围群聊总结：最近几天/昨天/今天/最近几小时/我不在的时候/从我上次发言后/帮我补课。短前情仍优先 group_chat_context。当前群 scope=current_group；“我不在/上次发言后”填 range=since_last_message；“最近 N 天/小时”填 range=recent_days/recent_hours 和 days/hours；用户问自己在别的群/其他群这段时间聊了什么，用 scope=my_recent_messages 且 exclude_current_group=true；主人指定群可填 group_id 或 target，所有群填 scope=all_groups。
@@ -1369,7 +1369,7 @@ ${toolDescriptionText}
 - group_chat_digest 用于较长时间范围的群聊总结，例如“最近几天/昨天/今天/我不在的时候/从我上次发言后群里聊了什么”；用户问自己在别的群/其他群这段时间聊了什么时 scope=my_recent_messages 且 exclude_current_group=true；短前情不要用它。
 - memory_search 可以用于“历史里查一下/以前有没有说过/相关记忆/语义检索”等只读历史召回；不要用于写档案，当前群刚才发生了什么优先 group_chat_context。
 - user_profile_update 只有在用户当前明确要求写入/更新/提炼个人档案或用户画像时使用；只是询问档案能力、查看档案、普通偏好闲聊都不要调用。用户说“全面读我们的对话/从所有群我的发言/结合当前群上下文提炼档案”时，mode=history，并按来源填写 sources 或 source_scope。
-- 文件/目录工具不强制要求绝对路径；可使用用户原话中的路径、别名、相对路径或文件名片段，由工具在白名单内解析。
+- 文件/目录工具不强制要求绝对路径；可使用用户原话中的路径、别名、相对路径或文件名片段，由工具在常用运行目录内做有限模糊解析。
 - YAML/JSON 配置读写优先使用 config_manage；更新时明确提供 action=update、key_path、operation 和 value，不要生成 sed/Python/Shell 文本修改命令。
 - 搜索关键词要精确、简洁，不超过 128 字。
 - 带图片但没有明确工具需求时，不要脑补工具调用；图片理解交给后续多模态流程。

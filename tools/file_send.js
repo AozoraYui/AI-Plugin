@@ -1,7 +1,7 @@
 /**
  * 本地文件上传工具
- * 允许 AI 把白名单目录下的文件/文件夹发送到当前会话（群/好友）。
- * 仅主人可用；路径受 file_roots.yaml 白名单约束。
+ * 允许 AI 把服务器上的文件/文件夹发送到当前会话（群/好友）。
+ * 仅主人可用；路径必须真实存在且通过文件类型、大小和适配器可见性校验。
  * 文件夹会先用系统 tar 打包为 .tar.gz 再发送，避免引入额外依赖。
  */
 
@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { toolRegistry } from './registry.js'
-import { checkPathAllowed, findFuzzyPathInAllowedRoots, rememberResolvedPath, resolvePathInput } from '../utils/file_access.js'
+import { checkPathAllowed, findFuzzyPathInRuntimeRoots, rememberResolvedPath, resolvePathInput } from '../utils/file_access.js'
 
 // 单个文件发送上限（字节）。过大文件 QQ 通常发送失败，提前拦截给出清晰提示。
 const MAX_SEND_SIZE = 200 * 1024 * 1024 // 200MB
@@ -91,13 +91,13 @@ function buildDockerNapcatHint(sendPath) {
         '  · docker-compose 写法：在该服务的 volumes 下加一行',
         '      volumes:',
         `        - "${dirOfFile}:${dirOfFile}"`,
-        '  · 建议直接把 file_roots.yaml 里的白名单根目录整体挂载进去，省得每个子目录单独挂。',
+        '  · 建议直接把插件或资源目录整体挂载进去，省得每个子目录单独挂。',
         '  · 改完后需要重新创建容器使挂载生效：',
         '      docker compose up -d   （或 docker rm -f 后用新的 -v 重新 docker run）',
         '',
         '【方案二】把要发送的文件放到"已经和容器共享的目录"里再发',
         '  NapCat 容器通常已经挂了数据目录（如宿主机某目录映射到容器内 /app/.config/QQ 之类），',
-        '  把目标文件复制到这个已共享目录下，再把该宿主机目录加入 file_roots.yaml 白名单，然后发送。',
+        '  把目标文件放到宿主机与 NapCat 容器都能看到的共享目录下，再发送。',
         '  注意：若容器内外路径不一致，仍可能失败，优先用方案一保持路径一致。',
         '',
         '【方案三】检查 NapCat 自身的文件/富媒体上传权限与配置',
@@ -123,19 +123,19 @@ function buildDockerNapcatShortHint(sendPath) {
 export const fileSendTool = {
     name: 'file_send',
     permission: 'master',
-    description: '把服务器白名单目录下的文件或文件夹发送到当前 QQ 会话（群或好友）。仅限主人。适合主人说"把某个文件发我""发一下那个日志/配置/脚本"等场景。文件夹会自动打包为 tar.gz 后发送。',
+    description: '把服务器上的文件或文件夹发送到当前 QQ 会话（群或好友）。仅限主人。适合主人说"把某个文件发我""发一下那个日志/配置/脚本"等场景。文件夹会自动打包为 tar.gz 后发送。',
 
     functionSchema: {
         type: 'function',
         function: {
             name: 'file_send',
-            description: '将服务器本地文件/文件夹发送到当前会话。仅限主人，路径受白名单约束。',
+            description: '将服务器本地文件/文件夹发送到当前会话。仅限主人，路径必须真实存在。',
             parameters: {
                 type: 'object',
                 properties: {
                     path: {
                         type: 'string',
-                        description: '要发送的文件或文件夹路径，支持绝对路径、相对路径、常用别名或文件名片段（会在白名单目录内模糊查找）。目标不明确时建议先让主人补充准确路径。'
+                        description: '要发送的文件或文件夹路径，支持绝对路径、相对路径、常用别名或文件名片段（会在常用运行目录内模糊查找）。目标不明确时建议先让主人补充准确路径。'
                     },
                     as_image: {
                         type: 'boolean',
@@ -155,17 +155,17 @@ export const fileSendTool = {
         const event = context.event
         if (!event) return '【文件发送失败】缺少会话上下文，无法发送文件。'
 
-        // 解析路径：先走别名/相对路径解析，命中不到再在白名单目录内模糊查找
+        // 解析路径：先走别名/相对路径解析，命中不到再在常用运行目录内模糊查找
         let resolved = resolvePathInput(rawInput, context)
         if (!resolved || !fs.existsSync(resolved)) {
-            const fuzzy = findFuzzyPathInAllowedRoots(rawInput)
+            const fuzzy = findFuzzyPathInRuntimeRoots(rawInput)
             if (fuzzy) resolved = fuzzy
         }
         if (!resolved || !fs.existsSync(resolved)) {
             return `【文件发送失败】未找到文件: ${rawInput}（请确认文件名或让 AI 用 Shell 查询准确路径）`
         }
 
-        // 白名单校验：只能发送白名单目录内的文件
+        // 真实路径校验：不再使用静态白名单，但仍拒绝不存在或无法解析的路径
         const check = checkPathAllowed(resolved)
         if (!check.allowed) {
             return `【文件发送失败】${check.reason}`

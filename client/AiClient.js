@@ -755,7 +755,7 @@ export class AiClient {
                     this.ensureShellSessionOnStartup()
                 }
                 if (this.enableFileTransfer) {
-                    logger.info('[AI-Plugin] 文件收发已启用：主人可让 AI 上传白名单文件到会话、下载会话媒体到白名单目录')
+                    logger.info('[AI-Plugin] 文件收发已启用：主人可让 AI 上传本地文件到会话、下载会话媒体到服务器目录')
                 }
                 if (this.enableAiDraw) {
                     logger.info('[AI-Plugin] AI 对话画图已启用：可在对话中按意图调用插件画图能力')

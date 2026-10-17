@@ -98,7 +98,7 @@ const defaultConfig = {
     FAST_CHAT_AUTO_READ_IMAGE_LIMIT: 2,
     FAST_CHAT_IMAGE_BATCH_SIZE: 3,
     FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS: 300,
-    // ========== 文件白名单与 Shell 工具配置 ==========
+    // ========== 文件工具与 Shell 工具配置 ==========
     // 本地图片路径输入的单文件最大大小（字节），默认 8MB
     FILE_MAX_SIZE: 8388608,
     // Shell 命令默认超时时间（毫秒），仅在 enable_shell_exec 开启后可由主人使用
@@ -211,7 +211,6 @@ export const CHECKPOINT_DIR = path.join(DATA_DIR, 'memory_checkpoints')
 export const HISTORY_DIR = path.join(DATA_DIR, 'user_histories')
 export const AI_NAME_FILE = path.join(DATA_DIR, 'ai_name.yaml')
 export const TRUSTED_GROUPS_FILE = path.join(DATA_DIR, 'trusted_groups.yaml')
-export const FILE_ROOTS_FILE = path.join(DATA_DIR, 'file_roots.yaml')
 export const PROMPTS_FILE = path.join(DATA_DIR, 'ai_prompt.yaml')
 export const TEMPLATE_DIR_EXPORT = TEMPLATE_DIR
 
@@ -308,26 +307,6 @@ function saveTrustedGroups(groups) {
     }
 }
 
-function loadFileRoots() {
-    try {
-        if (!fs.existsSync(FILE_ROOTS_FILE)) {
-            logger.info(`[AI-Plugin] 未找到文件白名单配置，将从模板创建。`)
-            ensureDataDir()
-            copyFromTemplate('file_roots.yaml', FILE_ROOTS_FILE, '文件白名单')
-        }
-        const fileContent = fs.readFileSync(FILE_ROOTS_FILE, 'utf8')
-        const data = yaml.parse(fileContent)
-        if (data && Array.isArray(data.paths)) {
-            logger.info(`[AI-Plugin] 已加载 ${data.paths.length} 个文件白名单路径`)
-            return data.paths
-        }
-        return []
-    } catch (error) {
-        logger.error(`[AI-Plugin] 加载文件白名单失败: ${error.message}`)
-        return []
-    }
-}
-
 function loadPrompts() {
     ensureDataDir()
     try {
@@ -347,7 +326,6 @@ let config = {}
 const presets = loadPresetsSync()
 const loadedAIName = loadAIName()
 const loadedTrustedGroups = loadTrustedGroups()
-const loadedFileRoots = loadFileRoots()
 const loadedPrompts = loadPrompts()
 
 export const Config = {
@@ -482,7 +460,6 @@ export const Config = {
         const num = Number(val)
         config.FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS = Number.isFinite(num) && num >= 0 ? num : defaultConfig.FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS
     },
-    get FILE_ROOTS() { return loadedFileRoots ?? defaultConfig.FILE_ROOTS },
     get FILE_MAX_SIZE() { return config.FILE_MAX_SIZE ?? defaultConfig.FILE_MAX_SIZE },
     get SHELL_EXEC_TIMEOUT_MS() { return config.SHELL_EXEC_TIMEOUT_MS ?? defaultConfig.SHELL_EXEC_TIMEOUT_MS },
     set SHELL_EXEC_TIMEOUT_MS(val) { config.SHELL_EXEC_TIMEOUT_MS = Number(val) || defaultConfig.SHELL_EXEC_TIMEOUT_MS },

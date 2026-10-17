@@ -152,7 +152,7 @@ enable_web_fetch: false
 # enable_shell_exec: 是否允许 AI 执行服务器 Shell 命令（默认 false）
 #   高危能力：等同把服务器命令行交给 AI，请慎重开启
 #   仅主人可用；非主人无论如何都无法触发
-#   开启后同时启用结构化工作区 list/search/read/patch/verify；工作区工具受 file_roots.yaml 白名单约束
+#   开启后同时启用结构化工作区 list/search/read/patch/verify；工作区工具仅主人可用，并保留真实路径和文件安全校验
 #   patch 成功后 Agent 会强制执行语言语法检查与 git diff --check；静态校验不等于项目测试通过
 #   仍可用 rg/ls/cat/tail 等 Shell 命令查看目录和日志，并用于运行测试或诊断服务
 #   支持多轮补查：AI 可根据上一条命令结果决定下一步命令
@@ -181,9 +181,9 @@ enable_web_fetch: false
 #
 # enable_file_transfer: 是否启用文件收发（默认 false）
 #   仅主人可用；开启后 AI 可按意图：
-#     · 上传：把白名单目录内的文件/文件夹发送到当前会话（文件夹自动打包为 tar.gz）
-#     · 下载：把当前消息或引用消息里的图片/视频/语音/文件保存到白名单目录
-#   路径同样受 file_roots.yaml 白名单约束
+#     · 上传：把服务器上的文件/文件夹发送到当前会话（文件夹自动打包为 tar.gz）
+#     · 下载：把当前消息或引用消息里的图片/视频/语音/文件保存到服务器目录
+#   不使用静态路径白名单，但所有文件工具仍仅主人可用并执行真实路径、类型、大小校验
 #   非主人无论如何都无法触发
 #
 # enable_ai_draw: 是否启用 AI 对话联动画图（默认 false）

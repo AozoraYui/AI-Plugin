@@ -70,7 +70,7 @@ export class HelpHandler extends plugin {
 > Shell 执行（主人专用）
   需在 models_config.yaml 开启 enable_shell_exec: true（独立开关）。
   开启后 AI 会优先使用结构化工作区工具列目录、搜索、按行读取和精确修改文件；修改后会强制执行语法与 Git diff 静态校验，必要时再执行 Shell 命令运行测试或诊断服务。
-  工作区读写同样受 file_roots.yaml 白名单限制；静态校验不等于项目测试已经通过。
+  工作区读写不受静态路径白名单限制，仅主人可用；仍会校验路径存在性、真实路径、文件类型和大小，静态校验不等于项目测试已经通过。
   注意：Shell 具备完整服务器权限。
 > 持久 Shell 会话（主人专用）
   需在 models_config.yaml 开启 enable_shell_session: true（独立开关）。
@@ -80,10 +80,10 @@ export class HelpHandler extends plugin {
   执行会改动状态的命令前会检查目录语义；目录不对会停止执行并反问你下一步。
 > 文件收发（主人专用）
   需在 models_config.yaml 开启 enable_file_transfer: true（独立开关）。
-  上传：让 AI 把白名单目录内的文件/文件夹发到当前会话（文件夹自动打包为 tar.gz）。
-  下载：让 AI 把当前消息或引用消息里的图片/视频/语音/文件保存到白名单目录。
-  群文件：让 AI 浏览当前群的群文件区，或按文件名把群文件下载到白名单目录（仅群聊）。
-  路径受 file_roots.yaml 白名单约束，仅主人可用。
+  上传：让 AI 把服务器上的文件/文件夹发到当前会话（文件夹自动打包为 tar.gz）。
+  下载：让 AI 把当前消息或引用消息里的图片/视频/语音/文件保存到服务器目录。
+  群文件：让 AI 浏览当前群的群文件区，或按文件名把群文件下载到服务器目录（仅群聊）。
+  不使用静态路径白名单，仅主人可用；仍保留真实路径、文件类型、大小和适配器可见性校验。
 > 代发群消息（主人专用）
   需在 models_config.yaml 开启 enable_group_send: true（独立开关），也可用 #ai开启代发 / #ai关闭代发 运行时切换。
   可让 AI 代你向指定群发送纯文本，例如“帮我在测试群说一下今晚不测了”。
@@ -275,7 +275,7 @@ export class HelpHandler extends plugin {
 - - - - - - - - - - - - - - - - -
 > 图片支持
   所有对话指令都支持发送图片，支持引用消息、合并转发展开。
-  主人也可让 #c/畅聊直接查看白名单内的服务器本地图片绝对路径，如 /root/Yunzai/resources/tmp/a.jpg。
+  主人也可让 #c/畅聊直接查看服务器上真实存在的本地图片绝对路径，如 /root/Yunzai/resources/tmp/a.jpg。
   问“能看到我的头像吗 / 看看 @某人 的头像 / 你的头像是什么样”时，会把对应 QQ 头像作为本轮图片输入。
   畅聊模式会静默读取纯图片和图文混合消息：不超过 ${fastChatDirectImageLimit} 张直接读，更多图片按每批 ${fastChatImageBatchSize} 张分批摘要；发图本身不会触发回复。
 > 临时开关

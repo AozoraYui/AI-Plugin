@@ -1,7 +1,7 @@
 /**
  * 群文件工具
- * 让 AI 浏览当前群的群文件（文件/文件夹列表），并把指定群文件下载到服务器白名单目录。
- * 仅主人可用；下载保存目录受 file_roots.yaml 白名单约束。
+ * 让 AI 浏览当前群的群文件（文件/文件夹列表），并把指定群文件下载到服务器目录。
+ * 仅主人可用；保存目录由主人明确指定或使用插件默认目录。
  * 依赖 NapCat / go-cqhttp 兼容的 OneBot 接口：
  *   get_group_root_files / get_group_files_by_folder / get_group_file_url
  */
@@ -9,8 +9,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { toolRegistry } from './registry.js'
-import { checkPathAllowed } from '../utils/file_access.js'
-import { Config } from '../utils/config.js'
 import { fetchWithProxy, takeSourceMsg } from '../utils/common.js'
 
 const GF_MAX_DEPTH = 3          // 递归遍历群文件夹的最大深度
@@ -122,28 +120,20 @@ async function collectAllFiles(event, folderId, depth, acc) {
     }
 }
 
-// 解析下载保存目录（受白名单约束），不带时间戳子目录，直接存入目标目录
+// 解析下载保存目录，不带时间戳子目录，直接存入目标目录
 function resolveSaveDir(inputDir) {
-    const roots = Config.FILE_ROOTS
-    if (!Array.isArray(roots) || roots.length === 0) {
-        return { error: '未配置文件白名单(FILE_ROOTS)，无法确定保存目录' }
-    }
     let baseDir
     if (inputDir && String(inputDir).trim()) {
         baseDir = path.resolve(String(inputDir).trim())
     } else {
-        baseDir = path.join(path.resolve(roots[0]), 'group-download')
+        baseDir = path.join(process.cwd(), 'resources', 'noa', 'group-download')
     }
     try {
         fs.mkdirSync(baseDir, { recursive: true })
     } catch (err) {
         return { error: `创建保存目录失败: ${err.message}` }
     }
-    const check = checkPathAllowed(baseDir)
-    if (!check.allowed) {
-        return { error: `保存目录不在白名单内: ${check.reason || baseDir}` }
-    }
-    return { dir: check.realPath }
+    return { dir: fs.realpathSync(baseDir) }
 }
 
 // 下载单个 URL 到目标目录，返回保存结果
@@ -358,13 +348,13 @@ async function extractFileNameFromReply(event) {
 export const groupFileDownloadTool = {
     name: 'group_file_download',
     permission: 'master',
-    description: '把当前 QQ 群群文件区里的指定文件下载并保存到服务器白名单目录。仅限主人。适合主人说"把群文件里的xxx下载到xxx目录""把那个文件存到服务器"，或"引用某条群文件消息"后说"下载这个/帮我下载"等场景。只能在群聊中使用。',
+    description: '把当前 QQ 群群文件区里的指定文件下载并保存到服务器目录。仅限主人。适合主人说"把群文件里的xxx下载到xxx目录""把那个文件存到服务器"，或"引用某条群文件消息"后说"下载这个/帮我下载"等场景。只能在群聊中使用。',
 
     functionSchema: {
         type: 'function',
         function: {
             name: 'group_file_download',
-            description: '按文件名把群文件下载到服务器白名单目录。仅限主人，仅群聊可用。若用户引用了某条群文件消息，file_name 可留空，工具会自动从引用消息中提取文件名。',
+            description: '按文件名把群文件下载到服务器目录。仅限主人，仅群聊可用。若用户引用了某条群文件消息，file_name 可留空，工具会自动从引用消息中提取文件名。',
             parameters: {
                 type: 'object',
                 properties: {
@@ -374,7 +364,7 @@ export const groupFileDownloadTool = {
                     },
                     save_dir: {
                         type: 'string',
-                        description: '可选，保存目录（必须在白名单内）。不填则默认保存到白名单首个目录下的 group-download 子目录。'
+                        description: '可选，保存目录。不填则默认保存到机器人根目录 resources/noa/group-download 子目录。'
                     }
                 },
                 required: []
