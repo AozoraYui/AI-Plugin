@@ -9,6 +9,7 @@ const TEMPLATE_DIR = path.join(_path, 'plugins', 'AI-Plugin', 'config_template')
 const defaultConfig = {
     USE_PROXY: false,
     PROXY_URL: "http://127.0.0.1:7890",
+    WEB_FETCH_ALLOWED_PRIVATE_ORIGINS: [],
     SUMMARY_THRESHOLD: 20,
     HISTORY_TO_KEEP_AFTER_SUMMARY: 10,
     SESSION_TIMEOUT_MS: 180000,
@@ -337,6 +338,15 @@ export const Config = {
     set USE_PROXY(val) { config.USE_PROXY = val },
     get PROXY_URL() { return config.PROXY_URL ?? defaultConfig.PROXY_URL },
     set PROXY_URL(val) { config.PROXY_URL = val },
+    get WEB_FETCH_ALLOWED_PRIVATE_ORIGINS() {
+        const value = config.WEB_FETCH_ALLOWED_PRIVATE_ORIGINS ?? defaultConfig.WEB_FETCH_ALLOWED_PRIVATE_ORIGINS
+        return Array.isArray(value) ? value : String(value || '').split(',').map(item => item.trim()).filter(Boolean)
+    },
+    set WEB_FETCH_ALLOWED_PRIVATE_ORIGINS(val) {
+        config.WEB_FETCH_ALLOWED_PRIVATE_ORIGINS = Array.isArray(val)
+            ? val
+            : String(val || '').split(',').map(item => item.trim()).filter(Boolean)
+    },
     get SUMMARY_THRESHOLD() { return config.SUMMARY_THRESHOLD ?? defaultConfig.SUMMARY_THRESHOLD },
     set SUMMARY_THRESHOLD(val) { config.SUMMARY_THRESHOLD = val },
     get HISTORY_TO_KEEP_AFTER_SUMMARY() { return config.HISTORY_TO_KEEP_AFTER_SUMMARY ?? defaultConfig.HISTORY_TO_KEEP_AFTER_SUMMARY },

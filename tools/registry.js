@@ -6,6 +6,7 @@
 import { filterToolCallsByIntent, getPrimaryUserInstruction, inferAutonomousUserProfileUpdate } from '../utils/tool_intent.js'
 import { normalizeToolResult } from '../utils/tool_result.js'
 import { applyToolExecutionPolicy, formatCentralPendingToolResult } from '../utils/tool_execution_policy.js'
+import { createAgentCancellationError, createAgentExecutionContext, isAgentCancellationError, isCancelledToolResult, throwIfAgentExecutionCancelled } from '../utils/agent_context.js'
 
 const TOOL_USAGE_GUIDES = {
     web_search: {
@@ -546,7 +547,7 @@ const TOOL_USAGE_GUIDES = {
             '访问指定 URL，提取网页可读文本，用于详细阅读网页内容。',
             '普通 HTTP 抓取失败、页面疑似反爬或需要 JS 渲染时，会自动切换请求画像，并按场景尝试浏览器渲染降级读取正文。',
             '网络错误、代理网关异常和部分 5xx 会有限重试；本地 Mihomo/Clash 代理不可用时保留一次安全直连兜底，429/服务端限流会优先走 Reader。',
-            '公开网页在 HTTP/浏览器都失败时，会尝试 Reader 文本化降级；本地/内网地址以及疑似包含 token、密钥或签名参数的链接不会交给第三方 Reader。'
+            '公开网页在 HTTP/浏览器都失败时，会尝试 Reader 文本化降级；未配置精确白名单的本地/内网地址会被阻止，内网地址以及疑似包含 token、密钥或签名参数的链接不会交给第三方 Reader。'
         ],
         useWhen: [
             '主人明确要求打开、fetch、抓取、总结、分析、解释某个链接，或搜索后需要进一步看网页详情时使用。'
@@ -555,7 +556,7 @@ const TOOL_USAGE_GUIDES = {
             '只是出现链接但用户没有阅读需求时不要抓取。',
             '搜索未知网页用 web_search；下载文件/媒体不用 web_fetch。',
             '登录后内容、人机验证、验证码页面通常无法读取；工具会记录 HTTP、浏览器、Reader 各阶段失败原因，返回此类失败时不要编造网页内容。',
-            'Reader 降级只能用于公开网页，不适合服务器内网地址、localhost、私有 IP 或带敏感 token 的链接。'
+            'Reader 降级只能用于公开网页；即使 web_fetch 通过精确 origin 白名单访问了服务器内网地址，也不会把该地址交给 Reader。'
         ]
     },
     weather: {
@@ -928,6 +929,8 @@ ${instruction}
 
     /** 执行工具调用 */
     async execute(name, args, isMaster = false, context = {}) {
+        const executionContext = createAgentExecutionContext(context, { toolName: name })
+        throwIfAgentExecutionCancelled(executionContext.signal)
         const tool = this.tools.get(name)
         if (!tool) {
             logger.warn(`[AI-Plugin] 未知工具: ${name}`)
@@ -950,7 +953,8 @@ ${instruction}
             return { success: false, error: '权限不足：此工具仅限机器人主人使用' }
         }
 
-        const policy = await applyToolExecutionPolicy(name, args, { ...context, isMaster })
+        const policy = await applyToolExecutionPolicy(name, args, { ...executionContext, isMaster })
+        throwIfAgentExecutionCancelled(executionContext.signal)
         if (!policy.allowed) {
             if (policy.pending) {
                 logger.warn(`[AI-Plugin] 高风险工具已进入待确认: tool=${name}, pending=${policy.data.pendingId}`)
@@ -971,7 +975,11 @@ ${instruction}
         logger.info(`[AI-Plugin] 调用工具: ${name}, 参数: ${JSON.stringify(args)}`)
         const startedAt = Date.now()
         try {
-            const result = await tool.execute(args, { ...context, isMaster })
+            const result = await tool.execute(args, { ...executionContext, isMaster })
+            throwIfAgentExecutionCancelled(executionContext.signal)
+            if (isCancelledToolResult(result)) {
+                throw createAgentCancellationError(result.error || result.protocol?.error || '工具执行已取消')
+            }
             const protocol = normalizeToolResult(name, result, { elapsedMs: Date.now() - startedAt })
             const businessFailed = (result && typeof result === 'object' && result.ok === false)
                 || (typeof result === 'string' && /^【[^】]+失败】/.test(result))
@@ -982,6 +990,7 @@ ${instruction}
             }
             return { success: true, data: result, protocol }
         } catch (err) {
+            if (isAgentCancellationError(err, executionContext.signal)) throw err
             logger.error(`[AI-Plugin] 工具 ${name} 执行失败:`, err)
             return {
                 success: false,

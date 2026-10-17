@@ -37,7 +37,7 @@ import { summarizeShellResultForReply } from '../utils/shell_result_summary.js'
 import { selectWorkspaceSurveyFiles } from '../utils/workspace_survey.js'
 import { buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, hasExplicitTerminalWebBlockResponse, hasExplicitWebUncertainty, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, normalizeWebUrlKey, updateWebEvidenceState } from '../utils/web_evidence.js'
 import { extractMessageSendError, isContentModerationSendError, rewriteRejectedReply } from '../utils/message_delivery.js'
-import { sendReplyWithForwardFallback } from '../utils/reply_delivery.js'
+import { sendReplyWithForwardFallback, sendTextInChunks } from '../utils/reply_delivery.js'
 import yaml from 'yaml'
 import { formatSkillGuidance, selectRelevantSkills } from '../utils/skill_runtime.js'
 
@@ -3967,12 +3967,30 @@ ${visualDescription}`
                 const footerSuffix = isSingleMode ? ' (单次对话)' : ''
                 const footerInfo = `耗时: ${elapsed}s${tokenInfo} @${result.platform}${footerSuffix}`
                 const reasoningText = Config.show_thinking && result.reasoning ? String(result.reasoning).trim() : ''
+                const deliveryContext = {
+                    requestId: e.message_id || e.seq || '',
+                    targetId: e.group_id ? `group:${e.group_id}` : `private:${e.user_id || ''}`,
+                    stepId: 'final_reply'
+                }
 
                 const sendFinalReply = async (responseText, responseReasoning = '') => {
                     throwIfExecutionCancelled()
                     if (!responseReasoning && responseText.length <= MAX_LENGTH) {
                         throwIfExecutionCancelled()
-                        return e.reply(`${responseText}\n\n${footerInfo}`, true)
+                        const shortDelivery = await sendTextInChunks({
+                            text: `${responseText}\n\n${footerInfo}`,
+                            sendReply: (...args) => e.reply(...args),
+                            maxChars: MAX_LENGTH,
+                            maxBytes: 3500,
+                            logger,
+                            logPrefix: '[AI-Plugin]',
+                            deliveryContext: {
+                                ...deliveryContext,
+                                taskId: agentTask?.taskId || '',
+                                method: 'plain'
+                            }
+                        })
+                        return shortDelivery.error ? { status: 'failed', error: shortDelivery.error } : shortDelivery.result
                     }
 
                     const delivery = await sendReplyWithForwardFallback({
@@ -3988,7 +4006,11 @@ ${visualDescription}`
                         maxChars: MAX_LENGTH,
                         maxBytes: 3500,
                         fallbackMaxChars: Math.min(MAX_LENGTH, 1800),
-                        fallbackMaxBytes: 3500
+                        fallbackMaxBytes: 3500,
+                        deliveryContext: {
+                            ...deliveryContext,
+                            taskId: agentTask?.taskId || ''
+                        }
                     })
                     return delivery.error ? { status: 'failed', error: delivery.error } : delivery.result
                 }
@@ -4019,7 +4041,21 @@ ${visualDescription}`
                             throwIfExecutionCancelled()
                             finalResponseText = '刚才生成的答复被消息发送过滤器拦截，自动改写后仍未能发送。你可以换一种说法再问，或让我只做简短、客观的概括。'
                             usedSafeFallbackReply = true
-                            const fallbackResult = await e.reply(finalResponseText, true)
+                            const fallbackDelivery = await sendTextInChunks({
+                                text: finalResponseText,
+                                sendReply: (...args) => e.reply(...args),
+                                logger,
+                                logPrefix: '[AI-Plugin]',
+                                deliveryContext: {
+                                    ...deliveryContext,
+                                    taskId: agentTask?.taskId || '',
+                                    stepId: 'moderation_fallback',
+                                    method: 'plain'
+                                }
+                            })
+                            const fallbackResult = fallbackDelivery.error
+                                ? { status: 'failed', error: fallbackDelivery.error }
+                                : fallbackDelivery.result
                             throwIfExecutionCancelled()
                             sendError = extractMessageSendError(fallbackResult)
                         }

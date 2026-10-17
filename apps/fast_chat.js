@@ -1322,6 +1322,7 @@ export class FastChatHandler extends plugin {
     }
 
     async replyWithGroupContext(e, normalized) {
+        const replyRequestId = getMessageId(e)
         const isPureImageTrigger = normalized.currentImageCount > 0 && !(normalized.instructionText || '').trim()
         const configuredLimit = Number(Config.FAST_CHAT_CONTEXT_LIMIT)
         const limit = normalizeFastChatReplyContextLimit()
@@ -2202,7 +2203,16 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                 text,
                 sendReply: (...args) => e.reply(...args),
                 maxChars: Config.CHECKPOINT_DISPLAY_MAX_LENGTH,
-                maxBytes: 3500
+                maxBytes: 3500,
+                logger,
+                logPrefix: '[AI-Plugin] [畅聊]',
+                deliveryContext: {
+                    requestId: replyRequestId,
+                    taskId: fastAgentTask?.taskId || '',
+                    stepId: 'fast_final_reply',
+                    targetId: e.group_id ? `group:${e.group_id}` : `private:${e.user_id || ''}`,
+                    method: 'plain'
+                }
             })
             return delivery.error ? { status: 'failed', error: delivery.error } : delivery.result
         }

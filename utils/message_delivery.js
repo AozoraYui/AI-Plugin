@@ -2,6 +2,7 @@ import { sanitizeModelOutput } from './model_output.js'
 
 const CONTENT_REJECTION_RE = /违禁词|敏感词|内容(?:违规|不合规)|消息(?:违规|被拦截)|(?:本地发送)?拦截|风控|risk control|content blocked|content rejected|message is risky/i
 const TRANSPORT_FAILURE_RE = /网络连接异常|网络错误|连接(?:异常|失败|断开)|请求超时|timeout|timed out|ECONN(?:RESET|REFUSED|ABORTED)|socket hang up|network error/i
+const INVALID_REQUEST_RE = /参数(?:错误|无效)|请求参数|invalid (?:param(?:eter)?|request)|bad request|unsupported|not supported|不支持|消息格式|消息类型|内容(?:过长|太长)|too long|forward.*(?:unavailable|unsupported)|method.*(?:unavailable|unsupported)/i
 
 export function extractMessageSendError(result) {
     if (result === false) return '发送接口返回 false，可能被本地发送拦截器拒绝'
@@ -40,6 +41,19 @@ export function isContentModerationSendError(error) {
 
 export function isMessageTransportError(error) {
     return TRANSPORT_FAILURE_RE.test(String(error || ''))
+}
+
+export function isInvalidMessageSendError(error) {
+    return INVALID_REQUEST_RE.test(String(error || ''))
+}
+
+export function classifyMessageSendFailure(error, result = undefined) {
+    const message = String(error || extractMessageSendError(result) || '').trim()
+    if (!message) return { kind: '', message: '' }
+    if (isContentModerationSendError(message)) return { kind: 'content_rejected', message }
+    if (isMessageTransportError(message)) return { kind: 'transport', message }
+    if (isInvalidMessageSendError(message)) return { kind: 'invalid_request', message }
+    return { kind: 'ambiguous', message }
 }
 
 export async function rewriteRejectedReply(client, text, modelGroupKey = 'flash', maxTokens = 4096, requestOptions = {}) {

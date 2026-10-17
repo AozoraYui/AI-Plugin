@@ -127,9 +127,15 @@ enable_web_search: false
 #   抓取顺序：普通 HTTP → 浏览器渲染降级 → 公开网页 Reader 文本化降级
 #   Reader 降级不会用于 localhost、内网 IP、.local 等私有地址；登录/验证码仍无法绕过
 #   可选：设置环境变量 JINA_API_KEY 或 JINA_READER_API_KEY，可提高 Reader 服务稳定性/配额
+# web_fetch_allowed_private_origins: 精确允许 web_fetch 访问的内网 origin 列表，默认空列表
+#   仅支持完整的 http(s) origin，不支持通配符、路径、查询参数；例如：
+#   web_fetch_allowed_private_origins:
+#     - "http://192.168.2.194:3001"
+#   该白名单只对主人专用 web_fetch 生效，Reader 仍不会转发内网地址。
 #   注意：与 enable_web_search 平级（不要缩进！）
 # ================================================
 enable_web_fetch: false
+web_fetch_allowed_private_origins: []
 
 # ================================================
 # 模型请求超时配置

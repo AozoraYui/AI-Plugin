@@ -146,10 +146,39 @@ function isPrivateHostname(hostname) {
         || isPrivateIp(host)
 }
 
+function normalizeConfiguredPrivateOrigin(value) {
+    try {
+        const parsed = new URL(String(value || '').trim())
+        if (!['http:', 'https:'].includes(parsed.protocol)) return ''
+        if (!isPrivateHostname(parsed.hostname)) return ''
+        if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) return ''
+        return parsed.origin.toLowerCase()
+    } catch {
+        return ''
+    }
+}
+
+export function getConfiguredPrivateNetworkOrigins(origins = Config.WEB_FETCH_ALLOWED_PRIVATE_ORIGINS) {
+    const values = Array.isArray(origins) ? origins : String(origins || '').split(',')
+    return [...new Set(values.map(normalizeConfiguredPrivateOrigin).filter(Boolean))]
+}
+
+export function isConfiguredPrivateNetworkUrl(targetUrl, origins = Config.WEB_FETCH_ALLOWED_PRIVATE_ORIGINS) {
+    try {
+        const parsed = new URL(targetUrl)
+        if (parsed.username || parsed.password) return false
+        if (!isPrivateHostname(parsed.hostname)) return false
+        return getConfiguredPrivateNetworkOrigins(origins).includes(parsed.origin.toLowerCase())
+    } catch {
+        return false
+    }
+}
+
 export async function assertPublicUrl(targetUrl, options = {}) {
     const parsed = new URL(targetUrl)
     if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error(`不支持的网络协议: ${parsed.protocol}`)
     if (options.allowPrivateNetwork === true) return parsed
+    if (options.allowConfiguredPrivateNetwork === true && isConfiguredPrivateNetworkUrl(parsed, options.privateNetworkOrigins)) return parsed
     if (isPrivateHostname(parsed.hostname)) throw new Error('为避免 SSRF，已阻止访问本机或内网地址')
     let addresses
     try {

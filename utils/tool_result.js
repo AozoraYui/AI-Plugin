@@ -13,6 +13,7 @@ const TOOL_RESULT_STATUSES = new Set([
     'partial',
     'failed',
     'failed_retryable',
+    'cancelled',
     'waiting',
     'blocked'
 ])
@@ -38,7 +39,7 @@ export function normalizeToolResult(toolName, rawResult, options = {}) {
     const explicitOk = objectResult && typeof objectResult.ok === 'boolean'
         ? objectResult.ok
         : (objectResult && typeof objectResult.success === 'boolean' ? objectResult.success : undefined)
-    const statusIndicatesFailure = ['failed', 'failed_retryable', 'blocked'].includes(explicitStatus)
+    const statusIndicatesFailure = ['failed', 'failed_retryable', 'blocked', 'cancelled'].includes(explicitStatus)
     const protocolConflict = statusIndicatesFailure && explicitOk === true
     const ok = statusIndicatesFailure
         ? false
@@ -50,6 +51,7 @@ export function normalizeToolResult(toolName, rawResult, options = {}) {
     const retryable = objectResult?.retryable === true || recoverable
     const needsUserAction = objectResult?.needs_user_action === true || objectResult?.needsUserAction === true
     const requiresConfirmation = pending || objectResult?.requires_confirmation === true || objectResult?.requiresConfirmation === true
+    const cancelled = objectResult?.cancelled === true || objectResult?.code === 'AGENT_CANCELLED' || explicitStatus === 'cancelled'
     const operationOk = objectResult?.operationOk === true || objectResult?.operation_ok === true
     const partial = objectResult?.partial === true || objectResult?.status === 'partial'
     const connectionState = String(objectResult?.connectionState || objectResult?.connection_state || '').trim().toLowerCase()
@@ -70,13 +72,15 @@ export function normalizeToolResult(toolName, rawResult, options = {}) {
         ok ? `${toolName} 执行完成` : `${toolName} 执行失败`
     )
     const requestedStatus = explicitStatus
-    const status = requestedStatus || (requiresConfirmation || needsUserAction || connectionState === 'disconnected'
-        ? 'waiting'
-        : !ok
-            ? (retryable ? 'failed_retryable' : 'failed')
-            : partial
-                ? 'partial'
-                : verified ? 'success_verified' : 'success_unverified')
+    const status = requestedStatus || (cancelled
+        ? 'cancelled'
+        : (requiresConfirmation || needsUserAction || connectionState === 'disconnected'
+            ? 'waiting'
+            : !ok
+                ? (retryable ? 'failed_retryable' : 'failed')
+                : partial
+                    ? 'partial'
+                    : verified ? 'success_verified' : 'success_unverified'))
 
     return {
         protocolVersion: 2,
@@ -87,6 +91,7 @@ export function normalizeToolResult(toolName, rawResult, options = {}) {
         pending,
         needsConfirmation: requiresConfirmation,
         requiresConfirmation,
+        cancelled,
         needsUserAction,
         operationOk,
         verified,
@@ -118,6 +123,7 @@ export function formatToolProtocol(protocol = {}) {
         `verified=${protocol.verified === true}`,
         `retryable=${protocol.retryable === true}`,
         `requiresConfirmation=${protocol.requiresConfirmation === true}`,
+        `cancelled=${protocol.cancelled === true}`,
         `partial=${protocol.partial === true}`
     ]
     let facts = '{}'

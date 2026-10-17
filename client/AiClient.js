@@ -577,7 +577,8 @@ export class AiClient {
         this.commandConfig = {}
         this.visionRelayConfig = { enable_vision_relay: false, vision_model: null }
         this.webSearchConfig = { enabled: false, intent_model: null }
-        this.webFetchConfig = { enabled: false }
+        this.webFetchConfig = { enabled: false, allowedPrivateOrigins: [] }
+        Config.WEB_FETCH_ALLOWED_PRIVATE_ORIGINS = []
         this.vectorMemoryConfig = { enabled: false }
         this.weatherApiKey = null
         this.openWeatherMapApiKey = null
@@ -605,6 +606,7 @@ export class AiClient {
                 value.enable_web_search !== undefined ||
                 value.intent_model !== undefined ||
                 value.enable_web_fetch !== undefined ||
+                value.web_fetch_allowed_private_origins !== undefined ||
                 value.enable_shell_exec !== undefined ||
                 value.enable_shell_session !== undefined ||
                 value.SHELL_SESSION_NAME !== undefined ||
@@ -711,7 +713,13 @@ export class AiClient {
                 }
 
                 // 提取 enable_web_fetch（与 web_search 同文档）
-                this.webFetchConfig = { enabled: rawConfig.enable_web_fetch === true }
+                this.webFetchConfig = {
+                    enabled: rawConfig.enable_web_fetch === true,
+                    allowedPrivateOrigins: rawConfig.web_fetch_allowed_private_origins
+                }
+                if (rawConfig.web_fetch_allowed_private_origins !== undefined) {
+                    Config.WEB_FETCH_ALLOWED_PRIVATE_ORIGINS = rawConfig.web_fetch_allowed_private_origins
+                }
                 if (this.enableWebFetch) {
                     logger.info('[AI-Plugin] 网页抓取已启用')
                 } else {

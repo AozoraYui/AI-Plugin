@@ -1,4 +1,5 @@
 import { normalizeToolResult } from './tool_result.js'
+import { createAgentCancellationError, createAgentExecutionContext, isAgentCancellationError, isCancelledToolResult, throwIfAgentExecutionCancelled } from './agent_context.js'
 
 export function stableAgentStringify(value) {
     if (Array.isArray(value)) return `[${value.map(stableAgentStringify).join(',')}]`
@@ -51,12 +52,13 @@ export function retainAgentContinuationTools(candidateTools = [], previousToolCa
 }
 
 export function createAgentToolContext(baseContext = {}, call = {}, index = 0) {
-    return {
-        ...baseContext,
+    const executionContext = createAgentExecutionContext(baseContext)
+    return createAgentExecutionContext(executionContext, {
         toolName: call.name || '',
         toolCallIndex: index,
+        toolCallId: call.id || call.tool_call_id || `${executionContext.requestId}:tool:${index}`,
         toolArgs: call.args || {}
-    }
+    })
 }
 
 export function isUnfulfilledImageSearch(call = {}, resultData = {}) {
@@ -296,9 +298,12 @@ export async function* executeAgentToolCalls(options = {}) {
     const registry = options.registry
     const toolCalls = Array.isArray(options.toolCalls) ? options.toolCalls : []
     const budget = options.budget || null
+    const executionContext = createAgentExecutionContext(options.context || {}, { signal: options.signal || options.context?.signal })
+    const executionSignal = executionContext.signal
     if (!registry?.execute) throw new Error('Agent runtime requires a tool registry')
 
     for (let index = 0; index < toolCalls.length; index++) {
+        throwIfAgentExecutionCancelled(executionSignal)
         const call = toolCalls[index]
         const reservation = reserveAgentBudget(budget, call?.name)
         if (!reservation.allowed) {
@@ -318,14 +323,19 @@ export async function* executeAgentToolCalls(options = {}) {
         let result
         try {
             const baseContext = typeof options.contextFactory === 'function'
-                ? await options.contextFactory(call, index + 1)
-                : (options.context || {})
+                ? await options.contextFactory(call, index + 1, executionContext)
+                : executionContext
             const context = createAgentToolContext(baseContext, call, index + 1)
             result = await registry.execute(toolName, args, options.isMaster === true, context)
+            throwIfAgentExecutionCancelled(executionSignal)
             if (!result || typeof result !== 'object' || Array.isArray(result)) {
                 result = { success: false, error: '工具返回了无效结果' }
             }
+            if (isCancelledToolResult(result)) {
+                throw createAgentCancellationError(result.error || result.protocol?.error || '工具执行已取消')
+            }
         } catch (error) {
+            if (isAgentCancellationError(error, executionSignal)) throw error
             result = { success: false, error: error?.message || String(error) }
         }
         const rawProtocol = result.protocol && typeof result.protocol === 'object'

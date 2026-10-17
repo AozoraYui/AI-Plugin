@@ -5,7 +5,7 @@
 
 import { toolRegistry } from './registry.js'
 import { assessFetchedContent, classifyWebUrl } from '../utils/web_evidence.js'
-import { assertPublicUrl, createTimeoutSignal, fetchWithProxy, getProxyCandidates, isAbortError, resolveProxyUrl, throwIfAborted } from '../utils/common.js'
+import { assertPublicUrl, createTimeoutSignal, fetchWithProxy, getProxyCandidates, isAbortError, isConfiguredPrivateNetworkUrl, resolveProxyUrl, throwIfAborted } from '../utils/common.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -243,38 +243,43 @@ function isRetryableTransportError(error) {
     )
 }
 
-function isLikelyBotWall(text = '', html = '') {
-    const source = `${text}\n${html}`.toLowerCase()
-    if (!source.trim()) return true
+export function isLikelyBotWall(text = '', html = '') {
+    const visibleText = String(text || '').toLowerCase()
+    const markup = String(html || '').toLowerCase()
+    if (!visibleText.trim() && !markup.trim()) return true
 
-    const strongPatterns = [
+    const visiblePatterns = [
         'checking your browser',
         'verify you are human',
         'just a moment',
         'attention required',
-        'cf-browser-verification',
-        'cloudflare ray id',
-        'ddos-guard',
-        'akamai bot manager',
-        'captcha',
-        'recaptcha',
-        'hcaptcha',
         'access denied',
         'request blocked',
         'enable javascript',
         'please enable javascript',
-        '人机验证',
-        '安全验证',
-        '验证码',
         '访问被拒绝',
         '请开启javascript',
         '请启用javascript',
     ]
-    if (strongPatterns.some(pattern => source.includes(pattern))) return true
+    if (visiblePatterns.some(pattern => visibleText.includes(pattern))) return true
 
-    return false
+    const verificationPhrasePatterns = [
+        /(?:请(?:完成|进行|先完成|先进行)|点击|通过|需要).{0,24}(?:人机验证|安全验证|验证码|验证)/,
+        /(?:人机验证|安全验证|验证码).{0,24}(?:输入|填写|点击|完成|通过|验证)/,
+        /(?:验证|验证码).{0,24}(?:后|后才|才能).{0,24}(?:继续|访问|进入|查看)/,
+    ]
+    if (verificationPhrasePatterns.some(pattern => pattern.test(visibleText))) return true
+
+    const markupPatterns = [
+        'cf-browser-verification',
+        'cloudflare ray id',
+        'ddos-guard',
+        'akamai bot manager',
+        'recaptcha',
+        'hcaptcha',
+    ]
+    return markupPatterns.some(pattern => markup.includes(pattern))
 }
-
 function isLikelyShellHtml(text = '', html = '') {
     const trimmedText = String(text || '').trim()
     if (trimmedText.length >= 300) return false
@@ -347,9 +352,11 @@ async function fetchPublicHttp(url, options = {}, maxRedirects = MAX_CLIENT_REDI
     let currentUrl = String(url || '').trim()
     let headers = { ...options.headers }
     for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount++) {
-        await assertPublicUrl(currentUrl)
+        await assertPublicUrl(currentUrl, { allowConfiguredPrivateNetwork: true })
         const rawResponse = await fetchWithProxy(currentUrl, {
             ...options,
+            disableProxy: isConfiguredPrivateNetworkUrl(currentUrl) ? true : options.disableProxy,
+            allowConfiguredPrivateNetwork: true,
             headers,
             redirect: 'manual',
             timeout: options.timeout || REQUEST_TIMEOUT_MS,
@@ -368,7 +375,7 @@ async function fetchPublicHttp(url, options = {}, maxRedirects = MAX_CLIENT_REDI
         if (!location || response.status < 300 || response.status >= 400) return response
         if (redirectCount >= maxRedirects) throw new Error(`网页重定向超过 ${maxRedirects} 次`)
         const nextUrl = new URL(location, currentUrl)
-        await assertPublicUrl(nextUrl.toString())
+        await assertPublicUrl(nextUrl.toString(), { allowConfiguredPrivateNetwork: true })
         if (nextUrl.origin !== new URL(currentUrl).origin) {
             headers = Object.fromEntries(Object.entries(headers).filter(([name]) =>
                 !/^(authorization|proxy-authorization|cookie|referer)$/i.test(name)
@@ -644,7 +651,7 @@ async function fetchWebPageWithBrowser(url, maxChars = DEFAULT_MAX_CHARS, reason
                 if (['image', 'media', 'font'].includes(type)) {
                     return void Promise.resolve(request.abort()).catch(() => {})
                 }
-                void assertPublicUrl(request.url())
+                void assertPublicUrl(request.url(), { allowConfiguredPrivateNetwork: true })
                     .then(() => request.continue())
                     .catch(() => request.abort().catch(() => {}))
             })
@@ -1103,7 +1110,7 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
     }
 
     try {
-        await assertPublicUrl(targetUrl)
+        await assertPublicUrl(targetUrl, { allowConfiguredPrivateNetwork: true })
     } catch (err) {
         return `\n\n【网页抓取失败】${err.message}\n`
     }
@@ -1161,7 +1168,7 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
 
     const finalUrl = res.url || resolvedUrl
     try {
-        await assertPublicUrl(finalUrl)
+        await assertPublicUrl(finalUrl, { allowConfiguredPrivateNetwork: true })
     } catch (err) {
         return `\n\n【网页抓取失败】最终跳转地址不安全：${err.message}\n`
     }
@@ -1250,13 +1257,13 @@ async function fetchWebPage(url, maxChars = DEFAULT_MAX_CHARS, options = {}) {
 export const webFetchTool = {
     name: 'web_fetch',
     permission: 'master',
-    description: '抓取指定网页的文本内容，用于获取网页详细信息；必要时会按 HTTP、浏览器渲染、公开 Reader 文本化的顺序降级。',
+    description: '抓取指定网页的文本内容，用于获取网页详细信息；必要时会按 HTTP、浏览器渲染、公开 Reader 文本化的顺序降级。主人可通过精确 origin 白名单放行指定内网网页。',
 
     functionSchema: {
         type: 'function',
         function: {
             name: 'web_fetch',
-            description: '访问指定网页 URL，提取并返回页面中的可读文本内容。适合在搜索后进一步查看具体网页的详细信息；HTTP 抓取失败或页面需要 JS 渲染时会自动尝试浏览器渲染，公开网页仍失败时会尝试 Reader 文本化降级；不会把本地/内网地址交给第三方，也无法绕过登录/验证码。',
+            description: '访问指定网页 URL，提取并返回页面中的可读文本内容。适合在搜索后进一步查看具体网页的详细信息；HTTP 抓取失败或页面需要 JS 渲染时会自动尝试浏览器渲染，公开网页仍失败时会尝试 Reader 文本化降级；未配置精确白名单的本地/内网地址仍会被阻止，内网地址不会交给第三方 Reader，也无法绕过登录/验证码。',
             parameters: {
                 type: 'object',
                 properties: {

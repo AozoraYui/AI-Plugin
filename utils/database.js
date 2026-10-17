@@ -212,6 +212,23 @@ export class AIDatabase {
                 CREATE INDEX IF NOT EXISTS idx_outbound_forward_created
                 ON outbound_forward_messages(created_at);
 
+                -- 出站消息投递状态：用于进程重启后的幂等恢复，不保存原始消息正文
+                CREATE TABLE IF NOT EXISTS outbound_delivery_states (
+                    delivery_key TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    result_json TEXT,
+                    error TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    expires_at INTEGER NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_outbound_delivery_expires
+                ON outbound_delivery_states(expires_at);
+
+                CREATE INDEX IF NOT EXISTS idx_outbound_delivery_status_updated
+                ON outbound_delivery_states(status, updated_at);
+
                 -- 群成员称呼/外号记忆（来自本群公开聊天，不作为事实断言）
                 CREATE TABLE IF NOT EXISTS group_member_aliases (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -663,6 +680,110 @@ export class AIDatabase {
             ], err => {
                 if (err) reject(err)
                 else resolve(true)
+            })
+        })
+    }
+
+    saveOutboundDeliveryState(record = {}) {
+        return new Promise((resolve, reject) => {
+            const deliveryKey = String(record.deliveryKey || '').trim()
+            const status = String(record.status || '').trim()
+            if (!deliveryKey || !status) {
+                resolve(false)
+                return
+            }
+            let resultJson = ''
+            if (record.result !== undefined) {
+                try {
+                    resultJson = JSON.stringify(record.result)
+                    if (resultJson.length > 20000) resultJson = ''
+                } catch {
+                    resultJson = ''
+                }
+            }
+            const now = Number(record.updatedAt) || Date.now()
+            const createdAt = Number(record.createdAt) || now
+            const expiresAt = Number(record.expiresAt) || (now + 30 * 60 * 1000)
+            this.db.run(`
+                INSERT INTO outbound_delivery_states
+                    (delivery_key, status, result_json, error, created_at, updated_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(delivery_key) DO UPDATE SET
+                    status = excluded.status,
+                    result_json = excluded.result_json,
+                    error = excluded.error,
+                    updated_at = excluded.updated_at,
+                    expires_at = excluded.expires_at
+            `, [
+                deliveryKey,
+                status,
+                resultJson,
+                String(record.error || '').slice(0, 2000),
+                createdAt,
+                now,
+                expiresAt
+            ], err => {
+                if (err) reject(err)
+                else resolve(true)
+            })
+        })
+    }
+
+    getOutboundDeliveryState(deliveryKey = '') {
+        return new Promise((resolve, reject) => {
+            const normalizedKey = String(deliveryKey || '').trim()
+            if (!normalizedKey) {
+                resolve(null)
+                return
+            }
+            this.db.get(`
+                SELECT delivery_key, status, result_json, error, created_at, updated_at, expires_at
+                FROM outbound_delivery_states
+                WHERE delivery_key = ?
+            `, [normalizedKey], (err, row) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                if (!row) {
+                    resolve(null)
+                    return
+                }
+                if (Number(row.expires_at) > 0 && Number(row.expires_at) <= Date.now()) {
+                    this.db.run('DELETE FROM outbound_delivery_states WHERE delivery_key = ?', [normalizedKey], () => resolve(null))
+                    return
+                }
+                let result
+                if (row.result_json) {
+                    try { result = JSON.parse(row.result_json) } catch { result = undefined }
+                }
+                resolve({
+                    deliveryKey: row.delivery_key,
+                    status: row.status,
+                    result,
+                    error: row.error || '',
+                    createdAt: Number(row.created_at) || 0,
+                    updatedAt: Number(row.updated_at) || 0,
+                    expiresAt: Number(row.expires_at) || 0
+                })
+            })
+        })
+    }
+
+    purgeExpiredOutboundDeliveryStates(limit = 500) {
+        return new Promise((resolve, reject) => {
+            const safeLimit = Math.max(1, Math.min(5000, Math.floor(Number(limit) || 500)))
+            this.db.run(`
+                DELETE FROM outbound_delivery_states
+                WHERE rowid IN (
+                    SELECT rowid FROM outbound_delivery_states
+                    WHERE expires_at <= ?
+                    ORDER BY expires_at ASC
+                    LIMIT ?
+                )
+            `, [Date.now(), safeLimit], function(err) {
+                if (err) reject(err)
+                else resolve(this.changes || 0)
             })
         })
     }

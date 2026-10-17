@@ -44,6 +44,11 @@ function testUnifiedProtocol() {
     assert.equal(retryable.retryable, true)
     assert.equal(deterministicToolDecision([retryable]).completionStatus, 'continue')
 
+    const cancelled = normalizeToolResult('demo', { status: 'cancelled', cancelled: true, code: 'AGENT_CANCELLED', error: '请求已取消' })
+    assert.equal(cancelled.status, 'cancelled')
+    assert.equal(cancelled.ok, false)
+    assert.equal(cancelled.cancelled, true)
+
     const partial = normalizeToolResult('demo', { ok: true, partial: true, next_hints: ['继续读取'] })
     assert.equal(partial.status, 'partial')
     assert.equal(deterministicToolDecision([partial]).completionStatus, 'continue')
@@ -146,6 +151,67 @@ async function testMalformedToolResultsBecomeStructuredFailures() {
     assert.match(formatExecutions[0].formattedResult, /模拟格式化异常/)
 }
 
+async function testAgentExecutionContextAndCancellation() {
+    const controller = new AbortController()
+    const contexts = []
+    let calls = 0
+    await assert.rejects(async () => {
+        for await (const execution of executeAgentToolCalls({
+            registry: {
+                async execute(name, args, isMaster, context) {
+                    calls++
+                    contexts.push(context)
+                    controller.abort('用户撤回')
+                    return { success: true, data: { ok: true } }
+                },
+                formatToolResult() { return 'ok' }
+            },
+            context: { requestId: 'req-1', conversationId: 'conv-1', agentTaskId: 'task-1', userId: '956', groupId: '614', signal: controller.signal },
+            toolCalls: [{ name: 'first', args: {} }, { name: 'second', args: {} }]
+        })) {
+            void execution
+        }
+    }, error => error.code === 'AGENT_CANCELLED')
+    assert.equal(calls, 1)
+    assert.equal(contexts[0].requestId, 'req-1')
+    assert.equal(contexts[0].conversationId, 'conv-1')
+    assert.equal(contexts[0].taskId, 'task-1')
+    assert.equal(contexts[0].agentTaskId, 'task-1')
+    assert.equal(contexts[0].toolName, 'first')
+    assert.equal(contexts[0].toolCallIndex, 1)
+
+    let returnedCancellationCalls = 0
+    await assert.rejects(async () => {
+        for await (const execution of executeAgentToolCalls({
+            registry: {
+                async execute() {
+                    returnedCancellationCalls++
+                    return { success: false, cancelled: true, error: '工具内部已取消' }
+                }
+            },
+            toolCalls: [{ name: 'cancelled', args: {} }, { name: 'must-not-run', args: {} }]
+        })) {
+            void execution
+        }
+    }, error => error.code === 'AGENT_CANCELLED' && /工具内部已取消/.test(error.message))
+    assert.equal(returnedCancellationCalls, 1)
+
+    const timeoutExecutions = []
+    for await (const execution of executeAgentToolCalls({
+        registry: {
+            async execute() {
+                const error = new Error('工具超时')
+                error.name = 'AbortError'
+                throw error
+            }
+        },
+        toolCalls: [{ name: 'timeout', args: {} }]
+    })) timeoutExecutions.push(execution)
+    assert.equal(timeoutExecutions.length, 1)
+    assert.equal(timeoutExecutions[0].status, 'failed')
+    assert.match(timeoutExecutions[0].protocol.error, /工具超时/)
+}
+
 function testCrossModeExecutionSummary() {
     const executions = [
         {
@@ -235,6 +301,7 @@ testUnifiedProtocol()
 await testBudgetAndMetrics()
 await testExecutionErrorsBecomeStructuredFailures()
 await testMalformedToolResultsBecomeStructuredFailures()
+await testAgentExecutionContextAndCancellation()
 testCrossModeExecutionSummary()
 testSharedRoundCompletionStateMachine()
-console.log('Agent runtime eval: 6 passed, 0 failed')
+console.log('Agent runtime eval: 7 passed, 0 failed')

@@ -31,6 +31,11 @@ if (!global.segment) {
 global.AIPluginClient = new AiClient()
 global.AIPluginConversationManager = new ConversationManager()
 await global.AIPluginConversationManager.waitForMigration()
+try {
+    await global.AIPluginConversationManager.db.purgeExpiredOutboundDeliveryStates?.()
+} catch (err) {
+    logger.warn(`[AI-Plugin] 清理过期出站投递状态失败: ${err.message}`)
+}
 
 vectorMemory.init({ db: global.AIPluginConversationManager.db })
     .then(ok => {

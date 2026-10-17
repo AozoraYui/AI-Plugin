@@ -7,8 +7,8 @@ global.logger = {
     error() {}
 }
 
-const { fetchWithProxy, isAbortError, readResponseBodyTextLimited } = await import('../utils/common.js')
-const { fetchHttpWithRecovery, webFetchTool } = await import('../tools/web_fetch.js')
+const { assertPublicUrl, fetchWithProxy, isAbortError, isConfiguredPrivateNetworkUrl, readResponseBodyTextLimited } = await import('../utils/common.js')
+const { fetchHttpWithRecovery, isLikelyBotWall, webFetchTool } = await import('../tools/web_fetch.js')
 const { weatherTool } = await import('../tools/weather.js')
 const { toolRegistry } = await import('../tools/registry.js')
 
@@ -87,6 +87,37 @@ async function testWebFetchHttpRecoveryCancellationDuringRetry() {
     await assert.rejects(promise, error => error.code === 'AGENT_CANCELLED' || error.name === 'AbortError')
 }
 
+async function testConfiguredPrivateWebFetchOrigin() {
+    const options = {
+        allowConfiguredPrivateNetwork: true,
+        privateNetworkOrigins: ['http://192.168.2.194:3001']
+    }
+    const allowed = await assertPublicUrl('http://192.168.2.194:3001/AozoraYui/AI-Plugin', options)
+    assert.equal(allowed.origin, 'http://192.168.2.194:3001')
+    assert.equal(isConfiguredPrivateNetworkUrl('http://192.168.2.194:3001/AozoraYui/AI-Plugin', options.privateNetworkOrigins), true)
+    assert.equal(isConfiguredPrivateNetworkUrl('http://192.168.2.194:3002/AozoraYui/AI-Plugin', options.privateNetworkOrigins), false)
+    assert.equal(isConfiguredPrivateNetworkUrl('http://user:pass@192.168.2.194:3001/AozoraYui/AI-Plugin', options.privateNetworkOrigins), false)
+    await assert.rejects(
+        () => assertPublicUrl('http://192.168.2.194:3002/AozoraYui/AI-Plugin', options),
+        /本机或内网地址/
+    )
+    await assert.rejects(
+        () => assertPublicUrl('http://192.168.2.195:3001/AozoraYui/AI-Plugin', options),
+        /本机或内网地址/
+    )
+    await assert.rejects(
+        () => assertPublicUrl('http://192.168.2.194:3001/AozoraYui/AI-Plugin'),
+        /本机或内网地址/
+    )
+}
+
+async function testBotWallDetectionAvoidsNormalPageTerms() {
+    assert.equal(isLikelyBotWall('本项目无法绕过登录/验证码，Reader 不会访问内网地址。README 正常内容。', '<html><body>正常项目主页</body></html>'), false)
+    assert.equal(isLikelyBotWall('请完成安全验证后才能继续访问', '<html><body>请完成安全验证</body></html>'), true)
+    assert.equal(isLikelyBotWall('验证码：请输入 1234', '<html><body>验证码</body></html>'), true)
+    assert.equal(isLikelyBotWall('A normal page', '<script>window.__app = true</script><div>content</div>'), false)
+}
+
 async function testWebFetchCancellationPropagates() {
     const controller = new AbortController()
     controller.abort()
@@ -119,6 +150,8 @@ await testTimeoutAndCancellationAreDistinguished()
 await testWebFetchHttpRecoveryRotatesProfiles()
 await testWebFetchHttpRecoveryStopsOnRateLimit()
 await testWebFetchHttpRecoveryCancellationDuringRetry()
+await testConfiguredPrivateWebFetchOrigin()
+await testBotWallDetectionAvoidsNormalPageTerms()
 await testWebFetchCancellationPropagates()
 await testWeatherCancellationPropagates()
-console.log('Network eval: 7 passed, 0 failed')
+console.log('Network eval: 9 passed, 0 failed')
