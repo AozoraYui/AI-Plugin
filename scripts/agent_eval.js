@@ -17,6 +17,7 @@ const {
     hasExplicitLocalFileMutationIntent,
     hasExplicitLocalFileReadIntent,
     hasExplicitFileSendIntent,
+    hasExplicitFileDownloadIntent,
     hasExplicitLocalFileDiscoveryIntent,
     hasExplicitGroupChatContextIntent,
     hasExplicitPortDiagnosticIntent,
@@ -36,7 +37,8 @@ const {
     parseRecentGroupChatFollowupRequest,
     parseWebSearchRequest,
     parseWorkspaceSurveyRequest,
-    selectToolCandidates
+    selectToolCandidates,
+    shouldSemanticallyValidateToolCandidates
 } = await import('../utils/tool_intent.js')
 const { classifyAgentRisk, classifyToolCallRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } = await import('../utils/agent_policy.js')
 const { buildFinalAnswerRetryInstruction, hasLeakedToolCallProtocol, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput, shouldAuditUnsupportedToolClaim } = await import('../utils/model_output.js')
@@ -978,6 +980,27 @@ for (const [name, text] of noToolCases) {
 check('群文件列表意图与下载意图区分', hasExplicitGroupFileListIntent('看看群文件里有什么')
     && !hasExplicitGroupFileDownloadIntent('看看群文件里有什么')
     && hasExplicitGroupFileDownloadIntent('把群文件 foo.zip 下载下来'))
+
+check('图片里的下载驱动讨论不会误判为保存当前图片', !hasExplicitFileDownloadIntent(
+    '#c我打算下载驱动到电脑上逆向', { hasImages: true }
+) && selectToolCandidates(['file_download'], '#c我打算下载驱动到电脑上逆向', { hasImages: true }).tools.length === 0)
+check('无工具证据时拦截图片已保存声明', hasUnsupportedToolResultClaim('两张图片已经保存到本地目录 /tmp/images', {
+    hasActualToolResults: false,
+    hasVisualEvidence: true
+}))
+check('明确保存当前图片仍能进入文件下载工具', hasExplicitFileDownloadIntent(
+    '#c把这两张图片保存到服务器', { hasImages: true }
+) && shouldSemanticallyValidateToolCandidates(['file_download'], { hasImages: true }))
+check('语义授权可放行非关键词文件保存表达', (() => {
+    const natural = '给这两张图留个副本到服务器上'
+    const blocked = filterToolCallsByIntent([{ name: 'file_download', args: {} }], natural, {})
+    const authorized = filterToolCallsByIntent([{ name: 'file_download', args: {} }], natural, {
+        allowSemanticSideEffects: true,
+        semanticTools: ['file_download'],
+        semanticConfidence: 0.9
+    })
+    return blocked.tools.length === 0 && authorized.tools.length === 1
+})())
 
 const deferredSideEffects = deferDependentSideEffectCalls([
     { name: 'shell_exec', args: { command: 'find . -name who_are_you.js' } },

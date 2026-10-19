@@ -14,7 +14,7 @@ import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, compactConversationHistory, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldLoadPrivateMemoryContext, shouldPrioritizeCurrentMultimodalTurn } from '../utils/message_context.js'
 import { collectQQFaceImageUrls, describeQQFaceSegment, formatQQFaceSegments } from '../utils/qq_face.js'
-import { detectToolIntentFamilies, extractUrlsFromText, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitHumanizeIntent, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, inferAutonomousUserProfileUpdate, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parsePluginUpdateRequest, parseQQUserLookupRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
+import { detectToolIntentFamilies, extractUrlsFromText, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitHumanizeIntent, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, hasSemanticValidationFamily, inferAutonomousUserProfileUpdate, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parsePluginUpdateRequest, parseQQUserLookupRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates, shouldSemanticallyValidateToolCandidates } from '../utils/tool_intent.js'
 import { claimPendingAction, clearPendingAction, loadPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision, releasePendingActionClaim } from '../utils/pending_actions.js'
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
@@ -1092,6 +1092,12 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         hasImages,
         hasRecentImages
     })
+
+    // 副作用工具必须经过语义模型和主模型规划，不能由规则预路由直接执行。
+    // 这样可以避免“下载驱动”“保存到某处”等讨论内容被误当成保存当前图片。
+    if (options.allowSemanticSideEffects !== true && hasSemanticValidationFamily([...routeFamilies])) {
+        return null
+    }
 
     if (isMaster && hasTool(enabledTools, 'qq_user_lookup')) {
         const qqLookupArgs = parseQQUserLookupRequest(routeText)
@@ -2441,6 +2447,8 @@ ${visualDescription}`
                     hasGroup: Boolean(e.group_id)
                     })
                 let toolAnalysis
+                let semanticAuthorizedTools = []
+                let semanticAuthorizationConfidence = 0
                 if (preRouted) {
                     toolAnalysis = preRouted
                     logger.info(`[AI-Plugin] 工具预路由命中: ${preRouted.tools.map(t => t.name).join(', ')} - ${preRouted.intent}`)
@@ -2460,7 +2468,10 @@ ${visualDescription}`
                             planningCandidates.reason = `${planningCandidates.reason}; 近期任务续接候选=${recentAgentTaskToolCandidates.join(', ')}`
                         }
                     }
-                    if (planningCandidates.tools.length === 0) {
+                    const semanticCandidateCheck = shouldSemanticallyValidateToolCandidates(planningCandidates.tools, {
+                        hasImages: allImages.length > 0 || hasLocalImageInput
+                    })
+                    if (planningCandidates.tools.length === 0 || semanticCandidateCheck) {
                         const discovery = await toolRegistry.discoverToolCandidates(
                             currentToolInstruction || userMessage,
                             this.client,
@@ -2468,6 +2479,7 @@ ${visualDescription}`
                             {
                                 currentInstruction: currentToolInstruction,
                                 planningContext: planningContextForTools,
+                                hasImages: allImages.length > 0 || hasLocalImageInput,
                                 maxTools: 8
                             }
                         )
@@ -2493,12 +2505,25 @@ ${visualDescription}`
                         }
                         if (resolvedDiscovery.tools.length > 0) {
                             planningCandidates.tools = enabledTools.filter(name => resolvedDiscovery.tools.includes(name))
+                            semanticAuthorizedTools = [...planningCandidates.tools]
+                            semanticAuthorizationConfidence = resolvedDiscovery.confidence
                             planningCandidates.reason = `语义工具发现与裁决(${resolvedDiscovery.mode}, confidence=${resolvedDiscovery.confidence.toFixed(2)}): ${resolvedDiscovery.reason || resolvedDiscovery.resolvedIntent || resolvedDiscovery.tools.join(', ')}`
                             logger.info(`[AI-Plugin] 语义工具发现召回候选: ${planningCandidates.tools.join(', ')}, mode=${resolvedDiscovery.mode}, confidence=${resolvedDiscovery.confidence.toFixed(2)}${resolvedDiscovery.model ? `, 模型=${resolvedDiscovery.model}` : ''}`)
-                        } else if (resolvedDiscovery.mode === 'task' && resolvedDiscovery.confidence >= 0.65) {
+                        } else if (resolvedDiscovery.mode === 'task' && resolvedDiscovery.confidence >= 0.65 && !semanticCandidateCheck) {
                             planningCandidates.tools = [...enabledTools]
                             planningCandidates.reason = `语义工具发现确认是任务但未能缩小能力范围，交给主模型从完整工具目录判断：${resolvedDiscovery.reason}`
                             logger.info(`[AI-Plugin] 语义工具发现确认任务，使用完整工具目录进入主模型规划: confidence=${resolvedDiscovery.confidence.toFixed(2)}`)
+                        } else if (semanticCandidateCheck) {
+                            // 语义模型未确认副作用任务时，宁可正常回答也不执行误操作。
+                            planningCandidates.tools = planningCandidates.tools.filter(name => ![
+                                'draw_image', 'file_send', 'file_download', 'group_file_download',
+                                'user_profile_update', 'group_send_message', 'group_leave',
+                                'group_mute', 'group_whole_mute', 'group_kick', 'group_set_card',
+                                'group_set_title', 'group_essence', 'group_request_handle',
+                                'shell_exec', 'shell_session', 'config_manage', 'workspace_patch'
+                            ].includes(name))
+                            planningCandidates.reason = `语义工具发现未确认副作用任务，已移除高影响候选: ${resolvedDiscovery.reason || resolvedDiscovery.mode}`
+                            logger.info('[AI-Plugin] 语义工具发现未确认副作用任务，已移除高影响候选')
                         } else {
                             planningCandidates.reason = `${planningCandidates.reason}; 语义发现=${resolvedDiscovery.mode}/${resolvedDiscovery.confidence.toFixed(2)} ${resolvedDiscovery.reason || ''}`.trim()
                         }
@@ -2544,6 +2569,9 @@ ${visualDescription}`
                                 allowContinuation: allowToolContinuation,
                                 allowTaskContextContinuation: taskContextContinuation,
                                 allowAutonomousProfileSync: Boolean(inferAutonomousUserProfileUpdate(currentToolInstruction)),
+                                allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
+                                semanticTools: semanticAuthorizedTools,
+                                semanticConfidence: semanticAuthorizationConfidence,
                                 continuationTools: continuationToolsForGuard
                             })
                             toolAnalysis.plan = mainToolPlan
@@ -2602,6 +2630,9 @@ ${visualDescription}`
                     allowTaskContextContinuation: taskContextContinuation,
                     continuationTools: continuationToolsForGuard,
                     allowModelPlannedLowRisk: ['main_model_plan', 'main_model_direct'].includes(toolAnalysis?.routedBy),
+                    allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
+                    semanticTools: semanticAuthorizedTools,
+                    semanticConfidence: semanticAuthorizationConfidence,
                     allowAutonomousProfileSync: Boolean(inferAutonomousUserProfileUpdate(currentToolInstruction))
                 })
                 if (guardedToolCalls.blocked.length > 0) {
@@ -3312,6 +3343,9 @@ ${visualDescription}`
                             maxTools: 2,
                             currentInstruction: currentToolInstruction,
                             allowContinuation: true,
+                            allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
+                            semanticTools: semanticAuthorizedTools,
+                            semanticConfidence: semanticAuthorizationConfidence,
                             continuationTools: AGENT_LOOP_ALLOWED_TOOLS
                         }),
                         extractTools: analysis => Array.isArray(analysis?.tools) ? analysis.tools : [],
@@ -3323,6 +3357,9 @@ ${visualDescription}`
                             allowContinuation: true,
                             continuationTools: AGENT_LOOP_ALLOWED_TOOLS,
                             allowAutonomousProfileSync: Boolean(inferAutonomousUserProfileUpdate(currentToolInstruction)),
+                            allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
+                            semanticTools: semanticAuthorizedTools,
+                            semanticConfidence: semanticAuthorizationConfidence,
                             allowModelPlannedLowRisk: true
                         }),
                         normalizeTools: calls => {

@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import plugin from '../../../lib/plugins/plugin.js'
 import { Config } from '../utils/config.js'
 import { checkAccess, getAccessConfig } from '../utils/access.js'
+import { isBotMuted } from '../utils/bot_mute.js'
 import { formatDBTimestampToBeijing, getBeijingTimeStr, getTodayDateStr, takeSourceMsg } from '../utils/common.js'
 import { processImagesInBatches, trimInlineImagesToPayloadLimit } from '../utils/image.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject } from '../utils/message_context.js'
@@ -11,7 +12,7 @@ import { buildGroupContextImageSummary, formatGroupContextImageSummary, isExpire
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memory_context.js'
-import { detectToolIntentFamilies, extractUrlsFromText, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, hasExplicitUserProfileUpdateIntent, inferAutonomousUserProfileUpdate, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates } from '../utils/tool_intent.js'
+import { detectToolIntentFamilies, extractUrlsFromText, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, hasExplicitUserProfileUpdateIntent, inferAutonomousUserProfileUpdate, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates, shouldSemanticallyValidateToolCandidates } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { relayImagesToVision } from '../tools/vision_relay.js'
 import { buildFinalAnswerRetryInstruction, hasLeakedToolCallProtocol, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput, shouldAuditUnsupportedToolClaim } from '../utils/model_output.js'
@@ -1230,6 +1231,10 @@ export class FastChatHandler extends plugin {
         const enabled = this.client?.enableFastChat || Config.enable_fast_chat === true
         if (!enabled) return false
         if (!e.group_id || !e.message || !Array.isArray(e.message)) return false
+        if (await isBotMuted(e)) {
+            logger.debug(`[AI-Plugin] [畅聊] 机器人在群 ${e.group_id} 当前被禁言，跳过消息处理`)
+            return false
+        }
 
         const dedup = claimMessageDedup(e, 'fast_chat')
         if (dedup.duplicate) {
@@ -1468,7 +1473,13 @@ export class FastChatHandler extends plugin {
                 continuationTools: FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS
             })
             let semanticDiscovery = null
-            if (candidateSelection.tools.length === 0 && enabledTools.length > 0 && toolRoutingText.trim().length >= 4) {
+            let semanticAuthorizedTools = []
+            let semanticAuthorizationConfidence = 0
+            const semanticCandidateCheck = shouldSemanticallyValidateToolCandidates(candidateSelection.tools, {
+                hasImages: normalized.imageMeta.length > 0 || hasLocalImageInput
+            })
+            if ((candidateSelection.tools.length === 0 || semanticCandidateCheck)
+                && enabledTools.length > 0 && toolRoutingText.trim().length >= 4) {
                 semanticDiscovery = await toolRegistry.discoverToolCandidates(
                     toolRoutingText,
                     this.client,
@@ -1476,6 +1487,7 @@ export class FastChatHandler extends plugin {
                     {
                         currentInstruction: toolRoutingText,
                         planningContext: recentAgentTaskPlanningContext,
+                        hasImages: normalized.imageMeta.length > 0 || hasLocalImageInput,
                         maxTools: 8
                     }
                 )
@@ -1497,19 +1509,30 @@ export class FastChatHandler extends plugin {
                 }
                 if (semanticDiscovery.tools.length > 0) {
                     candidateSelection.tools = enabledTools.filter(name => semanticDiscovery.tools.includes(name))
+                    semanticAuthorizedTools = [...candidateSelection.tools]
+                    semanticAuthorizationConfidence = semanticDiscovery.confidence
                     candidateSelection.compound = candidateSelection.compound || candidateSelection.tools.length > 1
                     candidateSelection.reason = `语义工具发现(${semanticDiscovery.mode}, confidence=${semanticDiscovery.confidence.toFixed(2)}): ${semanticDiscovery.reason || semanticDiscovery.tools.join(', ')}`
                     logger.info(`[AI-Plugin] [畅聊] 语义工具发现召回候选: ${candidateSelection.tools.join(', ')}, mode=${semanticDiscovery.mode}, confidence=${semanticDiscovery.confidence.toFixed(2)}${semanticDiscovery.model ? `, 模型=${semanticDiscovery.model}` : ''}`)
-                } else if (semanticDiscovery.mode === 'task' && semanticDiscovery.confidence >= 0.65) {
+                } else if (semanticDiscovery.mode === 'task' && semanticDiscovery.confidence >= 0.65 && !semanticCandidateCheck) {
                     candidateSelection.tools = [...enabledTools]
                     candidateSelection.reason = `语义工具发现确认任务但未缩小工具范围：${semanticDiscovery.reason}`
                     logger.info(`[AI-Plugin] [畅聊] 语义工具发现确认任务，使用完整工具目录: confidence=${semanticDiscovery.confidence.toFixed(2)}`)
+                } else if (semanticCandidateCheck) {
+                    candidateSelection.tools = []
+                    candidateSelection.reason = `语义工具发现未确认副作用任务，已阻止规则候选: ${semanticDiscovery.reason || semanticDiscovery.mode}`
+                    logger.info('[AI-Plugin] [畅聊] 语义工具发现未确认副作用任务，已阻止规则候选')
                 }
             }
+            const semanticCandidateRejected = semanticCandidateCheck
+                && semanticDiscovery
+                && semanticDiscovery.tools.length === 0
             const selectedToolSet = new Set([...candidateSelection.tools, ...recentAgentTaskToolCandidates])
             if (autonomousProfile && enabledTools.includes('user_profile_update')) selectedToolSet.add('user_profile_update')
-            const routeByKeyword = candidateSelection.tools.length > 0 || shouldRouteFastChatTools(toolRoutingText, candidateUrls) || Boolean(autonomousProfile)
-            const routeByMasterRequest = shouldLetFastChatToolModelJudge(toolRoutingText, e.isMaster)
+            const routeByKeyword = !semanticCandidateRejected
+                && (candidateSelection.tools.length > 0 || shouldRouteFastChatTools(toolRoutingText, candidateUrls) || Boolean(autonomousProfile))
+            const routeByMasterRequest = !semanticCandidateRejected
+                && shouldLetFastChatToolModelJudge(toolRoutingText, e.isMaster)
             const routeByRecentTask = recentAgentTaskToolCandidates.length > 0
             const planningEnabledTools = selectedToolSet.size > 0
                 ? enabledTools.filter(name => selectedToolSet.has(name))
@@ -1545,7 +1568,8 @@ export class FastChatHandler extends plugin {
                 const workspaceSurveyArgs = e.isMaster && planningEnabledTools.includes('workspace_list')
                     ? parseWorkspaceSurveyRequest(toolRoutingText)
                     : null
-                const allowSingleToolPreRoute = !candidateSelection.compound || routeByRecentTask
+                const allowSingleToolPreRoute = (!candidateSelection.compound || routeByRecentTask)
+                    && !semanticDiscovery?.tools?.length
                 if (allowSingleToolPreRoute && workspaceSurveyArgs?.exhaustive && planningEnabledTools.includes('workspace_survey')) {
                     toolCalls = [{ name: 'workspace_survey', args: workspaceSurveyArgs }]
                     logger.info('[AI-Plugin] [畅聊] 规则预路由命中: workspace_survey - 先执行结构化源码普查')
@@ -1584,7 +1608,10 @@ export class FastChatHandler extends plugin {
                         {
                             hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0 || hasLocalImageInput,
                             mentionedUserIds,
-                            currentInstruction: toolRoutingText
+                            currentInstruction: toolRoutingText,
+                            allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
+                            semanticTools: semanticAuthorizedTools,
+                            semanticConfidence: semanticAuthorizationConfidence
                         }
                     )
                     toolCalls = filterFastChatToolCalls(
@@ -1599,6 +1626,9 @@ export class FastChatHandler extends plugin {
                             allowTaskContextContinuation: recentAgentTaskPlanningContext.length > 0,
                             continuationTools: FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS,
                             allowModelPlannedLowRisk: true,
+                            allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
+                            semanticTools: semanticAuthorizedTools,
+                            semanticConfidence: semanticAuthorizationConfidence,
                             allowAutonomousProfileSync: Boolean(autonomousProfile)
                         }
                     )
@@ -1897,7 +1927,10 @@ export class FastChatHandler extends plugin {
                                 allowContinuation: true,
                                 allowTaskContextContinuation: true,
                                 continuationTools: FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS,
-                                allowModelPlannedLowRisk: true
+                                allowModelPlannedLowRisk: true,
+                                allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
+                                semanticTools: semanticAuthorizedTools,
+                                semanticConfidence: semanticAuthorizationConfidence
                             }
                         ),
                         extractTools: analysis => Array.isArray(analysis?.tools) ? analysis.tools : [],
@@ -1908,7 +1941,10 @@ export class FastChatHandler extends plugin {
                             strictWebSearch: false,
                             allowContinuation: true,
                             allowTaskContextContinuation: true,
-                            continuationTools: FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS
+                            continuationTools: FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS,
+                            allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
+                            semanticTools: semanticAuthorizedTools,
+                            semanticConfidence: semanticAuthorizationConfidence
                         }),
                         allowedTools: FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS,
                         enabledTools: followupEnabledTools,

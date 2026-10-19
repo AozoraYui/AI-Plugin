@@ -3,6 +3,7 @@ import path from 'node:path'
 import yaml from 'yaml'
 import { ACCESS_CONTROL_FILE, TEMPLATE_DIR_EXPORT } from './config.js'
 import { Config } from './config.js'
+import { isBotMuted } from './bot_mute.js'
 
 const defaultAccessConfig = {
     mode: 'whitelist',
@@ -79,6 +80,11 @@ export function saveAccessConfig(config) {
 }
 
 export async function checkAccess(e) {
+    if (e?.group_id && await isBotMuted(e)) {
+        logger.debug(`[AI-Plugin] 机器人在群 ${e.group_id} 当前被禁言，跳过 AI 插件处理`)
+        return false
+    }
+
     if (e.isMaster) {
         return true
     }

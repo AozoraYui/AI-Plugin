@@ -386,7 +386,6 @@ export function hasExplicitFileDownloadIntent(text, options = {}) {
     const mediaWords = '(?:图片|照片|图|视频|语音|文件|这些|这个|引用|消息|媒体)'
     const actionWords = '(?:下载|保存|存储|存到|下载到|保存到|存起来|落盘|落到服务器|保存到服务器)'
     return new RegExp(`${actionWords}.{0,30}${mediaWords}|${mediaWords}.{0,30}${actionWords}`, 'i').test(value)
-        || (hasImages && /(?:下载|保存|存储|存到|下载到|保存到|存起来)/i.test(value))
 }
 
 export function hasExplicitFileSendIntent(text) {
@@ -1055,6 +1054,35 @@ export function selectToolCandidates(enabledTools = [], text = '', options = {})
     }
 }
 
+const SEMANTIC_VALIDATION_TOOLS = new Set([
+    'draw_image', 'file_send', 'file_download', 'group_file_download',
+    'user_profile_update', 'group_send_message', 'group_leave',
+    'group_mute', 'group_whole_mute', 'group_kick', 'group_set_card',
+    'group_set_title', 'group_essence', 'group_request_handle',
+    'shell_exec', 'shell_session', 'config_manage', 'workspace_patch'
+])
+
+export function isSemanticValidationTool(toolName = '') {
+    return SEMANTIC_VALIDATION_TOOLS.has(String(toolName || '').trim())
+}
+
+export function shouldSemanticallyValidateToolCandidates(toolNames = [], options = {}) {
+    const names = Array.isArray(toolNames) ? toolNames : []
+    if (names.some(isSemanticValidationTool)) return true
+    return options.hasImages === true && names.some(name => ['draw_image', 'file_download'].includes(name))
+}
+
+const SEMANTIC_VALIDATION_FAMILIES = new Set([
+    'draw', 'file_send', 'file_download', 'group_file_download',
+    'profile_update', 'group_send', 'group_leave', 'group_admin',
+    'local_file_mutation', 'system_operation'
+])
+
+export function hasSemanticValidationFamily(families = []) {
+    return (Array.isArray(families) ? families : [...(families || [])])
+        .some(family => SEMANTIC_VALIDATION_FAMILIES.has(family))
+}
+
 const TRAILING_URL_ACTIONS = /(?:打开(?:一下|下)?|访问(?:一下|下)?|查看(?:一下|下)?|看看|看下|看一下|看一眼|查(?:一下|下)?|读(?:一下|下)?|读取(?:一下|下)?|分析(?:一下|下)?|总结(?:一下|下)?|概括(?:一下|下)?|解释(?:一下|下)?|确认一下|核实一下|一下|下)$/i
 
 function cleanExtractedUrl(candidate = '') {
@@ -1216,8 +1244,18 @@ export function filterToolCallsByIntent(toolCalls = [], text = '', options = {})
         'group_leave', 'group_mute', 'group_whole_mute', 'group_kick', 'group_set_card', 'group_set_title',
         'group_essence', 'group_request_handle', 'workspace_patch'
     ])
+    const semanticTools = new Set(Array.isArray(options.semanticTools) ? options.semanticTools : [])
+    const semanticAuthorization = options.allowSemanticSideEffects === true
+        && Number(options.semanticConfidence || 0) >= 0.72
     for (const call of toolCalls || []) {
         if (!call?.name) continue
+        const semanticallyAuthorized = semanticAuthorization
+            && semanticTools.has(call.name)
+            && isSemanticValidationTool(call.name)
+        if (semanticallyAuthorized) {
+            filtered.push(call)
+            continue
+        }
         if (!isExplicitToolIntent(call.name, instruction, { ...options, toolArgs: call.args || call.params || {} })) {
             if (allowContinuation && continuationTools.has(call.name) && !sideEffectTools.has(call.name)) {
                 filtered.push(call)
