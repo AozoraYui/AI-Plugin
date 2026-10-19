@@ -22,6 +22,22 @@ function buildSourceKey({ messageId = '', groupId = '', userId = '' } = {}) {
     return `${normalizeId(groupId) || 'private'}:${normalizeId(userId)}:${normalizedMessageId}`
 }
 
+export function parseRecallNotice(e = {}) {
+    const noticeType = normalizeId(e?.notice_type).toLowerCase()
+    const subType = normalizeId(e?.sub_type).toLowerCase()
+    const isGroupRecall = (noticeType === 'group' && subType === 'recall') || noticeType === 'group_recall'
+    const isFriendRecall = (noticeType === 'friend' && subType === 'recall') || noticeType === 'friend_recall'
+    if (!isGroupRecall && !isFriendRecall) return null
+
+    const userId = normalizeId(e?.user_id)
+    return {
+        messageId: normalizeId(e?.message_id || e?.seq),
+        groupId: isGroupRecall ? normalizeId(e?.group_id) : '',
+        userId,
+        operatorId: isGroupRecall ? normalizeId(e?.operator_id) || userId : userId
+    }
+}
+
 function cleanupExecution(executionId) {
     const record = ACTIVE_EXECUTIONS.get(executionId)
     if (!record) return false

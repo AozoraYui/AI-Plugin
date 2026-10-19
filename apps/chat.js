@@ -1883,6 +1883,10 @@ export class ChatHandler extends plugin {
         })
         const throwIfExecutionCancelled = () => cancellationHandle?.throwIfCancelled()
         const disposeCancellation = () => cancellationHandle?.dispose()
+        const replyUnlessCancelled = async (...args) => {
+            throwIfExecutionCancelled()
+            return e.reply(...args)
+        }
 
         const prefix = match[1].toLowerCase()
         const flags = match[2].toLowerCase()
@@ -3601,9 +3605,9 @@ ${visualDescription}`
             // 普通思考占位由主人命令「#ai开启/关闭思考提示」控制，默认关闭。
             if (Config.show_thinking_notice === true && !drawImageAttempted) {
                 if (!isSingleMode) {
-                    await e.reply(`${Config.AI_NAME}思考中 (使用 ${modelDisplay} 模型组)…`, true)
+                    await replyUnlessCancelled(`${Config.AI_NAME}思考中 (使用 ${modelDisplay} 模型组)…`, true)
                 } else {
-                    await e.reply(`${Config.AI_NAME}思考中 (单次对话模式，使用 ${modelDisplay} 模型组)…`, true)
+                    await replyUnlessCancelled(`${Config.AI_NAME}思考中 (单次对话模式，使用 ${modelDisplay} 模型组)…`, true)
                 }
             }
             await setMsgEmojiLike(e, 282)
@@ -3821,7 +3825,7 @@ ${visualDescription}`
             if (currentSizeMB > Config.REQUEST_SIZE_LIMIT_MB) {
                 throwIfExecutionCancelled()
                 logger.error(`[AI-Plugin] 请求体在历史和图片裁剪后仍超限: ${currentSizeMB.toFixed(2)}MB > ${Config.REQUEST_SIZE_LIMIT_MB}MB`)
-                await e.reply(`❌ 本轮上下文过大（${currentSizeMB.toFixed(2)}MB），即使裁剪历史和图片后仍超过 ${Config.REQUEST_SIZE_LIMIT_MB}MB。请减少单次引用内容或图片数量后重试。`, true)
+                await replyUnlessCancelled(`❌ 本轮上下文过大（${currentSizeMB.toFixed(2)}MB），即使裁剪历史和图片后仍超过 ${Config.REQUEST_SIZE_LIMIT_MB}MB。请减少单次引用内容或图片数量后重试。`, true)
                 return true
             }
             
@@ -4016,7 +4020,7 @@ ${visualDescription}`
                         throwIfExecutionCancelled()
                         const shortDelivery = await sendTextInChunks({
                             text: `${responseText}\n\n${footerInfo}`,
-                            sendReply: (...args) => e.reply(...args),
+                            sendReply: replyUnlessCancelled,
                             maxChars: MAX_LENGTH,
                             maxBytes: 3500,
                             logger,
@@ -4037,7 +4041,7 @@ ${visualDescription}`
                         aiName: Config.AI_NAME,
                         botUin: Bot.uin,
                         makeForwardMsg: nodes => Bot.makeForwardMsg(nodes),
-                        sendReply: (...args) => e.reply(...args),
+                        sendReply: replyUnlessCancelled,
                         logger,
                         logPrefix: '[AI-Plugin]',
                         maxChars: MAX_LENGTH,
@@ -4080,7 +4084,7 @@ ${visualDescription}`
                             usedSafeFallbackReply = true
                             const fallbackDelivery = await sendTextInChunks({
                                 text: finalResponseText,
-                                sendReply: (...args) => e.reply(...args),
+                                sendReply: replyUnlessCancelled,
                                 logger,
                                 logPrefix: '[AI-Plugin]',
                                 deliveryContext: {
@@ -4194,7 +4198,7 @@ ${visualDescription}`
                         logger.warn(`[AI-Plugin] Agent任务失败状态更新失败: ${err.message}`)
                     }
                 }
-                await e.reply(`❌ 请求失败\n错误: ${result.error}`, true)
+                await replyUnlessCancelled(`❌ 请求失败\n错误: ${result.error}`, true)
             }
         } catch (err) {
             if (cancellationHandle?.isCancelled() || isAgentExecutionCancelled(err)) {
@@ -4203,7 +4207,7 @@ ${visualDescription}`
             }
             await setMsgEmojiLike(e, 10)
             logger.error(`[AI-Plugin] 对话处理异常:`, err)
-            await e.reply(`❌ 处理异常: ${err.message}`, true)
+            if (!cancellationHandle?.isCancelled()) await e.reply(`❌ 处理异常: ${err.message}`, true)
         } finally {
             disposeCancellation()
         }

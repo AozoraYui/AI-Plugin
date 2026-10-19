@@ -78,7 +78,7 @@ const { trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
 const { getPureImageReplyPolicy, isReferentialBotKeywordMention, resolveFastChatImageDelivery, resolveFastChatTrigger } = await import('../utils/fast_chat_trigger.js')
 const { assessFetchedContent, assessSearchResults, buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, getOfficialSearchDomains, getWebSourceAuthority, hasExplicitTerminalWebBlockResponse, hasExplicitWebUncertainty, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, scoreWebSourceCandidate, updateWebEvidenceState } = await import('../utils/web_evidence.js')
 const { extractMessageSendError, isContentModerationSendError } = await import('../utils/message_delivery.js')
-const { cancelAgentExecutionsByRecalledMessage, getActiveAgentExecutionCount, registerAgentExecution } = await import('../utils/agent_cancellation.js')
+const { cancelAgentExecutionsByRecalledMessage, getActiveAgentExecutionCount, parseRecallNotice, registerAgentExecution } = await import('../utils/agent_cancellation.js')
 
 const failures = []
 let passed = 0
@@ -100,6 +100,44 @@ check('撤回原消息且作者主动操作可以取消 Agent 执行', (() => {
     execution.dispose()
     return result
 })())
+check('Yunzai 拆分后的群撤回事件可以解析', (() => {
+    const recall = parseRecallNotice({
+        notice_type: 'group',
+        sub_type: 'recall',
+        message_id: '204954643',
+        group_id: '1039793252',
+        user_id: '956753394',
+        operator_id: '956753394'
+    })
+    return recall?.messageId === '204954643'
+        && recall.groupId === '1039793252'
+        && recall.userId === '956753394'
+        && recall.operatorId === '956753394'
+})())
+check('Yunzai 拆分后的群撤回事件能取消已登记执行', (() => {
+    const execution = registerAgentExecution({ messageId: '204954643', groupId: '1039793252', userId: '956753394' })
+    const recall = parseRecallNotice({
+        notice_type: 'group',
+        sub_type: 'recall',
+        message_id: '204954643',
+        group_id: '1039793252',
+        user_id: '956753394',
+        operator_id: '956753394'
+    })
+    const cancelled = cancelAgentExecutionsByRecalledMessage(recall)
+    const result = execution.isCancelled() && cancelled.length === 1
+    execution.dispose()
+    return result
+})())
+check('兼容完整的 group_recall 和 friend_recall 通知类型', (() => {
+    const groupRecall = parseRecallNotice({ notice_type: 'group_recall', message_id: '1', group_id: '2', user_id: '3' })
+    const friendRecall = parseRecallNotice({ notice_type: 'friend_recall', message_id: '4', user_id: '5' })
+    return groupRecall?.groupId === '2'
+        && groupRecall.operatorId === '3'
+        && friendRecall?.groupId === ''
+        && friendRecall.operatorId === '5'
+})())
+check('普通通知不会被识别为撤回', parseRecallNotice({ notice_type: 'group', sub_type: 'increase', group_id: '1' }) === null)
 check('不同消息 ID 不会误取消 Agent 执行', (() => {
     const execution = registerAgentExecution({ messageId: 'recall-2', groupId: 'group-1', userId: 'user-1' })
     const cancelled = cancelAgentExecutionsByRecalledMessage({ messageId: 'other-message', groupId: 'group-1', userId: 'user-1', operatorId: 'user-1' })
