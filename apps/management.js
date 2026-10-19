@@ -350,7 +350,7 @@ export class ManagementHandler extends plugin {
             this.client.groupSendConfig = { enabled: isTurnOn }
             logger.info(`[AI-Plugin] 群消息代发开关已${isTurnOn ? '开启' : '关闭'}（运行时立即生效）`)
             await e.reply(isTurnOn
-                ? '✅ 已开启群消息代发工具。主人可让 AI 创建跨群代发待确认操作；显式列出多个目标时可批量，默认加“【主人转达】”前缀。'
+                ? '✅ 已开启群消息代发工具。主人明确指定目标群和正文后，AI 会直接发送；显式列出多个目标时可批量，默认加“【主人转达】”前缀。'
                 : '已关闭群消息代发工具。AI 不会再把跨群代发能力加入可用工具列表。')
         } catch (err) {
             logger.error('[AI-Plugin] 切换群消息代发开关失败:', err)

@@ -1183,7 +1183,7 @@ function formatFastChatToolInjection(toolName, result) {
         return `\n\n【畅聊工具结果：语义记忆检索】以下是本地向量记忆召回的相关历史线索；请结合当前群上下文谨慎回答，命中不足时说明不确定，不要把个人档案隐私主动摊开。${formattedResult}`
     }
     if (toolName === 'group_send_message') {
-        return `\n\n【畅聊工具结果：群消息代发】以下是代发群消息的实际结果；若结果显示待确认，说明尚未发送，请提醒主人按回执继续用 #c 自然确认或取消。${formattedResult}`
+        return `\n\n【畅聊工具结果：群消息代发】以下是代发群消息的实际结果；目标明确时会直接发送，请依据 results 逐项说明成功或失败。目标存在歧义时只提示选择候选群，不要说已经发送。${formattedResult}`
     }
     if (toolName === 'group_leave') {
         return `\n\n【畅聊工具结果：退群】以下是退群工具的实际结果；若结果显示待确认，说明尚未退出任何群，请提醒主人按回执继续用 #c 自然确认或取消。${formattedResult}`

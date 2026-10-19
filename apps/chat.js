@@ -29,7 +29,7 @@ import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../util
 import { cancelAgentExecutionsByTask, isAgentExecutionCancelled, registerAgentExecution } from '../utils/agent_cancellation.js'
 import { claimMessageDedup } from '../utils/message_dedup.js'
 import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
-import { createPendingGroupSendAction, executePendingGroupSend, parseGroupSendDisambiguationSelection } from '../tools/group_send.js'
+import { executeGroupSend, executePendingGroupSend, parseGroupSendDisambiguationSelection } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
 import { executePendingShellExec } from '../tools/shell_exec.js'
 import { executePendingShellSession } from '../tools/shell_session.js'
@@ -385,20 +385,17 @@ async function handlePendingActionShortcut(e, instruction = '', client = null, m
             return true
         }
         if (selection.action === 'select') {
-            const saveResult = await createPendingGroupSendAction(e.user_id, {
-                agentTaskId: pending.agentTaskId || '',
+            const result = await executeGroupSend({
+                type: 'group_send_message',
                 groups: [selection.group],
                 message: pending.message,
                 originalMessage: pending.originalMessage || '',
                 asIs: pending.asIs === true
-            })
-            if (!saveResult.ok) {
-                await e.reply(`目标群已识别，但创建待确认操作失败：${saveResult.error || '未知错误'}`, true)
-                return true
-            }
+            }, e)
             await clearPendingAction(e.user_id, pending.id)
-            const groupName = selection.group.groupName ? `「${selection.group.groupName}」` : '群名未知'
-            await e.reply(`已确认目标群为 ${groupName}（${selection.group.groupId}）。消息仍未发送；请继续回复「#c执行」或「#c取消」。\n待发送内容：${pending.message}`, true)
+            await updatePendingActionAgentTask(e, pending, result, 'confirm')
+            const formatted = toolRegistry.formatToolResult('group_send_message', result).trim()
+            await e.reply(formatted || (result.ok ? '群消息已发送。' : `群消息发送失败：${result.error || '未知错误'}`), true)
             return true
         }
         if (parseStandalonePendingCommand(text)) {
@@ -1176,7 +1173,7 @@ function preRouteToolIntent(userMessage, enabledTools, options = {}) {
         }
     }
 
-    // 1) 主人明确要求代发群消息：直接走 group_send_message，避免把“转达内容”当普通聊天回复；工具只会创建待确认操作。
+    // 1) 主人明确要求代发群消息：直接走 group_send_message，避免把“转达内容”当普通聊天回复。
     if (isMaster && hasTool(enabledTools, 'group_send_message')) {
         const groupSendArgs = parseGroupSendRequest(text)
         if (groupSendArgs) {
@@ -1690,7 +1687,7 @@ ${researchRequirementsBlock}
 - 用户要求从历史/记忆/旧对话里查找某个话题，或问“以前有没有说过/还记得我之前提过什么/相关记忆/语义检索”时，计划 memory_search；它是只读检索，不会写档案。当前群“刚才聊啥”这种需要原始时间线的问题优先 group_chat_context。
 - 用户问“这个人是谁/@某某有什么外号/谁是杂鱼/谁被叫过xxx/本群怎么称呼某人”时，计划 group_member_aliases 查询本群称呼记忆；这类结果只代表群内公开聊天里的称呼记录，不是真实身份断言。
 - 用户明确要求“记到我的个人档案/写进我的用户画像/更新个人档案/从刚才聊天提炼我的档案”时，计划 user_profile_update；当前用户用第一人称明确提供生日、称呼、偏好、习惯、长期技术或项目背景等稳定事实时，也可自主同步，使用 source_text=当前用户原话、mode=source_text。疑问、能力咨询、不确定表达、短期状态、引用/转发中的他人信息和敏感字段不要自动写入，必要时向用户询问。只是询问“能不能写档案/有没有档案”不要计划。普通用户只更新自己的档案，主人明确指定用户时才可带 user_id。
-- 主人明确要求“帮我在某群说/发/转达某段文本”时，才计划 group_send_message；必须有目标群和明确消息内容。支持显式多个目标，但工具会先创建待确认操作，不会直接发送。不要替主人编写、润色或补全要发送的内容，目标群不明确时不要计划。
+- 主人明确要求“帮我在某群说/发/转达某段文本”时，才计划 group_send_message；必须有目标群和明确消息内容。支持显式多个目标；目标群唯一时直接发送，目标群有歧义时只询问选择，不要求二次确认。不要替主人编写、润色或补全要发送的内容，目标群不明确时不要计划。
 - 主人明确要求“退出/离开/退了某群”时，才计划 group_leave；支持群号、唯一群名、本群/当前群，以及显式列出的多个目标。开放式“所有群/全部群/不友好那些群”不要计划，需让主人先明确群号或群名。group_leave 只创建待确认操作，确认后才真正退群。
 - 只计划“可用工具”中列出的工具，最多 5 个。
 - 群管理成员操作必须有明确目标；如果用户只给昵称/群名片且不确定 QQ 号，先计划 group_member_list 或 group_member_resolve。
@@ -3069,7 +3066,7 @@ ${visualDescription}`
                         } else if (call.name === 'group_send_message') {
                             suppressAutoFastChatContext = true
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
-                            userMessage = userMessage + '\n\n【重要指令】以上为群消息代发工具的实际结果。若结果显示“待确认”，说明尚未发送，请只提醒主人按回执继续用 #c 自然确认或取消；不要声称已经发送，也不要重复发送。' + formattedResult
+                            userMessage = userMessage + '\n\n【重要指令】以上为群消息代发工具的实际结果。目标明确时工具会直接发送，请严格依据 results 中的成功或失败逐项汇报；目标存在歧义时只说明尚未发送并请主人选择候选群。不要声称未成功的群已经发送，也不要重复发送。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (call.name === 'group_leave') {
                             suppressAutoFastChatContext = true

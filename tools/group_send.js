@@ -401,10 +401,7 @@ async function sendGroupText(bot, groupId, text) {
     throw new Error('当前适配器不支持发送群消息。')
 }
 
-export async function executePendingGroupSend(record = {}, event = {}) {
-    if (record.type !== 'group_send_message') {
-        return { ok: false, error: '待确认操作类型不是群消息代发。' }
-    }
+export async function executeGroupSend(record = {}, event = {}) {
     if (global.AIPluginClient?.enableGroupSend !== true) {
         return { ok: false, error: '群消息代发工具未启用。' }
     }
@@ -413,7 +410,7 @@ export async function executePendingGroupSend(record = {}, event = {}) {
     }
     const groups = Array.isArray(record.groups) ? record.groups.map(compactGroup).filter(group => group.groupId) : []
     if (groups.length === 0) {
-        return { ok: false, error: '待确认操作里没有有效目标群。' }
+        return { ok: false, error: '没有有效目标群，无法发送群消息。' }
     }
     const messageResult = normalizeMessage(record.message)
     if (!messageResult.ok) return messageResult
@@ -422,10 +419,10 @@ export async function executePendingGroupSend(record = {}, event = {}) {
     for (const group of groups) {
         try {
             const method = await sendGroupText(event.bot, group.groupId, messageResult.message)
-            logger.info(`[AI-Plugin] group_send_message 确认后已代发: 群=${group.groupId}(${group.groupName || '未知'}), 字数=${messageResult.message.length}, method=${method}`)
+            logger.info(`[AI-Plugin] group_send_message 已代发: 群=${group.groupId}(${group.groupName || '未知'}), 字数=${messageResult.message.length}, method=${method}`)
             results.push({ ok: true, groupId: group.groupId, groupName: group.groupName || '', method })
         } catch (err) {
-            logger.warn(`[AI-Plugin] group_send_message 确认后发送失败: 群=${group.groupId}, ${err.message || String(err)}`)
+            logger.warn(`[AI-Plugin] group_send_message 发送失败: 群=${group.groupId}, ${err.message || String(err)}`)
             results.push({ ok: false, groupId: group.groupId, groupName: group.groupName || '', error: err.message || String(err) })
         }
     }
@@ -439,6 +436,13 @@ export async function executePendingGroupSend(record = {}, event = {}) {
         originalMessage: record.originalMessage || '',
         asIs: record.asIs === true
     }
+}
+
+export async function executePendingGroupSend(record = {}, event = {}) {
+    if (record.type !== 'group_send_message') {
+        return { ok: false, error: '待确认操作类型不是群消息代发。' }
+    }
+    return executeGroupSend(record, event)
 }
 
 export async function createPendingGroupSendAction(userId, payload = {}) {
@@ -459,7 +463,7 @@ export async function createPendingGroupSendAction(userId, payload = {}) {
 export const groupSendMessageTool = {
     name: 'group_send_message',
     permission: 'master',
-    description: '代主人向指定 QQ 群发送纯文本消息。仅限主人。适合“帮我在xx群说一下xxx”“给xx群带个话，内容是xxx”“去A群和B群发xxx”。支持最多 5 个明确目标；执行前会创建待确认操作，主人确认后才发送。',
+    description: '代主人向指定 QQ 群发送纯文本消息。仅限主人。适合“帮我在xx群说一下xxx”“给xx群带个话，内容是xxx”“去A群和B群发xxx”。支持最多 5 个明确目标；当前指令明确且目标唯一时直接发送，目标存在歧义时只询问选择，不要求二次确认。',
 
     functionSchema: {
         type: 'function',
@@ -574,27 +578,17 @@ export const groupSendMessageTool = {
             }
         }
 
-        const saveResult = await createPendingGroupSendAction(event.user_id || context.userId, {
-            agentTaskId: context.agentTaskId || '',
+        const sendResult = await executeGroupSend({
+            type: 'group_send_message',
             groups: targetResult.groups,
             message: finalMessage,
             originalMessage: messageResult.message,
             asIs: safeArgs.as_is === true
-        })
-        if (!saveResult.ok) return { ok: false, error: saveResult.error }
-
-        logger.warn(`[AI-Plugin] group_send_message 已创建待确认操作: 群=${targetResult.groups.map(group => group.groupId).join(',')}, 字数=${finalMessage.length}, pending=${saveResult.record.id}`)
-        return {
-            ok: true,
-            pending: true,
-            pendingId: saveResult.record.id,
-            expiresAt: saveResult.record.expiresAt,
-            groups: targetResult.groups,
-            message: finalMessage,
-            originalMessage: messageResult.message,
-            asIs: safeArgs.as_is === true,
-            confirmationHint: formatPendingActionHint()
+        }, event)
+        if (!sendResult.ok) {
+            logger.warn(`[AI-Plugin] group_send_message 直接发送失败: 群=${targetResult.groups.map(group => group.groupId).join(',')}, error=${sendResult.error || '部分或全部发送失败'}`)
         }
+        return sendResult
     },
 
     formatResult(data) {
@@ -604,6 +598,13 @@ export const groupSendMessageTool = {
                 ? `\n当前唯一候选是「${data.suggestedGroup.groupName || '群名未知'}」（${data.suggestedGroup.groupId}），可回复“对的”或直接回复群号。`
                 : '\n请回复候选编号、群号或完整群名。'
             return `\n\n【群消息目标待选择】尚未创建发送操作，也没有发送消息。${data.error ? `\n原因：${data.error}` : ''}\n候选群：\n${candidates}${suggested}`
+        }
+        if (Array.isArray(data?.results)) {
+            const success = data.results.filter(item => item.ok)
+            const failed = data.results.filter(item => !item.ok)
+            const successText = success.length ? `成功：\n${success.map(formatGroupLine).join('\n')}` : '成功：无'
+            const failedText = failed.length ? `\n失败：\n${failed.map((item, index) => `${index + 1}. ${item.groupName ? `「${item.groupName}」` : '群名未知'}（${item.groupId}）：${item.error || '未知错误'}`).join('\n')}` : ''
+            return `\n\n【群消息代发执行完成】${data.ok ? '全部发送成功。' : (data.partial ? '部分发送成功。' : '全部发送失败。')}\n${successText}${failedText}\n发送内容：${data.message}`
         }
         if (!data || data.ok === false) {
             const candidateText = Array.isArray(data?.candidates) && data.candidates.length > 0
@@ -615,13 +616,6 @@ export const groupSendMessageTool = {
         if (data.pending) {
             const groupText = (data.groups || []).map(formatGroupLine).join('\n')
             return `\n\n【群消息代发待确认】尚未发送。目标群：\n${groupText}\n发送内容：${data.message}\n请在 ${formatPendingTtl(data)} 内继续回复。\n${data.confirmationHint || formatPendingActionHint()}`
-        }
-        if (Array.isArray(data.results)) {
-            const success = data.results.filter(item => item.ok)
-            const failed = data.results.filter(item => !item.ok)
-            const successText = success.length ? `成功：\n${success.map(formatGroupLine).join('\n')}` : '成功：无'
-            const failedText = failed.length ? `\n失败：\n${failed.map((item, index) => `${index + 1}. ${item.groupName ? `「${item.groupName}」` : '群名未知'}（${item.groupId}）：${item.error || '未知错误'}`).join('\n')}` : ''
-            return `\n\n【群消息代发执行完成】${data.ok ? '全部发送成功。' : (data.partial ? '部分发送成功。' : '全部发送失败。')}\n${successText}${failedText}\n发送内容：${data.message}`
         }
         const name = data.groupName ? `「${data.groupName}」` : '群名未知'
         return `\n\n【群消息代发成功】已发送到 ${name}（${data.groupId}）。\n发送内容：${data.message}`

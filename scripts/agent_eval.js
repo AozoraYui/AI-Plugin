@@ -58,7 +58,7 @@ const { executePendingShellExec, shellExecTool } = await import('../tools/shell_
 const { shellSessionTool } = await import('../tools/shell_session.js')
 const { detectShellSessionConnectionState, sanitizeTerminalOutput } = await import('../utils/shell_session.js')
 const { buildShellResultSummaryPrompt, summarizeShellResultForReply } = await import('../utils/shell_result_summary.js')
-const { groupSendMessageTool, parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically, resolveTargetGroup } = await import('../tools/group_send.js')
+const { executeGroupSend, groupSendMessageTool, parseGroupSendDisambiguationSelection, resolveGroupTargetSemantically, resolveTargetGroup } = await import('../tools/group_send.js')
 await import('../tools/group_admin.js')
 await import('../tools/file_send.js')
 const { scoreWorkspaceFilenameMatch, verifyWorkspaceFile } = await import('../tools/workspace.js')
@@ -1439,6 +1439,7 @@ global.redis = {
     async del(key) { return redisStore.delete(key) ? 1 : 0 }
 }
 global.AIPluginClient = { enableGroupSend: true, ...semanticGroupClient }
+const symbolicSentMessages = []
 const symbolicSendResult = await groupSendMessageTool.execute({}, {
     isMaster: true,
     userId: 'symbolic-group-user',
@@ -1448,7 +1449,11 @@ const symbolicSendResult = await groupSendMessageTool.execute({}, {
         user_id: 'symbolic-group-user',
         isMaster: true,
         bot: {
-            async sendApi(name) {
+            async sendApi(name, params = {}) {
+                if (name === 'send_group_msg') {
+                    symbolicSentMessages.push(params)
+                    return { message_id: 'sent-symbolic' }
+                }
                 if (name !== 'get_group_list') return []
                 return symbolicGroups.map(group => ({ group_id: group.groupId, group_name: group.groupName }))
             }
@@ -1456,12 +1461,44 @@ const symbolicSendResult = await groupSendMessageTool.execute({}, {
     }
 })
 const symbolicPending = await loadPendingAction('symbolic-group-user')
-check('括号群代发直接创建真实待确认操作', symbolicSendResult.ok
-    && symbolicSendResult.pending
-    && symbolicPending?.type === 'group_send_message'
-    && symbolicPending.groups?.[0]?.groupName === '【】',
-JSON.stringify({ symbolicSendResult, symbolicPending }))
+check('括号群代发目标明确时直接发送且不再二次确认', symbolicSendResult.ok
+    && !symbolicSendResult.pending
+    && symbolicSendResult.results?.[0]?.groupId === '1061970295'
+    && symbolicSentMessages[0]?.group_id === 1061970295
+    && !symbolicPending,
+JSON.stringify({ symbolicSendResult, symbolicPending, symbolicSentMessages }))
 await clearPendingAction('symbolic-group-user', symbolicPending?.id)
+
+const directSelectionSend = await executeGroupSend({
+    type: 'group_send_message',
+    groups: [{ groupId: '20002', groupName: '测试二群' }],
+    message: '【主人转达】测试',
+    originalMessage: '测试'
+}, {
+    bot: {
+        async sendApi(name, params = {}) {
+            if (name === 'send_group_msg') return { message_id: String(params.group_id) }
+            return []
+        }
+    }
+})
+check('目标消歧选定后直接发送而不是再次创建待确认', directSelectionSend.ok
+    && directSelectionSend.results?.[0]?.groupId === '20002'
+    && !directSelectionSend.pending,
+JSON.stringify(directSelectionSend))
+const partialSendFormatted = toolRegistry.formatToolResult('group_send_message', {
+    ok: false,
+    partial: true,
+    message: '测试',
+    results: [
+        { ok: true, groupId: '20001', groupName: '测试一群' },
+        { ok: false, groupId: '20002', groupName: '测试二群', error: '发送失败' }
+    ]
+})
+check('部分发送失败时逐项显示真实结果', /部分发送成功/.test(partialSendFormatted)
+    && /测试一群/.test(partialSendFormatted)
+    && /测试二群.*发送失败/.test(partialSendFormatted),
+partialSendFormatted)
 
 const ambiguousSendResult = await groupSendMessageTool.execute({}, {
     isMaster: true,
