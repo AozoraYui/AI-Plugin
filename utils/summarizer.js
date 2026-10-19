@@ -1,18 +1,21 @@
 import { Config, expandPrompt } from './config.js'
 import { isAIErrorResponse } from './common.js'
+import { formatSpeakerAwareHistoryTurn, SPEAKER_ATTRIBUTION_RULE } from './speaker_context.js'
 
 /**
  * 将对话历史数组构建为文本格式。
  * 用于作为总结的输入。
  */
-export function buildHistoryText(history, aiName) {
-    let text = ""
+export function buildHistoryText(history, aiName, options = {}) {
+    const lines = []
     for (const turn of history) {
-        const role = turn.role === 'user' ? '用户' : aiName
-        const content = turn.parts.map(p => p.text).join(' ')
-        if (content) text += `${role}: ${content}\n`
+        const line = formatSpeakerAwareHistoryTurn(turn, {
+            aiName,
+            defaultUserId: options.defaultUserId
+        })
+        if (line) lines.push(line)
     }
-    return text
+    return lines.length > 0 ? `${SPEAKER_ATTRIBUTION_RULE}\n${lines.join('\n')}\n` : ''
 }
 
 /**

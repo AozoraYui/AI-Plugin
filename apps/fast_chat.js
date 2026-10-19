@@ -6,6 +6,7 @@ import { isBotMuted } from '../utils/bot_mute.js'
 import { formatDBTimestampToBeijing, getBeijingTimeStr, getTodayDateStr, takeSourceMsg } from '../utils/common.js'
 import { processImagesInBatches, trimInlineImagesToPayloadLimit } from '../utils/image.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject } from '../utils/message_context.js'
+import { buildEventSpeakerMeta, buildSpeakerMeta } from '../utils/speaker_context.js'
 import { describeQQFaceSegment } from '../utils/qq_face.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedUserIds } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, isExpiredGroupContextImageUrl, isGroupContextImageQuestion, shouldReadGroupContextImages } from '../utils/group_context_images.js'
@@ -2046,6 +2047,7 @@ export class FastChatHandler extends plugin {
 - 个人档案来自历次全量/增量总结维护出的稳定画像。可以回答请求涉及的非敏感印象和字段，但不要展示完整档案，不要展开无关字段或高敏感信息。
 - 如果存在“本轮参与者身份边界”，必须严格区分当前发言者和被 @ 的成员。只能把档案、摘要和检索结果用于其明确标注的归属用户；主人查询被 @ 成员时，可使用系统明确提供的目标资料回答非敏感印象，但不得泄露高敏感字段。
 - “语义相关记忆”来自本地向量检索，只是和当前消息相关的旧线索，不等于当前群正在发生的事；命中不足时要说明不确定。
+- 最近群聊流水每行以“昵称(QQ): 内容”标识说话人；不得把某人的发言、行为或偏好归给当前触发者或另一名成员。个人记忆和个人档案只属于标题明确标注的用户。
 - 不要编造没有出现在上下文里的事实。
 - 如果上下文不足，就坦诚说不太确定。
 ${isPureImageTrigger ? getPureImageReplyPolicy() : ''}
@@ -2318,11 +2320,11 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             })
             logger.info(`[AI-Plugin] [畅聊] Agent任务已收尾: ${fastAgentTask.taskId}, status=${fastAgentTask.status}`)
         }
-        await this.saveFastChatToPersonalHistory(e, normalized, contextText, replyText, memoryContext?.history)
+        await this.saveFastChatToPersonalHistory(e, normalized, replyText, memoryContext?.history)
 
     }
 
-    async saveFastChatToPersonalHistory(e, normalized, contextText, replyText, existingHistory = null) {
+    async saveFastChatToPersonalHistory(e, normalized, replyText, existingHistory = null) {
         const userId = String(normalized.userId)
         try {
             const history = Array.isArray(existingHistory)
@@ -2339,14 +2341,33 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                 `触发者：${normalized.nickname}(${userId})`,
                 `触发消息：${truncateText(normalized.normalizedText, PERSONAL_HISTORY_CONTEXT_MAX_CHARS)}`,
                 normalized.imageSummary ? `触发消息图片内容摘要：${truncateText(normalized.imageSummary, PERSONAL_HISTORY_CONTEXT_MAX_CHARS)}` : '',
-                contextText ? `当时最近群聊上下文：\n${truncateText(contextText, PERSONAL_HISTORY_CONTEXT_MAX_CHARS)}` : '',
-                '注意：这是一段群聊公开上下文记录，回复时仍需遵守当前聊天环境的隐私规则。'
+                '群聊中其他人的发言保存在群级流水，不属于本用户的个人事实；不得把其他群成员的发言归入本用户。'
             ].filter(Boolean).join('\n')
 
             const updatedHistory = [
                 ...strippedHistory.history,
-                { role: 'user', parts: [{ text: memoryText }] },
-                { role: 'model', parts: [{ text: replyText }] }
+                {
+                    role: 'user',
+                    parts: [{ text: memoryText }],
+                    meta: buildEventSpeakerMeta(e, {
+                        userId,
+                        nickname: normalized.nickname,
+                        scope: 'group',
+                        source: 'fast_chat'
+                    })
+                },
+                {
+                    role: 'model',
+                    parts: [{ text: replyText }],
+                    meta: buildSpeakerMeta({
+                        userId: getBotUin(e),
+                        nickname: Config.AI_NAME,
+                        isBot: true,
+                        scope: 'group',
+                        source: 'fast_chat',
+                        groupId: normalized.groupId
+                    })
+                }
             ]
             await this.conversationManager.saveUserHistory(userId, updatedHistory)
             logger.info(`[AI-Plugin] [畅聊] 已同步畅聊记录到用户 ${userId} 的普通对话记忆`)

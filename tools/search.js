@@ -12,6 +12,7 @@ import { hasExplicitImageSearchIntent } from '../utils/tool_intent.js'
 import { assertPublicUrl, createTimeoutSignal, fetchWithProxy, isAbortError, readResponseBodyTextLimited } from '../utils/common.js'
 import { assessSearchResults, classifyWebUrl, getOfficialSearchDomains, normalizeWebUrlKey, scoreWebSourceCandidate } from '../utils/web_evidence.js'
 import { buildSearchAttemptKey, createSearchHealthManager, parseRetryAfterMs } from '../utils/web_search_health.js'
+import { executeSearchProvider, normalizeSearchProviderConfigs, normalizeSearchProviderMode } from '../utils/search_providers.js'
 
 const SEARCH_TIMEOUT_MS = 15000
 const IMAGE_DOWNLOAD_TIMEOUT_MS = 18000
@@ -1002,19 +1003,66 @@ async function searchWeb(query, count = 5, signal) {
     const assessmentCount = Math.min(20, Math.max(count, researchLike ? 10 : count))
     const engineRuns = []
     const attemptedKeys = new Set()
+    const searchConfig = global.AIPluginClient?.webSearchConfig || {}
+    const configuredProviders = normalizeSearchProviderConfigs(searchConfig)
+    const configuredMode = normalizeSearchProviderMode(searchConfig.search_provider_mode || searchConfig.searchProviderMode)
+    const providerMode = configuredProviders.length === 0 ? 'html_only' : configuredMode
+    const hasConfiguredProvider = configuredProviders.some(item => item.configured)
+    const allowHtmlFallback = providerMode === 'hybrid'
+        || (providerMode === 'api_first' && searchConfig.search_provider_fallback_html !== false)
 
-    const mainRuns = await Promise.all([
-        runSearchEngine('Bing', () => searchBing(query, candidateCount, signal), signal, { queryKey: query, attemptedKeys }),
-        runSearchEngine('百度', () => searchBaidu(query, candidateCount, signal), signal, { queryKey: query, attemptedKeys })
-    ])
+    const providerGroups = []
+    if (providerMode !== 'html_only') {
+        for (const providerConfig of configuredProviders) {
+            if (!providerConfig.configured) {
+                logger.warn(`[AI-Plugin] 搜索 provider ${providerConfig.name} 未配置凭据，已跳过`)
+                continue
+            }
+            const providerRun = await runSearchEngine(
+                providerConfig.name,
+                () => executeSearchProvider(providerConfig, query, candidateCount, { signal }),
+                signal,
+                { queryKey: query, attemptedKeys }
+            )
+            engineRuns.push(providerRun)
+            if (providerRun.status === 'ok' && providerRun.results.length > 0) {
+                providerGroups.push(providerRun.results)
+                logger.info(`[AI-Plugin] 搜索 provider ${providerConfig.name} 返回 ${providerRun.results.length} 条结果`)
+                break
+            }
+        }
+    }
+
+    let providerAssessment = assessSearchResults(
+        prepareSearchResults(query, mergeSearchResults(providerGroups, candidateCount), assessmentCount),
+        query
+    )
+    const shouldRunHtmlMain = providerMode !== 'api_only' && (
+        providerMode === 'hybrid'
+        || providerGroups.length === 0
+        || providerAssessment.directCandidates.length < 1
+        || (researchLike && providerAssessment.authoritativeSourceCount === 0)
+    ) && (providerGroups.length === 0 ? allowHtmlFallback || providerMode === 'html_only' : true)
+    if (providerGroups.length > 0 && !shouldRunHtmlMain) {
+        logger.info(`[AI-Plugin] 搜索 provider 结果已满足直接来源要求，跳过 HTML 搜索链路: ${configuredProviders.map(item => item.name).join(', ')}`)
+    }
+
+    const mainRuns = shouldRunHtmlMain
+        ? await Promise.all([
+            runSearchEngine('Bing', () => searchBing(query, candidateCount, signal), signal, { queryKey: query, attemptedKeys }),
+            runSearchEngine('百度', () => searchBaidu(query, candidateCount, signal), signal, { queryKey: query, attemptedKeys })
+        ])
+        : []
     engineRuns.push(...mainRuns)
     const mainGroups = mainRuns.map(run => run.results)
 
-    let mergedCandidates = mergeSearchResults(mainGroups, candidateCount)
+    let mergedCandidates = mergeSearchResults([...providerGroups, ...mainGroups], candidateCount)
     let merged = prepareSearchResults(query, mergedCandidates, assessmentCount)
     let assessment = assessSearchResults(merged, query)
     let fallbackGroups = []
-    const shouldBroaden = researchLike || assessment.directCandidates.length < Math.min(4, Math.max(2, count))
+    const shouldBroaden = shouldRunHtmlMain && (
+        researchLike || assessment.directCandidates.length < Math.min(4, Math.max(2, count))
+    )
 
     if (shouldBroaden) {
         logger.info('[AI-Plugin] 多源研究扩展搜索：主搜索直接候选=' + assessment.directCandidates.length + '，继续补充独立搜索源')
@@ -1026,12 +1074,12 @@ async function searchWeb(query, count = 5, signal) {
         ])
         fallbackGroups = fallbackRuns.map(run => run.results)
         engineRuns.push(...fallbackRuns)
-        mergedCandidates = mergeSearchResults([...mainGroups, ...fallbackGroups], candidateCount)
+        mergedCandidates = mergeSearchResults([...providerGroups, ...mainGroups, ...fallbackGroups], candidateCount)
         merged = prepareSearchResults(query, mergedCandidates, assessmentCount)
         assessment = assessSearchResults(merged, query)
     }
 
-    const researchVariants = buildResearchSearchVariants(query)
+    const researchVariants = shouldRunHtmlMain && researchLike ? buildResearchSearchVariants(query) : []
     for (const variant of researchVariants) {
         throwIfAborted(signal)
         logger.info('[AI-Plugin] 研究任务来源补充搜索: "' + variant + '"')
@@ -1043,6 +1091,7 @@ async function searchWeb(query, count = 5, signal) {
         engineRuns.push(...variantRuns)
         mergedCandidates = mergeSearchResults([
             ...variantRuns.map(run => run.results),
+            ...providerGroups,
             ...mainGroups,
             ...fallbackGroups
         ], candidateCount)
@@ -1053,7 +1102,8 @@ async function searchWeb(query, count = 5, signal) {
     logger.info('[AI-Plugin] 搜索相关性与来源评分完成: 候选=' + mergedCandidates.length + ', 展示=' + assessment.results.length + ', 直接候选=' + assessment.directCandidates.length + ', 严格模式=' + strictRelevance)
     const successfulEngineCount = engineRuns.filter(run => run.status === 'ok').length
     const successfulProviderCount = new Set(engineRuns.filter(run => run.status === 'ok').map(run => run.name)).size
-    const searchUnavailable = engineRuns.length > 0 && successfulEngineCount === 0
+    const searchUnavailable = (providerMode === 'api_only' && !hasConfiguredProvider)
+        || (engineRuns.length > 0 && successfulEngineCount === 0)
     const searchStatus = searchUnavailable
         ? 'unavailable'
         : assessment.results.length === 0
@@ -1065,7 +1115,9 @@ async function searchWeb(query, count = 5, signal) {
                     : 'success'
     const transportFailure = searchUnavailable
     const visibleResults = assessment.results.slice(0, count)
-    const summary = searchUnavailable
+    const summary = providerMode === 'api_only' && !hasConfiguredProvider
+        ? '搜索 provider 模式为 api_only，但没有配置可用的 API provider；本次没有执行 HTML 搜索。'
+        : searchUnavailable
         ? '搜索链路当前不可用：所有搜索源均失败或处于熔断冷却，未获得任何搜索证据；这不代表目标不存在。'
         : searchStatus === 'low_evidence'
             ? '搜索已返回候选，但没有足够的直接正文证据；不能据此确认目标事实。'
@@ -1093,6 +1145,13 @@ async function searchWeb(query, count = 5, signal) {
             authoritativeCandidates: assessment.authoritativeSourceCount,
             recommended: assessment.recommendedSources
         },
+        providerMode,
+        configuredProviders: configuredProviders.map(item => ({
+            provider: item.provider,
+            name: item.name,
+            configured: item.configured,
+            keyless: item.keyless
+        })),
         searchVariants: researchVariants,
         engineStatus: engineRuns.map(run => ({
             name: run.name,

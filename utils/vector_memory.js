@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Config } from './config.js'
+import { buildSpeakerMeta, getTurnSpeakerLabel, getTurnText, normalizeTurnMeta } from './speaker_context.js'
 import { ensureDir, formatDBTimestampToBeijing, getDBTimestamp, getTodayDateStr } from './common.js'
 import { vectorDB } from './vector_db.js'
 
@@ -296,9 +297,16 @@ export function buildGroupMessageVectorDocs(log = {}) {
 export function buildHistoryRowVectorDocs(row = {}) {
     const role = row?.role === 'model' ? 'model' : 'user'
     const dateStr = row?.date_str || getTodayDateStr()
-    const rawText = textFromParts(row?.parts || [])
+    const rawText = getTurnText(row)
     if (!isWorthIndexing(rawText)) return []
     const userId = String(row.user_id || row.userId || '')
+    const speaker = normalizeTurnMeta(row) || buildSpeakerMeta({
+        userId: role === 'model' ? '' : userId,
+        nickname: '',
+        isBot: role === 'model',
+        scope: 'private',
+        source: 'user_history'
+    })
     const sourceId = row.id
         ? String(row.id)
         : `${userId}:${dateStr}:${role}:${row.source_fallback_index ?? hashText(rawText).slice(0, 12)}`
@@ -308,9 +316,14 @@ export function buildHistoryRowVectorDocs(row = {}) {
         row_id: row.id ? Number(row.id) : '',
         date_str: dateStr,
         bucket_key: `user_history:${userId}:${dateStr}`,
-        created_at: normalizeCreatedAt(row.created_at || row.createdAt, dateStr)
+        created_at: normalizeCreatedAt(row.created_at || row.createdAt, dateStr),
+        speaker_user_id: speaker.speaker_user_id,
+        speaker_name: speaker.speaker_name,
+        speaker_is_bot: speaker.speaker_is_bot,
+        scope: speaker.scope || 'private',
+        source: speaker.source || 'user_history'
     }, [
-        `${role === 'model' ? Config.AI_NAME : '用户'}:`,
+        `说话人: ${getTurnSpeakerLabel({ ...row, meta: speaker }, { aiName: Config.AI_NAME, defaultUserId: userId })}`,
         `日期: ${dateStr}`
     ])
 }

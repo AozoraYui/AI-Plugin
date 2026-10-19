@@ -7,6 +7,7 @@ import dns from 'node:dns/promises'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { Config, expandPrompt } from './config.js'
 import { hydrateCachedForwardMessage } from './outbound_message.js'
+import { formatSpeakerAwareHistoryTurn, SPEAKER_ATTRIBUTION_RULE } from './speaker_context.js'
 
 const AI_ERROR_PATTERNS = [
     'AI Studio 过滤了你的请求内容',
@@ -453,13 +454,13 @@ export function getDBTimestamp() {
 export async function generateDailySummary(client, userId, dateDir, dayHistory, modelGroupKey = 'flash') {
     if (dayHistory.length === 0) return ""
 
-    let dayContent = ""
+    const dayLines = []
     const aiName = Config.AI_NAME
     for (const turn of dayHistory) {
-        const role = turn.role === 'user' ? '用户' : aiName
-        const text = turn.parts.map(p => p.text).join(' ')
-        if (text) dayContent += `${role}: ${text}\n`
+        const line = formatSpeakerAwareHistoryTurn(turn, { aiName, defaultUserId: userId })
+        if (line) dayLines.push(line)
     }
+    const dayContent = dayLines.length > 0 ? `${SPEAKER_ATTRIBUTION_RULE}\n${dayLines.join('\n')}\n` : ''
 
     if (!dayContent.trim()) return ""
 

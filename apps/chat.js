@@ -13,6 +13,7 @@ import { buildLocalImageInputContext } from '../utils/local_image_input.js'
 import { buildAvatarImageInputContext } from '../utils/avatar_input.js'
 import { buildAutoSemanticMemoryContext, compactConversationHistory, loadUserMemoryContext } from '../utils/memory_context.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldLoadPrivateMemoryContext, shouldPrioritizeCurrentMultimodalTurn } from '../utils/message_context.js'
+import { buildEventSpeakerMeta, buildSpeakerMeta, toModelHistory } from '../utils/speaker_context.js'
 import { collectQQFaceImageUrls, describeQQFaceSegment, formatQQFaceSegments } from '../utils/qq_face.js'
 import { detectToolIntentFamilies, extractUrlsFromText, filterToolCallsByIntent, getPrimaryUserInstruction, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatContextIntent, hasGroupChatContextQuestion, hasStrongGroupChatContextQuestion, hasExplicitHumanizeIntent, hasExplicitLocalFileReadIntent, hasExplicitUserProfileHistoryExtractionIntent, hasExplicitUserProfileUpdateIntent, hasExplicitWebFetchIntent, hasNegatedDrawIntent, hasSemanticValidationFamily, inferAutonomousUserProfileUpdate, isContinuationToolInstruction, parseExplicitLocalFileReadRequest, parseGroupChatDigestRequest, parseGroupLeaveRequest, parseGroupSendRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parsePluginUpdateRequest, parseQQUserLookupRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates, shouldSemanticallyValidateToolCandidates } from '../utils/tool_intent.js'
 import { claimPendingAction, clearPendingAction, loadPendingAction, parseStandalonePendingCommand, parseStrictPendingDecision, releasePendingActionClaim } from '../utils/pending_actions.js'
@@ -1627,7 +1628,7 @@ async function askMainModelForToolPlan(client, modelGroupKey, options = {}) {
         ? `\n\n${truncateForPrompt(planningContext, AGENT_TASK_CONTEXT_MAX_CHARS)}`
         : ''
     const researchRequirementsBlock = researchRequirements.requiresFetch
-        ? `\n\n【联网研究硬约束】当前日期为 ${getTodayDateStr()}（北京时间）。${researchRequirements.scopeTerms.length > 0 ? `用户明确给出的范围词是「${researchRequirements.scopeTerms.join('、')}」，后续搜索、抓取和回答必须保持这些实体、型号、版本、时间或范围，不能擅自替换。` : ''}${researchRequirements.asksCompleteList ? '用户要求全部/完整名单，必须验证完整来源；部分批次不能包装成完整名单。' : ''}${researchRequirements.asksOfficialSource ? '用户询问官方/正式发布/升级适配信息，搜索摘要只能发现来源，必须继续读取权威原文或明确说明无法核实。' : ''}`
+        ? `\n\n【联网研究硬约束】当前日期为 ${getTodayDateStr()}（北京时间）。${researchRequirements.scopeTerms.length > 0 ? `用户明确给出的范围词是「${researchRequirements.scopeTerms.join('、')}」，后续搜索、抓取和回答必须保持这些实体、型号、版本、时间或范围，不能擅自替换。` : ''}${researchRequirements.asksCompleteList ? '用户要求全部/完整名单，必须验证完整来源；部分批次不能包装成完整名单。' : ''}${researchRequirements.asksOfficialSource ? '用户询问官方/正式发布/升级适配信息，搜索摘要只能发现来源，必须继续读取权威原文或明确说明无法核实。' : ''}${researchRequirements.asksRolloutList ? '升级/推送名单必须以官方原文或明确标注来源的正式公告为准；如果官方页面写的是 Beta、内测或公测计划，只能称为 Beta/内测计划，不能包装成正式版或稳定版名单。' : ''}`
         : ''
     const fullMessageHasQuotedContext = currentInstruction && currentInstruction !== String(userMessage || '').trim()
     const fullMessageForPlanner = fullMessageHasQuotedContext
@@ -2033,7 +2034,7 @@ export class ChatHandler extends plugin {
             const currentImages = (e.message || []).filter(m => m.type === "image").map(m => m.data?.url || m.url).filter(url => url)
             if (currentImages.length > 0) allImages = allImages.concat(currentImages)
             allImages = allImages.concat(collectQQFaceImageUrls(e.message || []))
-            historyUserMessage = userMessage.trim()
+            historyUserMessage = originalUserMessage.trim()
             if (allImages.length > 0) {
                 await cacheRecentImages(e, allImages)
             }
@@ -3024,7 +3025,7 @@ ${visualDescription}`
                                     logger.warn(`[AI-Plugin] group_chat_context 图片预读失败: ${err.message}`)
                                 }
                             }
-                            userMessage = userMessage + '\n\n【重要指令】以上为畅聊模式捕获的公开聊天流水或跨群个人消息查询结果。请严格基于这些记录回答用户关于“之前聊了什么/发生了什么/前情提要/别的群刚说了什么”的问题；如果记录里包含图片且下面提供了“群聊上下文图片预读摘要”，可以结合摘要回答；如果没有摘要，就只能说明有图片元信息，不能编造图片内容。记录不足时要明确说明只能看到已捕获的部分，并遵守工具结果中的范围与隐私提示。' + formattedResult + imageSummaryBlock
+                                    userMessage = userMessage + '\n\n【重要指令】以上为畅聊模式捕获的公开聊天流水或跨群个人消息查询结果。每行“昵称(QQ): 内容”是说话人归属的唯一依据；禁止把 A 的发言、行为或偏好归给 B 或当前发言者；无法确认时标注“说话人不确定”。请严格基于这些记录回答用户关于“之前聊了什么/发生了什么/前情提要/别的群刚说了什么”的问题；如果记录里包含图片且下面提供了“群聊上下文图片预读摘要”，可以结合摘要回答；如果没有摘要，就只能说明有图片元信息，不能编造图片内容。记录不足时要明确说明只能看到已捕获的部分，并遵守工具结果中的范围与隐私提示。' + formattedResult + imageSummaryBlock
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
                         } else if (call.name === 'group_chat_digest') {
                             groupChatContextToolUsed = true
@@ -3705,7 +3706,7 @@ ${visualDescription}`
                 "parts": [{ "text": "好的，我会把历史只作为低优先级背景，并优先处理当前用户指令。" }]
             })
             const historyStartIndex = contents.length
-            contents.push(...history)
+            contents.push(...toModelHistory(history))
             const historyEndIndex = contents.length
             contents.push({
                 "role": "user",
@@ -3798,12 +3799,12 @@ ${visualDescription}`
                 while (currentSizeMB > Config.REQUEST_SIZE_LIMIT_MB && history.length > Config.MIN_HISTORY_FOR_TRUNCATION) {
                     // 每次裁剪 5 条历史，但保证至少保留 MIN_HISTORY_FOR_TRUNCATION 条
                     history = history.slice(-Math.max(Config.MIN_HISTORY_FOR_TRUNCATION, history.length - 5))
-                    const trimmedContents = [...prefixParts, ...history, ...suffixParts]
+                    const trimmedContents = [...prefixParts, ...toModelHistory(history), ...suffixParts]
                     currentPayload = { "contents": trimmedContents }
                     currentSizeMB = JSON.stringify(currentPayload).length / (1024 * 1024)
                 }
                 // 更新最终的 contents 为裁剪后的结果
-                contents = [...prefixParts, ...history, ...suffixParts]
+                contents = [...prefixParts, ...toModelHistory(history), ...suffixParts]
                 logger.info(`[AI-Plugin] 请求体已裁剪至 ${currentSizeMB.toFixed(2)}MB`)
             }
             if (currentSizeMB > Config.REQUEST_SIZE_LIMIT_MB) {
@@ -4149,8 +4150,23 @@ ${visualDescription}`
                     const historyUserTurnParts = cleanHistoryText ? [{ text: cleanHistoryText }] : []
                     const compactedHistory = compactConversationHistory([
                         ...history,
-                        { role: 'user', parts: historyUserTurnParts },
-                        { role: 'model', parts: [{ text: finalResponseText }] }
+                        {
+                            role: 'user',
+                            parts: historyUserTurnParts,
+                            meta: buildEventSpeakerMeta(e, { source: 'direct_chat' })
+                        },
+                        {
+                            role: 'model',
+                            parts: [{ text: finalResponseText }],
+                            meta: buildSpeakerMeta({
+                                userId: botUserId,
+                                nickname: Config.AI_NAME,
+                                isBot: true,
+                                scope: e.group_id ? 'group' : 'private',
+                                source: 'direct_chat',
+                                groupId: e.group_id || ''
+                            })
+                        }
                     ])
                     const updatedHistory = compactedHistory
                     await this.conversationManager.saveUserHistory(userId, updatedHistory)

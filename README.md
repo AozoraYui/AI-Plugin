@@ -151,6 +151,17 @@ vision_model:
 #     - model: "flash"
 enable_web_search: false
 # intent_model: []
+
+# 可选 API 搜索 provider；为空时使用原有 Bing/百度/360/搜狗多引擎
+# search_provider_mode: api_first | hybrid | html_only | api_only
+# search_provider_fallback_html: true
+# search_providers:
+#   - provider: tavily
+#     api_key_env: TAVILY_API_KEY
+#   - provider: exa
+#     api_key_env: EXA_API_KEY
+#   - provider: firecrawl
+#     api_key_env: FIRECRAWL_API_KEY
 enable_web_fetch: false
 # MODEL_CHAT_REQUEST_TIMEOUT_MS: 90000  # 普通对话/工具规划/最终回复的单模型超时
 # MODEL_IMAGE_REQUEST_TIMEOUT_MS: 180000 # 绘图请求的单模型超时
@@ -164,7 +175,7 @@ enable_web_fetch: false
 # enable_file_transfer: false # 文件收发/群文件工具，主人专用
 # enable_ai_draw: false       # 对话/畅聊中联动画图工具
 # enable_group_admin: false   # 群管理工具，主人或当前群管理员可用，机器人需有对应权限
-# enable_group_send: false    # 代发群消息，主人专用；默认关闭，执行前需二次确认
+# enable_group_send: false    # 代发群消息，主人专用；默认关闭，目标明确时直接发送
 # enable_group_leave: false   # 遥控退群，主人专用；默认关闭，执行前需二次确认
 # enable_vector_memory: false # 本地向量记忆；开启前先安装 scripts/requirements.txt 里的 Python 依赖
 # VECTOR_MODEL: shibing624/text2vec-base-chinese
@@ -181,6 +192,7 @@ enable_web_fetch: false
 # FAST_CHAT_AUTO_READ_IMAGE_LIMIT: 2   # 自动回看单条历史图片消息时的阈值；当前图片自然触发不受此阈值截断
 # FAST_CHAT_IMAGE_BATCH_SIZE: 3        # 待读图片超过 3 张时，每批 3 张先生成读图摘要再回复
 # 普通“刚才聊了什么/前情总结”优先使用已保存视觉摘要；未保存摘要时按需预读历史图片
+# 群聊上下文按“昵称(QQ)”保留说话人；其他人的发言不会写入触发者的个人历史/档案
 ```
 
 **`draw_presets.yaml`** - 作图预设配置
@@ -353,7 +365,7 @@ AI 在 `#chat` 对话中会自动识别意图并调用以下工具，**无需单
 > 代发群消息默认关闭，独立开关 `enable_group_send: true`，仅主人可用；也可用 `#ai开启代发` / `#ai关闭代发` 运行时切换。可显式列出多个目标群，默认加“【主人转达】”前缀，不支持 CQ 码；目标明确时直接发送，目标有歧义时才询问选择。
 > 遥控退群默认关闭，独立开关 `enable_group_leave: true`，仅主人可用；也可用 `#ai开启退群` / `#ai关闭退群` 运行时切换。支持最多 5 个明确目标群，开放式“所有群/全部群/不友好那些群”不会执行；所有退群都需要待确认。
 > AI 画图默认关闭，独立开关 `enable_ai_draw: true`，开启后所有人可在对话中用自然语言让 AI 画图（等同 `#draw`），支持参考图与预设风格名。
-> 联网搜索默认关闭，可使用 `#cn` 临时启用，或在 `models_config.yaml` 中设置 `enable_web_search: true` 全局开启。推荐配置专用意图分析模型以加速。
+> 联网搜索默认关闭，可使用 `#cn` 临时启用，或在 `models_config.yaml` 中设置 `enable_web_search: true` 全局开启。推荐配置专用意图分析模型以加速。可选用 Tavily、Exa、Firecrawl API provider；未配置时自动使用原有 Bing/百度/360/搜狗多引擎，API 失败时默认回退 HTML 搜索。
 > 网页抓取默认关闭，可使用 `#cw` 临时启用，或在 `models_config.yaml` 中设置 `enable_web_fetch: true` 全局开启。消息中包含 URL 时自动抓取网页内容。
 > 网页抓取会自动尝试浏览器渲染和公开网页 Reader 文本化降级；Reader 不会用于 localhost、内网 IP、`.local` 等私有地址，也无法绕过登录/验证码。可选配置 `JINA_API_KEY` 或 `JINA_READER_API_KEY` 环境变量提升 Reader 稳定性。
 > 抓取 GitHub 链接（commits/commit/releases/issues/pulls/blob/仓库主页）时会自动改走 GitHub API/raw，返回精简数据并规避网页防爬。匿名访问限 60 次/小时，可在服务器配置 `GITHUB_TOKEN` 环境变量提升到 5000 次/小时。

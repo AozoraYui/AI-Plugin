@@ -331,6 +331,20 @@ check('指定澎湃 OS 版本会形成联网研究硬约束', (() => {
         && requirements.requiresFetch
         && requirements.preserveScope
 })())
+check('普通升级名单请求也必须校验权威来源', (() => {
+    const requirements = buildWebResearchRequirements('小米澎湃OS4升级名单')
+    return requirements.asksRolloutList
+        && requirements.asksOfficialSource
+        && requirements.requiresAuthoritativeSource
+        && requirements.requiresFetch
+})())
+check('推送时间表和批次安排同样按发布名单校验', (() => {
+    const timeline = buildWebResearchRequirements('查一下某系统正式版推送时间表和各机型批次安排')
+    return timeline.asksRolloutList
+        && timeline.asksStableRelease
+        && timeline.requiresAuthoritativeSource
+        && timeline.requiresFetch
+})())
 check('缺少正文时不能完成官方完整名单任务', hasInsufficientWebEvidenceForRequirements(
     { searchCount: 2, usableFetchCount: 0, fetchedAuthoritativeDomains: [] },
     buildWebResearchRequirements('联网查一下澎湃OS4官方全部升级名单')
@@ -2217,6 +2231,48 @@ check('二手长文不会被误判为官方高质量证据', (() => {
         && result.facts.quality !== 'high'
 })())
 check('360 搜索结果页不会被当作正文来源', classifyWebUrl('https://ai.so.com/search/abc?query=test').category === 'search_page')
+check('360 新闻搜索结果页也不会被当作正文来源', (() => {
+    const result = classifyWebUrl('https://news.so.com/ns?q=test&src=onebox')
+    return result.category === 'search_page' && result.autoFetchEligible === false
+})())
+check('其他资讯聚合搜索页同样不会被当作正文来源', (() => {
+    const urls = [
+        'https://news.baidu.com/ns?word=test',
+        'https://news.sogou.com/news?query=test',
+        'https://so.html5.qq.com/page/real/search_news?docid=test',
+        'https://search.yahoo.com/search?p=test',
+        'https://duckduckgo.com/html/?q=test'
+    ]
+    return urls.every(url => {
+        const result = classifyWebUrl(url)
+        return result.category === 'search_page' && result.autoFetchEligible === false
+    })
+})())
+check('发布阶段会区分 Beta 与正式版', (() => {
+    const beta = assessFetchedContent('https://os.mi.com/', 'Xiaomi HyperOS 4 Beta 推送计划\n8月14日下午开启陆续推送\n' + '测试机型与时间以官方公告为准。'.repeat(20))
+    const stable = assessFetchedContent('https://example.com/stable', '澎湃 OS 4 正式版开始推送\n首批机型名单如下。\n' + '正式版推送时间以官方公告为准。'.repeat(20))
+    return beta.facts.releaseStage === 'beta' && stable.facts.releaseStage === 'stable'
+})())
+check('只有 Beta 证据时不能声称正式版推送', (() => {
+    const state = updateWebEvidenceState({}, 'web_fetch', {
+        facts: {
+            usableEvidence: true,
+            evidenceKey: 'beta-source',
+            domain: 'os.mi.com',
+            authoritativeDomain: true,
+            releaseStage: 'beta'
+        }
+    })
+    return hasOverconfidentLowEvidenceAnswer(
+        '根据官方公布，澎湃OS4正式版首批已经推送。',
+        '澎湃OS4升级名单',
+        state
+    )
+})())
+check('用户明确询问正式版时必须取得正式版证据', hasInsufficientWebEvidenceForRequirements(
+    { usableFetchCount: 1, betaFetchCount: 1, stableFetchCount: 0, fetchedAuthoritativeDomains: ['os.mi.com'], coverage: 'complete', coverageSources: 1 },
+    buildWebResearchRequirements('查一下澎湃OS4正式版升级名单')
+))
 check('联网不确定性识别规则在最终门控中复用', hasExplicitWebUncertainty('本轮搜索未找到可直接核验的官方原始来源，多个来源之间存在冲突。'))
 check('低证据下的来源冲突说明不会被误判为确定性结论', !hasOverconfidentLowEvidenceAnswer(
     '本轮搜索找到多个互相冲突的非官方版本，但没有拿到可直接核验的官方原始公告，因此目前无法确认完整名单。',

@@ -8,6 +8,7 @@ import { checkAccess } from '../utils/access.js'
 import { sessionManager } from '../utils/session.js'
 import { setMsgEmojiLike, getTodayDateStr, generateDailySummary, isAIErrorResponse, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
 import { buildHistoryText, summarizeSingleChunk, summarizeChunk } from '../utils/summarizer.js'
+import { SPEAKER_ATTRIBUTION_RULE } from '../utils/speaker_context.js'
 import { updateUserProfileFromSummary } from '../utils/user_profile.js'
 
 export class MemoryHandler extends plugin {
@@ -101,7 +102,7 @@ export class MemoryHandler extends plugin {
         }
 
         if (allHistory.length <= chunkSize) {
-            const historyText = buildHistoryText(allHistory, aiName)
+            const historyText = buildHistoryText(allHistory, aiName, { defaultUserId: userIdStr })
             await e.reply(`正在整合 ${allHistory.length} 条对话记录...`, true)
             const result = await summarizeSingleChunk(historyText, modelGroupKey, this.client)
             if (!result) {
@@ -125,7 +126,7 @@ export class MemoryHandler extends plugin {
 
         const chunkSummaries = []
         for (let i = 0; i < chunks.length; i++) {
-            const chunkText = buildHistoryText(chunks[i], aiName)
+            const chunkText = buildHistoryText(chunks[i], aiName, { defaultUserId: userIdStr })
             if (!chunkText.trim()) continue
             await e.reply(`正在总结第 ${i + 1}/${chunks.length} 块 (${chunks[i].length}条)...`, true)
             const result = await summarizeChunk(chunkText, i + 1, chunks.length, modelGroupKey, this.client)
@@ -146,7 +147,7 @@ export class MemoryHandler extends plugin {
 
         const mergeTemplate = Config.Prompts?.full_checkpoint?.merge
             || `请将以下 {chunk_count} 个分段的对话摘要整合成一份完整的、精炼的核心记忆存档。\n要求：\n1. 保留所有重要的用户信息（性格、偏好、技术能力、重要经历等）\n2. 按主题分类整理（如：个人信息、技术兴趣、重要对话、情感偏好等）\n3. 去除重复的内容，保留核心内容\n4. 字数不限，尽可能写好各处细节\n5. 直接输出整合后的记忆存档，不要加"好的"等客套话，严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本\n\n以下是各分段摘要：`
-        const mergePrompt = expandPrompt(mergeTemplate, { chunk_count: chunkSummaries.length })
+        const mergePrompt = `${expandPrompt(mergeTemplate, { chunk_count: chunkSummaries.length })}\n${SPEAKER_ATTRIBUTION_RULE}\n`
             + `\n${chunkSummaries.map((s, i) => `=== 第${i + 1}段 ===\n${s}`).join('\n\n')}`
 
         const payload = { "contents": [{ "role": "user", "parts": [{ "text": mergePrompt }] }] }
@@ -246,12 +247,7 @@ export class MemoryHandler extends plugin {
         const todayFullCheckpoint = await this.conversationManager.db.getFullCheckpointByDate(userIdStr, dateStr)
         const latestFullCheckpoint = todayFullCheckpoint || await this.conversationManager.db.getLatestFullCheckpoint(userIdStr)
 
-        let targetContent = ""
-        for (const turn of targetHistory) {
-            const role = turn.role === 'user' ? '用户' : Config.AI_NAME
-            const text = turn.parts.map(p => p.text).join(' ')
-            if (text) targetContent += `${role}: ${text}\n`
-        }
+        const targetContent = buildHistoryText(targetHistory, Config.AI_NAME, { defaultUserId: userIdStr })
 
         let summaryPrompt = ""
         if (latestFullCheckpoint) {
@@ -623,7 +619,7 @@ export class MemoryHandler extends plugin {
                         || `你是一位专业的传记作家和档案管理员。现在是【{current_time}】。\n这是一次【记忆存档重构 (Rebuild)】操作。请阅读以下用户的【每日摘要】，将这些碎片化的信息整合成一份**完整的、连贯的**人生总结报告。\n输出要求：\n1. 报告将作为**新的存档文件**保存，供未来使用，请确保信息密度高。\n2. 请用第三人称叙述。\n3. 重点关注：用户的性格变化、核心人际关系、重要事件的时间线。\n4. 严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本。\n\n--- 待处理数据 ---`
                     finalPrompt = expandPrompt(template, { current_time: currentTime })
                 }
-                finalPrompt += `\n${finalContext}\n--- 数据结束 ---`
+                finalPrompt += `\n${SPEAKER_ATTRIBUTION_RULE}\n${finalContext}\n--- 数据结束 ---`
 
                 const payload = { "contents": [{ "role": "user", "parts": [{ "text": finalPrompt }] }] }
                 const result = await this.client.makeRequest('chat', payload, modelGroupKey, Config.CHECKPOINT_MAX_LENGTH)

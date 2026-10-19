@@ -120,6 +120,29 @@ vision_model:
 enable_web_search: false
 # intent_model: []
 
+# search_provider_mode: 搜索 provider 策略（默认 api_first）
+#   api_first: 先尝试 search_providers，拿到直接来源后跳过 HTML 搜索；结果不足时回退
+#   hybrid: API provider 和 Bing/百度等 HTML 来源都执行，适合需要交叉验证的研究
+#   html_only: 只使用现有 HTML 多引擎
+#   api_only: 只使用 API provider，失败时不回退 HTML
+# search_provider_fallback_html: api_first 模式下是否允许回退 HTML，默认 true
+# search_providers: 可选 API provider 列表，按顺序故障转移；为空时保持原有行为
+#   目前支持 tavily / exa / firecrawl
+#   api_key_env 会读取环境变量；未配置 api_key 时 Tavily 可使用 keyless 模式
+#   示例：
+# search_provider_mode: api_first
+# search_provider_fallback_html: true
+# search_providers:
+#   - provider: tavily
+#     api_key_env: TAVILY_API_KEY
+#     timeout_ms: 25000
+#     max_results: 8
+#   - provider: exa
+#     api_key_env: EXA_API_KEY
+#   - provider: firecrawl
+#     api_key_env: FIRECRAWL_API_KEY
+#     timeout_ms: 30000
+
 # ================================================
 # 网页抓取配置
 # enable_web_fetch: 是否启用网页抓取（默认 false，使用 #cw 临时启用）

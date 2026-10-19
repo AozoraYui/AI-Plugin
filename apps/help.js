@@ -62,6 +62,7 @@ export class HelpHandler extends plugin {
   全局开启后，仅当前模型组没有可用多模态模型时自动启用；有图请求会优先使用多模态模型。
 > #${chatCmd}n [内容]
   临时启用联网搜索，AI 自动判断是否搜索并注入结果。
+  可在 models_config.yaml 配置 Tavily/Exa/Firecrawl API provider；未配置时使用 Bing/百度/360/搜狗多引擎。
 > #${chatCmd}w [URL]
   临时启用网页抓取，自动提取消息中的 URL 并抓取网页内容；失败时会尝试浏览器渲染和公开网页 Reader 文本化降级。
 > Agent 任务续接

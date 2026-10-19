@@ -605,6 +605,9 @@ export class AiClient {
                 value.web_search !== undefined ||
                 value.enable_web_search !== undefined ||
                 value.intent_model !== undefined ||
+                value.search_providers !== undefined ||
+                value.search_provider_mode !== undefined ||
+                value.search_provider_fallback_html !== undefined ||
                 value.enable_web_fetch !== undefined ||
                 value.web_fetch_allowed_private_origins !== undefined ||
                 value.enable_shell_exec !== undefined ||

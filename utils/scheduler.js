@@ -2,6 +2,7 @@ import schedule from 'node-schedule'
 import { getTodayDateStr, isAIErrorResponse } from './common.js'
 import { Config, expandPrompt } from './config.js'
 import { buildHistoryText, summarizeSingleChunk, summarizeChunk } from './summarizer.js'
+import { SPEAKER_ATTRIBUTION_RULE } from './speaker_context.js'
 import { updateUserProfileFromSummary } from './user_profile.js'
 
 export class AIScheduler {
@@ -62,13 +63,8 @@ export class AIScheduler {
         const todayFullCheckpoint = await global.AIPluginConversationManager.db.getFullCheckpointByDate(userId, today)
         const latestFullCheckpoint = todayFullCheckpoint || await global.AIPluginConversationManager.db.getLatestFullCheckpoint(userId)
 
-        let todayContent = ""
         const aiName = Config.AI_NAME
-        for (const turn of todayHistory) {
-            const role = turn.role === 'user' ? '用户' : aiName
-            const text = turn.parts.map(p => p.text).join(' ')
-            if (text) todayContent += `${role}: ${text}\n`
-        }
+        const todayContent = buildHistoryText(todayHistory, aiName, { defaultUserId: userId })
 
         if (!todayContent.trim()) return
 
@@ -162,7 +158,7 @@ export class AIScheduler {
 
         // 对话条数不超过分块大小时，直接总结
         if (allHistory.length <= Config.FULL_CHUNK_SIZE) {
-            const historyText = buildHistoryText(allHistory, aiName)
+            const historyText = buildHistoryText(allHistory, aiName, { defaultUserId: userId })
             if (!historyText.trim()) return
             const result = await summarizeSingleChunk(historyText, 'flash', this.client)
             addChunkUsage(result.usage)
@@ -186,7 +182,7 @@ export class AIScheduler {
         // 逐块总结
         const chunkSummaries = []
         for (let i = 0; i < chunks.length; i++) {
-            const chunkText = buildHistoryText(chunks[i], aiName)
+            const chunkText = buildHistoryText(chunks[i], aiName, { defaultUserId: userId })
             if (!chunkText.trim()) continue
             logger.info(`[AI-Plugin] 正在总结第 ${i + 1}/${chunks.length} 块 (${chunks[i].length}条)...`)
             const result = await summarizeChunk(chunkText, i + 1, chunks.length, 'flash', this.client)
@@ -209,7 +205,7 @@ export class AIScheduler {
         logger.info(`[AI-Plugin] 正在合并 ${chunkSummaries.length} 个分块总结...`)
         const mergeTemplate = Config.Prompts?.full_checkpoint?.merge
             || `请将以下 {chunk_count} 个分段的对话摘要整合成一份完整的、精炼的核心记忆存档。\n要求：\n1. 保留所有重要的用户信息（性格、偏好、技术能力、重要经历等）\n2. 按主题分类整理（如：个人信息、技术兴趣、重要对话、情感偏好等）\n3. 去除重复的内容，保留核心内容\n4. 字数不限，尽可能写好各处细节\n5. 直接输出整合后的记忆存档，不要加"好的"等客套话，严禁使用 Markdown 格式（如 **粗体**、# 标题等），请使用纯文本\n\n以下是各分段摘要：`
-        const mergePrompt = expandPrompt(mergeTemplate, { chunk_count: chunkSummaries.length })
+        const mergePrompt = `${expandPrompt(mergeTemplate, { chunk_count: chunkSummaries.length })}\n${SPEAKER_ATTRIBUTION_RULE}\n`
             + `\n${chunkSummaries.map((s, i) => `=== 第${i + 1}段 ===\n${s}`).join('\n\n')}`
 
         const payload = { "contents": [{ "role": "user", "parts": [{ "text": mergePrompt }] }] }

@@ -1,6 +1,7 @@
 import { Config } from './config.js'
 import { loadUserProfileText } from './user_profile.js'
 import { buildSemanticMemoryContext } from './vector_memory.js'
+import { stripLegacyGroupContextMemory } from './speaker_context.js'
 
 function stripLoneSurrogates(text) {
     const value = String(text || '')
@@ -63,7 +64,7 @@ const GENERATED_HISTORY_MARKERS = [
 ]
 
 function compactGeneratedHistoryText(text, maxChars) {
-    let value = sanitizeMemoryText(text).trim()
+    let value = stripLegacyGroupContextMemory(sanitizeMemoryText(text))
     const markerIndexes = GENERATED_HISTORY_MARKERS
         .map(marker => value.indexOf(marker))
         .filter(index => index >= 0)

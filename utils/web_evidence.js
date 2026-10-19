@@ -7,13 +7,16 @@ const SEARCH_REDIRECT_RULES = [
 ]
 
 const SEARCH_PAGE_RULES = [
-    ['baidu.com', /^\/(?:s|search)(?:\/|$)/i],
+    ['baidu.com', /^\/(?:s|search|ns)(?:\/|$)/i],
     ['bing.com', /^\/(?:search|images)(?:\/|$)/i],
-    ['so.com', /^\/(?:s|search)(?:\/|$)/i],
+    ['so.com', /^\/(?:s|search|ns)(?:\/|$)/i],
     ['ai.so.com', /^\/search(?:\/|$)/i],
     ['image.so.com', /^\/i/i],
-    ['sogou.com', /^\/web/i],
-    ['google.com', /^\/search/i]
+    ['sogou.com', /^\/(?:web|news)(?:\/|$)/i],
+    ['google.com', /^\/search/i],
+    ['yahoo.com', /^\/search(?:\/|$)/i],
+    ['duckduckgo.com', /^\/(?:html|search)(?:\/|$)/i],
+    ['qq.com', /^\/page\/real\/search_news(?:\/|$)/i]
 ]
 
 const ERROR_PAGE_PATTERNS = [
@@ -115,6 +118,8 @@ export function getWebSourceAuthority(domain = '') {
 export function buildWebResearchRequirements(instruction = '') {
     const value = String(instruction || '').replace(/\s+/g, ' ').trim()
     const asksCompleteList = /(?:全部|完整|所有|全量|全名单|完整名单|全部名单|所有机型|每一款|每个机型)/i.test(value)
+    const asksRolloutList = /(?:(?:升级|适配|推送|更新).{0,10}(?:名单|列表|计划|批次|机型|时间表|时间|安排)|(?:名单|列表|计划|批次|机型|时间表|时间|安排).{0,10}(?:升级|适配|推送|更新))/i.test(value)
+    const asksStableRelease = /(?:正式版|稳定版|正式推送|stable\s+(?:release|build|rollout))/i.test(value)
     const asksFreshness = /(?:最新|目前|现在|当前|截至|实时|近期|今天|今日|昨天|明天|最近)/i.test(value)
     const asksFactCheck = /(?:核实|核查|查证|查真|真假|是否真实|是否属实|有没有发生|是否发生|是否存在)/i.test(value)
     const asksHighCredibility = /(?:可信|可靠|权威|原始|高质量|准确|严谨)/i.test(value)
@@ -124,9 +129,10 @@ export function buildWebResearchRequirements(instruction = '') {
     const asksCurrentFact = (asksFreshness || hasSourceRequest) && hasCurrentFactTopic
     const asksResearchBackedAnalysis = asksHighCredibility
         && (hasResearchAction || asksCurrentFact || hasSourceRequest || asksFactCheck)
-    const asksOfficialSource = /(?:官方|正式|公告|通报|发布|升级|适配|名单|推送)/i.test(value)
-        && (hasResearchAction || asksCurrentFact || asksCompleteList)
-    const requiresAuthoritativeSource = (
+    const asksOfficialSource = (/(?:官方|正式|公告|通报|发布|升级|适配|名单|推送)/i.test(value)
+        && (hasResearchAction || asksCurrentFact || asksCompleteList))
+        || asksRolloutList
+    const requiresAuthoritativeSource = asksRolloutList || (
         /(?:官方|正式(?:发布|公告|来源)?|官方来源|官方名单|官方说明)/i.test(value)
         && (hasResearchAction || asksCurrentFact || asksCompleteList)
     ) || (asksCompleteList && /(?:升级|适配|名单|推送|公告|通报|版本)/i.test(value))
@@ -138,6 +144,8 @@ export function buildWebResearchRequirements(instruction = '') {
     return {
         scopeTerms,
         asksCompleteList,
+        asksRolloutList,
+        asksStableRelease,
         asksOfficialSource,
         requiresAuthoritativeSource,
         asksSourceBackedFact,
@@ -166,6 +174,7 @@ export function hasInsufficientWebEvidenceForRequirements(state = {}, requiremen
         if (state.coverage !== 'complete') return true
         if (Number(state.coverageSources || 0) < 1) return true
     }
+    if (requirements.asksStableRelease && Number(state.stableFetchCount || 0) < 1) return true
     return false
 }
 
@@ -378,6 +387,16 @@ export function assessSearchResults(results = [], query = '') {
     }
 }
 
+function detectReleaseStage(text = '') {
+    const value = String(text || '')
+    const betaSignal = /(?:Beta|内测|公测|测试版|预览版|开发者预览|developer\s+preview|release\s+candidate)/i.test(value)
+    const stableSignal = /(?:正式版|稳定版|正式推送|stable\s+(?:release|build|rollout)|general\s+availability)/i.test(value)
+    if (betaSignal && stableSignal) return 'mixed'
+    if (betaSignal) return 'beta'
+    if (stableSignal) return 'stable'
+    return 'unknown'
+}
+
 export function assessFetchedContent(requestedUrl = '', content = '') {
     const raw = String(content || '')
     const finalUrlMatches = [...raw.matchAll(/(?:最终地址|跳转目标)[：:]\s*(https?:\/\/[^\s]+)/gi)]
@@ -429,6 +448,7 @@ export function assessFetchedContent(requestedUrl = '', content = '') {
         ? 'partial'
         : (hasCompleteListLanguage && !hasPartialListLanguage ? 'complete' : (hasPartialListLanguage ? 'partial' : 'unknown'))
     const authority = getWebSourceAuthority(urlInfo.domain)
+    const releaseStage = detectReleaseStage(text)
     const authoritativeDomain = authority.tier === 'official'
     const authoritySignals = [
         authority.tier === 'official' ? authority.reason : '',
@@ -459,6 +479,7 @@ export function assessFetchedContent(requestedUrl = '', content = '') {
         sourceCategory: urlInfo.category,
         contentChars: text.length,
         coverage,
+        releaseStage,
         truncated,
         embeddedListOnly,
         authoritativeDomain,
@@ -476,6 +497,7 @@ export function assessFetchedContent(requestedUrl = '', content = '') {
             usableEvidence,
             contentChars: text.length,
             coverage,
+            releaseStage,
             truncated,
             embeddedListOnly,
             authoritativeDomain,
@@ -507,6 +529,8 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
         coverage: state.coverage || 'unknown',
         coverageSources: Math.max(0, Number(state.coverageSources) || 0),
         truncatedFetchCount: Math.max(0, Number(state.truncatedFetchCount) || 0),
+        fetchedBetaEvidenceKeys: [...new Set(state.fetchedBetaEvidenceKeys || [])],
+        fetchedStableEvidenceKeys: [...new Set(state.fetchedStableEvidenceKeys || [])],
         lowQualityCount: Math.max(0, Number(state.lowQualityCount) || 0),
         searchCount: Math.max(0, Number(state.searchCount) || 0),
         fetchCount: Math.max(0, Number(state.fetchCount) || 0),
@@ -545,6 +569,12 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
                 keys.add(String(facts.evidenceKey))
                 fetchedKeys.add(String(facts.evidenceKey))
             }
+            if (facts.evidenceKey && facts.releaseStage === 'beta') {
+                current.fetchedBetaEvidenceKeys = [...new Set([...current.fetchedBetaEvidenceKeys, String(facts.evidenceKey)])]
+            }
+            if (facts.evidenceKey && ['stable', 'mixed'].includes(facts.releaseStage)) {
+                current.fetchedStableEvidenceKeys = [...new Set([...current.fetchedStableEvidenceKeys, String(facts.evidenceKey)])]
+            }
             if (facts.domain) domains.add(String(facts.domain))
             if (facts.domain) fetchedSourceDomains.add(String(facts.domain))
             if (facts.domain && (facts.authoritativeDomain === true || isLikelyAuthoritativeWebDomain(facts.domain))) {
@@ -571,6 +601,8 @@ export function updateWebEvidenceState(state = {}, toolName = '', data = {}) {
     current.independentFetchedDomainCount = current.fetchedSourceDomains.length
     current.usableFetchCount = current.fetchedEvidenceKeys.length
     current.fetchedSourceCount = current.fetchedEvidenceKeys.length
+    current.betaFetchCount = current.fetchedBetaEvidenceKeys.length
+    current.stableFetchCount = current.fetchedStableEvidenceKeys.length
     current.quality = current.fetchedAuthoritativeDomains.length > 0
         && current.usableFetchCount >= 1
         && current.coverage !== 'partial'
@@ -592,6 +624,8 @@ export function buildWebEvidenceFingerprint(state = {}) {
         coverage: state.coverage || 'unknown',
         coverageSources: Number(state.coverageSources) || 0,
         usableFetchCount: Math.max(0, Number(state.usableFetchCount) || 0),
+        betaFetchCount: Math.max(0, Number(state.betaFetchCount) || 0),
+        stableFetchCount: Math.max(0, Number(state.stableFetchCount) || 0),
         quality: state.quality || 'low',
         searchUnavailable: state.searchUnavailable === true
     })
@@ -663,5 +697,10 @@ export function hasOverconfidentLowEvidenceAnswer(answer = '', instruction = '',
     const unverifiedScopeDenial = requirements.preserveScope
         && hasInsufficientWebEvidenceForRequirements(evidenceState, requirements)
         && /(?:官方|正式).{0,16}(?:不存在|未发布|没有发布|尚未发布)|(?:不存在|未发布|没有发布|尚未发布).{0,16}(?:官方|正式)/i.test(value)
-    return (sensitivePersonClaim || publicFactClaim || unavailableClaim || scopeMismatch || incompleteResearchClaim || unverifiedScopeDenial) && !uncertainty
+    const onlyBetaEvidence = Number(evidenceState?.betaFetchCount || 0) > 0
+        && Number(evidenceState?.stableFetchCount || 0) === 0
+    const releaseStageMismatch = requirements.asksRolloutList
+        && onlyBetaEvidence
+        && /(?:正式版|稳定版|正式推送|已开始正式推送|稳定版推送)/i.test(value)
+    return (sensitivePersonClaim || publicFactClaim || unavailableClaim || scopeMismatch || incompleteResearchClaim || unverifiedScopeDenial || releaseStageMismatch) && !uncertainty
 }

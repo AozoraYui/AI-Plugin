@@ -82,6 +82,15 @@ function parseJsonArray(value) {
     }
 }
 
+function parseJsonObject(value) {
+    try {
+        const parsed = JSON.parse(value || '{}')
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    } catch {
+        return {}
+    }
+}
+
 function appendLimitClause(query, params, limit, defaultLimit, maxLimit = Infinity) {
     const num = Number(limit)
     if (num === Infinity) return query
@@ -394,6 +403,7 @@ export class AIDatabase {
                         user_id TEXT NOT NULL,
                         role TEXT NOT NULL,
                         parts TEXT NOT NULL,
+                        meta TEXT NOT NULL DEFAULT '{}',
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                         date_str TEXT NOT NULL
                     );
@@ -419,7 +429,7 @@ export class AIDatabase {
             if (err || !row) {
                 this.db.run('INSERT INTO migration_status (id, json_migrated, checkpoints_migrated, summary_migrated) VALUES (1, 0, 0, 0)', (err) => {
                     if (err) reject(err)
-                    else resolve()
+                    else this.db.run("ALTER TABLE user_histories ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'", () => resolve())
                 })
             } else {
                 // 修复旧数据的 created_at，使其跟随 date_str 的日期（使用中午 12 点作为默认时间）
@@ -429,7 +439,9 @@ export class AIDatabase {
                     }
                     // 添加 message_count 列（如果不存在）
                     this.db.run('ALTER TABLE memory_checkpoints ADD COLUMN message_count INTEGER DEFAULT 0', () => {
-                        resolve()
+                        this.db.run("ALTER TABLE user_histories ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'", () => {
+                            resolve()
+                        })
                     })
                 })
             }
@@ -439,7 +451,7 @@ export class AIDatabase {
     getConversationHistory(userId) {
         return new Promise((resolve, reject) => {
             const userIdStr = String(userId)
-            this.db.all('SELECT role, parts, date_str FROM user_histories WHERE user_id = ? ORDER BY id ASC', [userIdStr], (err, rows) => {
+            this.db.all('SELECT role, parts, meta, date_str FROM user_histories WHERE user_id = ? ORDER BY id ASC', [userIdStr], (err, rows) => {
                 if (err) {
                     reject(err)
                     return
@@ -447,6 +459,7 @@ export class AIDatabase {
                 resolve(rows.map(row => ({
                     role: row.role,
                     parts: JSON.parse(row.parts),
+                    meta: parseJsonObject(row.meta),
                     date_str: row.date_str
                 })))
             })
@@ -486,8 +499,8 @@ export class AIDatabase {
                 
                 // 再插入新的完整历史
                 const insert = this.db.prepare(`
-                    INSERT INTO user_histories (user_id, role, parts, date_str)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO user_histories (user_id, role, parts, meta, date_str)
+                    VALUES (?, ?, ?, ?, ?)
                 `)
                 
                 try {
@@ -499,6 +512,7 @@ export class AIDatabase {
                                 userIdStr,
                                 turn.role,
                                 JSON.stringify(turn.parts),
+                                JSON.stringify(turn.meta || {}),
                                 turn.date_str
                             )
                         }
@@ -526,12 +540,12 @@ export class AIDatabase {
         })
     }
 
-    saveConversationEntry(userId, role, parts, dateStr) {
+    saveConversationEntry(userId, role, parts, dateStr, meta = {}) {
         return new Promise((resolve, reject) => {
             this.db.run(`
-                INSERT INTO user_histories (user_id, role, parts, date_str)
-                VALUES (?, ?, ?, ?)
-            `, [String(userId), role, JSON.stringify(parts), dateStr], function(err) {
+                INSERT INTO user_histories (user_id, role, parts, meta, date_str)
+                VALUES (?, ?, ?, ?, ?)
+            `, [String(userId), role, JSON.stringify(parts), JSON.stringify(meta || {}), dateStr], function(err) {
                 if (err) reject(err)
                 else {
                     queueHistoryRowsVectorIndex([{
@@ -539,6 +553,7 @@ export class AIDatabase {
                         user_id: String(userId),
                         role,
                         parts,
+                        meta,
                         date_str: dateStr
                     }])
                     resolve()
@@ -1705,7 +1720,7 @@ export class AIDatabase {
     getVectorHistoryRowsAfter(lastId = 0, limit = 200) {
         return new Promise((resolve, reject) => {
             this.db.all(`
-                SELECT id, user_id, role, parts, date_str, created_at
+                SELECT id, user_id, role, parts, meta, date_str, created_at
                 FROM user_histories
                 WHERE id > ?
                 ORDER BY id ASC
@@ -1722,6 +1737,7 @@ export class AIDatabase {
                     parts: (() => {
                         try { return JSON.parse(row.parts || '[]') } catch { return [] }
                     })(),
+                    meta: parseJsonObject(row.meta),
                     date_str: row.date_str,
                     created_at: row.created_at
                 })))
@@ -1732,7 +1748,7 @@ export class AIDatabase {
     getVectorHistoryRowsByUserDate(userId, dateStr) {
         return new Promise((resolve, reject) => {
             this.db.all(`
-                SELECT id, user_id, role, parts, date_str, created_at
+                SELECT id, user_id, role, parts, meta, date_str, created_at
                 FROM user_histories
                 WHERE user_id = ? AND date_str = ?
                 ORDER BY id ASC
@@ -1748,6 +1764,7 @@ export class AIDatabase {
                     parts: (() => {
                         try { return JSON.parse(row.parts || '[]') } catch { return [] }
                     })(),
+                    meta: parseJsonObject(row.meta),
                     date_str: row.date_str,
                     created_at: row.created_at
                 })))
@@ -1847,7 +1864,7 @@ export class AIDatabase {
     getConversationHistoryByDateRange(userId, startDate, endDate) {
         return new Promise((resolve, reject) => {
             const userIdStr = String(userId)
-            let query = 'SELECT role, parts, date_str FROM user_histories WHERE user_id = ?'
+            let query = 'SELECT role, parts, meta, date_str FROM user_histories WHERE user_id = ?'
             const params = [userIdStr]
 
             if (startDate) {
@@ -1869,6 +1886,7 @@ export class AIDatabase {
                 resolve(rows.map(row => ({
                     role: row.role,
                     parts: JSON.parse(row.parts),
+                    meta: parseJsonObject(row.meta),
                     date_str: row.date_str
                 })))
             })
@@ -1877,7 +1895,7 @@ export class AIDatabase {
 
     getConversationHistoryByDate(userId, dateStr) {
         return new Promise((resolve, reject) => {
-            this.db.all('SELECT role, parts FROM user_histories WHERE user_id = ? AND date_str = ? ORDER BY id ASC',
+            this.db.all('SELECT role, parts, meta FROM user_histories WHERE user_id = ? AND date_str = ? ORDER BY id ASC',
                 [String(userId), dateStr], (err, rows) => {
                     if (err) {
                         reject(err)
@@ -1885,7 +1903,8 @@ export class AIDatabase {
                     }
                     resolve(rows.map(row => ({
                         role: row.role,
-                        parts: JSON.parse(row.parts)
+                        parts: JSON.parse(row.parts),
+                        meta: parseJsonObject(row.meta)
                     })))
                 })
         })

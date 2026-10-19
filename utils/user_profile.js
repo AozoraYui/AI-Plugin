@@ -21,7 +21,7 @@ function normalizeSummaryType(type = '') {
     return value || '记忆总结'
 }
 
-function buildUserProfilePrompt({ oldProfile, summaryText, summaryType, dateStr }) {
+export function buildUserProfilePrompt({ userId = '', oldProfile, summaryText, summaryType, dateStr }) {
     const oldProfileText = oldProfile
         ? truncateText(oldProfile.info || oldProfile, OLD_PROFILE_MAX_CHARS)
         : '暂无旧档案。'
@@ -37,8 +37,9 @@ function buildUserProfilePrompt({ oldProfile, summaryText, summaryType, dateStr 
 3. 对一次性任务、临时命令、工具执行结果、短期情绪、纯闲聊噪声，不要写入档案。
 4. 不要把群内对他人的调侃、攻击性称呼或未经确认的信息当作事实；必要时只写成“可能/曾提到/群内称呼”。
 5. 不要编造旧档案和本次总结都没有的信息。
-6. 输出纯文本，不要 Markdown 标题、不要代码块、不要解释你的处理过程。
-7. 如果没有值得更新的新信息，也请输出整理后的旧档案，而不是说“没有变化”。
+6. 本次总结明确归属于 QQ ${userId} 的事实才可以写入档案；标注为其他昵称/QQ 的发言、行为、偏好和经历一律不得写入。无法判断说话人归属时不要写入。
+7. 输出纯文本，不要 Markdown 标题、不要代码块、不要解释你的处理过程。
+8. 如果没有值得更新的新信息，也请输出整理后的旧档案，而不是说“没有变化”。
 
 【建议结构】
 基本信息与称呼：
@@ -70,6 +71,7 @@ export async function updateUserProfileFromSummary(db, client, userId, summaryTe
     try {
         const oldProfile = await db.getUserProfile(userIdStr)
         const prompt = buildUserProfilePrompt({
+            userId: userIdStr,
             oldProfile,
             summaryText: sourceText,
             summaryType: options.summaryType,
