@@ -3,6 +3,7 @@ import sharp from 'sharp'
 globalThis.logger = globalThis.logger || { info() {}, warn() {}, error() {}, debug() {} }
 const { Config } = await import('../utils/config.js')
 const { processImageBufferForAI, processInlineImagesForAI, processImagesInBatches } = await import('../utils/image.js')
+const { urlToBuffer } = await import('../utils/common.js')
 
 const failures = []
 let passed = 0
@@ -50,6 +51,24 @@ check('Vision Relay inline 图片强制转 JPEG', forcedJpeg.length === 1 && for
 
 const batchProcessed = await processImagesInBatches([], { maxImages: 1 })
 check('批量图片处理入口正常工作', Array.isArray(batchProcessed) && batchProcessed.length === 0, String(batchProcessed.length))
+
+const cancelledImageController = new AbortController()
+cancelledImageController.abort()
+let batchCancellationCode = ''
+try {
+    await processImagesInBatches(['https://example.invalid/image.png'], { signal: cancelledImageController.signal })
+} catch (error) {
+    batchCancellationCode = error.code
+}
+check('图片分批处理会在已取消时停止，不再下载图片', batchCancellationCode === 'AGENT_CANCELLED', batchCancellationCode)
+
+let downloadCancellationCode = ''
+try {
+    await urlToBuffer('https://example.invalid/image.png', { signal: cancelledImageController.signal })
+} catch (error) {
+    downloadCancellationCode = error.code
+}
+check('图片下载支持取消信号并在发起网络请求前中止', downloadCancellationCode === 'AGENT_CANCELLED', downloadCancellationCode)
 
 if (failures.length > 0) {
     console.error(`Image eval: ${passed} passed, ${failures.length} failed`)

@@ -47,6 +47,7 @@ const { buildParticipantIdentityHint, expandInlineContent, isThirdPartySubjectQu
 const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq_face.js')
 const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
+await import('../tools/image_gen.js')
 const { buildBingImageSearchUrl, extractPageImageUrls, filterRelevantSearchResults, normalizeWebSearchQueries, parseSo360ImageResults, parseSogouSearchResults, parseYahooSearchResults, prepareSearchResults, scoreSearchResultRelevance, scoreSearchSourceAuthority, webSearchTool } = await import('../tools/search.js')
 const { createHeadersLike, getProxyCandidates } = await import('../utils/common.js')
 const { buildSearchAttemptKey, createSearchHealthManager, classifySearchFailure, parseRetryAfterMs } = await import('../utils/web_search_health.js')
@@ -92,6 +93,66 @@ function check(name, condition, detail = '') {
     failures.push({ name, detail })
     console.error(`FAIL ${name}${detail ? `: ${detail}` : ''}`)
 }
+
+const drawCancellationResult = await (async () => {
+    const drawImageTool = toolRegistry.get('draw_image')
+    const controller = new AbortController()
+    controller.abort()
+    const event = { message: [], replyCalls: 0, async reply() { this.replyCalls++ } }
+    const previousClient = global.AIPluginClient
+    global.AIPluginClient = {}
+    let errorCode = ''
+    try {
+        await drawImageTool.execute({}, { event, signal: controller.signal })
+    } catch (error) {
+        errorCode = error.code
+    } finally {
+        global.AIPluginClient = previousClient
+    }
+    return { errorCode, replyCalls: event.replyCalls }
+})()
+check('绘图工具收到取消信号时不继续执行或发送进度', drawCancellationResult.errorCode === 'AGENT_CANCELLED' && drawCancellationResult.replyCalls === 0, `${drawCancellationResult.errorCode}, replies=${drawCancellationResult.replyCalls}`)
+
+const drawMidflightCancellation = await (async () => {
+    const drawImageTool = toolRegistry.get('draw_image')
+    const controller = new AbortController()
+    const event = { isPrivate: true, message: [], replyCalls: 0, async reply() { this.replyCalls++ } }
+    const previousClient = global.AIPluginClient
+    let observedSignal = null
+    let markRequestStarted
+    const requestStarted = new Promise(resolve => { markRequestStarted = resolve })
+    global.AIPluginClient = {
+        async makeRequest(_type, _payload, _group, _tokens, options = {}) {
+            observedSignal = options.signal
+            markRequestStarted()
+            return await new Promise(resolve => {
+                const onAbort = () => resolve({ success: false, cancelled: true, error: '请求已取消' })
+                if (options.signal?.aborted) onAbort()
+                else options.signal?.addEventListener('abort', onAbort, { once: true })
+            })
+        }
+    }
+    let cancelledCode = ''
+    let timeout
+    try {
+        const pending = drawImageTool.execute({ prompt: '测试绘图撤回取消' }, { event, signal: controller.signal })
+        const started = await Promise.race([
+            requestStarted.then(() => true),
+            new Promise(resolve => { timeout = setTimeout(() => resolve(false), 1500) })
+        ])
+        controller.abort(new Error('触发消息已撤回'))
+        try {
+            await pending
+        } catch (error) {
+            cancelledCode = error.code
+        }
+        return { started, cancelledCode, observedSignal, expectedSignal: controller.signal, replyCalls: event.replyCalls }
+    } finally {
+        clearTimeout(timeout)
+        global.AIPluginClient = previousClient
+    }
+})()
+check('绘图模型请求收到撤回信号后不发送生成结果', drawMidflightCancellation.started && drawMidflightCancellation.cancelledCode === 'AGENT_CANCELLED' && drawMidflightCancellation.observedSignal === drawMidflightCancellation.expectedSignal && drawMidflightCancellation.replyCalls === 1, `${drawMidflightCancellation.cancelledCode}, started=${drawMidflightCancellation.started}, replies=${drawMidflightCancellation.replyCalls}`)
 
 check('撤回原消息且作者主动操作可以取消 Agent 执行', (() => {
     const execution = registerAgentExecution({ messageId: 'recall-1', groupId: 'group-1', userId: 'user-1' })

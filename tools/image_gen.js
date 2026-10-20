@@ -11,6 +11,7 @@ import { toolRegistry } from './registry.js'
 import { Config } from '../utils/config.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, resolveModelDisplay } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
+import { isAgentCancellationError, throwIfAgentExecutionCancelled } from '../utils/agent_context.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import yaml from 'yaml'
@@ -116,13 +117,16 @@ function loadCharacterImages(characterProfile) {
 }
 
 // 从事件对象收集画图参考图：引用图 + 当前消息图 + @成员头像
-async function collectReferenceImages(event) {
+async function collectReferenceImages(event, signal) {
+    throwIfAgentExecutionCancelled(signal)
     let images = []
     // 1. 引用消息中的图片
     try {
         const replyImages = await takeSourceMsg(event, { img: true })
+        throwIfAgentExecutionCancelled(signal)
         if (replyImages) images = images.concat(replyImages)
     } catch (err) {
+        if (isAgentCancellationError(err, signal)) throw err
         logger.warn(`[AI-Plugin] 画图工具：获取引用图失败: ${err.message}`)
     }
     // 2. 当前消息中的图片
@@ -133,7 +137,9 @@ async function collectReferenceImages(event) {
     let atSegments = (event.message || []).filter(m => m.type === 'at' && (m.qq || m.data?.qq))
     if (hasReply && atSegments.length > 0) atSegments = atSegments.slice(1)
     for (const atSeg of atSegments) {
+        throwIfAgentExecutionCancelled(signal)
         try { images.push(await getAvatarUrl(atSeg.qq || atSeg.data?.qq)) } catch { /* ignore */ }
+        throwIfAgentExecutionCancelled(signal)
     }
     if (images.length > 0) {
         logger.info(`[AI-Plugin] 画图工具：从当前/引用/@ 收集到 ${images.length} 张参考图`)
@@ -151,7 +157,8 @@ function shouldUseCachedReferenceImage(args = {}, event = {}) {
     return /(刚才|上次|之前|上一张|这张|那张|原图|参考图|图片|图里|截图|处理|修改|编辑|去掉|去除|移除|擦除|消除|水印|二维码|背景|重绘|修图|真人化|真人版|真人写实|写实真人|写实化|二次元转真人|动漫转真人|绘图功能|画图功能|调用绘图|调用画图|p模型|pro模型|inpaint|inpainting)/i.test(text)
 }
 
-async function loadCachedReferenceImages(event, args = {}) {
+async function loadCachedReferenceImages(event, args = {}, signal) {
+    throwIfAgentExecutionCancelled(signal)
     if (!shouldUseCachedReferenceImage(args, event)) return []
     if (typeof redis === 'undefined' || !redis.get) return []
 
@@ -165,6 +172,7 @@ async function loadCachedReferenceImages(event, args = {}) {
     for (const key of keys) {
         try {
             const raw = await redis.get(key)
+            throwIfAgentExecutionCancelled(signal)
             if (!raw) continue
             const record = JSON.parse(raw)
             const images = Array.isArray(record.images) ? record.images.filter(Boolean) : []
@@ -173,6 +181,7 @@ async function loadCachedReferenceImages(event, args = {}) {
                 return images
             }
         } catch (err) {
+            if (isAgentCancellationError(err, signal)) throw err
             logger.warn(`[AI-Plugin] 画图工具：读取最近图片缓存失败: ${err.message}`)
         }
     }
@@ -238,6 +247,10 @@ export const imageGenTool = {
     },
 
     async execute(args = {}, context = {}) {
+        const signal = context.signal
+        const throwIfCancelled = () => throwIfAgentExecutionCancelled(signal)
+        throwIfCancelled()
+
         const event = context.event
         if (!event) return '【画图失败】缺少会话上下文，无法发送图片。'
 
@@ -290,10 +303,12 @@ export const imageGenTool = {
         }
 
         // 收集参考图
-        const { images: refImages, hasReply } = await collectReferenceImages(event)
+        const { images: refImages, hasReply } = await collectReferenceImages(event, signal)
+        throwIfCancelled()
         if (refImages.length === 0) {
-            refImages.push(...await loadCachedReferenceImages(event, args))
+            refImages.push(...await loadCachedReferenceImages(event, args, signal))
         }
+        throwIfCancelled()
         // 无参考图、无描述、无预设、也没有角色参考图时，无法判断画什么
         if (refImages.length === 0 && characterImages.length === 0 && !prompt && !preset) {
             return '【画图失败】没有可用的画图内容：请提供文字描述，或附带/引用图片，或@某位成员。'
@@ -301,19 +316,23 @@ export const imageGenTool = {
         // 纯预设且无图时，默认用发送者头像作为参考（与 #draw 行为一致）
         if (refImages.length === 0 && characterImages.length === 0 && preset && !prompt && !hasReply) {
             try { refImages.push(await getAvatarUrl(event.user_id)) } catch { /* ignore */ }
+            throwIfCancelled()
         }
 
         const imagesToProcess = refImages.slice(0, Config.MAX_IMAGES_PER_MESSAGE)
 
         try {
+            throwIfCancelled()
             await setMsgEmojiLike(event, 282)
             const modelDisplay = resolveModelDisplay(modelGroupKey)
             await event.reply(`正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
+            throwIfCancelled()
 
             const parts = []
             // 角色图库参考图优先放最前，锁定目标角色形象
             if (characterImages.length > 0) parts.push(...characterImages)
-            const processedImages = imagesToProcess.length > 0 ? await processImagesInBatches(imagesToProcess) : []
+            const processedImages = imagesToProcess.length > 0 ? await processImagesInBatches(imagesToProcess, { signal }) : []
+            throwIfCancelled()
             if (imagesToProcess.length > 0 && processedImages.length === 0) {
                 await setMsgEmojiLike(event, 10)
                 return '【画图失败】参考图获取失败，请检查图片来源是否可访问，或稍后重试。'
@@ -369,8 +388,9 @@ export const imageGenTool = {
             const payload = { contents: [{ parts }] }
             const startTime = Date.now()
             const result = await client.makeRequest('image', payload, modelGroupKey, 8192, {
-                signal: context.signal
+                signal
             })
+            throwIfCancelled()
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
 
             if (!result.success || !result.data) {
@@ -392,7 +412,7 @@ export const imageGenTool = {
                     }
                 } else {
                     try {
-                        const arr = await urlToBuffer(result.data)
+                        const arr = await urlToBuffer(result.data, { signal })
                         const buf = Buffer.from(arr)
                         const mimeType = getImageMimeType(buf) || 'image/png'
                         const data = buf.toString('base64')
@@ -400,10 +420,12 @@ export const imageGenTool = {
                         imageToSend = `base64://${data}`
                     } catch { /* 用原 url */ }
                 }
+                throwIfCancelled()
                 const caption = preset
                     ? `✅ 生成完成 (${elapsed}s)｜预设：${preset.name}${prompt ? ' + 自定义' : ''} @${result.platform}`
                     : `✅ 创作完成 (${elapsed}s) @${result.platform}`
                 await event.reply([segment.image(imageToSend), caption], true)
+                throwIfCancelled()
                 await setMsgEmojiLike(event, 144)
                 return {
                     ok: true,
@@ -418,10 +440,15 @@ export const imageGenTool = {
                 }
             } else {
                 // 模型只返回了文本（如拒绝/描述），交回文本
+                throwIfCancelled()
                 await setMsgEmojiLike(event, 144)
                 return `【画图结果（模型返回文本）】${String(result.data).trim()}`
             }
         } catch (err) {
+            if (isAgentCancellationError(err, signal)) {
+                logger.info('[AI-Plugin] 画图工具请求已取消：触发消息已撤回')
+                throw err
+            }
             try { await setMsgEmojiLike(event, 10) } catch { /* ignore */ }
             logger.error('[AI-Plugin] 画图工具异常:', err)
             return `【画图失败】处理异常: ${err.message}`

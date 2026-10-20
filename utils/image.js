@@ -1,5 +1,5 @@
 import sharp from 'sharp'
-import { urlToBuffer, getImageMimeType } from './common.js'
+import { isAbortError, throwIfAborted, urlToBuffer, getImageMimeType } from './common.js'
 import { Config } from './config.js'
 
 function payloadSizeMB(contents = []) {
@@ -63,6 +63,7 @@ function getImageQuality() {
  */
 export async function processImageBufferForAI(imageBuffer, options = {}) {
     try {
+        throwIfAborted(options.signal)
         imageBuffer = Buffer.from(imageBuffer || [])
         if (imageBuffer.length === 0) {
             logger.warn('[AI-Plugin] 图片内容为空')
@@ -70,6 +71,7 @@ export async function processImageBufferForAI(imageBuffer, options = {}) {
         }
 
         const metadata = await sharp(imageBuffer).metadata()
+        throwIfAborted(options.signal)
         const width = Number(metadata.width) || 0
         const height = Number(metadata.height) || 0
         const pixels = width > 0 && height > 0 ? width * height : 0
@@ -120,6 +122,7 @@ export async function processImageBufferForAI(imageBuffer, options = {}) {
                 mimeType = 'image/webp'
             }
             finalBuffer = await pipeline.toBuffer()
+            throwIfAborted(options.signal)
         }
 
         if (!mimeType || !['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
@@ -140,6 +143,7 @@ export async function processImageBufferForAI(imageBuffer, options = {}) {
             }
         }
     } catch (err) {
+        if (isAbortError(err, options.signal)) throw err
         logger.warn(`[AI-Plugin] 图片处理异常: ${err.message}`)
         return null
     }
@@ -150,13 +154,15 @@ export async function processImageBufferForAI(imageBuffer, options = {}) {
  */
 export async function processImageForAI(imageUrl, options = {}) {
     try {
-        const imageBuffer = await urlToBuffer(imageUrl)
+        throwIfAborted(options.signal)
+        const imageBuffer = await urlToBuffer(imageUrl, { signal: options.signal })
         if (!imageBuffer) {
             logger.warn(`[AI-Plugin] 获取图片失败: ${imageUrl}`)
             return null
         }
         return await processImageBufferForAI(imageBuffer, options)
     } catch (err) {
+        if (isAbortError(err, options.signal)) throw err
         logger.warn(`[AI-Plugin] 图片处理异常: ${err.message}`)
         return null
     }
@@ -174,12 +180,15 @@ function normalizeImageLimit(value, fallback) {
  */
 export async function processInlineImagesForAI(imageParts, options = {}) {
     const parts = Array.isArray(imageParts) ? imageParts : []
+    throwIfAborted(options.signal)
     const results = await Promise.all(parts.map(async part => {
         const data = part?.inline_data?.data
         if (!data) return null
         try {
+            throwIfAborted(options.signal)
             return await processImageBufferForAI(Buffer.from(String(data), 'base64'), options)
         } catch (err) {
+            if (isAbortError(err, options.signal)) throw err
             logger.warn(`[AI-Plugin] inline 图片处理异常: ${err.message}`)
             return null
         }
@@ -192,15 +201,18 @@ export async function processInlineImagesForAI(imageParts, options = {}) {
  * 默认限制最大图片数量；调用方可传入 maxImages 覆盖数量限制。
  */
 export async function processImagesInBatches(imageUrls, options = {}) {
+    throwIfAborted(options.signal)
     const maxImages = normalizeImageLimit(options.maxImages, Config.MAX_IMAGES_PER_MESSAGE)
     const imagesToProcess = maxImages === Infinity ? imageUrls.slice() : imageUrls.slice(0, maxImages)
     const processingBatchSize = Math.max(1, Number(Config.IMAGE_PROCESSING_BATCH_SIZE) || 1)
     const validImages = []
 
     for (let i = 0; i < imagesToProcess.length; i += processingBatchSize) {
+        throwIfAborted(options.signal)
         const batch = imagesToProcess.slice(i, i + processingBatchSize)
         const batchPromises = batch.map(url => processImageForAI(url, options))
         const batchResults = await Promise.all(batchPromises)
+        throwIfAborted(options.signal)
         validImages.push(...batchResults.filter(img => img !== null))
     }
 

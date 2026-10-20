@@ -6,6 +6,7 @@ import { checkAccess } from '../utils/access.js'
 import { sessionManager } from '../utils/session.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
+import { isAgentExecutionCancelled, registerAgentExecution } from '../utils/agent_cancellation.js'
 import fs from 'node:fs'
 import yaml from 'yaml'
 import sharp from 'sharp'
@@ -105,23 +106,34 @@ export class ImageHandler extends plugin {
 
         if (!match) return
 
-        const startTime = Date.now()
-
-        let allImages = []
-        const replyImages = await takeSourceMsg(e, { img: true })
-        logger.info(`[AI-Plugin] takeSourceMsg: replyImages=${JSON.stringify(replyImages?.slice?.(0, 2))}, e.source=${!!e.source}, e.source?.seq=${e.source?.seq}, hasReplySeg=${!!e.message?.find(m => m.type === 'reply')}, replySegId=${e.message?.find(m => m.type === 'reply')?.id}, hasGetReply=${typeof e.getReply === 'function'}`)
-        if (replyImages) allImages = allImages.concat(replyImages)
-        const currentImages = (e.message || []).filter(m => m.type === "image").map(m => m.data?.url || m.url).filter(Boolean)
-        if (currentImages.length > 0) allImages = allImages.concat(currentImages)
-
-        await setMsgEmojiLike(e, 282)
-        const modelDisplay = resolveModelDisplay(modelGroupKey)
-        await e.reply(`正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
-
-        let parts = []
-        let presetName = '自定义'
+        const cancellationHandle = registerAgentExecution({
+            messageId: e.message_id || e.seq || '',
+            groupId: e.group_id || '',
+            userId: e.user_id || ''
+        })
+        const throwIfCancelled = () => cancellationHandle?.throwIfCancelled()
+        const signal = cancellationHandle?.signal
 
         try {
+            const startTime = Date.now()
+
+            let allImages = []
+            const replyImages = await takeSourceMsg(e, { img: true })
+            throwIfCancelled()
+            logger.info(`[AI-Plugin] takeSourceMsg: replyImages=${JSON.stringify(replyImages?.slice?.(0, 2))}, e.source=${!!e.source}, e.source?.seq=${e.source?.seq}, hasReplySeg=${!!e.message?.find(m => m.type === 'reply')}, replySegId=${e.message?.find(m => m.type === 'reply')?.id}, hasGetReply=${typeof e.getReply === 'function'}`)
+            if (replyImages) allImages = allImages.concat(replyImages)
+            const currentImages = (e.message || []).filter(m => m.type === "image").map(m => m.data?.url || m.url).filter(Boolean)
+            if (currentImages.length > 0) allImages = allImages.concat(currentImages)
+
+            await setMsgEmojiLike(e, 282)
+            throwIfCancelled()
+            const modelDisplay = resolveModelDisplay(modelGroupKey)
+            await e.reply(`正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
+            throwIfCancelled()
+
+            let parts = []
+            let presetName = '自定义'
+
             // 处理 @：回复消息时跳过第一个 @（QQ 自动加的）
             const hasReply = e.source || e.message?.find(m => m.type === 'reply')
             let atSegments = (e.message || []).filter(m => m.type === "at" && (m.qq || m.data?.qq))
@@ -130,24 +142,30 @@ export class ImageHandler extends plugin {
             }
             for (const atSeg of atSegments) {
                 allImages.push(await getAvatarUrl(atSeg.qq || atSeg.data?.qq))
+                throwIfCancelled()
             }
 
             if (allImages.length === 0 && !isCustomCommand && !hasReply) {
                 allImages.push(await getAvatarUrl(e.user_id))
+                throwIfCancelled()
             }
 
             const imagesToProcess = allImages.slice(0, Config.MAX_IMAGES_PER_MESSAGE)
+            throwIfCancelled()
 
             if (imagesToProcess.length === 0 && !isCustomCommand) {
                 await setMsgEmojiLike(e, 10)
+                throwIfCancelled()
                 return e.reply("❌ 该功能需要附带图片才能使用哦！(可以回复图片或@某人)")
             }
 
-            const processedImages = await processImagesInBatches(imagesToProcess)
+            const processedImages = await processImagesInBatches(imagesToProcess, { signal })
+            throwIfCancelled()
 
             // 检查：有图片URL但全部处理失败，说明下载/转换出了问题
             if (imagesToProcess.length > 0 && processedImages.length === 0) {
                 await setMsgEmojiLike(e, 10)
+                throwIfCancelled()
                 return e.reply("❌ 图片获取失败，请检查图片来源是否可访问，或稍后重试。")
             }
 
@@ -156,6 +174,7 @@ export class ImageHandler extends plugin {
             if (isCustomCommand) {
                 if (!instruction && imagesToProcess.length === 0) {
                     await setMsgEmojiLike(e, 10)
+                    throwIfCancelled()
                     return e.reply("请输入内容或发送图片呀！")
                 }
                 parts.push({ "text": instruction })
@@ -163,6 +182,7 @@ export class ImageHandler extends plugin {
                 const preset = Config.presets.find(p => p.command.toLowerCase() === command.toLowerCase() || (p.aliases && p.aliases.map(a => a.toLowerCase()).includes(command.toLowerCase())))
                 if (!preset) {
                     await setMsgEmojiLike(e, 10)
+                    throwIfCancelled()
                     return e.reply(`❌ 未找到指令 #${command} 对应的预设。`)
                 }
                 const prompt = extraInstruction ? `${preset.prompt} ${extraInstruction}` : preset.prompt
@@ -171,7 +191,9 @@ export class ImageHandler extends plugin {
             }
 
             const payload = { "contents": [{ "parts": parts }] }
-            const result = await this.client.makeRequest('image', payload, modelGroupKey, 8192)
+            const result = await this.client.makeRequest('image', payload, modelGroupKey, 8192, { signal })
+            throwIfCancelled()
+            if (result.cancelled) return true
 
             if (result.success && result.data) {
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
@@ -186,7 +208,9 @@ export class ImageHandler extends plugin {
                 }
 
                 if (typeof result.data === 'string' && (result.data.startsWith('data:image/') || result.data.startsWith('http'))) {
+                    throwIfCancelled()
                     await setMsgEmojiLike(e, 60)
+                    throwIfCancelled()
 
                     const replyMsg = isCustomCommand
                         ? `✅ 创作完成 (${elapsed}s${tokenInfo}) @${result.platform}`
@@ -197,27 +221,39 @@ export class ImageHandler extends plugin {
                         imageToSend = `base64://${result.data.split(',')[1]}`
                     } else if (result.data.startsWith('http')) {
                         try {
-                            const imageBuffer = await urlToBuffer(result.data)
+                            const imageBuffer = await urlToBuffer(result.data, { signal })
                             imageToSend = `base64://${imageBuffer.toString('base64')}`
                         } catch (downloadErr) { }
                     }
+                    throwIfCancelled()
                     await e.reply([segment.image(imageToSend), replyMsg], true)
+                    throwIfCancelled()
                     await setMsgEmojiLike(e, 144)
 
                 } else {
                     const cleanResponseText = result.data.trim()
+                    throwIfCancelled()
                     await e.reply(`${cleanResponseText}\n\n耗时: ${elapsed}s${tokenInfo} @${result.platform}`, true)
+                    throwIfCancelled()
                     await setMsgEmojiLike(e, 144)
                 }
             } else {
                 await setMsgEmojiLike(e, 10)
+                throwIfCancelled()
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
                 await e.reply(`❌ 请求失败 (${elapsed}s)\n错误: ${result.error || '未知错误'}`, true)
             }
         } catch (err) {
+            if (isAgentExecutionCancelled(err) || cancellationHandle?.isCancelled()) {
+                logger.info(`[AI-Plugin] 作图请求已取消：触发消息已撤回，message_id=${e.message_id || e.seq || 'unknown'}`)
+                return true
+            }
             await setMsgEmojiLike(e, 10)
+            if (cancellationHandle?.isCancelled()) return true
             logger.error(`[AI-Plugin] 作图异常:`, err)
             await e.reply(`❌ 处理异常: ${err.message}`, true)
+        } finally {
+            cancellationHandle?.dispose()
         }
     }
 

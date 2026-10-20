@@ -380,13 +380,14 @@ export async function fetchWithProxy(url, options = {}) {
     return request(url)
 }
 
-export async function urlToBuffer(url) {
+export async function urlToBuffer(url, options = {}) {
     const normalizedUrl = String(url || '').replace(/&amp;/gi, '&').trim()
     const res = await fetchWithProxy(normalizedUrl, {
         headers: {
             'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
             Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
-        }
+        },
+        signal: options.signal
     })
     if (!res.ok) {
         let source = '未知地址'
