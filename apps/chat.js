@@ -38,7 +38,7 @@ import { summarizeShellResultForReply } from '../utils/shell_result_summary.js'
 import { selectWorkspaceSurveyFiles } from '../utils/workspace_survey.js'
 import { buildWebEvidenceFingerprint, buildWebResearchRequirements, classifyWebUrl, hasExplicitTerminalWebBlockResponse, hasExplicitWebUncertainty, hasInsufficientWebEvidenceForRequirements, hasOverconfidentLowEvidenceAnswer, hasUnsupportedWebResearchClaim, normalizeWebUrlKey, updateWebEvidenceState } from '../utils/web_evidence.js'
 import { extractMessageSendError, isContentModerationSendError, rewriteRejectedReply } from '../utils/message_delivery.js'
-import { sendReplyWithForwardFallback, sendTextInChunks } from '../utils/reply_delivery.js'
+import { sendReplyWithForwardFallback, sendTextInChunks, shouldUseForwardReply } from '../utils/reply_delivery.js'
 import yaml from 'yaml'
 import { formatSkillGuidance, selectRelevantSkills } from '../utils/skill_runtime.js'
 
@@ -4055,7 +4055,7 @@ ${visualDescription}`
 
                 const sendFinalReply = async (responseText, responseReasoning = '') => {
                     throwIfExecutionCancelled()
-                    if (!responseReasoning && responseText.length <= MAX_LENGTH) {
+                    if (!shouldUseForwardReply({ responseText, responseReasoning, footerInfo, maxChars: MAX_LENGTH, maxBytes: 3500 })) {
                         throwIfExecutionCancelled()
                         const shortDelivery = await sendTextInChunks({
                             text: `${responseText}\n\n${footerInfo}`,

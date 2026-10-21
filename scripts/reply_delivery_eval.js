@@ -10,6 +10,7 @@ const {
     sendReplyWithForwardFallback,
     sendTextInChunks,
     splitReplyText,
+    shouldUseForwardReply,
     buildDeliveryKey,
     clearDeliveryState,
     getDeliveryState
@@ -27,6 +28,20 @@ async function testByteSafeSplitting() {
     assert.ok(chunks.length > 1)
     assertSafeChunks(chunks)
     assert.equal(chunks.join(''), source)
+}
+
+async function testForwardSelectionUsesWholeReplyBudget() {
+    const responseText = 'Linux Terminal、Unix Terminal、Windows Terminal 的区别。'.repeat(60)
+    const footerInfo = '耗时: 28.16s | 输入Tokens: 30564 | 输出Tokens: 1964 @model'
+    const completeReply = [responseText, '', footerInfo].join('\n')
+    assert.ok(Array.from(completeReply).length < 3500)
+    assert.ok(Buffer.byteLength(completeReply, 'utf8') > 3500)
+    assert.equal(shouldUseForwardReply({ responseText, footerInfo, maxChars: 3500, maxBytes: 3500 }), true)
+    assert.equal(shouldUseForwardReply({ responseText: '短回复', footerInfo: '耗时: 1s', maxChars: 3500, maxBytes: 3500 }), false)
+    const bodyWithinLimit = 'a'.repeat(3490)
+    assert.ok(Array.from(bodyWithinLimit).length <= 3500)
+    assert.equal(shouldUseForwardReply({ responseText: bodyWithinLimit, footerInfo: '1234567890', maxChars: 3500, maxBytes: 3500 }), true)
+    assert.equal(shouldUseForwardReply({ responseText: '短回复', responseReasoning: '过程', footerInfo: '耗时: 1s', maxChars: 3500, maxBytes: 3500 }), true)
 }
 
 async function testForwardSuccess() {
@@ -330,6 +345,7 @@ async function testFastPathUsesReplyOnlyOnceForShortText() {
 }
 
 await testByteSafeSplitting()
+await testForwardSelectionUsesWholeReplyBudget()
 await testForwardSuccess()
 await testForwardRetcodeFallsBackToPlainChunks()
 await testPlainSendFailureIsReported()
@@ -343,4 +359,4 @@ await testPendingStateIsPersistedBeforeSend()
 await testPersistedSentDeliverySurvivesProcessCacheReset()
 await testPersistedPendingDeliveryIsNotRetried()
 await testFastPathUsesReplyOnlyOnceForShortText()
-console.log('Reply delivery eval: 14 passed, 0 failed')
+console.log('Reply delivery eval: 15 passed, 0 failed')

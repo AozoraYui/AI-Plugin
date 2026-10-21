@@ -274,6 +274,27 @@ function textByteLength(text) {
     return Buffer.byteLength(String(text || ''), 'utf8')
 }
 
+function fitsSingleReply(text, {
+    maxChars = DEFAULT_MAX_CHARS,
+    maxBytes = DEFAULT_MAX_BYTES
+} = {}) {
+    const value = String(text ?? '')
+    const safeMaxChars = Math.max(1, Number(maxChars) || DEFAULT_MAX_CHARS)
+    const safeMaxBytes = Math.max(1, Number(maxBytes) || DEFAULT_MAX_BYTES)
+    return Array.from(value).length <= safeMaxChars && textByteLength(value) <= safeMaxBytes
+}
+
+export function shouldUseForwardReply({
+    responseText = '',
+    responseReasoning = '',
+    footerInfo = '',
+    maxChars = DEFAULT_MAX_CHARS,
+    maxBytes = DEFAULT_MAX_BYTES
+} = {}) {
+    if (String(responseReasoning || '').trim()) return true
+    return !fitsSingleReply([String(responseText ?? ''), '', String(footerInfo ?? '')].join('\n'), { maxChars, maxBytes })
+}
+
 function splitTextToSafeChunks(text, {
     maxChars = DEFAULT_MAX_CHARS,
     maxBytes = DEFAULT_MAX_BYTES
