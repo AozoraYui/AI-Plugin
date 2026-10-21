@@ -780,10 +780,16 @@ ${instruction}
         let result = null
         try {
             if (Array.isArray(client.webSearchIntentModels) && client.webSearchIntentModels.length > 0 && client.quickIntentRequest) {
-                result = await client.quickIntentRequest(payload)
+                result = await client.quickIntentRequest(payload, {
+                    requestId: options.requestId,
+                    stage: 'tool_discovery'
+                })
             }
             if (!result?.success && client.makeRequest) {
-                result = await client.makeRequest('chat', payload, 'flash', 768)
+                result = await client.makeRequest('chat', payload, 'flash', 768, {
+                    requestId: options.requestId,
+                    stage: 'tool_discovery_fallback'
+                })
             }
             if (!result?.success || !result.data) {
                 return { mode: 'ambiguous', tools: [], confidence: 0, reason: result?.error || '语义工具发现模型无返回' }
@@ -846,7 +852,10 @@ ${instruction}
 {"interpretations":[{"intent":"解释","confidence":0.0,"evidence":["证据"]}],"resolved_intent":"最终理解","mode":"chat|task|ambiguous","tools":["工具名"],"confidence":0.0,"should_ask_user":false,"clarification_question":"必要时的问题","reason":"裁决理由"}`
         const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
         try {
-            const result = await client.makeRequest('chat', payload, 'flash', 1200)
+            const result = await client.makeRequest('chat', payload, 'flash', 1200, {
+                requestId: options.requestId,
+                stage: 'tool_intent_adjudication'
+            })
             if (!result?.success || !result.data) return null
             const parsed = this._parseJsonFromText(result.data)
             if (!parsed || typeof parsed !== 'object') return null
@@ -1237,14 +1246,20 @@ ${JSON.stringify(mainPlan, null, 2)}
 
             let result = null
             if (client.webSearchIntentModels.length > 0) {
-                result = await client.quickIntentRequest(payload)
+                result = await client.quickIntentRequest(payload, {
+                    requestId: options.requestId,
+                    stage: 'tool_compile'
+                })
                 if (!result?.success) {
                     logger.warn('[AI-Plugin] 工具计划编译专用模型失败，降级到 Flash 模型组')
                 }
             }
 
             if (!result?.success) {
-                result = await client.makeRequest('chat', payload, 'flash', 1024)
+                result = await client.makeRequest('chat', payload, 'flash', 1024, {
+                    requestId: options.requestId,
+                    stage: 'tool_compile_fallback'
+                })
             }
 
             if (!result.success || !result.data) {

@@ -17,7 +17,7 @@ function truncate(text, maxChars) {
 
 export async function verifyAgentRound(options = {}) {
     const observations = Array.isArray(options.observations) ? options.observations : []
-    const deterministic = summarizeDeterministicAgentRound(observations)
+    const deterministic = summarizeDeterministicAgentRound(observations, options.plan)
     if (deterministic) {
         return {
             ...deterministic,

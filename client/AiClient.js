@@ -6,6 +6,7 @@ import { fetchWithProxy, normalizeModelGroup } from '../utils/common.js'
 import { ensureShellSession } from '../utils/shell_session.js'
 import { toolRegistry } from '../tools/index.js'
 import { normalizeModelConfigDocuments, resolveModelReference } from '../utils/model_config.js'
+import { APPLICATION_SECURITY_INSTRUCTION } from '../utils/prompt_security.js'
 
 const MAX_INTENT_ATTEMPTS = 3
 const RETRY_BACKOFF_BASE_MS = 150
@@ -13,6 +14,13 @@ const RETRY_BACKOFF_MAX_MS = 1200
 const MODEL_STATUS_FORMAT_VERSION = 3
 const LATENCY_SAMPLE_WEIGHT = 0.3         // 新延迟占 30% 加权（平滑指数）
 const ULTRA_CHAT_REQUEST_TIMEOUT_MS = 600000 // Ultra 长思考模型固定等待 10 分钟
+
+function getRequestTraceSuffix(requestOptions = {}) {
+    const requestId = String(requestOptions.requestId || '').replace(/[^\w:-]/g, '').slice(0, 100)
+    if (!requestId) return ''
+    const stage = String(requestOptions.stage || '').replace(/[^\w:-]/g, '').slice(0, 50)
+    return ` [request=${requestId}${stage ? `/${stage}` : ''}]`
+}
 
 export class AiClient {
     constructor() {
@@ -127,9 +135,10 @@ export class AiClient {
      * @param {object} payload - 请求体
      * @returns {object|null} 成功返回 { success, data, platform }，失败返回 null
      */
-    async quickIntentRequest(payload) {
+    async quickIntentRequest(payload, requestOptions = {}) {
         const intentModels = this.webSearchIntentModels
         if (intentModels.length === 0) return null
+        const traceSuffix = getRequestTraceSuffix(requestOptions)
 
         let attempts = 0
         for (const modelConfig of intentModels) {
@@ -141,7 +150,7 @@ export class AiClient {
             }
             attempts += 1
             const startTime = Date.now()
-            const result = await this.attemptRequest('chat', payload, provider, modelConfig.model_id, 1024, 30000, modelConfig)
+            const result = await this.attemptRequest('chat', payload, provider, modelConfig.model_id, 1024, 30000, modelConfig, requestOptions)
             const elapsedMs = Date.now() - startTime
             const elapsed = (elapsedMs / 1000).toFixed(2)
             const statusKey = `${provider.id}-${modelConfig.id || modelConfig.model_id}`
@@ -149,14 +158,14 @@ export class AiClient {
                 this._recordModelSuccess(statusKey, elapsedMs)
                 this._recordProviderSuccess(provider.id)
                 this.scheduleModelStatusSave()
-                logger.info(`[AI-Plugin] 意图分析成功: ${provider.name}/${modelConfig.model_id}, 耗时 ${elapsed}s`)
+                logger.info(`[AI-Plugin] 意图分析成功${traceSuffix}: ${provider.name}/${modelConfig.model_id}, 耗时 ${elapsed}s`)
                 return result
             }
             const failure = this._classifyRequestError(result.error)
             this._recordModelFail(statusKey, failure)
             this._recordProviderFail(provider.id, failure)
             this.scheduleModelStatusSave()
-            logger.warn(`[AI-Plugin] 意图分析失败: ${provider.name}/${modelConfig.model_id}, 耗时 ${elapsed}s, 错误: ${result.error}`)
+            logger.warn(`[AI-Plugin] 意图分析失败${traceSuffix}: ${provider.name}/${modelConfig.model_id}, 耗时 ${elapsed}s, 错误: ${result.error}`)
         }
         return null
     }
@@ -1003,6 +1012,20 @@ export class AiClient {
         }
 
         const url = `${providerConfig.base_url}/chat/completions`
+        const convertedMessages = this.convertToOpenAIMessages(payload, modelConfig?.multimodal !== false)
+        const systemInstructions = convertedMessages
+            .filter(message => message.role === 'system')
+            .map(message => message.content)
+            .filter(Boolean)
+        const messages = type === 'chat'
+            ? [
+                {
+                    role: 'system',
+                    content: [...systemInstructions, APPLICATION_SECURITY_INSTRUCTION].join('\n\n')
+                },
+                ...convertedMessages.filter(message => message.role !== 'system')
+            ]
+            : convertedMessages
         const options = {
             method: "POST",
             headers: {
@@ -1013,7 +1036,7 @@ export class AiClient {
             },
             body: JSON.stringify({
                 model: modelId,
-                messages: this.convertToOpenAIMessages(payload, modelConfig?.multimodal !== false),
+                messages,
                 max_tokens: maxTokens,
                 stream: false,
             })
@@ -1069,7 +1092,7 @@ export class AiClient {
     convertToOpenAIMessages(requestPayload, allowImages = true) {
         const messages = []
         for (const content of requestPayload.contents) {
-            const role = content.role === 'model' ? 'assistant' : 'user'
+            const role = content.role === 'system' ? 'system' : content.role === 'model' ? 'assistant' : 'user'
             const messageContent = []
             const textParts = []
             let droppedImages = 0
@@ -1234,6 +1257,7 @@ export class AiClient {
     }
 
     async attemptRequest(type, payload, provider, modelId, maxTokens = 8192, timeout = 0, modelConfig = null, requestOptions = {}) {
+        const traceSuffix = getRequestTraceSuffix(requestOptions)
         try {
             if (requestOptions.signal?.aborted) {
                 return { success: false, cancelled: true, error: '请求已取消', code: 'AGENT_CANCELLED' }
@@ -1262,7 +1286,7 @@ export class AiClient {
                 if (requestOptions.signal?.aborted) {
                     return { success: false, cancelled: true, error: '请求已取消', code: 'AGENT_CANCELLED' }
                 }
-                logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 传输失败，重试当前请求一次`)
+                logger.info(`[AI-Plugin] 模型${traceSuffix} [${provider.name} - ${modelId}] 传输失败，重试当前请求一次`)
                 res = await fetchWithProxy(url, { ...options, signal: requestOptions.signal, autoDetectProxy: true, family: 4 })
             }
 
@@ -1325,7 +1349,7 @@ export class AiClient {
             }
         } catch (err) {
             const errorText = this._formatRequestError(err)
-            logger.error(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 请求失败: ${errorText}`)
+            logger.error(`[AI-Plugin] 模型${traceSuffix} [${provider.name} - ${modelId}] 请求失败: ${errorText}`)
             return { success: false, error: errorText }
         }
     }
@@ -1477,6 +1501,7 @@ export class AiClient {
     }
 
     async makeRequest(type, payload, modelGroupKey = 'flash', maxTokens = 8192, requestOptions = {}) {
+        const traceSuffix = getRequestTraceSuffix(requestOptions)
         if (requestOptions.signal?.aborted) {
             return { success: false, cancelled: true, error: '请求已取消', code: 'AGENT_CANCELLED' }
         }
@@ -1528,6 +1553,9 @@ export class AiClient {
                     this._recordModelSuccess(statusKey, elapsedMs)
                     this._recordProviderSuccess(provider.id)
                     this.scheduleModelStatusSave()
+                    if (traceSuffix) {
+                        logger.info(`[AI-Plugin] 模型阶段请求成功${traceSuffix}: ${provider.name}/${modelId}, elapsed=${elapsedMs}ms, attempt=${attempt}`)
+                    }
                     logger.debug(`[AI-Plugin] 请求成功: ${provider.name} (${modelId})，耗时 ${elapsed}s, 得分:${score?.toFixed(2)}`)
                     return result
                 }
@@ -1541,7 +1569,7 @@ export class AiClient {
                 this._recordModelFail(statusKey)
                 this._recordProviderFail(provider.id, failure)
                 this.scheduleModelStatusSave()
-                logger.debug(`[AI-Plugin] 请求失败: ${provider.name} (${modelId})，耗时 ${elapsed}s，得分:${score?.toFixed(2)}, 错误: ${result.error}`)
+                logger.debug(`[AI-Plugin] 请求失败${traceSuffix}: ${provider.name} (${modelId})，耗时 ${elapsed}s，得分:${score?.toFixed(2)}, 错误: ${result.error}`)
                 lastError += `[${provider.name}-${modelId}]: ${result.error}\n`
             }
 

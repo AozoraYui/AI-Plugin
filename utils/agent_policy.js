@@ -100,10 +100,32 @@ export function classifyAgentRisk(toolCalls = []) {
     }, 'low')
 }
 
-export function summarizeDeterministicAgentRound(observations = []) {
+export function summarizeDeterministicAgentRound(observations = [], plan = {}) {
     if (!Array.isArray(observations) || observations.length === 0) return null
     const protocolDecision = deterministicToolDecision(observations.map(item => item?.protocol).filter(Boolean))
     if (protocolDecision) return protocolDecision
+    const explicitTaskKind = String(plan?.task_kind || '').trim().toLowerCase()
+    const planMetadata = normalizeAgentPlan(plan)
+    const completeReadOnlyShellRound = observations.every(item => item?.tool === 'shell_exec'
+        && item?.status === 'ok'
+        && item?.protocol?.ok === true
+        && classifyToolCallRisk({ name: item.tool, args: item.args }) === 'low'
+        && item?.data?.success === true
+        && item?.data?.code === 0
+        && item?.data?.timedOut !== true
+        && item?.data?.paging?.hasMore !== true
+        && Boolean(String(item?.data?.stdout || item?.data?.stderr || '').trim()))
+    if (observations.length === 1
+        && /^(?:single[_\s-]?step|单步)$/.test(explicitTaskKind)
+        && !planMetadata.requiresFollowupCheck
+        && completeReadOnlyShellRound) {
+        return {
+            summary: '单步只读 Shell 查询已成功，完整输出已提供，且计划未要求额外复核。',
+            lastObservation: observations.map(item => item.protocol?.summary || `${item.tool} 调用成功`).join('；').slice(0, 1600),
+            completionStatus: 'ready',
+            nextHint: ''
+        }
+    }
     if (!observations.every(item => item?.tool === 'config_manage')) return null
 
     const failed = observations.find(item => item.status !== 'ok' || item.data?.ok === false)

@@ -1470,6 +1470,51 @@ const deterministicSummary = summarizeDeterministicAgentRound([{
     data: updateResult
 }])
 check('结构化配置结果无需LLM即可确定完成', deterministicSummary?.completionStatus === 'ready', JSON.stringify(deterministicSummary))
+const successfulUnverifiedObservation = {
+    tool: 'shell_exec',
+    args: { command: 'git log -n 5' },
+    status: 'ok',
+    protocol: { ok: true, verified: false, summary: '命令执行成功，退出码 0' },
+    data: {
+        success: true,
+        code: 0,
+        timedOut: false,
+        stdout: 'commit one',
+        paging: { hasMore: false }
+    }
+}
+check('无额外复核要求的完整只读Shell单步任务跳过观察器模型', summarizeDeterministicAgentRound(
+    [successfulUnverifiedObservation],
+    { task_kind: 'single_step', requires_followup_check: false }
+)?.completionStatus === 'ready')
+check('多步任务仍要求观察和后续规划', summarizeDeterministicAgentRound(
+    [successfulUnverifiedObservation],
+    { task_kind: 'multi_step', requires_followup_check: true }
+) === null)
+check('明确要求复核的单步任务不跳过观察器', summarizeDeterministicAgentRound(
+    [successfulUnverifiedObservation],
+    { task_kind: 'single_step', requires_followup_check: true }
+) === null)
+check('缺少显式任务类型时不推断单步完成', summarizeDeterministicAgentRound(
+    [successfulUnverifiedObservation],
+    {}
+) === null)
+check('会修改状态的Shell命令不跳过观察器', summarizeDeterministicAgentRound([{
+    ...successfulUnverifiedObservation,
+    args: { command: 'git pull' }
+}], { task_kind: 'single_step', requires_followup_check: false }) === null)
+check('分页未读完的Shell结果不跳过观察器', summarizeDeterministicAgentRound([{
+    ...successfulUnverifiedObservation,
+    data: { ...successfulUnverifiedObservation.data, paging: { hasMore: true } }
+}], { task_kind: 'single_step', requires_followup_check: false }) === null)
+check('缺少完整命令输出的Shell结果不跳过观察器', summarizeDeterministicAgentRound([{
+    ...successfulUnverifiedObservation,
+    data: { ...successfulUnverifiedObservation.data, stdout: '' }
+}], { task_kind: 'single_step', requires_followup_check: false }) === null)
+check('多个Shell工具不能按单步结果跳过观察器', summarizeDeterministicAgentRound([
+    successfulUnverifiedObservation,
+    successfulUnverifiedObservation
+], { task_kind: 'single_step', requires_followup_check: false }) === null)
 await fs.rm(tempDir, { recursive: true, force: true })
 
 const normalizedPending = normalizeToolResult('group_send_message', { ok: true, pending: true, summary: '等待确认' }, { elapsedMs: 12 })

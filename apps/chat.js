@@ -794,8 +794,12 @@ async function recordAgentStep(db, task, step = {}) {
 }
 
 async function summarizeAgentRound(client, modelGroupKey, task, round, observations = [], plan = {}, requestOptions = {}) {
-    const deterministic = summarizeDeterministicAgentRound(observations)
-    if (deterministic) return deterministic
+    const deterministic = summarizeDeterministicAgentRound(observations, plan)
+    if (deterministic) {
+        const traceLabel = requestOptions.traceId ? `, request=${requestOptions.traceId}` : ''
+        logger.info(`[AI-Plugin] Agent观察器使用确定性结果${traceLabel}: round=${round}, status=${deterministic.completionStatus}`)
+        return deterministic
+    }
     if (!client?.makeRequest || observations.length === 0) return null
     const observationText = observations.map((item, index) => {
         const args = item.args ? `\n参数：${summarizeToolArgs(item.args)}` : ''
@@ -837,7 +841,10 @@ ${observationText}
 {"summary":"更新后的任务摘要","last_observation":"本轮最重要观察","completion_status":"continue|ready|waiting|blocked","next_hint":"如果需要继续，下一步建议；否则留空"}`
 
     const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
+    const observerStartedAt = Date.now()
     const result = await client.makeRequest('chat', payload, modelGroupKey, 1024, requestOptions)
+    const traceLabel = requestOptions.traceId ? `, request=${requestOptions.traceId}` : ''
+    logger.info(`[AI-Plugin] Agent观察器模型请求完成${traceLabel}: round=${round}, elapsed=${Date.now() - observerStartedAt}ms, success=${result?.success === true}`)
     if (!result.success || !result.data) {
         logger.warn(`[AI-Plugin] Agent观察摘要失败: ${result.error || '无返回'}`)
         return null
@@ -1596,6 +1603,7 @@ async function askMainModelForToolPlan(client, modelGroupKey, options = {}) {
         planningContext = '',
         skillGuidance = '',
         agentRound = 0,
+        traceId = '',
         requestOptions = {}
     } = options
 
@@ -1638,7 +1646,9 @@ async function askMainModelForToolPlan(client, modelGroupKey, options = {}) {
         ? `\n【Agent继续规划】\n你正在进行第 ${agentRound} 轮工具后续规划。上方“当前消息完整文本”里已经包含前面工具的实际结果；只有这些结果仍不足以完成用户当前需求时才继续计划工具。如果已经足够回答，请返回 need_tools=false。不要重复调用参数完全相同的工具，不要为了形式上的验证而追加无意义步骤。`
         : ''
 
-    logger.info(`[AI-Plugin] 主模型工具规划开始: 可用工具=${enabledTools.join(', ')}, 详细说明=${toolSummary.length}字, 历史条数=${history.length}, 有记忆=${Boolean(incrementalCheckpoint)}, 有图片=${hasImages}, 有近期图片=${hasRecentImages}, @成员=${mentions.join(', ') || '无'}`)
+    const planningStartedAt = Date.now()
+    const traceLabel = traceId ? `, request=${traceId}` : ''
+    logger.info(`[AI-Plugin] 主模型工具规划开始${traceLabel}: 可用工具=${enabledTools.join(', ')}, 详细说明=${toolSummary.length}字, 历史条数=${history.length}, 有记忆=${Boolean(incrementalCheckpoint)}, 有图片=${hasImages}, 有近期图片=${hasRecentImages}, @成员=${mentions.join(', ') || '无'}`)
 
     const prompt = `你现在处于工具规划阶段。你是主模型本人，需要基于完整上下文判断本轮是否需要调用工具；这不是最终回复。
 
@@ -1734,15 +1744,20 @@ ${agentRoundBlock}
 }`
 
     const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
-    const result = await client.makeRequest('chat', payload, modelGroupKey, 2048, requestOptions)
+    const result = await client.makeRequest('chat', payload, modelGroupKey, 2048, {
+        ...requestOptions,
+        requestId: requestOptions.requestId || traceId,
+        stage: requestOptions.stage || `tool_plan_${agentRound || 1}`
+    })
+    const planningElapsedMs = Date.now() - planningStartedAt
     if (!result.success || !result.data) {
-        logger.warn(`[AI-Plugin] 主模型工具规划失败: ${result.error || '无返回'}`)
+        logger.warn(`[AI-Plugin] 主模型工具规划失败${traceLabel}: elapsed=${planningElapsedMs}ms, ${result.error || '无返回'}`)
         return { need_tools: false, planning_failed: true, reason: '主模型工具规划失败', error: result.error || '无返回' }
     }
 
     const parsed = parseJsonObject(result.data)
     if (!parsed) {
-        logger.warn(`[AI-Plugin] 主模型工具规划 JSON 解析失败: ${String(result.data).slice(0, 300)}`)
+        logger.warn(`[AI-Plugin] 主模型工具规划 JSON 解析失败${traceLabel}: elapsed=${planningElapsedMs}ms, ${String(result.data).slice(0, 300)}`)
         return { need_tools: false, planning_failed: true, reason: '主模型工具规划 JSON 解析失败', error: 'JSON 解析失败' }
     }
 
@@ -1754,7 +1769,7 @@ ${agentRoundBlock}
     parsed.requires_followup_check = planMetadata.requiresFollowupCheck
     parsed.success_criteria = planMetadata.successCriteria
     const modelInfo = result.platform ? `, 模型=${result.platform}` : ''
-    logger.info(`[AI-Plugin] 主模型工具规划完成${modelInfo}: need_tools=${parsed.need_tools}, tools=${parsed.tool_plan.map(t => t.tool).join(', ') || '无'}, reason=${String(parsed.reason || '').slice(0, 160)}`)
+    logger.info(`[AI-Plugin] 主模型工具规划完成${traceLabel}${modelInfo}: elapsed=${planningElapsedMs}ms, need_tools=${parsed.need_tools}, tools=${parsed.tool_plan.map(t => t.tool).join(', ') || '无'}, reason=${String(parsed.reason || '').slice(0, 160)}`)
     return parsed
 }
 
@@ -1909,6 +1924,9 @@ export class ChatHandler extends plugin {
         const modelDisplay = resolveModelDisplay(modelGroupKey)
 
         const startTime = Date.now()
+        const traceGroupId = String(e.group_id || 'private').replace(/[^\w:-]/g, '').slice(0, 60)
+        const traceMessageId = String(e.message_id || e.seq || startTime).replace(/[^\w:-]/g, '').slice(0, 100)
+        const requestTraceId = `${traceGroupId}:${traceMessageId}`
         let allImages = []
 
         try {
@@ -2482,7 +2500,8 @@ ${visualDescription}`
                                 currentInstruction: currentToolInstruction,
                                 planningContext: planningContextForTools,
                                 hasImages: allImages.length > 0 || hasLocalImageInput,
-                                maxTools: 8
+                                maxTools: 8,
+                                requestId: requestTraceId
                             }
                         )
                         let resolvedDiscovery = discovery
@@ -2494,7 +2513,8 @@ ${visualDescription}`
                                 discovery,
                                 {
                                     currentInstruction: currentToolInstruction,
-                                    planningContext: planningContextForTools
+                                    planningContext: planningContextForTools,
+                                    requestId: requestTraceId
                                 }
                             )
                             if (adjudication) {
@@ -2555,7 +2575,12 @@ ${visualDescription}`
                             currentInstruction: currentToolInstruction,
                             planningContext: planningContextForTools,
                             skillGuidance: activeSkillGuidance,
-                            requestOptions: { signal: cancellationHandle?.signal }
+                            traceId: requestTraceId,
+                            requestOptions: {
+                                signal: cancellationHandle?.signal,
+                                requestId: requestTraceId,
+                                stage: 'tool_plan'
+                            }
                         })
                         throwIfExecutionCancelled()
                         if (mainToolPlan?.need_tools) {
@@ -2571,6 +2596,7 @@ ${visualDescription}`
                                 allowContinuation: allowToolContinuation,
                                 allowTaskContextContinuation: taskContextContinuation,
                                 allowAutonomousProfileSync: Boolean(inferAutonomousUserProfileUpdate(currentToolInstruction)),
+                                requestId: requestTraceId,
                                 allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
                                 semanticTools: semanticAuthorizedTools,
                                 semanticConfidence: semanticAuthorizationConfidence,
@@ -3135,7 +3161,12 @@ ${visualDescription}`
                             ...agentTask,
                             summary: agentTaskLatestSummary,
                             lastObservation: agentTaskLatestObservation
-                        }, agentRound, roundObservations, currentAgentPlan, { signal: cancellationHandle?.signal })
+                        }, agentRound, roundObservations, currentAgentPlan, {
+                            signal: cancellationHandle?.signal,
+                            traceId: requestTraceId,
+                            requestId: requestTraceId,
+                            stage: `agent_observer_${agentRound}`
+                        })
                         throwIfExecutionCancelled()
                         const researchEvidenceIncomplete = webResearchUsed
                             && hasInsufficientWebEvidenceForRequirements(webEvidenceState, webResearchRequirements)
@@ -3320,7 +3351,12 @@ ${visualDescription}`
                         currentInstruction: currentToolInstruction,
                         skillGuidance: activeSkillGuidance,
                         agentRound: agentRound + 1,
-                        requestOptions: { signal: cancellationHandle?.signal }
+                        traceId: requestTraceId,
+                        requestOptions: {
+                            signal: cancellationHandle?.signal,
+                            requestId: requestTraceId,
+                            stage: `agent_continuation_${agentRound + 1}`
+                        }
                     })
                     throwIfExecutionCancelled()
                     if (!nextPlan?.need_tools) {
@@ -3344,6 +3380,7 @@ ${visualDescription}`
                             hasRecentImages: recentImageInfo.available,
                             maxTools: 2,
                             currentInstruction: currentToolInstruction,
+                            requestId: requestTraceId,
                             allowContinuation: true,
                             allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
                             semanticTools: semanticAuthorizedTools,
@@ -3828,7 +3865,11 @@ ${visualDescription}`
             }
             
             throwIfExecutionCancelled()
-            let result = await this.client.makeRequest('chat', currentPayload, modelGroupKey, 8192, { signal: cancellationHandle?.signal })
+            let result = await this.client.makeRequest('chat', currentPayload, modelGroupKey, 8192, {
+                signal: cancellationHandle?.signal,
+                requestId: requestTraceId,
+                stage: 'final_answer'
+            })
             throwIfExecutionCancelled()
 
             // 直读失败时再降级：先用健康的 Vision Relay 把图片转成摘要，再让纯文本模型接管。

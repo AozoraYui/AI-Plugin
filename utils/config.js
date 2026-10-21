@@ -156,7 +156,7 @@ function buildPersonaPrimer(aiName, prompts) {
     const userInstruction = prompts.persona.user_instruction.replace(/\{AI_NAME\}/g, aiName)
     const modelConfirmation = (prompts.persona.model_confirmation || '').replace(/\{AI_NAME\}/g, aiName)
     return [
-        { "role": "user", "parts": [{ "text": userInstruction }] },
+        { "role": "system", "parts": [{ "text": userInstruction }] },
         { "role": "model", "parts": [{ "text": modelConfirmation }] }
     ]
 }
