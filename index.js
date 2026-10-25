@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './utils/plugin_logger.js'
 import fs from 'node:fs'
 import { Config, HISTORY_DIR } from './utils/config.js'
 import { AiClient } from './client/AiClient.js'

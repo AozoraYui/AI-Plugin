@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 /**
  * 群聊上下文工具
  * 读取畅聊模式捕获的群消息流水，供普通 #c 和畅聊工具链查询最近群聊前情。

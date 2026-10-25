@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 /**
  * 群文件工具
  * 让 AI 浏览当前群的群文件（文件/文件夹列表），并把指定群文件下载到服务器目录。

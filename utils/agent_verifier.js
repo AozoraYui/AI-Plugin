@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './plugin_logger.js'
 import { normalizeAgentPlan, summarizeDeterministicAgentRound } from './agent_policy.js'
 
 function parseJsonObject(text) {
@@ -101,7 +102,7 @@ ${observationText}
             model: result.platform || ''
         }
     } catch (err) {
-        global.logger?.warn?.(`[AI-Plugin] Agent独立验证失败: ${err.message}`)
+        logger?.warn?.(`[AI-Plugin] Agent独立验证失败: ${err.message}`)
         return null
     }
 }

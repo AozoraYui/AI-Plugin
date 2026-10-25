@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './plugin_logger.js'
 import { isAIErrorResponse } from './common.js'
 
 const OLD_PROFILE_MAX_CHARS = 12000

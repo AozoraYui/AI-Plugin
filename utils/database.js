@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './plugin_logger.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import sqlite3 from 'sqlite3'

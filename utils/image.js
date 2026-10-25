@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './plugin_logger.js'
 import sharp from 'sharp'
 import { isAbortError, throwIfAborted, urlToBuffer, getImageMimeType } from './common.js'
 import { Config } from './config.js'

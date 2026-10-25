@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './plugin_logger.js'
 import https from 'https'
 import http from 'http'
 import fs from 'node:fs'

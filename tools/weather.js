@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 /**
  * 天气查询工具
  * 优先使用高德地图 API，失败时降级到 OpenWeatherMap

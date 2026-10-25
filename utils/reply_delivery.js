@@ -1,3 +1,4 @@
+import { pluginLogger } from './plugin_logger.js'
 import crypto from 'node:crypto'
 import { classifyMessageSendFailure, extractMessageSendError } from './message_delivery.js'
 
@@ -148,7 +149,7 @@ export function clearDeliveryState(deliveryKey = '') {
 export async function executeIdempotentDelivery({
     deliveryKey = '',
     send,
-    logger = global.logger,
+    logger = pluginLogger,
     logPrefix = '[AI-Plugin]',
     deliveryContext = {}
 } = {}) {
@@ -372,7 +373,7 @@ export async function sendTextInChunks({
     maxBytes = DEFAULT_MAX_BYTES,
     deliveryKey = '',
     deliveryContext = {},
-    logger = global.logger,
+    logger = pluginLogger,
     logPrefix = '[AI-Plugin]'
 } = {}) {
     const chunks = splitTextToSafeChunks(text, { maxChars, maxBytes })
@@ -417,7 +418,7 @@ export async function sendReplyWithForwardFallback({
     botUin = '',
     makeForwardMsg,
     sendReply,
-    logger = global.logger,
+    logger = pluginLogger,
     logPrefix = '[AI-Plugin]',
     maxChars = DEFAULT_MAX_CHARS,
     maxBytes = DEFAULT_MAX_BYTES,

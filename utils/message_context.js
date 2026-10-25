@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './plugin_logger.js'
 import { Config, expandPrompt } from './config.js'
 import { describeQQFaceSegment } from './qq_face.js'
 

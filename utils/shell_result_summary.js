@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './plugin_logger.js'
 import { isPlanOnlyResponse, sanitizePlainTextOutput } from './model_output.js'
 import { sanitizeTerminalOutput } from './shell_session.js'
 

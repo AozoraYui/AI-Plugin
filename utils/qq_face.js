@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './plugin_logger.js'
 import fs from 'node:fs'
 
 // 本地兜底表由 koishijs/QFace 的 QQNT 索引生成，运行时不访问外部站点。
@@ -16,7 +17,7 @@ let qqFaceMap = {}
 try {
     qqFaceMap = JSON.parse(fs.readFileSync(new URL('../data/qq_face_map.json', import.meta.url), 'utf8'))
 } catch (err) {
-    globalThis.logger?.warn?.(`[AI-Plugin] QQ 表情映射加载失败，将只使用消息段自带描述: ${err.message}`)
+    logger?.warn?.(`[AI-Plugin] QQ 表情映射加载失败，将只使用消息段自带描述: ${err.message}`)
 }
 
 function decodeHtmlEntities(text = '') {

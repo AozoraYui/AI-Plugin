@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './plugin_logger.js'
 const ALIAS_MAX_LENGTH = 24
 const ALIAS_TARGET_CACHE_TTL_SECONDS = 600
 

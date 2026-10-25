@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 /**
  * 群消息代发工具
  * 仅主人可用：把主人明确给出的纯文本消息发送到指定群。

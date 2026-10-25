@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 import plugin from '../../../lib/plugins/plugin.js'
 import {
     GROUP_INCREASE_KEY,

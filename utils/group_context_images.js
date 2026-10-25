@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './plugin_logger.js'
 import { Config } from './config.js'
 import { formatDBTimestampToBeijing } from './common.js'
 import { processImagesInBatches } from './image.js'

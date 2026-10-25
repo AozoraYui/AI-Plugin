@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './plugin_logger.js'
 import { getDBTimestamp } from './common.js'
 
 export const AGENT_TASK_STEP_MAX_CHARS = 6000
@@ -13,7 +14,7 @@ function truncateTaskText(text, maxChars) {
 }
 
 function taskLogger(options = {}) {
-    return options.logger || global.logger
+    return options.logger || logger
 }
 
 function taskLogPrefix(options = {}) {

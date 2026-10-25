@@ -9,3 +9,5 @@ data/characters_template/*
 config/
 !config_template/
 package-lock.json
+logs/*
+!logs/.gitkeep

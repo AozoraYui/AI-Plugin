@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 /**
  * 本地 Shell 执行工具
  * 仅主人可用；仅在 enable_shell_exec 开启后进入工具路由。

@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 /**
  * 网页抓取工具
  * 允许 AI 访问指定 URL 并提取可读文本内容

@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 /**
  * 持久 Shell 会话工具
  * 仅主人可用；通过 tmux 维护一个独立的 ai-shell 窗口。

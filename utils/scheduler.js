@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './plugin_logger.js'
 import schedule from 'node-schedule'
 import { getTodayDateStr, isAIErrorResponse } from './common.js'
 import { Config, expandPrompt } from './config.js'

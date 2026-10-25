@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 /**
  * 图文转述工具（Vision Relay）
  * 当主模型不支持多模态时，先用 Vision 模型描述图片，

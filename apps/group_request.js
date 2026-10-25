@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 import plugin from '../../../lib/plugins/plugin.js'
 import { GROUP_REQUEST_KEY, GROUP_REQUEST_TTL_SECONDS } from '../tools/group_admin.js'
 

@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 /**
  * AI 画图工具
  * 让 AI 在对话中按意图联动插件自身的画图能力：

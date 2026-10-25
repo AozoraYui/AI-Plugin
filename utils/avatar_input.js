@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './plugin_logger.js'
 import { getAvatarUrl, takeSourceMsg } from './common.js'
 import { processImageForAI } from './image.js'
 

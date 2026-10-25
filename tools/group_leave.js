@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 /**
  * 群退出工具
  * 主人专用：让机器人退出指定 QQ 群。

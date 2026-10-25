@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 /**
  * AI-Plugin 工具注册表
  * 管理所有内置工具，支持 Function Calling schema 生成和结果格式化

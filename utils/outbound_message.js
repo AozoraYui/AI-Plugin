@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './plugin_logger.js'
 import crypto from 'node:crypto'
 
 const MAX_FORWARD_NODES = 200

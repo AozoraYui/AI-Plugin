@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 /**
  * 文件下载工具
  * 把当前消息 / 引用消息中的图片、视频、语音、文件下载到服务器目录。

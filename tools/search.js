@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 /**
  * 联网搜索工具
  * 主搜索源：Bing + 百度并行；冗余补位：DuckDuckGo + Yahoo + 360；兜底降级：搜狗

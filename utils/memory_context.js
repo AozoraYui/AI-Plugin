@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from './plugin_logger.js'
 import { Config } from './config.js'
 import { loadUserProfileText } from './user_profile.js'
 import { buildSemanticMemoryContext } from './vector_memory.js'

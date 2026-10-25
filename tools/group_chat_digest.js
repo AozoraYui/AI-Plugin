@@ -1,3 +1,4 @@
+import { pluginLogger as logger } from '../utils/plugin_logger.js'
 /**
  * 群聊时间范围总结工具
  * 按时间范围分页读取畅聊流水，并在工具内部做分段摘要，避免把大量原始消息塞进最终回复。
