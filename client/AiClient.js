@@ -113,22 +113,15 @@ export class AiClient {
         return tracker ? { ...tracker } : null
     }
 
-    _startTrackedUsageCall() {
+    _recordTrackedUsage(usage) {
         const tracker = usageTrackingStorage.getStore()
         if (!tracker) return
         tracker.calls++
-        tracker.missingUsageCalls++
-    }
-
-    _recordTrackedUsage(usage) {
-        const tracker = usageTrackingStorage.getStore()
-        if (!tracker || !usage) return
         const normalized = this._normalizeUsage(usage)
-        if (!normalized) return
-        const prompt = readUsageCount(normalized.prompt_tokens)
-        const completion = readUsageCount(normalized.completion_tokens)
-        const total = readUsageCount(normalized.total_tokens)
-        if (prompt === null && completion === null && total === null) return
+        const prompt = readUsageCount(normalized?.prompt_tokens)
+        const completion = readUsageCount(normalized?.completion_tokens)
+        const total = readUsageCount(normalized?.total_tokens)
+        if (prompt === null || completion === null) tracker.missingUsageCalls++
         if (prompt !== null) {
             tracker.prompt_tokens += prompt
             tracker.promptReportedCalls++
@@ -138,9 +131,6 @@ export class AiClient {
             tracker.completionReportedCalls++
         }
         tracker.total_tokens += total ?? (prompt !== null && completion !== null ? prompt + completion : 0)
-        if (prompt !== null && completion !== null) {
-            tracker.missingUsageCalls = Math.max(0, tracker.missingUsageCalls - 1)
-        }
     }
 
 
@@ -1369,7 +1359,6 @@ export class AiClient {
             }
             options.allowPrivateNetwork = true
             
-            this._startTrackedUsageCall()
             let res
             try {
                 res = await fetchWithProxy(url, { ...options, signal: requestOptions.signal, autoDetectProxy: true, family: 4 })
@@ -1384,7 +1373,6 @@ export class AiClient {
                     return { success: false, cancelled: true, error: '请求已取消', code: 'AGENT_CANCELLED' }
                 }
                 logger.info(`[AI-Plugin] 模型${traceSuffix} [${provider.name} - ${modelId}] 传输失败，重试当前请求一次`)
-                this._startTrackedUsageCall()
                 res = await fetchWithProxy(url, { ...options, signal: requestOptions.signal, autoDetectProxy: true, family: 4 })
             }
 
@@ -1419,9 +1407,9 @@ export class AiClient {
             }
 
             const result = this.parseResponse(data, type)
-            this._recordTrackedUsage(result.usage ?? data.usage)
 
             if (result.success) {
+                this._recordTrackedUsage(result.usage ?? data.usage)
                 return {
                     success: true,
                     data: result.data,
@@ -1548,7 +1536,6 @@ export class AiClient {
             options.allowPrivateNetwork = true
 
             logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 使用 /images/edits（${images.length} 张参考图）`)
-            this._startTrackedUsageCall()
             const res = await fetchWithProxy(url, { ...options, signal, autoDetectProxy: true, family: 4 })
             if (!res.ok) throw new Error(`HTTP状态码: ${res.status}`)
 
@@ -1561,8 +1548,8 @@ export class AiClient {
             }
 
             const result = this.parseResponse(data, 'image')
-            this._recordTrackedUsage(result.usage ?? data.usage)
             if (result.success) {
+                this._recordTrackedUsage(result.usage ?? data.usage)
                 return { success: true, data: result.data, platform: `${provider.name} (${modelId})`, usage: result.usage }
             }
             throw new Error(`API业务错误: ${result.error}`)
@@ -1583,7 +1570,6 @@ export class AiClient {
         if (timeout > 0) options.timeout = timeout
         options.allowPrivateNetwork = true
 
-        this._startTrackedUsageCall()
         const res = await fetchWithProxy(url, { ...options, signal, autoDetectProxy: true, family: 4 })
         if (!res.ok) throw new Error(`HTTP状态码: ${res.status}`)
 
@@ -1596,8 +1582,8 @@ export class AiClient {
         }
 
         const result = this.parseResponse(data, 'image')
-        this._recordTrackedUsage(result.usage ?? data.usage)
         if (result.success) {
+            this._recordTrackedUsage(result.usage ?? data.usage)
             return { success: true, data: result.data, platform: `${provider.name} (${modelId})`, usage: result.usage }
         }
         throw new Error(`API业务错误: ${result.error}`)

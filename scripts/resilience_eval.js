@@ -38,15 +38,12 @@ async function testUsageTrackingIsolatedPerConcurrentRequest() {
     const client = Object.create(AiClient.prototype)
     const [first, second] = await Promise.all([
         client.withUsageTracking(async () => {
-            client._startTrackedUsageCall()
             client._recordTrackedUsage({ prompt_tokens: 12000, completion_tokens: 200 })
             await new Promise(resolve => setTimeout(resolve, 5))
-            client._startTrackedUsageCall()
             client._recordTrackedUsage({ input_tokens: 200, output_tokens: 56 })
             return client.getCurrentUsageSnapshot()
         }),
         client.withUsageTracking(async () => {
-            client._startTrackedUsageCall()
             client._recordTrackedUsage({ prompt_tokens: 700, completion_tokens: 90 })
             return client.getCurrentUsageSnapshot()
         })
@@ -64,14 +61,13 @@ async function testUsageTrackingIsolatedPerConcurrentRequest() {
     assert.equal(formatTokenUsageInfo(null, { total_tokens: 15 }), ' | 消耗Token: 15')
 
     const partial = await client.withUsageTracking(async () => {
-        client._startTrackedUsageCall()
         client._recordTrackedUsage({ total_tokens: 24 })
         return client.getCurrentUsageSnapshot()
     })
     assert.equal(formatTokenUsageInfo(partial, { total_tokens: 24 }), ' | 已报告总Tokens: 24(24)（另有 1 次模型请求未返回完整输入/输出用量）')
 
     const missing = await client.withUsageTracking(async () => {
-        client._startTrackedUsageCall()
+        client._recordTrackedUsage(null)
         return client.getCurrentUsageSnapshot()
     })
     assert.equal(formatTokenUsageInfo(missing, { prompt_tokens: 4, completion_tokens: 2 }), ' | 已统计输入Tokens: 4(4) | 已统计输出Tokens: 2(2)（另有 1 次模型请求未返回完整输入/输出用量）')
@@ -82,6 +78,70 @@ async function testUsageTrackingIsolatedPerConcurrentRequest() {
         'data: [DONE]'
     ].join('\n'), 'chat')
     assert.deepEqual(streamUsage.usage, { prompt_tokens: 30, completion_tokens: 8, total_tokens: 38 })
+}
+
+async function testFailedRequestsAreExcludedFromUsageTracking() {
+    const server = http.createServer((request, response) => {
+        if (request.url === '/failed') {
+            response.writeHead(400, { 'content-type': 'application/json' })
+            response.end(JSON.stringify({ error: { message: 'prompt blocked' }, usage: { prompt_tokens: 900, completion_tokens: 80 } }))
+            return
+        }
+        if (request.url === '/business-error') {
+            response.writeHead(200, { 'content-type': 'application/json' })
+            response.end(JSON.stringify({ error: { message: 'request rejected' }, usage: { prompt_tokens: 700, completion_tokens: 60 } }))
+            return
+        }
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({
+            choices: [{ message: { content: 'ok' } }],
+            usage: { prompt_tokens: 30, completion_tokens: 8, total_tokens: 38 }
+        }))
+    })
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+
+    try {
+        const { port } = server.address()
+        const client = Object.create(AiClient.prototype)
+        client.buildRequest = (_type, payload) => ({
+            url: `http://127.0.0.1:${port}${payload.path}`,
+            options: {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: '{}'
+            }
+        })
+        const usage = await client.withUsageTracking(async () => {
+            const failed = await client.attemptRequest(
+                'chat', { path: '/failed' }, { name: 'local', api_key: 'test' }, 'test-model', 128, 2000, { multimodal: true }
+            )
+            const failedAgain = await client.attemptRequest(
+                'chat', { path: '/failed' }, { name: 'local', api_key: 'test' }, 'test-model', 128, 2000, { multimodal: true }
+            )
+            const businessError = await client.attemptRequest(
+                'chat', { path: '/business-error' }, { name: 'local', api_key: 'test' }, 'test-model', 128, 2000, { multimodal: true }
+            )
+            const succeeded = await client.attemptRequest(
+                'chat', { path: '/success' }, { name: 'local', api_key: 'test' }, 'test-model', 128, 2000, { multimodal: true }
+            )
+            return { failed, failedAgain, businessError, succeeded, usage: client.getCurrentUsageSnapshot() }
+        })
+
+        assert.equal(usage.failed.success, false)
+        assert.equal(usage.failedAgain.success, false)
+        assert.equal(usage.businessError.success, false)
+        assert.equal(usage.succeeded.success, true)
+        assert.equal(usage.usage.calls, 1)
+        assert.equal(usage.usage.prompt_tokens, 30)
+        assert.equal(usage.usage.completion_tokens, 8)
+        assert.equal(usage.usage.missingUsageCalls, 0)
+        assert.equal(
+            formatTokenUsageInfo(usage.usage, usage.succeeded.usage),
+            ' | 总输入Tokens: 30(30) | 总输出Tokens: 8(8)'
+        )
+    } finally {
+        await new Promise(resolve => server.close(resolve))
+    }
 }
 
 async function testProviderFailoverBudget() {
@@ -464,6 +524,7 @@ async function testAttemptRequestPassesCancellationSignal() {
 }
 
 await testUsageTrackingIsolatedPerConcurrentRequest()
+await testFailedRequestsAreExcludedFromUsageTracking()
 await testProviderFailoverBudget()
 await testConfiguredOrderBeatsHealthScore()
 await testModelSpecificFailureKeepsConfiguredOrder()
