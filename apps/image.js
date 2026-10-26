@@ -1,4 +1,4 @@
-import { pluginLogger as logger } from '../utils/plugin_logger.js'
+import { formatLogPreview, pluginLogger as logger } from '../utils/plugin_logger.js'
 import plugin from '../../../lib/plugins/plugin.js'
 import { Config } from '../utils/config.js'
 import { AiClient } from '../client/AiClient.js'
@@ -106,6 +106,9 @@ export class ImageHandler extends plugin {
         }
 
         if (!match) return
+
+        const directImageCount = (e.message || []).filter(segment => segment?.type === 'image').length
+        logger.info(`[AI-Plugin] 作图请求已触发: scene=${e.group_id ? `群 ${e.group_id}` : '私聊'}, 用户=${e.user_id || 'unknown'}, model_group=${modelGroupKey}, 图片=${directImageCount}, 引用=${(e.message || []).some(segment => segment?.type === 'reply')}, 输入=${formatLogPreview(e.msg)}`)
 
         const cancellationHandle = registerAgentExecution({
             messageId: e.message_id || e.seq || '',

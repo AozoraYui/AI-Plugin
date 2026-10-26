@@ -1,4 +1,4 @@
-import { pluginLogger as logger } from '../utils/plugin_logger.js'
+import { formatLogPreview, pluginLogger as logger } from '../utils/plugin_logger.js'
 import crypto from 'node:crypto'
 import plugin from '../../../lib/plugins/plugin.js'
 import { Config } from '../utils/config.js'
@@ -1301,6 +1301,8 @@ export class FastChatHandler extends plugin {
         if (trigger.forceReadCurrentImages && normalized.currentImageCount > 0) {
             logger.info(`[AI-Plugin] [畅聊] 图片消息同时命中回复触发条件: reason=${trigger.reason}, 图片=${normalized.currentImageCount}`)
         }
+
+        logger.info(`[AI-Plugin] [畅聊] AI回复请求已触发: reason=${trigger.reason}, 群=${normalized.groupId}, 用户=${normalized.userId}, message_id=${normalized.messageId}, 图片=${normalized.currentImageCount}, 输入=${formatLogPreview(normalized.currentText || normalized.instructionText)}`)
 
         const cooldownMs = Math.max(0, Number(Config.FAST_CHAT_REPLY_COOLDOWN_MS) || 0)
         const cooldownKey = String(e.group_id)

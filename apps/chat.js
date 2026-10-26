@@ -1,4 +1,4 @@
-import { pluginLogger as logger } from '../utils/plugin_logger.js'
+import { formatLogPreview, pluginLogger as logger } from '../utils/plugin_logger.js'
 import plugin from '../../../lib/plugins/plugin.js'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -1928,6 +1928,8 @@ export class ChatHandler extends plugin {
         const traceGroupId = String(e.group_id || 'private').replace(/[^\w:-]/g, '').slice(0, 60)
         const traceMessageId = String(e.message_id || e.seq || startTime).replace(/[^\w:-]/g, '').slice(0, 100)
         const requestTraceId = `${traceGroupId}:${traceMessageId}`
+        const inputImageCount = (e.message || []).filter(segment => segment?.type === 'image').length
+        logger.info(`[AI-Plugin] 对话请求已触发: request=${requestTraceId}, scene=${e.group_id ? `群 ${e.group_id}` : '私聊'}, 用户=${e.user_id || 'unknown'}, mode=${e._singleMode ? 'single' : 'chat'}, model_group=${modelGroupKey}, 图片=${inputImageCount}, 引用=${(e.message || []).some(segment => segment?.type === 'reply')}, 输入=${formatLogPreview(userMessage)}`)
         let allImages = []
 
         try {

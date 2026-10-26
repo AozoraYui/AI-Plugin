@@ -67,6 +67,15 @@ export function sanitizeLogText(value) {
         .replace(ANSI_PATTERN, '')
 }
 
+export function formatLogPreview(value, maxChars = 1000) {
+    const text = sanitizeLogText(String(value ?? '')).replace(/\s+/g, ' ').trim()
+    if (!text) return '[无文本输入]'
+    const limit = Math.max(1, Math.floor(Number(maxChars) || 1000))
+    const characters = Array.from(text)
+    if (characters.length <= limit) return text
+    return `${characters.slice(0, limit).join('')}…[原文共 ${characters.length} 字]`
+}
+
 function sanitizeStructuredValue(value, key = '', seen = new WeakSet()) {
     if (SECRET_KEY_PATTERN.test(String(key))) return '[REDACTED]'
     if (value === null || value === undefined || typeof value === 'boolean' || typeof value === 'number') return value

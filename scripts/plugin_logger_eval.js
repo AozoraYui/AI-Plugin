@@ -5,6 +5,7 @@ import path from 'node:path'
 
 const {
     createPluginLogger,
+    formatLogPreview,
     sanitizeLogText
 } = await import('../utils/plugin_logger.js')
 
@@ -29,6 +30,12 @@ const base64Uri = `base64://${'A'.repeat(4096)}`
 assert.match(sanitizeLogText(base64Uri), /\[base64 payload omitted: \d+ bytes\]/)
 assert.match(sanitizeLogText('https://example.test/image?rkey=private-signature&file=1'), /rkey=\[REDACTED\]/)
 assert.ok(!sanitizeLogText('https://example.test/image?rkey=private-signature&file=1').includes('private-signature'))
+assert.equal(formatLogPreview('  #c 帮我查一下 现在的 API_KEY=preview-secret  '), '#c 帮我查一下 现在的 API_KEY=[REDACTED]')
+assert.equal(formatLogPreview('   '), '[无文本输入]')
+const longPreview = formatLogPreview('很长的请求'.repeat(300), 20)
+assert.ok(Array.from(longPreview).length < 60)
+assert.match(longPreview, /原文共 1500 字/)
+assert.ok(!formatLogPreview(`data:image/png;base64,${'A'.repeat(4096)}`).includes('A'.repeat(1024)))
 
 const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-plugin-log-eval-'))
 const consoleLines = []
