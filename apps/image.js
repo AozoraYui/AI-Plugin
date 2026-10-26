@@ -7,6 +7,7 @@ import { checkAccess } from '../utils/access.js'
 import { sessionManager } from '../utils/session.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
+import { extractMessageSendError } from '../utils/message_delivery.js'
 import { isAgentExecutionCancelled, registerAgentExecution } from '../utils/agent_cancellation.js'
 import fs from 'node:fs'
 import yaml from 'yaml'
@@ -108,7 +109,9 @@ export class ImageHandler extends plugin {
         if (!match) return
 
         const directImageCount = (e.message || []).filter(segment => segment?.type === 'image').length
-        logger.info(`[AI-Plugin] 作图请求已触发: scene=${e.group_id ? `群 ${e.group_id}` : '私聊'}, 用户=${e.user_id || 'unknown'}, model_group=${modelGroupKey}, 图片=${directImageCount}, 引用=${(e.message || []).some(segment => segment?.type === 'reply')}, 输入=${formatLogPreview(e.msg)}`)
+        const requestTraceId = `${e.group_id || 'private'}:${e.message_id || e.seq || Date.now()}`
+        const startTime = Date.now()
+        logger.info(`[AI-Plugin] 作图请求已触发: request=${requestTraceId}, scene=${e.group_id ? `群 ${e.group_id}` : '私聊'}, 用户=${e.user_id || 'unknown'}, model_group=${modelGroupKey}, 图片=${directImageCount}, 引用=${(e.message || []).some(segment => segment?.type === 'reply')}, 输入=${formatLogPreview(e.msg)}`)
 
         const cancellationHandle = registerAgentExecution({
             messageId: e.message_id || e.seq || '',
@@ -119,12 +122,10 @@ export class ImageHandler extends plugin {
         const signal = cancellationHandle?.signal
 
         try {
-            const startTime = Date.now()
-
             let allImages = []
             const replyImages = await takeSourceMsg(e, { img: true })
             throwIfCancelled()
-            logger.info(`[AI-Plugin] takeSourceMsg: replyImages=${JSON.stringify(replyImages?.slice?.(0, 2))}, e.source=${!!e.source}, e.source?.seq=${e.source?.seq}, hasReplySeg=${!!e.message?.find(m => m.type === 'reply')}, replySegId=${e.message?.find(m => m.type === 'reply')?.id}, hasGetReply=${typeof e.getReply === 'function'}`)
+            logger.info(`[AI-Plugin] takeSourceMsg: replyImages=${Array.isArray(replyImages) ? replyImages.length : 0}, e.source=${!!e.source}, e.source?.seq=${e.source?.seq}, hasReplySeg=${!!e.message?.find(m => m.type === 'reply')}, replySegId=${e.message?.find(m => m.type === 'reply')?.id}, hasGetReply=${typeof e.getReply === 'function'}`)
             if (replyImages) allImages = allImages.concat(replyImages)
             const currentImages = (e.message || []).filter(m => m.type === "image").map(m => m.data?.url || m.url).filter(Boolean)
             if (currentImages.length > 0) allImages = allImages.concat(currentImages)
@@ -165,6 +166,7 @@ export class ImageHandler extends plugin {
 
             const processedImages = await processImagesInBatches(imagesToProcess, { signal })
             throwIfCancelled()
+            logger.info(`[AI-Plugin] 作图输入图片已处理: request=${requestTraceId}, 引用图=${Array.isArray(replyImages) ? replyImages.length : 0}, 当前消息图=${currentImages.length}, 待处理=${imagesToProcess.length}, 可用=${processedImages.length}`)
 
             // 检查：有图片URL但全部处理失败，说明下载/转换出了问题
             if (imagesToProcess.length > 0 && processedImages.length === 0) {
@@ -195,7 +197,7 @@ export class ImageHandler extends plugin {
             }
 
             const payload = { "contents": [{ "parts": parts }] }
-            const result = await this.client.makeRequest('image', payload, modelGroupKey, 8192, { signal })
+            const result = await this.client.makeRequest('image', payload, modelGroupKey, 8192, { signal, requestId: requestTraceId, stage: 'image_generation' })
             throwIfCancelled()
             if (result.cancelled) return true
 
@@ -227,34 +229,48 @@ export class ImageHandler extends plugin {
                         try {
                             const imageBuffer = await urlToBuffer(result.data, { signal })
                             imageToSend = `base64://${imageBuffer.toString('base64')}`
-                        } catch (downloadErr) { }
+                        } catch (downloadErr) {
+                            logger.warn(`[AI-Plugin] 作图结果图片下载失败: request=${requestTraceId}, error=${formatLogPreview(downloadErr?.message || String(downloadErr), 300)}`)
+                        }
                     }
                     throwIfCancelled()
-                    await e.reply([segment.image(imageToSend), replyMsg], true)
+                    const sendResult = await e.reply([segment.image(imageToSend), replyMsg], true)
                     throwIfCancelled()
-                    await setMsgEmojiLike(e, 144)
-
+                    const sendError = extractMessageSendError(sendResult)
+                    if (sendError) {
+                        logger.error(`[AI-Plugin] 作图结果发送失败: request=${requestTraceId}, error=${formatLogPreview(sendError, 500)}`)
+                    } else {
+                        logger.info(`[AI-Plugin] 作图结果已发送: request=${requestTraceId}, scene=${e.group_id ? `群 ${e.group_id}` : '私聊'}, 用户=${e.user_id || 'unknown'}, model=${result.platform || 'unknown'}, elapsed=${elapsed}s, output=image, preset=${isCustomCommand ? 'custom' : formatLogPreview(presetName, 80)}`)
+                    }
+                    await setMsgEmojiLike(e, sendError ? 10 : 144)
                 } else {
                     const cleanResponseText = result.data.trim()
                     throwIfCancelled()
-                    await e.reply(`${cleanResponseText}\n\n耗时: ${elapsed}s${tokenInfo} @${result.platform}`, true)
+                    const sendResult = await e.reply(`${cleanResponseText}\n\n耗时: ${elapsed}s${tokenInfo} @${result.platform}`, true)
+                    const sendError = extractMessageSendError(sendResult)
+                    if (sendError) {
+                        logger.error(`[AI-Plugin] 作图文本结果发送失败: request=${requestTraceId}, error=${formatLogPreview(sendError, 500)}, 输出=${formatLogPreview(cleanResponseText)}`)
+                    } else {
+                        logger.info(`[AI-Plugin] 作图请求返回文本并已发送: request=${requestTraceId}, scene=${e.group_id ? `群 ${e.group_id}` : '私聊'}, 用户=${e.user_id || 'unknown'}, model=${result.platform || 'unknown'}, elapsed=${elapsed}s, 输出=${formatLogPreview(cleanResponseText)}`)
+                    }
                     throwIfCancelled()
-                    await setMsgEmojiLike(e, 144)
+                    await setMsgEmojiLike(e, sendError ? 10 : 144)
                 }
             } else {
                 await setMsgEmojiLike(e, 10)
                 throwIfCancelled()
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
+                logger.error(`[AI-Plugin] 作图模型请求失败: request=${requestTraceId}, scene=${e.group_id ? `群 ${e.group_id}` : '私聊'}, 用户=${e.user_id || 'unknown'}, elapsed=${elapsed}s, error=${formatLogPreview(result.error || '未知错误', 500)}`)
                 await e.reply(`❌ 请求失败 (${elapsed}s)\n错误: ${result.error || '未知错误'}`, true)
             }
         } catch (err) {
             if (isAgentExecutionCancelled(err) || cancellationHandle?.isCancelled()) {
-                logger.info(`[AI-Plugin] 作图请求已取消：触发消息已撤回，message_id=${e.message_id || e.seq || 'unknown'}`)
+                logger.info(`[AI-Plugin] 作图请求已取消：request=${requestTraceId}, 触发消息已撤回`)
                 return true
             }
             await setMsgEmojiLike(e, 10)
             if (cancellationHandle?.isCancelled()) return true
-            logger.error(`[AI-Plugin] 作图异常:`, err)
+            logger.error(`[AI-Plugin] 作图异常: request=${requestTraceId}, elapsed=${((Date.now() - startTime) / 1000).toFixed(2)}s:`, err)
             await e.reply(`❌ 处理异常: ${err.message}`, true)
         } finally {
             cancellationHandle?.dispose()

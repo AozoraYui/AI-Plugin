@@ -6,6 +6,7 @@ import path from 'node:path'
 const {
     createPluginLogger,
     formatLogPreview,
+    formatLogValueSummary,
     sanitizeLogText
 } = await import('../utils/plugin_logger.js')
 
@@ -36,6 +37,10 @@ const longPreview = formatLogPreview('很长的请求'.repeat(300), 20)
 assert.ok(Array.from(longPreview).length < 60)
 assert.match(longPreview, /原文共 1500 字/)
 assert.ok(!formatLogPreview(`data:image/png;base64,${'A'.repeat(4096)}`).includes('A'.repeat(1024)))
+assert.equal(formatLogValueSummary('secret response text'), 'text:20 code units')
+assert.equal(formatLogValueSummary({ apiKey: 'secret', result: 'private' }), 'object:2 fields')
+assert.equal(formatLogValueSummary(['private result']), 'array:1 items')
+assert.equal(formatLogValueSummary(Buffer.from('image')), 'binary:5 bytes')
 
 const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-plugin-log-eval-'))
 const consoleLines = []

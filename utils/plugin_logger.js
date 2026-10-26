@@ -76,6 +76,22 @@ export function formatLogPreview(value, maxChars = 1000) {
     return `${characters.slice(0, limit).join('')}…[原文共 ${characters.length} 字]`
 }
 
+export function formatLogValueSummary(value) {
+    if (value === null || value === undefined) return 'empty'
+    if (typeof value === 'string') return `text:${value.length} code units`
+    if (Buffer.isBuffer(value) || ArrayBuffer.isView(value)) return `binary:${value.byteLength} bytes`
+    if (value instanceof ArrayBuffer) return `binary:${value.byteLength} bytes`
+    if (Array.isArray(value)) return `array:${value.length} items`
+    if (typeof value === 'object') {
+        try {
+            return `object:${Object.keys(value).length} fields`
+        } catch {
+            return 'object:unknown fields'
+        }
+    }
+    return typeof value
+}
+
 function sanitizeStructuredValue(value, key = '', seen = new WeakSet()) {
     if (SECRET_KEY_PATTERN.test(String(key))) return '[REDACTED]'
     if (value === null || value === undefined || typeof value === 'boolean' || typeof value === 'number') return value

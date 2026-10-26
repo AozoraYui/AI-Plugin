@@ -1,4 +1,4 @@
-import { formatLogPreview, pluginLogger as logger } from '../utils/plugin_logger.js'
+import { formatLogPreview, formatLogValueSummary, pluginLogger as logger } from '../utils/plugin_logger.js'
 import crypto from 'node:crypto'
 import plugin from '../../../lib/plugins/plugin.js'
 import { Config } from '../utils/config.js'
@@ -1302,7 +1302,8 @@ export class FastChatHandler extends plugin {
             logger.info(`[AI-Plugin] [畅聊] 图片消息同时命中回复触发条件: reason=${trigger.reason}, 图片=${normalized.currentImageCount}`)
         }
 
-        logger.info(`[AI-Plugin] [畅聊] AI回复请求已触发: reason=${trigger.reason}, 群=${normalized.groupId}, 用户=${normalized.userId}, message_id=${normalized.messageId}, 图片=${normalized.currentImageCount}, 输入=${formatLogPreview(normalized.currentText || normalized.instructionText)}`)
+        const replyRequestId = getMessageId(e)
+        logger.info(`[AI-Plugin] [畅聊] AI回复请求已触发: request=${replyRequestId}, reason=${trigger.reason}, 群=${normalized.groupId}, 用户=${normalized.userId}, message_id=${normalized.messageId}, 图片=${normalized.currentImageCount}, 输入=${formatLogPreview(normalized.currentText || normalized.instructionText)}`)
 
         const cooldownMs = Math.max(0, Number(Config.FAST_CHAT_REPLY_COOLDOWN_MS) || 0)
         const cooldownKey = String(e.group_id)
@@ -1323,15 +1324,15 @@ export class FastChatHandler extends plugin {
         replyCooldown.set(cooldownKey, now)
 
         try {
-            await this.replyWithGroupContext(e, normalized)
+            await this.replyWithGroupContext(e, normalized, replyRequestId)
         } catch (err) {
-            logger.error(`[AI-Plugin] [畅聊] 回复失败:`, err)
+            logger.error(`[AI-Plugin] [畅聊] 回复失败: request=${replyRequestId}, 群=${e.group_id || 'unknown'}, 用户=${e.user_id || 'unknown'}`, err)
         }
         return true
     }
 
-    async replyWithGroupContext(e, normalized) {
-        const replyRequestId = getMessageId(e)
+    async replyWithGroupContext(e, normalized, replyRequestId = getMessageId(e)) {
+        const replyStartedAt = Date.now()
         const isPureImageTrigger = normalized.currentImageCount > 0 && !(normalized.instructionText || '').trim()
         const configuredLimit = Number(Config.FAST_CHAT_CONTEXT_LIMIT)
         const limit = normalizeFastChatReplyContextLimit()
@@ -1710,6 +1711,7 @@ export class FastChatHandler extends plugin {
                         const { call, result, protocol } = execution
                         const executionSucceeded = result.success && protocol?.ok === true
                         const failureReason = result.error || protocol?.error || result.data?.error || '工具返回业务失败'
+                        logger.info(`[AI-Plugin] [畅聊] Agent工具结果: request=${replyRequestId}, round=${agentRound}, tool=${call.name}, status=${execution.pending ? 'pending' : executionSucceeded ? 'success' : 'failed'}, protocol=${protocol?.ok === false ? 'failed' : protocol?.ok === true ? 'ok' : 'n/a'}, data=${formatLogValueSummary(result.data)}`)
                         seenToolCalls.add(execution.key)
                         if (executionSucceeded && protocol.ok && !execution.pending) hasSuccessfulToolResult = true
                         if (executionSucceeded && protocol.ok && protocol.verified && !execution.pending) hasVerifiedToolResult = true
@@ -2129,7 +2131,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             return
         }
 
-        let result = await this.client.makeRequest('chat', payload, 'flash', 4096)
+        let result = await this.client.makeRequest('chat', payload, 'flash', 4096, { requestId: replyRequestId, stage: 'fast_final_answer' })
         let finalVisionRelayDescription = ''
         if ((!result.success || !result.data) && (imageParts.length > 0 || localImageInput.imageParts.length > 0 || avatarImageInput.imageParts.length > 0)) {
             const finalImageParts = [
@@ -2137,7 +2139,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                 ...localImageInput.imageParts,
                 ...avatarImageInput.imageParts
             ]
-            logger.warn(`[AI-Plugin] [畅聊] 含图片的最终回复直接请求失败: ${result.error || '模型无返回'}；尝试 Vision Relay 后重试`)
+            logger.warn(`[AI-Plugin] [畅聊] 含图片的最终回复直接请求失败: request=${replyRequestId}, error=${result.error || '模型无返回'}；尝试 Vision Relay 后重试`)
             const description = await buildFastChatVisionRelayFallback(
                 this.client,
                 finalImageParts,
@@ -2150,16 +2152,17 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                 }
                 contents = replaceInlineImagesWithVisionDescription(contents, description)
                 payload = { contents }
-                const relayResult = await this.client.makeRequest('chat', payload, 'flash', 4096)
+                const relayResult = await this.client.makeRequest('chat', payload, 'flash', 4096, { requestId: replyRequestId, stage: 'fast_final_answer_vision_relay' })
                 if (relayResult.success && relayResult.data) {
                     result = relayResult
-                    logger.info('[AI-Plugin] [畅聊] Vision Relay 摘要已替换图片，最终回复重试成功')
+                    logger.info(`[AI-Plugin] [畅聊] Vision Relay 摘要已替换图片，最终回复重试成功: request=${replyRequestId}`)
                 } else {
-                    logger.warn(`[AI-Plugin] [畅聊] Vision Relay 后最终回复仍失败: ${relayResult.error || '模型无返回'}`)
+                    logger.warn(`[AI-Plugin] [畅聊] Vision Relay 后最终回复仍失败: request=${replyRequestId}, error=${relayResult.error || '模型无返回'}`)
                 }
             }
         }
         if (!result.success || !result.data) {
+            logger.error(`[AI-Plugin] [畅聊] 最终回复模型请求失败: request=${replyRequestId}, 群=${normalized.groupId}, 用户=${normalized.userId}, elapsed=${((Date.now() - replyStartedAt) / 1000).toFixed(2)}s, error=${formatLogPreview(result.error || '模型无返回', 500)}`)
             if (fastAgentTask?.taskId) {
                 const failText = `畅聊最终回复模型请求失败：${result.error || '模型无返回'}`
                 fastAgentTask = await finalizeAgentTask(this.conversationManager.db, fastAgentTask, {
@@ -2218,7 +2221,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                     }
                 ]
             }
-            const retryResult = await this.client.makeRequest('chat', retryPayload, 'flash', 4096)
+            const retryResult = await this.client.makeRequest('chat', retryPayload, 'flash', 4096, { requestId: replyRequestId, stage: 'fast_final_answer_correction' })
             if (retryResult.success && retryResult.data) {
                 result = retryResult
                 replyText = cleanModelText(retryResult.data)
@@ -2260,16 +2263,16 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
         let sendResult = await sendFastReply(replyText)
         let sendError = extractMessageSendError(sendResult)
         if (sendError) {
-            logger.warn(`[AI-Plugin] [畅聊] 最终回复发送失败: ${sendError}`)
+            logger.warn(`[AI-Plugin] [畅聊] 最终回复发送失败: request=${replyRequestId}, 群=${normalized.groupId}, 用户=${normalized.userId}, error=${sendError}, 输出=${formatLogPreview(replyText)}`)
             if (isContentModerationSendError(sendError)) {
-                const rewritten = await rewriteRejectedReply(this.client, replyText, 'flash', 2048)
+                const rewritten = await rewriteRejectedReply(this.client, replyText, 'flash', 2048, { requestId: replyRequestId, stage: 'fast_delivery_rewrite' })
                 if (rewritten) {
                     const retryResult = await sendFastReply(rewritten)
                     const retryError = extractMessageSendError(retryResult)
                     if (!retryError) {
                         replyText = rewritten
                         sendError = ''
-                        logger.info('[AI-Plugin] [畅聊] 最终回复经中性改写后发送成功')
+                        logger.info(`[AI-Plugin] [畅聊] 最终回复经中性改写后发送成功: request=${replyRequestId}`)
                     } else {
                         sendError = retryError
                     }
@@ -2282,10 +2285,11 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                 }
             }
             if (sendError) {
-                logger.error(`[AI-Plugin] [畅聊] 最终回复确认发送失败，停止写入成功历史: ${sendError}`)
+                logger.error(`[AI-Plugin] [畅聊] 最终回复确认发送失败，停止写入成功历史: request=${replyRequestId}, error=${sendError}, 输出=${formatLogPreview(replyText)}`)
                 return
             }
         }
+        logger.info(`[AI-Plugin] [畅聊] 回复已发送: request=${replyRequestId}, 群=${normalized.groupId}, 用户=${normalized.userId}, model=${result.platform || 'unknown'}, elapsed=${((Date.now() - replyStartedAt) / 1000).toFixed(2)}s, 输出=${formatLogPreview(replyText)}`)
         if (shouldCaptureCurrentImageMemory && !imageMemorySummary && imageParts.length > 0) {
             logger.info('[AI-Plugin] [畅聊] 前台回复已发送，启动独立后台视觉摘要')
             try {

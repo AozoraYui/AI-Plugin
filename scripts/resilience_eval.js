@@ -10,6 +10,7 @@ global.logger = {
 
 const { AiClient } = await import('../client/AiClient.js')
 const { Config } = await import('../utils/config.js')
+const { formatTokenUsageInfo } = await import('../client/AiClient.js')
 
 function createClient(pool) {
     const client = Object.create(AiClient.prototype)
@@ -31,6 +32,56 @@ function model(provider, modelId, index = 0) {
         statusKey: `${provider}-${modelId}`,
         perCall: false
     }
+}
+
+async function testUsageTrackingIsolatedPerConcurrentRequest() {
+    const client = Object.create(AiClient.prototype)
+    const [first, second] = await Promise.all([
+        client.withUsageTracking(async () => {
+            client._startTrackedUsageCall()
+            client._recordTrackedUsage({ prompt_tokens: 12000, completion_tokens: 200 })
+            await new Promise(resolve => setTimeout(resolve, 5))
+            client._startTrackedUsageCall()
+            client._recordTrackedUsage({ input_tokens: 200, output_tokens: 56 })
+            return client.getCurrentUsageSnapshot()
+        }),
+        client.withUsageTracking(async () => {
+            client._startTrackedUsageCall()
+            client._recordTrackedUsage({ prompt_tokens: 700, completion_tokens: 90 })
+            return client.getCurrentUsageSnapshot()
+        })
+    ])
+    assert.equal(first.prompt_tokens, 12200)
+    assert.equal(first.completion_tokens, 256)
+    assert.equal(first.calls, 2)
+    assert.equal(first.missingUsageCalls, 0)
+    assert.equal(second.prompt_tokens, 700)
+    assert.equal(second.completion_tokens, 90)
+    assert.equal(second.calls, 1)
+    assert.equal(formatTokenUsageInfo(first, { prompt_tokens: 200, completion_tokens: 56 }), ' | 总输入Tokens: 12200(200) | 总输出Tokens: 256(56)')
+    assert.equal(formatTokenUsageInfo({ prompt_tokens: 29856, completion_tokens: 997, total_tokens: 30853, promptReportedCalls: 2, completionReportedCalls: 2, calls: 2, missingUsageCalls: 0 }, { prompt_tokens: 12200, completion_tokens: 256 }), ' | 总输入Tokens: 29856(12200) | 总输出Tokens: 997(256)')
+    assert.equal(formatTokenUsageInfo(null, { prompt_tokens: 12, completion_tokens: 3 }), ' | 输入Tokens: 12 | 输出Tokens: 3')
+    assert.equal(formatTokenUsageInfo(null, { total_tokens: 15 }), ' | 消耗Token: 15')
+
+    const partial = await client.withUsageTracking(async () => {
+        client._startTrackedUsageCall()
+        client._recordTrackedUsage({ total_tokens: 24 })
+        return client.getCurrentUsageSnapshot()
+    })
+    assert.equal(formatTokenUsageInfo(partial, { total_tokens: 24 }), ' | 已报告总Tokens: 24(24)（另有 1 次模型请求未返回完整输入/输出用量）')
+
+    const missing = await client.withUsageTracking(async () => {
+        client._startTrackedUsageCall()
+        return client.getCurrentUsageSnapshot()
+    })
+    assert.equal(formatTokenUsageInfo(missing, { prompt_tokens: 4, completion_tokens: 2 }), ' | 已统计输入Tokens: 4(4) | 已统计输出Tokens: 2(2)（另有 1 次模型请求未返回完整输入/输出用量）')
+
+    const streamUsage = client.parseStreamResponse([
+        'data: {"choices":[{"delta":{"content":"答复"}}]}',
+        'data: {"choices":[],"usage":{"prompt_tokens":30,"completion_tokens":8,"total_tokens":38}}',
+        'data: [DONE]'
+    ].join('\n'), 'chat')
+    assert.deepEqual(streamUsage.usage, { prompt_tokens: 30, completion_tokens: 8, total_tokens: 38 })
 }
 
 async function testProviderFailoverBudget() {
@@ -368,7 +419,10 @@ async function testVisionRelayAutoDiscoversUnlistedChatFallback() {
 async function testAttemptRequestPassesCancellationSignal() {
     const server = http.createServer((_request, response) => {
         response.writeHead(200, { 'content-type': 'application/json' })
-        response.end(JSON.stringify({ choices: [{ message: { content: '模型测试通过。' } }] }))
+        response.end(JSON.stringify({
+            choices: [{ message: { content: '模型测试通过。' } }],
+            usage: { prompt_tokens: 18, completion_tokens: 6, total_tokens: 24 }
+        }))
     })
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 
@@ -384,23 +438,32 @@ async function testAttemptRequestPassesCancellationSignal() {
             }
         })
         const controller = new AbortController()
-        const result = await client.attemptRequest(
-            'chat',
-            { contents: [] },
-            { name: 'local', api_key: 'test' },
-            'test-model',
-            128,
-            2000,
-            { multimodal: true },
-            { signal: controller.signal }
-        )
+        const tracked = await client.withUsageTracking(async () => {
+            const result = await client.attemptRequest(
+                'chat',
+                { contents: [] },
+                { name: 'local', api_key: 'test' },
+                'test-model',
+                128,
+                2000,
+                { multimodal: true },
+                { signal: controller.signal }
+            )
+            return { result, usage: client.getCurrentUsageSnapshot() }
+        })
+        const { result, usage } = tracked
         assert.equal(result.success, true)
         assert.equal(result.data, '模型测试通过。')
+        assert.equal(usage.calls, 1)
+        assert.equal(usage.prompt_tokens, 18)
+        assert.equal(usage.completion_tokens, 6)
+        assert.equal(usage.missingUsageCalls, 0)
     } finally {
         await new Promise(resolve => server.close(resolve))
     }
 }
 
+await testUsageTrackingIsolatedPerConcurrentRequest()
 await testProviderFailoverBudget()
 await testConfiguredOrderBeatsHealthScore()
 await testModelSpecificFailureKeepsConfiguredOrder()
@@ -418,4 +481,4 @@ await testAllModelProbeContinuesAfterUnexpectedFailure()
 await testMultimodalVisionRelayDependsOnConfiguration()
 await testVisionRelayAutoDiscoversUnlistedChatFallback()
 await testAttemptRequestPassesCancellationSignal()
-console.log('Resilience eval: 15 passed, 0 failed')
+console.log('Resilience eval: 18 passed, 0 failed')

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { pluginLogger as logger } from '../utils/plugin_logger.js'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -15,6 +16,48 @@ const RETRY_BACKOFF_MAX_MS = 1200
 const MODEL_STATUS_FORMAT_VERSION = 3
 const LATENCY_SAMPLE_WEIGHT = 0.3         // 新延迟占 30% 加权（平滑指数）
 const ULTRA_CHAT_REQUEST_TIMEOUT_MS = 600000 // Ultra 长思考模型固定等待 10 分钟
+const usageTrackingStorage = new AsyncLocalStorage()
+
+function readUsageCount(value) {
+    if (value === null || value === undefined || value === '') return null
+    const count = Number(value)
+    return Number.isFinite(count) && count >= 0 ? count : null
+}
+
+export function formatTokenUsageInfo(totalUsage, finalUsage) {
+    const finalPrompt = readUsageCount(finalUsage?.prompt_tokens)
+    const finalCompletion = readUsageCount(finalUsage?.completion_tokens)
+    const finalTotal = readUsageCount(finalUsage?.total_tokens)
+    if (!totalUsage || !Number.isFinite(totalUsage.calls) || totalUsage.calls <= 0) {
+        if (finalPrompt !== null && finalCompletion !== null) return ` | 输入Tokens: ${finalPrompt} | 输出Tokens: ${finalCompletion}`
+        if (finalTotal !== null) return ` | 消耗Token: ${finalTotal}`
+        return ''
+    }
+
+    const totalPrompt = totalUsage.promptReportedCalls > 0
+        ? readUsageCount(totalUsage.prompt_tokens)
+        : finalPrompt
+    const totalCompletion = totalUsage.completionReportedCalls > 0
+        ? readUsageCount(totalUsage.completion_tokens)
+        : finalCompletion
+    const missingUsageCalls = Number(totalUsage.missingUsageCalls || 0)
+    const missingNote = missingUsageCalls > 0
+        ? `（另有 ${missingUsageCalls} 次模型请求未返回完整输入/输出用量）`
+        : ''
+    if (totalPrompt === null && totalCompletion === null) {
+        const reportedTotal = readUsageCount(totalUsage.total_tokens) ?? finalTotal
+        if (reportedTotal !== null) return ` | 已报告总Tokens: ${reportedTotal}${finalTotal === null ? '' : `(${finalTotal})`}${missingNote}`
+        return ''
+    }
+
+    const label = missingUsageCalls > 0 ? '已统计' : '总'
+    const promptInfo = totalPrompt === null ? '未知' : (finalPrompt === null ? String(totalPrompt) : `${totalPrompt}(${finalPrompt})`)
+    const completionInfo = totalCompletion === null ? '未知' : (finalCompletion === null ? String(totalCompletion) : `${totalCompletion}(${finalCompletion})`)
+    const finalTotalNote = (finalPrompt === null || finalCompletion === null) && finalTotal !== null
+        ? `（最终回复共 ${finalTotal} Tokens）`
+        : ''
+    return ` | ${label}输入Tokens: ${promptInfo} | ${label}输出Tokens: ${completionInfo}${finalTotalNote}${missingNote}`
+}
 
 function getRequestTraceSuffix(requestOptions = {}) {
     const requestId = String(requestOptions.requestId || '').replace(/[^\w:-]/g, '').slice(0, 100)
@@ -51,6 +94,55 @@ export class AiClient {
         this.loadDisabledModels()
         this._buildActiveModelPools()
     }
+
+    async withUsageTracking(callback) {
+        const tracker = {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            promptReportedCalls: 0,
+            completionReportedCalls: 0,
+            calls: 0,
+            missingUsageCalls: 0
+        }
+        return usageTrackingStorage.run(tracker, () => callback(tracker))
+    }
+
+    getCurrentUsageSnapshot() {
+        const tracker = usageTrackingStorage.getStore()
+        return tracker ? { ...tracker } : null
+    }
+
+    _startTrackedUsageCall() {
+        const tracker = usageTrackingStorage.getStore()
+        if (!tracker) return
+        tracker.calls++
+        tracker.missingUsageCalls++
+    }
+
+    _recordTrackedUsage(usage) {
+        const tracker = usageTrackingStorage.getStore()
+        if (!tracker || !usage) return
+        const normalized = this._normalizeUsage(usage)
+        if (!normalized) return
+        const prompt = readUsageCount(normalized.prompt_tokens)
+        const completion = readUsageCount(normalized.completion_tokens)
+        const total = readUsageCount(normalized.total_tokens)
+        if (prompt === null && completion === null && total === null) return
+        if (prompt !== null) {
+            tracker.prompt_tokens += prompt
+            tracker.promptReportedCalls++
+        }
+        if (completion !== null) {
+            tracker.completion_tokens += completion
+            tracker.completionReportedCalls++
+        }
+        tracker.total_tokens += total ?? (prompt !== null && completion !== null ? prompt + completion : 0)
+        if (prompt !== null && completion !== null) {
+            tracker.missingUsageCalls = Math.max(0, tracker.missingUsageCalls - 1)
+        }
+    }
+
 
     /** 是否启用图文转述 */
     get enableVisionRelay() {
@@ -1219,12 +1311,14 @@ export class AiClient {
         let accumulatedContent = ""
         let accumulatedReasoning = ""
         let imageUrlInStream = null
+        let usage = null
 
         for (const line of lines) {
             try {
                 const jsonStr = line.substring(6).trim()
                 if (!jsonStr) continue
                 const chunk = JSON.parse(jsonStr)
+                if (chunk.usage) usage = this._normalizeUsage(chunk.usage)
 
                 const delta = chunk.choices?.[0]?.delta || {}
                 const deltaContent = delta.content
@@ -1253,7 +1347,8 @@ export class AiClient {
         return {
             choices: [{
                 message: messageObject
-            }]
+            }],
+            ...(usage ? { usage } : {})
         }
     }
 
@@ -1274,6 +1369,7 @@ export class AiClient {
             }
             options.allowPrivateNetwork = true
             
+            this._startTrackedUsageCall()
             let res
             try {
                 res = await fetchWithProxy(url, { ...options, signal: requestOptions.signal, autoDetectProxy: true, family: 4 })
@@ -1288,6 +1384,7 @@ export class AiClient {
                     return { success: false, cancelled: true, error: '请求已取消', code: 'AGENT_CANCELLED' }
                 }
                 logger.info(`[AI-Plugin] 模型${traceSuffix} [${provider.name} - ${modelId}] 传输失败，重试当前请求一次`)
+                this._startTrackedUsageCall()
                 res = await fetchWithProxy(url, { ...options, signal: requestOptions.signal, autoDetectProxy: true, family: 4 })
             }
 
@@ -1322,6 +1419,7 @@ export class AiClient {
             }
 
             const result = this.parseResponse(data, type)
+            this._recordTrackedUsage(result.usage ?? data.usage)
 
             if (result.success) {
                 return {
@@ -1450,6 +1548,7 @@ export class AiClient {
             options.allowPrivateNetwork = true
 
             logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 使用 /images/edits（${images.length} 张参考图）`)
+            this._startTrackedUsageCall()
             const res = await fetchWithProxy(url, { ...options, signal, autoDetectProxy: true, family: 4 })
             if (!res.ok) throw new Error(`HTTP状态码: ${res.status}`)
 
@@ -1462,6 +1561,7 @@ export class AiClient {
             }
 
             const result = this.parseResponse(data, 'image')
+            this._recordTrackedUsage(result.usage ?? data.usage)
             if (result.success) {
                 return { success: true, data: result.data, platform: `${provider.name} (${modelId})`, usage: result.usage }
             }
@@ -1483,6 +1583,7 @@ export class AiClient {
         if (timeout > 0) options.timeout = timeout
         options.allowPrivateNetwork = true
 
+        this._startTrackedUsageCall()
         const res = await fetchWithProxy(url, { ...options, signal, autoDetectProxy: true, family: 4 })
         if (!res.ok) throw new Error(`HTTP状态码: ${res.status}`)
 
@@ -1495,6 +1596,7 @@ export class AiClient {
         }
 
         const result = this.parseResponse(data, 'image')
+        this._recordTrackedUsage(result.usage ?? data.usage)
         if (result.success) {
             return { success: true, data: result.data, platform: `${provider.name} (${modelId})`, usage: result.usage }
         }

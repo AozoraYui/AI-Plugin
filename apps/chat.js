@@ -1,9 +1,9 @@
-import { formatLogPreview, pluginLogger as logger } from '../utils/plugin_logger.js'
+import { formatLogPreview, formatLogValueSummary, pluginLogger as logger } from '../utils/plugin_logger.js'
 import plugin from '../../../lib/plugins/plugin.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Config, MODELS_CONFIG_FILE } from '../utils/config.js'
-import { AiClient } from '../client/AiClient.js'
+import { AiClient, formatTokenUsageInfo } from '../client/AiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, getDBTimestamp, hasExplicitModelGroup, resolveModelGroup, resolveModelDisplay, formatDBTimestampToBeijing } from '../utils/common.js'
@@ -1878,6 +1878,13 @@ export class ChatHandler extends plugin {
     }
 
     async handleChat(e) {
+        const execute = () => this.handleChatWithUsage(e)
+        return typeof this.client?.withUsageTracking === 'function'
+            ? this.client.withUsageTracking(execute)
+            : execute()
+    }
+
+    async handleChatWithUsage(e) {
         if (!await checkAccess(e)) return true
 
         const chatCmd = Config.CHAT_COMMAND
@@ -2785,6 +2792,7 @@ ${visualDescription}`
                         const { call, index: roundCallIndex, key, result, protocol, formattedResult: runtimeFormattedResult, status: runtimeStatus, pending } = execution
                         const executionFailed = !result.success || protocol?.ok === false
                         const failureReason = result.error || protocol?.error || result.data?.error || '工具返回业务失败'
+                        logger.info(`[AI-Plugin] Agent工具结果: request=${requestTraceId}, round=${agentRound}, tool=${call.name}, status=${pending ? 'pending' : executionFailed ? 'failed' : 'success'}, protocol=${protocol?.ok === false ? 'failed' : protocol?.ok === true ? 'ok' : 'n/a'}, data=${formatLogValueSummary(result.data)}`)
                         seenToolCalls.add(key)
                         if (call.name === 'shell_exec' || call.name === 'shell_session') shellToolExecutionCount++
                         if (call.name === 'shell_session'
@@ -3892,7 +3900,7 @@ ${visualDescription}`
                 if (description) {
                     visionRelayDescription = description
                     const relayContents = replaceInlineImagesWithVisionDescription(contents, description)
-                    const relayResult = await this.client.makeRequest('chat', { contents: relayContents }, modelGroupKey, 8192, { signal: cancellationHandle?.signal })
+                    const relayResult = await this.client.makeRequest('chat', { contents: relayContents }, modelGroupKey, 8192, { signal: cancellationHandle?.signal, requestId: requestTraceId, stage: 'final_answer_vision_relay' })
                     throwIfExecutionCancelled()
                     if (relayResult.success && relayResult.data) {
                         result = relayResult
@@ -3909,7 +3917,7 @@ ${visualDescription}`
                 const recoveryContents = replaceInlineImagesWithVisionDescription(contents, `${visionRelayDescription}
 
 【强制处理要求】以上摘要来自本轮实际图片。不要声称没有收到图片、没有视觉摘要或无法判断图片内容；请严格基于摘要直接回答用户当前请求，不要编造摘要之外的事实。`)
-                const recoveryResult = await this.client.makeRequest('chat', { contents: recoveryContents }, modelGroupKey, 8192, { signal: cancellationHandle?.signal })
+                const recoveryResult = await this.client.makeRequest('chat', { contents: recoveryContents }, modelGroupKey, 8192, { signal: cancellationHandle?.signal, requestId: requestTraceId, stage: 'final_answer_recovery' })
                 throwIfExecutionCancelled()
                 if (recoveryResult.success && recoveryResult.data) {
                     result = recoveryResult
@@ -3983,7 +3991,7 @@ ${visualDescription}`
                         ]
                     }
                     throwIfExecutionCancelled()
-                    const retryResult = await this.client.makeRequest('chat', retryPayload, modelGroupKey, 8192, { signal: cancellationHandle?.signal })
+                    const retryResult = await this.client.makeRequest('chat', retryPayload, modelGroupKey, 8192, { signal: cancellationHandle?.signal, requestId: requestTraceId, stage: 'final_answer_correction' })
                     throwIfExecutionCancelled()
                     if (retryResult.success && retryResult.data) {
                         result = retryResult
@@ -4036,8 +4044,9 @@ ${visualDescription}`
                 }
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
 
-                let tokenInfo = ''
-                if (result.usage) {
+                const totalUsage = this.client.getCurrentUsageSnapshot?.()
+                let tokenInfo = formatTokenUsageInfo(totalUsage, result.usage)
+                if (!tokenInfo && result.usage) {
                     if (result.usage.prompt_tokens !== undefined && result.usage.completion_tokens !== undefined) {
                         tokenInfo = ` | 输入Tokens: ${result.usage.prompt_tokens} | 输出Tokens: ${result.usage.completion_tokens}`
                     } else if (result.usage.total_tokens) {
@@ -4102,10 +4111,10 @@ ${visualDescription}`
                 throwIfExecutionCancelled()
                 let sendError = extractMessageSendError(sendResult)
                 if (sendError) {
-                    logger.warn(`[AI-Plugin] 最终回复发送失败: ${sendError}`)
+                    logger.warn(`[AI-Plugin] 最终回复发送失败: request=${requestTraceId}, scene=${e.group_id ? `群 ${e.group_id}` : '私聊'}, 用户=${e.user_id || 'unknown'}, error=${sendError}, 输出=${formatLogPreview(finalResponseText)}`)
                     if (isContentModerationSendError(sendError)) {
                         throwIfExecutionCancelled()
-                        const rewritten = await rewriteRejectedReply(this.client, finalResponseText, modelGroupKey, 4096, { signal: cancellationHandle?.signal })
+                        const rewritten = await rewriteRejectedReply(this.client, finalResponseText, modelGroupKey, 4096, { signal: cancellationHandle?.signal, requestId: requestTraceId, stage: 'delivery_rewrite' })
                         throwIfExecutionCancelled()
                         if (rewritten) {
                             const retryResult = await sendFinalReply(rewritten)
@@ -4114,10 +4123,10 @@ ${visualDescription}`
                             if (!retryError) {
                                 finalResponseText = rewritten
                                 sendError = ''
-                                logger.info('[AI-Plugin] 最终回复经中性改写后发送成功')
+                                logger.info(`[AI-Plugin] 最终回复经中性改写后发送成功: request=${requestTraceId}`)
                             } else {
                                 sendError = retryError
-                                logger.warn(`[AI-Plugin] 中性改写回复仍发送失败: ${retryError}`)
+                                logger.warn(`[AI-Plugin] 中性改写回复仍发送失败: request=${requestTraceId}, error=${retryError}`)
                             }
                         }
                         if (sendError) {
@@ -4144,11 +4153,13 @@ ${visualDescription}`
                         }
                     }
                     if (sendError) {
-                        logger.error(`[AI-Plugin] 最终回复确认发送失败，停止写入成功历史: ${sendError}`)
+                        logger.error(`[AI-Plugin] 最终回复确认发送失败，停止写入成功历史: request=${requestTraceId}, error=${sendError}, 输出=${formatLogPreview(finalResponseText)}`)
                         await setMsgEmojiLike(e, 10)
                         return true
                     }
                 }
+
+                logger.info(`[AI-Plugin] 对话回复已发送: request=${requestTraceId}, scene=${e.group_id ? `群 ${e.group_id}` : '私聊'}, 用户=${e.user_id || 'unknown'}, model=${result.platform || 'unknown'}, elapsed=${elapsed}s, tokens=${tokenInfo.replace(/^\s*\|\s*/, '') || 'n/a'}, 输出=${formatLogPreview(finalResponseText)}`)
 
                 if (webResearchUsed
                     && hasInsufficientWebEvidenceForRequirements(webEvidenceState, webResearchRequirements)
@@ -4236,6 +4247,7 @@ ${visualDescription}`
                 }
             } else {
                 await setMsgEmojiLike(e, 10)
+                logger.error(`[AI-Plugin] 最终回复模型请求失败: request=${requestTraceId}, scene=${e.group_id ? `群 ${e.group_id}` : '私聊'}, 用户=${e.user_id || 'unknown'}, elapsed=${((Date.now() - startTime) / 1000).toFixed(2)}s, error=${formatLogPreview(result.error || '模型无返回', 500)}`)
                 if (agentTask?.taskId) {
                     const failText = `最终回复模型请求失败：${result.error || '未知错误'}`
                     await recordAgentStep(this.conversationManager.db, agentTask, {
@@ -4263,7 +4275,7 @@ ${visualDescription}`
                 return true
             }
             await setMsgEmojiLike(e, 10)
-            logger.error(`[AI-Plugin] 对话处理异常:`, err)
+            logger.error(`[AI-Plugin] 对话处理异常: request=${requestTraceId}, elapsed=${((Date.now() - startTime) / 1000).toFixed(2)}s:`, err)
             if (!cancellationHandle?.isCancelled()) await e.reply(`❌ 处理异常: ${err.message}`, true)
         } finally {
             disposeCancellation()
