@@ -1,6 +1,8 @@
 const INTERNAL_TAGS = ['think', 'analysis', 'reasoning']
-const FINAL_SECTION_RE = /^(?:#{1,6}\s*)?(?:final(?:\s+answer|\s+response)?|answer|最终答案|最终回复|答复|结论)\s*[：:]?\s*/i
-const INTERNAL_SECTION_RE = /^(?:#{1,6}\s*)?(?:\*{0,2}(?:thinking|analysis|reasoning)\*{0,2}|思考过程|思维过程|推理过程|分析过程|内部思考|内部推理)\s*[：:]?\s*/i
+const FINAL_SECTION_RE = /^(?:#{1,6}\s*)?(?:\*\*)?(?:final(?:\s+answer|\s+response)?|answer|最终答案|最终回复|答复|结论)(?:\*\*)?(?:\s*[：:])?(?:\*\*)?\s*/i
+const INTERNAL_SECTION_HEADING_RE = /^(?:#{1,6}\s*)?(?:\*\*)?(?:thinking|analysis|reasoning|思考过程|思维过程|推理过程|分析过程|内部思考|内部推理)(?:\*\*)?(?:\s*[：:])?(?:\*\*)?\s*$/i
+const INTERNAL_SECTION_PREFIX_RE = /^(?:#{1,6}\s*)?(?:\*\*)?(?:thinking|analysis|reasoning|思考过程|思维过程|推理过程|分析过程|内部思考|内部推理)(?:(?:\*\*)?\s*[：:](?:\*\*)?|\*\*)/i
+const INTERNAL_FENCE_RE = /^\x60{3}(?:thinking|analysis|reasoning)\s*$/i
 const PLAN_HEADING_RE = /^(?:#{1,6}\s*)?(?:【\s*)?(?:工具规划|工具调用规划|行动计划|执行计划|下一步计划)(?:\s*】)?\s*[：:]?\s*/i
 const XML_TOOL_PROTOCOL_RE = /<function_calls\b[\s\S]*?<invoke\b[\s\S]*?<tool_name\b[\s\S]*?<\/function_calls>/i
 const JSON_TOOL_PROTOCOL_RE = /["']tool_calls["']\s*:\s*\[[\s\S]*?["'](?:function|name|arguments)["']\s*:/i
@@ -15,26 +17,57 @@ function stripInternalTags(text) {
     return result
 }
 
-function stripLeadingInternalSection(text) {
+function stripInternalSections(text) {
     const lines = String(text || '').split('\n')
     const firstContentIndex = lines.findIndex(line => line.trim())
     if (firstContentIndex < 0) return ''
 
-    const firstLine = lines[firstContentIndex].trim()
-    if (INTERNAL_SECTION_RE.test(firstLine)) {
-        const finalIndex = lines.findIndex((line, index) => index > firstContentIndex && FINAL_SECTION_RE.test(line.trim()))
-        if (finalIndex < 0) return ''
-        lines[finalIndex] = lines[finalIndex].replace(FINAL_SECTION_RE, '')
-        return lines.slice(finalIndex).join('\n').trim()
-    }
-
-    if (firstLine.startsWith('>')) {
+    if (lines[firstContentIndex].trim().startsWith('>')) {
         let index = firstContentIndex
         while (index < lines.length && (!lines[index].trim() || lines[index].trim().startsWith('>'))) index++
-        return lines.slice(index).join('\n').trim()
+        lines.splice(firstContentIndex, index - firstContentIndex)
     }
 
-    return lines.join('\n').trim()
+    const output = []
+    let inInternalSection = false
+    let inInternalFence = false
+    let stripNextFinalLabel = false
+    for (const line of lines) {
+        const trimmed = line.trim()
+        if (inInternalFence) {
+            if (/^\x60{3}\s*$/.test(trimmed)) {
+                inInternalFence = false
+                stripNextFinalLabel = true
+            }
+            continue
+        }
+        if (stripNextFinalLabel && trimmed) {
+            stripNextFinalLabel = false
+            if (FINAL_SECTION_RE.test(trimmed)) {
+                const finalLine = line.replace(FINAL_SECTION_RE, '')
+                if (finalLine) output.push(finalLine)
+                continue
+            }
+        }
+        if (!inInternalSection && INTERNAL_FENCE_RE.test(trimmed)) {
+            inInternalFence = true
+            continue
+        }
+        if (inInternalSection) {
+            if (!FINAL_SECTION_RE.test(trimmed)) continue
+            inInternalSection = false
+            const finalLine = line.replace(FINAL_SECTION_RE, '')
+            if (finalLine) output.push(finalLine)
+            continue
+        }
+        if (INTERNAL_SECTION_HEADING_RE.test(trimmed) || INTERNAL_SECTION_PREFIX_RE.test(trimmed)) {
+            inInternalSection = true
+            continue
+        }
+        output.push(line)
+    }
+
+    return output.join('\n').trim()
 }
 
 export function sanitizeModelOutput(text, options = {}) {
@@ -42,7 +75,7 @@ export function sanitizeModelOutput(text, options = {}) {
     if (!result) return ''
     if (options.showThinking !== true) {
         result = stripInternalTags(result)
-        result = stripLeadingInternalSection(result)
+        result = stripInternalSections(result)
     }
     return result.trim()
 }
@@ -133,7 +166,9 @@ export function buildFinalAnswerRetryInstruction(options = {}) {
         : ''
     const webAudit = options.unsupportedWebClaim === true
         ? '上一条输出声称已经联网核查或引用了通报，但本轮没有任何真实网页工具结果；只能说明图片中的待核查说法，不能说已经证实、属实、虚假或经过核查。'
-        : ''
+        : (options.lowEvidenceOverclaim === true || options.blockedResearchClaim === true)
+            ? '本轮联网研究的可用证据不足；请只报告工具结果实际支持的内容，并明确区分事实、推测和无法核实之处。'
+            : ''
     const profileAudit = options.unsupportedProfileClaim === true
         ? '上一条输出声称个人信息已经记住、写入或同步到个人档案，但本轮没有个人档案工具成功写入证据；必须明确说明尚未写入，不能把模型自己的承诺当成数据库结果。'
         : ''
@@ -143,9 +178,17 @@ export function buildFinalAnswerRetryInstruction(options = {}) {
     const issue = options.leakedToolCallProtocol === true
         ? '上一条输出是内部工具调用协议，不是可发送给用户的最终答复。'
         : options.unsupportedToolClaim === true
-        ? '上一条输出声称完成了工具操作，但本轮没有对应的真实工具执行证据。'
-        : '上一条输出是内部思考或行动规划，不是可发送给用户的最终答复。'
-    const completionAudit = options.hasTaskCompletionEvidence === false
+            ? '上一条输出声称完成了工具操作，但本轮没有对应的真实工具执行证据。'
+            : options.unsupportedProfileClaim === true
+                ? '上一条输出对个人档案写入状态的描述缺少成功写入证据。'
+                : options.unsupportedWebClaim === true || options.lowEvidenceOverclaim === true || options.blockedResearchClaim === true
+                    ? '上一条输出对联网研究结果的表述超出了本轮可用证据。'
+                    : options.planOnlyResponse === true
+                        ? '上一条输出只有行动计划，没有回答用户的问题。'
+                        : options.emptyResponse === true
+                            ? '上一条输出为空，未形成可发送的答复。'
+                            : '上一条输出未通过最终回复校验，需要基于原始上下文重新直接回答。'
+    const completionAudit = options.hasActualToolResults === true && options.hasTaskCompletionEvidence === false
         ? '虽然可能已有部分工具结果，但任务验证器尚未确认全部成功标准完成；可以描述已经取得的具体结果，不能扩大表述为任务完成、修复成功、部署成功或全部处理完毕。'
         : ''
     return `${issue}上一条异常输出本身不可信，不能把其中声称的工具调用或结果当作事实。${toolAudit}${visualAudit}${webAudit}${profileAudit}${completionAudit}${protocolAudit}请重新基于原始上下文直接回答用户的问题。不要输出 Thinking、Analysis、思考过程、工具规划或下一步计划；不要输出任何 function_calls、invoke、tool_name、tool_calls、参数 JSON 或其他内部工具协议；不要声称执行了尚未执行的工具。如果缺少完成请求所需的真实结果，请明确说明目前无法确认，不能猜测。`

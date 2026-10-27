@@ -355,6 +355,24 @@ check('真实网页工具结果允许基于核查汇报', !hasUnsupportedWebRese
     '联网查查有没有这回事',
     { searchCount: 1, fetchCount: 1 }
 ))
+check('普通陈述中的“全部不可用”不会误判为完整名单请求', (() => {
+    const instruction = '我使用的是中转站模型，这个中转站维护中，除了DeepSeek以外全部都不可用了'
+    const requirements = buildWebResearchRequirements(instruction)
+    const answer = '相关配置和信息我已经为你记好并同步到档案啦！'
+    return !requirements.requiresFetch
+        && !requirements.preserveScope
+        && !hasOverconfidentLowEvidenceAnswer(answer, instruction, {})
+})())
+check('产品是否成熟的观点不会误判为完整名单请求', (() => {
+    const requirements = buildWebResearchRequirements('这都不是完整的商业化产品，还是源码阶段的半成品')
+    return !requirements.requiresFetch && !requirements.asksCompleteList
+})())
+check('明确索要完整升级名单仍触发联网证据要求', (() => {
+    const requirements = buildWebResearchRequirements('把澎湃OS4的全部升级名单发给我')
+    return requirements.requiresFetch && requirements.asksCompleteList
+})())
+check('直接查询全部机型仍识别为完整范围', buildWebResearchRequirements('查一下该系统支持的所有机型').asksCompleteList)
+check('陈述全部机型不可用不会误判为索要完整列表', !buildWebResearchRequirements('该系统所有机型都不可用了').asksCompleteList)
 check('技术架构咨询不会因提到官方 API 而强制联网核验', (() => {
     const requirements = buildWebResearchRequirements('DeepSeek官方API有TPM限制，我能不能注册多个账户接入本地New API做负载均衡？有什么风险？')
     return !requirements.requiresFetch && !requirements.asksOfficialSource && !requirements.asksSourceBackedFact
@@ -1356,9 +1374,23 @@ check('JSON工具调用协议不会进入最终回复', hasLeakedToolCallProtoco
 check('普通工具概念说明不会被协议泄漏规则误判', !hasLeakedToolCallProtocol('工具调用通常会经过 function_calls 协议，但这里仅是在解释概念。'))
 check('工具协议泄漏会触发最终答复纠正提示', buildFinalAnswerRetryInstruction({ leakedToolCallProtocol: true }).includes('禁止输出 function_calls'))
 check('Analysis区块只保留最终答案', sanitizeModelOutput('Analysis:\n先查看文件\n\nFinal Answer:\ntag 是 image') === 'tag 是 image')
+check('正文中途出现的内部分析区块会被剔除', sanitizeModelOutput('先说结论。\n\nAnalysis:\n内部推演细节\n更多推演\n\nFinal Answer:\n这是给用户的答复。') === '先说结论。\n\n这是给用户的答复。')
+check('冒号置于加粗标题内的思维区块会被剔除', sanitizeModelOutput('**Analysis:**\n内部推演\n**Final Answer:**\n最终答复') === '最终答复')
+check('冒号置于加粗标题外的思维区块会被剔除', sanitizeModelOutput('**Analysis**:\n内部推演\n**Final Answer**:\n最终答复') === '最终答复')
+check('行内分析标题会截断内部区块并保留最终答复', sanitizeModelOutput('Analysis: 内部推演\n更多推演\nFinal Answer: 直接答复') === '直接答复')
+check('普通句首的 Analysis 不会被当成推理标题', sanitizeModelOutput('Analysis of the issue: this is a normal answer.') === 'Analysis of the issue: this is a normal answer.')
+check('思维类代码围栏会被剔除且保留后续答复', (() => {
+    const fence = String.fromCharCode(96).repeat(3)
+    return sanitizeModelOutput(fence + 'analysis\n内部推演\n' + fence + '\nFinal Answer: 最终答复') === '最终答复'
+})())
 check('纯工具规划会被识别', isPlanOnlyResponse('【工具规划】查看 sendImage.js 文件内容'))
 check('正常解释中的分析一词不会误删', sanitizeModelOutput('这个分析是合理的，因为已有真实结果。') === '这个分析是合理的，因为已有真实结果。')
 check('无工具纠正提示禁止伪造执行结果', buildFinalAnswerRetryInstruction({ hasActualToolResults: false }).includes('本轮没有执行任何工具'))
+check('证据门禁纠正提示不会误称原答复是思维链', (() => {
+    const instruction = buildFinalAnswerRetryInstruction({ lowEvidenceOverclaim: true })
+    return instruction.includes('联网研究结果的表述超出了本轮可用证据')
+        && !instruction.includes('上一条输出是内部思考或行动规划')
+})())
 check('有工具纠正提示限定系统结果区块', buildFinalAnswerRetryInstruction({ hasActualToolResults: true }).includes('由系统注入的工具结果区块'))
 check('零工具执行会拦截虚构完成声明', hasUnsupportedToolResultClaim('我已经为你运行 pnpm install，依赖补全成功。', { hasActualToolResults: false }))
 check('真实工具结果允许汇报完成', !hasUnsupportedToolResultClaim('我已经为你运行 pnpm install，依赖补全成功。', { hasActualToolResults: true }))

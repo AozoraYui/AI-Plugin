@@ -117,7 +117,7 @@ export function getWebSourceAuthority(domain = '') {
 
 export function buildWebResearchRequirements(instruction = '') {
     const value = String(instruction || '').replace(/\s+/g, ' ').trim()
-    const asksCompleteList = /(?:全部|完整|所有|全量|全名单|完整名单|全部名单|所有机型|每一款|每个机型)/i.test(value)
+    const asksCompleteList = /(?:(?:全部|完整|所有|全量).{0,8}(?:名单|列表|清单)|(?:名单|列表|清单).{0,8}(?:全部|完整|所有|全量)|(?:列出|列一下|整理|汇总|给我|发给我|查一下|查下|查询|搜索|检索).{0,12}(?:(?:全部|完整|所有|全量|每个|每一款).{0,6})?(?:升级|适配|推送)?(?:机型|型号|条目|项目|步骤|文件|成员|名单|列表|清单)|(?:全部|完整|所有|全量|每个|每一款).{0,8}(?:升级|适配|推送)?(?:机型|型号).{0,8}(?:名单|列表|清单|列出|列一下|整理|给我|发给我|有哪些|都有哪些))/i.test(value)
     const asksRolloutList = /(?:(?:升级|适配|推送|更新).{0,10}(?:名单|列表|计划|批次|机型|时间表|时间|安排)|(?:名单|列表|计划|批次|机型|时间表|时间|安排).{0,10}(?:升级|适配|推送|更新))/i.test(value)
     const asksStableRelease = /(?:正式版|稳定版|正式推送|stable\s+(?:release|build|rollout))/i.test(value)
     const asksFreshness = /(?:最新|目前|现在|当前|截至|实时|近期|今天|今日|昨天|明天|最近)/i.test(value)
@@ -153,7 +153,7 @@ export function buildWebResearchRequirements(instruction = '') {
         asksFactCheck,
         asksHighCredibility,
         requiresFetch,
-        preserveScope: scopeTerms.length > 0 || asksCompleteList,
+        preserveScope: requiresFetch && (scopeTerms.length > 0 || asksCompleteList),
         requiresIndependentConfirmation: asksFactCheck || asksResearchBackedAnalysis
     }
 }

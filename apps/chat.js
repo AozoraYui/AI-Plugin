@@ -3980,7 +3980,11 @@ ${visualDescription}`
                                         leakedToolCallProtocol,
                                         unsupportedToolClaim,
                                         unsupportedWebClaim,
-                                        unsupportedProfileClaim
+                                        unsupportedProfileClaim,
+                                        lowEvidenceOverclaim,
+                                        blockedResearchClaim,
+                                        planOnlyResponse: isPlanOnlyResponse(finalResponseText),
+                                        emptyResponse: !finalResponseText
                                     }) + ((lowEvidenceOverclaim || blockedResearchClaim)
                                         ? '\n本轮联网证据不足或搜索链路不可用。请重写：只列出能够由直接来源支持的内容；搜索摘要、转述和网传必须明确标注；若没有足够原始材料就直接说无法核实。不得把搜索失败、熔断或零结果解释为目标不存在、事件未发生、从未报道或纯属虚构，也不得断言具体日期、金额、违法违规、动机、因果、他人反应或后续影响。'
                                         : '') + ((terminalWebAccessBlock && !explicitTerminalWebBlockResponse)

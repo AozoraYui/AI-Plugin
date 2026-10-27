@@ -2215,7 +2215,9 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                                 hasVisualEvidence,
                                 leakedToolCallProtocol,
                                 unsupportedToolClaim,
-                                unsupportedProfileClaim
+                                unsupportedProfileClaim,
+                                planOnlyResponse: isPlanOnlyResponse(replyText),
+                                emptyResponse: !replyText
                             })
                         }]
                     }
