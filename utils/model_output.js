@@ -6,6 +6,9 @@ const INTERNAL_FENCE_RE = /^\x60{3}(?:thinking|analysis|reasoning)\s*$/i
 const PLAN_HEADING_RE = /^(?:#{1,6}\s*)?(?:【\s*)?(?:工具规划|工具调用规划|行动计划|执行计划|下一步计划)(?:\s*】)?\s*[：:]?\s*/i
 const XML_TOOL_PROTOCOL_RE = /<function_calls\b[\s\S]*?<invoke\b[\s\S]*?<tool_name\b[\s\S]*?<\/function_calls>/i
 const JSON_TOOL_PROTOCOL_RE = /["']tool_calls["']\s*:\s*\[[\s\S]*?["'](?:function|name|arguments)["']\s*:/i
+const MALFORMED_ANALYSIS_PREFIX_RE = /^\s*\[\s*::/i
+const INTERNAL_ANALYSIS_OPENING_RE = /^\s*(?:(?:part|section)\s+\d+\s*[:—-]\s*)?(?:\d+[.)]\s*)?(?:let me think\b|let(?:'s| us) think\b|let(?:'s| us) analyze\b|we need to (?:analyze|inspect|review|examine|look at)\b|i need to (?:analyze|inspect|review|examine|look at)\b|first,? (?:we|i) (?:need to |should )?(?:analyze|inspect|review|examine|look at)\b|look closely at\b|carefully inspect\b|我(?:们)?(?:需要|应该|先)分析\b|我(?:们)?(?:需要|应该|先)检查\b|先来分析\b|首先(?:需要|应该|先)?(?:检查|分析|观察)\b)/i
+const INTERNAL_ANALYSIS_MARKER_RE = /^\s*(?:here(?:'s| is) (?:my )?(?:chain[- ]of[- ]thought|internal analysis|private reasoning|scratchpad)|(?:chain[- ]of[- ]thought|internal analysis|private reasoning|scratchpad)\s*[:：]|(?:思维链|内部推理|内部思考|逐步推理|推理草稿)(?:\s*[:：]|$))/i
 
 function stripInternalTags(text) {
     let result = text
@@ -124,6 +127,18 @@ export function hasLeakedToolCallProtocol(text, options = {}) {
     return protocolStart || mostlyProtocol
 }
 
+export function hasLeakedInternalAnalysis(text) {
+    const value = String(text || '').trim()
+    if (!value) return false
+    if (MALFORMED_ANALYSIS_PREFIX_RE.test(value) || INTERNAL_ANALYSIS_MARKER_RE.test(value)) return true
+
+    const opening = value.slice(0, 1200)
+    if (!INTERNAL_ANALYSIS_OPENING_RE.test(opening)) return false
+    const hasSelfDirectedPlanning = /(?:\b(?:we|i) (?:need to|should|will now|must)\b|\b(?:step|part)\s*\d+\b|\bfirst[,.:])/i.test(opening)
+    const hasTaskAnalysisContext = /(?:\b(?:images?|screenshots?|chat history|conversation|user(?:'s)? request|the prompt|the task)\b|图片|截图|对话历史|聊天记录|用户(?:的)?(?:请求|问题)|任务)/i.test(opening)
+    return hasSelfDirectedPlanning && hasTaskAnalysisContext
+}
+
 export function hasUnsupportedToolResultClaim(text, options = {}) {
     const value = sanitizeModelOutput(text, options)
     if (!value) return false
@@ -175,6 +190,9 @@ export function buildFinalAnswerRetryInstruction(options = {}) {
     const protocolAudit = options.leakedToolCallProtocol === true
         ? '上一条输出泄漏了内部工具调用协议；最终回复阶段禁止输出 function_calls、invoke、tool_name、tool_calls 或任何工具参数 JSON。'
         : ''
+    const analysisAudit = options.leakedInternalAnalysis === true
+        ? '上一条输出包含内部分析草稿或自我指令，不是面向用户的答复；不要复述、续写或解释草稿，直接依据当前用户请求和可用资料给出简洁结论。'
+        : ''
     const issue = options.leakedToolCallProtocol === true
         ? '上一条输出是内部工具调用协议，不是可发送给用户的最终答复。'
         : options.unsupportedToolClaim === true
@@ -191,5 +209,5 @@ export function buildFinalAnswerRetryInstruction(options = {}) {
     const completionAudit = options.hasActualToolResults === true && options.hasTaskCompletionEvidence === false
         ? '虽然可能已有部分工具结果，但任务验证器尚未确认全部成功标准完成；可以描述已经取得的具体结果，不能扩大表述为任务完成、修复成功、部署成功或全部处理完毕。'
         : ''
-    return `${issue}上一条异常输出本身不可信，不能把其中声称的工具调用或结果当作事实。${toolAudit}${visualAudit}${webAudit}${profileAudit}${completionAudit}${protocolAudit}请重新基于原始上下文直接回答用户的问题。不要输出 Thinking、Analysis、思考过程、工具规划或下一步计划；不要输出任何 function_calls、invoke、tool_name、tool_calls、参数 JSON 或其他内部工具协议；不要声称执行了尚未执行的工具。如果缺少完成请求所需的真实结果，请明确说明目前无法确认，不能猜测。`
+    return `${issue}上一条异常输出本身不可信，不能把其中声称的工具调用或结果当作事实。${toolAudit}${visualAudit}${webAudit}${profileAudit}${completionAudit}${protocolAudit}${analysisAudit}请重新基于原始上下文直接回答用户的问题。不要输出 Thinking、Analysis、思考过程、工具规划或下一步计划；不要输出任何 function_calls、invoke、tool_name、tool_calls、参数 JSON 或其他内部工具协议；不要声称执行了尚未执行的工具。如果缺少完成请求所需的真实结果，请明确说明目前无法确认，不能猜测。`
 }

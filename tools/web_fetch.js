@@ -887,7 +887,7 @@ function formatGitHubJson(kind, json) {
  * 通过 GitHub API/raw 抓取，带 429 退避重试与可选 token
  * 列表类资源（commits/issues/pulls/releases）自动跟随 Link 头翻页，拉取全部数据
  */
-async function fetchGitHubApi(gh, originalUrl, maxChars, signal) {
+export async function fetchGitHubApi(gh, originalUrl, maxChars, signal, requestHttp = fetchPublicHttp) {
     const isRaw = gh.kind === 'raw'
     const headers = {
         'User-Agent': 'AI-Plugin-WebFetch',
@@ -904,7 +904,7 @@ async function fetchGitHubApi(gh, originalUrl, maxChars, signal) {
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             let res
             try {
-                res = await fetchPublicHttp(url, {
+                res = await requestHttp(url, {
                     method: 'GET',
                     headers,
                     signal: createTimeoutSignal(REQUEST_TIMEOUT_MS, signal),
@@ -995,7 +995,31 @@ async function fetchGitHubApi(gh, originalUrl, maxChars, signal) {
     // 非列表资源（repo/commit/raw）：单次请求
     const r = await requestOnce(gh.apiUrl)
     if (r.error) return r.error
-    const text = isRaw ? r.body : formatGitHubJson(gh.kind, r.body)
+    let text = isRaw ? r.body : formatGitHubJson(gh.kind, r.body)
+    if (gh.kind === 'repo') {
+        let repoData = null
+        try { repoData = JSON.parse(r.body) } catch {}
+        const owner = repoData?.owner?.login || repoData?.full_name?.split('/')[0]
+        const repo = repoData?.name || repoData?.full_name?.split('/')[1]
+        if (owner && repo && maxChars > 1500) {
+            const readme = await requestOnce(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/readme`)
+            if (!readme.error) {
+                try {
+                    const readmeData = JSON.parse(readme.body)
+                    const readmeText = readmeData?.encoding === 'base64' && readmeData?.content
+                        ? Buffer.from(readmeData.content.replace(/\s+/g, ''), 'base64').toString('utf8')
+                        : String(readmeData?.content || '')
+                    if (readmeText.trim()) text += '\nREADME:\n' + readmeText
+                    else text += '\nREADME: GitHub API 未返回可读取正文。'
+                } catch {
+                    logger.debug(`[AI-Plugin] WebFetch GitHub README 解析失败: ${originalUrl}`)
+                }
+            } else {
+                logger.debug(`[AI-Plugin] WebFetch GitHub README 不可用，仅返回仓库元信息: ${originalUrl}`)
+                text += '\nREADME: 当前不可用，本次只返回仓库元信息。'
+            }
+        }
+    }
     const originalLen = text.length
     const finalText = text.length > maxChars ? text.slice(0, maxChars) + '\n...(已截断)' : text
     logger.info(`[AI-Plugin] WebFetch 成功(GitHub ${gh.kind}): ${originalUrl} (${originalLen} 字符)`)

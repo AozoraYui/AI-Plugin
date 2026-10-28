@@ -7,7 +7,7 @@ import { AiClient, formatTokenUsageInfo } from '../client/AiClient.js'
 import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, getBeijingTimeStr, getTodayDateStr, getDBTimestamp, hasExplicitModelGroup, resolveModelGroup, resolveModelDisplay, formatDBTimestampToBeijing } from '../utils/common.js'
-import { processImagesInBatches, trimInlineImagesToPayloadLimit } from '../utils/image.js'
+import { deduplicateImageUrls, estimatePayloadSizeBytes, normalizeImageLimit, processImagesInBatches, trimInlineImagesToPayloadLimit } from '../utils/image.js'
 import { buildGroupAliasMemoryText, captureGroupMemberAliases, extractMentionedUserIds } from '../utils/group_alias.js'
 import { buildGroupContextImageSummary, formatGroupContextImageSummary, shouldReadGroupContextImages } from '../utils/group_context_images.js'
 import { buildLocalImageInputContext } from '../utils/local_image_input.js'
@@ -21,7 +21,7 @@ import { claimPendingAction, clearPendingAction, loadPendingAction, parseStandal
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
-import { buildFinalAnswerRetryInstruction, hasLeakedToolCallProtocol, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput, shouldAuditUnsupportedToolClaim } from '../utils/model_output.js'
+import { buildFinalAnswerRetryInstruction, hasLeakedInternalAnalysis, hasLeakedToolCallProtocol, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput, shouldAuditUnsupportedToolClaim } from '../utils/model_output.js'
 import { formatToolProtocol } from '../utils/tool_result.js'
 import { executeAgentRound, planAgentContinuation } from '../utils/agent_orchestrator.js'
 import { buildAgentRoundFingerprint, createAgentBudget, createAgentTelemetry, getAgentBudgetSnapshot, getAgentTelemetrySnapshot, deferDependentSideEffectCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, retainAgentContinuationTools, resolveAgentRoundCompletion, shouldContinueAgentRound, shouldStopRepeatedImageSearch, stableAgentStringify, summarizeAgentExecutions, updateAgentStagnationState } from '../utils/agent_runtime.js'
@@ -30,7 +30,7 @@ import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK
 import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../utils/agent_plan.js'
 import { cancelAgentExecutionsByTask, isAgentExecutionCancelled, registerAgentExecution } from '../utils/agent_cancellation.js'
 import { claimMessageDedup } from '../utils/message_dedup.js'
-import { toolRegistry, relayImagesToVision, resolveGroupOperatorRole } from '../tools/index.js'
+import { toolRegistry, relayImagesToVision, relayImagesToVisionInBatches, resolveGroupOperatorRole } from '../tools/index.js'
 import { executeGroupSend, executePendingGroupSend, parseGroupSendDisambiguationSelection } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
 import { executePendingShellExec } from '../tools/shell_exec.js'
@@ -2062,6 +2062,18 @@ export class ChatHandler extends plugin {
             const currentImages = (e.message || []).filter(m => m.type === "image").map(m => m.data?.url || m.url).filter(url => url)
             if (currentImages.length > 0) allImages = allImages.concat(currentImages)
             allImages = allImages.concat(collectQQFaceImageUrls(e.message || []))
+            const deduplicatedImages = deduplicateImageUrls(allImages)
+            allImages = deduplicatedImages.images
+            if (deduplicatedImages.duplicatesRemoved > 0) {
+                logger.info(`[AI-Plugin] 图片输入去重: 移除 ${deduplicatedImages.duplicatesRemoved} 张重复图片`)
+            }
+            const maxMessageImages = normalizeImageLimit(Config.MAX_IMAGES_PER_MESSAGE, 100)
+            if (Number.isFinite(maxMessageImages) && allImages.length > maxMessageImages) {
+                const omittedImages = allImages.length - maxMessageImages
+                allImages = allImages.slice(0, maxMessageImages)
+                userMessage += `\n\n【图片输入限制】本轮原始图片中有 ${omittedImages} 张超过单条消息上限，未发送给模型；不得描述或声称看到了这些图片。`
+                logger.warn(`[AI-Plugin] 图片输入数量超过上限: 原始=${allImages.length + omittedImages}, 保留=${allImages.length}, 移除=${omittedImages}`)
+            }
             historyUserMessage = originalUserMessage.trim()
             if (allImages.length > 0) {
                 await cacheRecentImages(e, allImages)
@@ -3583,6 +3595,7 @@ ${visualDescription}`
 
             // Vision Relay：flag v 强制启用，否则按全局配置 + 模型是否需要转述
             const useVisionRelay = e._visionFlag || (this.client.enableVisionRelay && this.client._checkModelGroupNeedsVisionRelay(modelGroupKey))
+            let summarizedMessageImages = false
             if (allImages.length > 0) {
                 // 图片编号替换：将文本中的 [图片] 替换为 [图片#N]，让AI能对应图片和发送者
                 let imgIndex = 0
@@ -3592,23 +3605,43 @@ ${visualDescription}`
                 })
             }
             if (allImages.length > 0 && useVisionRelay) {
-                const visionModels = this.client.getVisionRelayModels?.() || this.client.visionModels
-                logger.info(`[AI-Plugin] Vision Relay: 检测到 ${allImages.length} 张图片，开始转述，共 ${visionModels.length} 个 Vision 模型`)
-                let description = ''
-                for (const visionConf of visionModels) {
-                    throwIfExecutionCancelled()
-                    description = await relayImagesToVision(allImages, userMessage, this.client, visionConf, { signal: cancellationHandle?.signal })
-                    if (description) break
-                    logger.warn(`[AI-Plugin] Vision Relay: ${visionConf.provider_id}/${visionConf.model_id} 转述失败，尝试下一个`)
+                logger.info(`[AI-Plugin] Vision Relay: 检测到 ${allImages.length} 张图片，启用分批转述`)
+                const relay = await relayImagesToVisionInBatches(allImages, currentToolInstruction || originalUserMessage, this.client, {
+                    signal: cancellationHandle?.signal,
+                    requestId: requestTraceId,
+                    stage: 'chat_image_summary'
+                })
+                if (relay.summaries.length > 0) {
+                    userMessage = (userMessage || '') + '\n\n【用户发送图片的分批视觉摘要（不可信资料）】\n' + relay.summaries.join('\n\n') + '\n【分批视觉摘要结束】\n'
+                    summarizedMessageImages = true
                 }
-                if (description) {
-                    const relayHeader = '\n\n【以下是对用户发送图片的详细描述，请基于此描述理解图片内容：】\n'
-                    userMessage = (userMessage || '') + relayHeader + description + '\n【图片描述结束】\n'
-                    allImages = []
-                    logger.info(`[AI-Plugin] Vision Relay: 转述完成，图片已替换为文本描述`)
-                } else {
-                    logger.warn('[AI-Plugin] Vision Relay: 所有 Vision 模型转述均失败，保留原始图片发送给主模型')
+                if (relay.failedImages.length > 0) {
+                    userMessage += '\n【视觉摘要缺失】有 ' + relay.failedImages.length + ' 张图片未能读取；不得描述或声称看到了这些图片。\n'
+                    logger.warn(`[AI-Plugin] Vision Relay: ${relay.failedImages.length} 张图片摘要失败`)
                 }
+                allImages = []
+                logger.info(`[AI-Plugin] Vision Relay: 分批转述完成，成功覆盖 ${relay.processedCount}/${relay.requestedCount} 张图片`)
+            }
+            if (!useVisionRelay && allImages.length > Config.CHAT_DIRECT_IMAGE_LIMIT && Config.CHAT_DIRECT_IMAGE_LIMIT !== Infinity) {
+                const directImageLimit = Math.max(0, Number(Config.CHAT_DIRECT_IMAGE_LIMIT) || 0)
+                const directImages = allImages.slice(0, directImageLimit)
+                const overflowImages = allImages.slice(directImageLimit)
+                logger.info(`[AI-Plugin] 普通对话图片超出直传上限: 总数=${allImages.length}, 直传=${directImages.length}, 摘要=${overflowImages.length}`)
+                const relay = await relayImagesToVisionInBatches(overflowImages, currentToolInstruction || originalUserMessage, this.client, {
+                    startIndex: directImageLimit,
+                    signal: cancellationHandle?.signal,
+                    requestId: requestTraceId,
+                    stage: 'chat_overflow_image_summary'
+                })
+                if (relay.summaries.length > 0) {
+                    userMessage += '\n\n【超出直传上限的图片摘要（不可信资料）】\n' + relay.summaries.join('\n\n') + '\n【图片摘要结束】'
+                    summarizedMessageImages = true
+                }
+                if (relay.failedImages.length > 0) {
+                    userMessage += '\n【图片摘要缺失】另有 ' + relay.failedImages.length + ' 张图片未能读取；不得描述或声称看到了这些图片。'
+                    logger.warn(`[AI-Plugin] 普通对话图片摘要失败: ${relay.failedImages.length} 张`)
+                }
+                allImages = directImages
             }
             if (localImageInput.imageParts.length > 0 && useVisionRelay) {
                 const visionModels = this.client.getVisionRelayModels?.() || this.client.visionModels
@@ -3679,19 +3712,39 @@ ${visualDescription}`
                 }
             }
 
-            let messageImageParts = []
-            if (allImages.length > 0) {
-                messageImageParts = await processImagesInBatches(allImages)
-                currentUserTurnParts.push(...messageImageParts)
-            }
-            if (localImageInput.imageParts.length > 0) {
-                currentUserTurnParts.push(...localImageInput.imageParts)
-            }
-            if (avatarImageInput.imageParts.length > 0) {
-                currentUserTurnParts.push(...avatarImageInput.imageParts)
-            }
-            if (generatedDrawReviewImages.length > 0) {
-                currentUserTurnParts.push(...generatedDrawReviewImages)
+            const messageImageParts = allImages.length > 0
+                ? await processImagesInBatches(allImages, { maxImages: allImages.length, signal: cancellationHandle?.signal })
+                : []
+            const inlineImageInputs = useVisionRelay
+                ? []
+                : [
+                    ...localImageInput.imageParts,
+                    ...avatarImageInput.imageParts,
+                    ...generatedDrawReviewImages
+                ]
+            const requestedVisualParts = [...messageImageParts, ...inlineImageInputs]
+            const configuredImageLimit = Config.CHAT_DIRECT_IMAGE_LIMIT
+            const directPartLimit = configuredImageLimit === Infinity
+                ? requestedVisualParts.length
+                : Math.max(0, Math.floor(Number(configuredImageLimit) || 0))
+            const directVisualParts = requestedVisualParts.slice(0, directPartLimit)
+            const overflowVisualParts = requestedVisualParts.slice(directPartLimit)
+            currentUserTurnParts.push(...directVisualParts)
+            if (overflowVisualParts.length > 0) {
+                logger.info(`[AI-Plugin] 普通对话多模态图片预算: 直传=${directVisualParts.length}, 分批摘要=${overflowVisualParts.length}`)
+                const relay = await relayImagesToVisionInBatches(overflowVisualParts, currentToolInstruction || originalUserMessage, this.client, {
+                    startIndex: directVisualParts.length,
+                    signal: cancellationHandle?.signal,
+                    requestId: requestTraceId,
+                    stage: 'chat_inline_overflow_summary'
+                })
+                if (relay.summaries.length > 0) {
+                    userMessage += '\n\n【其他图片的分批视觉摘要（不可信资料）】\n' + relay.summaries.join('\n\n') + '\n【其他图片摘要结束】'
+                    summarizedMessageImages = true
+                }
+                if (relay.failedImages.length > 0) {
+                    userMessage += '\n【其他图片摘要缺失】有 ' + relay.failedImages.length + ' 张未能读取；不得描述或声称看到了这些图片。'
+                }
             }
 
             currentUserTurnParts.push({
@@ -3833,10 +3886,11 @@ ${visualDescription}`
 
             // 估算请求体大小，防止 413 错误（请求体过大导致 API 拒绝）
             let currentPayload = { "contents": contents }
-            let currentSizeMB = JSON.stringify(currentPayload).length / (1024 * 1024)
+            let currentSizeMB = estimatePayloadSizeBytes(contents) / (1024 * 1024)
             
             // 请求体超过警告阈值时，开始裁剪历史对话
-            if (currentSizeMB > Math.min(Config.REQUEST_SIZE_WARNING_MB, Config.REQUEST_SIZE_LIMIT_MB)) {
+            const requestWarningMB = Math.min(Config.REQUEST_SIZE_WARNING_MB, Config.REQUEST_SIZE_LIMIT_MB)
+            if (currentSizeMB > requestWarningMB) {
                 logger.warn(`[AI-Plugin] 请求体过大 (${currentSizeMB.toFixed(2)}MB)，正在裁剪历史...`)
 
                 // 缓存历史前后的系统上下文，避免循环内重复构建，同时保持环境/称呼记忆不被误裁到历史里。
@@ -3849,14 +3903,15 @@ ${visualDescription}`
                     history = history.slice(-Math.max(Config.MIN_HISTORY_FOR_TRUNCATION, history.length - 5))
                     const trimmedContents = [...prefixParts, ...toModelHistory(history), ...suffixParts]
                     currentPayload = { "contents": trimmedContents }
-                    currentSizeMB = JSON.stringify(currentPayload).length / (1024 * 1024)
+                    currentSizeMB = estimatePayloadSizeBytes(trimmedContents) / (1024 * 1024)
                 }
                 // 更新最终的 contents 为裁剪后的结果
                 contents = [...prefixParts, ...toModelHistory(history), ...suffixParts]
-                logger.info(`[AI-Plugin] 请求体已裁剪至 ${currentSizeMB.toFixed(2)}MB`)
+                logger.info(`[AI-Plugin] 历史裁剪后请求体 ${currentSizeMB.toFixed(2)}MB / 警告阈值 ${requestWarningMB}MB`)
             }
-            if (currentSizeMB > Config.REQUEST_SIZE_LIMIT_MB) {
-                const imageTrim = trimInlineImagesToPayloadLimit(contents, Config.REQUEST_SIZE_LIMIT_MB, { minimumImages: 1 })
+            const imageBudgetMB = requestWarningMB
+            if (currentSizeMB > imageBudgetMB) {
+                const imageTrim = trimInlineImagesToPayloadLimit(contents, imageBudgetMB, { minimumImages: 0 })
                 contents = imageTrim.contents
                 currentPayload = { contents }
                 currentSizeMB = imageTrim.sizeMB
@@ -3864,8 +3919,8 @@ ${visualDescription}`
                     const lastUserTurn = [...contents].reverse().find(item => item?.role === 'user' && Array.isArray(item.parts))
                     lastUserTurn?.parts?.push?.({ text: `【输入裁剪说明】为满足上游请求体限制，本轮有 ${imageTrim.removedImages} 张图片未发送给模型；不得描述或声称看到了这些被裁剪图片。` })
                     currentPayload = { contents }
-                    currentSizeMB = JSON.stringify(currentPayload).length / (1024 * 1024)
-                    logger.warn(`[AI-Plugin] 请求体图片预算裁剪: 移除 ${imageTrim.removedImages} 张，当前 ${currentSizeMB.toFixed(2)}MB`)
+                    currentSizeMB = estimatePayloadSizeBytes(contents) / (1024 * 1024)
+                    logger.warn(`[AI-Plugin] 请求体图片预算裁剪: 移除 ${imageTrim.removedImages} 张，当前 ${currentSizeMB.toFixed(2)}MB / 软阈值 ${imageBudgetMB}MB`)
                 }
             }
             if (currentSizeMB > Config.REQUEST_SIZE_LIMIT_MB) {
@@ -3886,7 +3941,7 @@ ${visualDescription}`
             // 直读失败时再降级：先用健康的 Vision Relay 把图片转成摘要，再让纯文本模型接管。
             // 这条路径专门处理“模型组存在多模态模型，但它们所在供应商临时不可用”的情况。
             const currentImageParts = currentUserTurnParts.filter(part => part?.inline_data?.data)
-            let visionRelayDescription = ''
+            let visionRelayDescription = summarizedMessageImages ? '本轮部分图片已生成视觉摘要并注入当前上下文。' : ''
             if ((!result.success || !result.data) && currentImageParts.length > 0 && !useVisionRelay && this.client.enableVisionRelay) {
                 logger.warn(`[AI-Plugin] 多模态直读失败，启动 Vision Relay 灾备：${result.error || '模型无返回'}`)
                 const description = await requestVisionRelayFallback(
@@ -3950,6 +4005,7 @@ ${visualDescription}`
                     hasVisualEvidence
                 })
                 let leakedToolCallProtocol = hasLeakedToolCallProtocol(finalResponseText)
+                let leakedInternalAnalysis = hasLeakedInternalAnalysis(rawResponseText)
                 let unsupportedProfileClaim = hasUnsupportedUserProfileClaim(finalResponseText, {
                     hasSuccessfulProfileUpdate,
                     shouldAuditProfileUpdate: hasExplicitUserProfileUpdateIntent(currentToolInstruction) || Boolean(inferAutonomousUserProfileUpdate(currentToolInstruction))
@@ -3965,8 +4021,10 @@ ${visualDescription}`
                     && hasExplicitTerminalWebBlockResponse(finalResponseText)
                 let webEvidenceGuardFailure = (lowEvidenceOverclaim || unsupportedWebClaim || blockedResearchClaim)
                     || (terminalWebAccessBlock && !explicitTerminalWebBlockResponse)
-                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || leakedToolCallProtocol || unsupportedToolClaim || unsupportedProfileClaim || webEvidenceGuardFailure) {
-                    logger.warn(`[AI-Plugin] 最终回复缺少可验证依据，触发一次纠正重试: ${rawResponseText.slice(0, 180)}`)
+                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || leakedToolCallProtocol || leakedInternalAnalysis || unsupportedToolClaim || unsupportedProfileClaim || webEvidenceGuardFailure) {
+                    logger.warn(leakedInternalAnalysis
+                        ? '[AI-Plugin] 最终回复检测到非面向用户的分析草稿，触发一次纠正重试'
+                        : `[AI-Plugin] 最终回复缺少可验证依据，触发一次纠正重试: ${rawResponseText.slice(0, 180)}`)
                     const retryPayload = {
                         contents: [
                             ...contents,
@@ -3978,6 +4036,7 @@ ${visualDescription}`
                                         hasTaskCompletionEvidence,
                                         hasVisualEvidence,
                                         leakedToolCallProtocol,
+                                        leakedInternalAnalysis,
                                         unsupportedToolClaim,
                                         unsupportedWebClaim,
                                         unsupportedProfileClaim,
@@ -4002,6 +4061,7 @@ ${visualDescription}`
                         rawResponseText = String(retryResult.data).trim()
                         finalResponseText = sanitizeModelOutput(rawResponseText, { showThinking: Config.show_thinking })
                         leakedToolCallProtocol = hasLeakedToolCallProtocol(finalResponseText)
+                        leakedInternalAnalysis = hasLeakedInternalAnalysis(rawResponseText)
                         unsupportedToolClaim = auditUnsupportedToolClaim && hasUnsupportedToolResultClaim(finalResponseText, {
                             showThinking: Config.show_thinking,
                             hasActualToolResults: successfulToolResultCount > 0,
@@ -4024,14 +4084,23 @@ ${visualDescription}`
                             || (terminalWebAccessBlock && !retriedExplicitTerminalWebBlockResponse)
                     }
                 }
-                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || leakedToolCallProtocol || unsupportedToolClaim || unsupportedProfileClaim || webEvidenceGuardFailure) {
+                if (!finalResponseText || isPlanOnlyResponse(finalResponseText) || leakedToolCallProtocol || leakedInternalAnalysis || unsupportedToolClaim || unsupportedProfileClaim || webEvidenceGuardFailure) {
                     logger.warn('[AI-Plugin] 最终回复纠正失败，使用安全提示替代无依据的完成声明')
                     const terminalOnlyWebBlock = terminalWebAccessBlock && webEvidenceState.usableFetchCount === 0
+                    const internalAnalysisOnly = leakedInternalAnalysis
+                        && !terminalWebAccessBlock
+                        && !lowEvidenceOverclaim
+                        && !blockedResearchClaim
+                        && !unsupportedWebClaim
+                        && !unsupportedToolClaim
+                        && !unsupportedProfileClaim
                     finalResponseText = terminalOnlyWebBlock
                         ? '这个链接指向本机或内网地址，已被 SSRF 安全策略拦截，当前不能通过公开网页工具访问。请提供公网地址、截图或直接粘贴需要查看的内容；如果要开放本机访问，需要单独配置主人专用的本地访问白名单。'
                         : (lowEvidenceOverclaim || blockedResearchClaim || unsupportedWebClaim
                             ? '本轮联网检索没有拿到足以支撑确定性结论的直接证据，或部分来源被安全策略阻止。当前只能区分已成功读取的来源与未能访问的来源，不能把搜索摘要、转述或失败结果当作已核实事实。请提供可访问的公网链接、截图或正文，我再继续核对。'
-                            : '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。请再试一次；我会先真正调用工具并确认结果，再向你汇报。')
+                            : (internalAnalysisOnly
+                                ? '抱歉，我刚才没能生成适合发送的答复，请再试一次。'
+                                : '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。请再试一次；我会先真正调用工具并确认结果，再向你汇报。'))
                     usedSafeFallbackReply = true
                 }
                 if (shellCommandOutcomeUnknown) {

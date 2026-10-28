@@ -5,7 +5,7 @@ import { Config } from '../utils/config.js'
 import { checkAccess, getAccessConfig } from '../utils/access.js'
 import { isBotMuted } from '../utils/bot_mute.js'
 import { formatDBTimestampToBeijing, getBeijingTimeStr, getTodayDateStr, takeSourceMsg } from '../utils/common.js'
-import { processImagesInBatches, trimInlineImagesToPayloadLimit } from '../utils/image.js'
+import { estimatePayloadSizeBytes, processImagesInBatches, trimInlineImagesToPayloadLimit } from '../utils/image.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject } from '../utils/message_context.js'
 import { buildEventSpeakerMeta, buildSpeakerMeta } from '../utils/speaker_context.js'
 import { describeQQFaceSegment } from '../utils/qq_face.js'
@@ -17,7 +17,7 @@ import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memo
 import { detectToolIntentFamilies, extractUrlsFromText, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, hasExplicitUserProfileUpdateIntent, inferAutonomousUserProfileUpdate, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates, shouldSemanticallyValidateToolCandidates } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { relayImagesToVision } from '../tools/vision_relay.js'
-import { buildFinalAnswerRetryInstruction, hasLeakedToolCallProtocol, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput, shouldAuditUnsupportedToolClaim } from '../utils/model_output.js'
+import { buildFinalAnswerRetryInstruction, hasLeakedInternalAnalysis, hasLeakedToolCallProtocol, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput, shouldAuditUnsupportedToolClaim } from '../utils/model_output.js'
 import { formatToolProtocol } from '../utils/tool_result.js'
 import { buildAgentRoundFingerprint, createAgentBudget, createAgentTelemetry, getAgentBudgetSnapshot, getAgentTelemetrySnapshot, isUnfulfilledImageSearch, resolveAgentRoundCompletion, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } from '../utils/agent_runtime.js'
 import { findPendingWorkspaceVerification, resolvePersistedAgentStatus } from '../utils/agent_completion.js'
@@ -870,7 +870,7 @@ async function persistCurrentMessageImageMemory(client, db, normalized, options 
 
 function estimateFastChatPayloadSizeMB(buildContents, promptText) {
     try {
-        return JSON.stringify({ contents: buildContents(promptText) }).length / (1024 * 1024)
+        return estimatePayloadSizeBytes(buildContents(promptText)) / (1024 * 1024)
     } catch {
         return Infinity
     }
@@ -2093,17 +2093,17 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
         let prompt = buildFinalPrompt(finalContext, compactedContext.note)
         let contents = buildContents(prompt)
         let payload = { contents }
-        let payloadSizeMB = JSON.stringify(payload).length / (1024 * 1024)
+        let payloadSizeMB = estimatePayloadSizeBytes(contents) / (1024 * 1024)
         if (prompt.length > FAST_CHAT_FINAL_PROMPT_TARGET_CHARS || payloadSizeMB > Math.min(Config.REQUEST_SIZE_WARNING_MB, Config.REQUEST_SIZE_LIMIT_MB)) {
             logger.warn(`[AI-Plugin] [畅聊] 分段摘要后最终上下文仍过大 (prompt=${prompt.length}字, body=${payloadSizeMB.toFixed(2)}MB)，执行兜底硬截断`)
             prompt = truncateMiddleText(prompt, FAST_CHAT_FINAL_PROMPT_TARGET_CHARS)
             contents = buildContents(prompt)
             payload = { contents }
-            payloadSizeMB = JSON.stringify(payload).length / (1024 * 1024)
+            payloadSizeMB = estimatePayloadSizeBytes(contents) / (1024 * 1024)
             logger.info(`[AI-Plugin] [畅聊] 最终请求体已裁剪至 ${payloadSizeMB.toFixed(2)}MB`)
         }
-        if (payloadSizeMB > Config.REQUEST_SIZE_LIMIT_MB) {
-            const imageTrim = trimInlineImagesToPayloadLimit(contents, Config.REQUEST_SIZE_LIMIT_MB, { minimumImages: 1 })
+        if (payloadSizeMB > Math.min(Config.REQUEST_SIZE_WARNING_MB, Config.REQUEST_SIZE_LIMIT_MB)) {
+            const imageTrim = trimInlineImagesToPayloadLimit(contents, Math.min(Config.REQUEST_SIZE_WARNING_MB, Config.REQUEST_SIZE_LIMIT_MB), { minimumImages: 0 })
             contents = imageTrim.contents
             payload = { contents }
             payloadSizeMB = imageTrim.sizeMB
@@ -2111,7 +2111,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                 const lastUserTurn = [...contents].reverse().find(item => item?.role === 'user' && Array.isArray(item.parts))
                 lastUserTurn?.parts?.push?.({ text: `【输入裁剪说明】为满足上游请求体限制，本轮有 ${imageTrim.removedImages} 张图片未发送给模型；不得描述或声称看到了这些被裁剪图片。` })
                 payload = { contents }
-                payloadSizeMB = JSON.stringify(payload).length / (1024 * 1024)
+                payloadSizeMB = estimatePayloadSizeBytes(contents) / (1024 * 1024)
                 logger.warn(`[AI-Plugin] [畅聊] 请求体图片预算裁剪: 移除 ${imageTrim.removedImages} 张，当前 ${payloadSizeMB.toFixed(2)}MB`)
             }
         }
@@ -2197,12 +2197,15 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             hasVisualEvidence
         })
         let leakedToolCallProtocol = hasLeakedToolCallProtocol(replyText)
+        let leakedInternalAnalysis = hasLeakedInternalAnalysis(result.data)
         let unsupportedProfileClaim = hasUnsupportedUserProfileClaim(replyText, {
             hasSuccessfulProfileUpdate,
             shouldAuditProfileUpdate: hasExplicitUserProfileUpdateIntent(toolRoutingText) || Boolean(autonomousProfile)
         })
-        if (!replyText || isPlanOnlyResponse(replyText) || leakedToolCallProtocol || unsupportedToolClaim || unsupportedProfileClaim) {
-            logger.warn(`[AI-Plugin] [畅聊] 最终回复缺少可验证依据，触发一次纠正重试: ${String(result.data).slice(0, 180)}`)
+        if (!replyText || isPlanOnlyResponse(replyText) || leakedToolCallProtocol || leakedInternalAnalysis || unsupportedToolClaim || unsupportedProfileClaim) {
+            logger.warn(leakedInternalAnalysis
+                ? '[AI-Plugin] [畅聊] 最终回复检测到非面向用户的分析草稿，触发一次纠正重试'
+                : `[AI-Plugin] [畅聊] 最终回复缺少可验证依据，触发一次纠正重试: ${String(result.data).slice(0, 180)}`)
             const retryPayload = {
                 contents: [
                     ...contents,
@@ -2214,6 +2217,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                                 hasTaskCompletionEvidence,
                                 hasVisualEvidence,
                                 leakedToolCallProtocol,
+                                leakedInternalAnalysis,
                                 unsupportedToolClaim,
                                 unsupportedProfileClaim,
                                 planOnlyResponse: isPlanOnlyResponse(replyText),
@@ -2228,6 +2232,7 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                 result = retryResult
                 replyText = cleanModelText(retryResult.data)
                 leakedToolCallProtocol = hasLeakedToolCallProtocol(replyText)
+                leakedInternalAnalysis = hasLeakedInternalAnalysis(retryResult.data)
                 unsupportedToolClaim = auditUnsupportedToolClaim && hasUnsupportedToolResultClaim(replyText, {
                     hasActualToolResults: hasSuccessfulToolResult,
                     hasTaskCompletionEvidence,
@@ -2239,9 +2244,12 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
                 })
             }
         }
-        if (!replyText || isPlanOnlyResponse(replyText) || leakedToolCallProtocol || unsupportedToolClaim || unsupportedProfileClaim) {
+        if (!replyText || isPlanOnlyResponse(replyText) || leakedToolCallProtocol || leakedInternalAnalysis || unsupportedToolClaim || unsupportedProfileClaim) {
             logger.warn('[AI-Plugin] [畅聊] 最终回复纠正失败，使用安全提示替代无依据的完成声明')
-            replyText = '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。你可以再问一次，我会先真正调用工具并确认结果。'
+            const internalAnalysisOnly = leakedInternalAnalysis && !leakedToolCallProtocol && !unsupportedToolClaim && !unsupportedProfileClaim && !isPlanOnlyResponse(replyText) && Boolean(replyText)
+            replyText = internalAnalysisOnly
+                ? '抱歉，我刚才没能生成适合发送的答复，请再试一次。'
+                : '这次没有拿到可验证的实际执行结果，所以我不能声称任务已经完成。你可以再问一次，我会先真正调用工具并确认结果。'
             usedSafeFallbackReply = true
         }
         const sendFastReply = async text => {

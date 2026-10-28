@@ -8,7 +8,7 @@ global.logger = {
 }
 
 const { assertPublicUrl, fetchWithProxy, isAbortError, isConfiguredPrivateNetworkUrl, readResponseBodyTextLimited } = await import('../utils/common.js')
-const { fetchHttpWithRecovery, isLikelyBotWall, webFetchTool } = await import('../tools/web_fetch.js')
+const { fetchGitHubApi, fetchHttpWithRecovery, isLikelyBotWall, webFetchTool } = await import('../tools/web_fetch.js')
 const { weatherTool } = await import('../tools/weather.js')
 const { toolRegistry } = await import('../tools/registry.js')
 
@@ -145,7 +145,42 @@ async function testWeatherCancellationPropagates() {
     }
 }
 
+async function testGitHubRepositoryFetchIncludesReadme() {
+    const requests = []
+    const repoData = {
+        full_name: 'owner/project',
+        name: 'project',
+        description: 'A test repository',
+        language: 'JavaScript',
+        stargazers_count: 12,
+        forks_count: 3,
+        open_issues_count: 1,
+        default_branch: 'main',
+        pushed_at: '2026-10-27T00:00:00Z',
+        owner: { login: 'owner' }
+    }
+    const result = await fetchGitHubApi({ kind: 'repo', apiUrl: 'https://api.github.com/repos/owner/project' }, 'https://github.com/owner/project', 8000, undefined, async url => {
+        requests.push(String(url))
+        if (String(url).endsWith('/readme')) {
+            return new Response(JSON.stringify({ encoding: 'base64', content: Buffer.from('# Project\nREADME body is returned with repo metadata.').toString('base64') }), { status: 200 })
+        }
+        return new Response(JSON.stringify(repoData), { status: 200 })
+    })
+    assert.equal(requests.length, 2)
+    assert.match(requests[1], /repos\/owner\/project\/readme$/)
+    assert.match(result, /仓库: owner\/project/)
+    assert.match(result, /README body is returned with repo metadata/)
+
+    const shortBudgetRequests = []
+    await fetchGitHubApi({ kind: 'repo', apiUrl: 'https://api.github.com/repos/owner/project' }, 'https://github.com/owner/project', 1200, undefined, async url => {
+        shortBudgetRequests.push(String(url))
+        return new Response(JSON.stringify(repoData), { status: 200 })
+    })
+    assert.equal(shortBudgetRequests.length, 1)
+}
+
 await testLimitedResponseBody()
+await testGitHubRepositoryFetchIncludesReadme()
 await testTimeoutAndCancellationAreDistinguished()
 await testWebFetchHttpRecoveryRotatesProfiles()
 await testWebFetchHttpRecoveryStopsOnRateLimit()
@@ -154,4 +189,4 @@ await testConfiguredPrivateWebFetchOrigin()
 await testBotWallDetectionAvoidsNormalPageTerms()
 await testWebFetchCancellationPropagates()
 await testWeatherCancellationPropagates()
-console.log('Network eval: 9 passed, 0 failed')
+console.log('Network eval: 10 passed, 0 failed')

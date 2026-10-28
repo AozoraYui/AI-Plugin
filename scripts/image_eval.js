@@ -2,7 +2,8 @@ import sharp from 'sharp'
 
 globalThis.logger = globalThis.logger || { info() {}, warn() {}, error() {}, debug() {} }
 const { Config } = await import('../utils/config.js')
-const { processImageBufferForAI, processInlineImagesForAI, processImagesInBatches } = await import('../utils/image.js')
+const { deduplicateImageUrls, estimatePayloadSizeBytes, normalizeImageLimit, processImageBufferForAI, processInlineImagesForAI, processImagesInBatches, trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
+const { relayImagesToVisionInBatches } = await import('../tools/vision_relay.js')
 const { urlToBuffer } = await import('../utils/common.js')
 
 const failures = []
@@ -69,6 +70,53 @@ try {
     downloadCancellationCode = error.code
 }
 check('图片下载支持取消信号并在发起网络请求前中止', downloadCancellationCode === 'AGENT_CANCELLED', downloadCancellationCode)
+
+const utf8Payload = [{ role: 'user', parts: [{ text: '图片分析' }] }]
+check('请求体大小按 UTF-8 字节计算', estimatePayloadSizeBytes(utf8Payload) === Buffer.byteLength(JSON.stringify({ contents: utf8Payload }), 'utf8'))
+const deduplicated = deduplicateImageUrls(['https://example.com/a.png', ' https://example.com/a.png ', '', null, 'https://example.com/b.png'])
+check('重复图片 URL 去重且不把空值计作重复', deduplicated.images.length === 2 && deduplicated.duplicatesRemoved === 1)
+check('图片数量上限接受 unlimited 配置', normalizeImageLimit('unlimited', 100) === Infinity)
+const priorTurn = { role: 'user', parts: [{ text: '旧图' }, { inline_data: { mime_type: 'image/png', data: 'a'.repeat(600) } }] }
+const latestTurn = { role: 'user', parts: [{ text: '当前图' }, { inline_data: { mime_type: 'image/png', data: 'b'.repeat(700) } }] }
+const historyWithImages = [priorTurn, { role: 'model', parts: [{ text: '已看到旧图' }] }, latestTurn]
+const currentOnly = [priorTurn, { role: 'model', parts: [{ text: '已看到旧图' }] }, { ...latestTurn, parts: [latestTurn.parts[0]] }]
+const currentOnlySizeMB = estimatePayloadSizeBytes(currentOnly) / (1024 * 1024)
+const trimmedPayload = trimInlineImagesToPayloadLimit(historyWithImages, currentOnlySizeMB, { minimumImages: 1 })
+check('请求体裁剪优先移除历史图片并保留当前图片', trimmedPayload.removedImages === 1 && !trimmedPayload.contents[0].parts.some(part => part?.inline_data) && trimmedPayload.contents[2].parts.some(part => part?.inline_data))
+const zeroImagePayload = trimInlineImagesToPayloadLimit(historyWithImages, 0, { minimumImages: 0 })
+check('硬请求体预算允许裁掉最后一张超限图片', zeroImagePayload.removedImages === 2 && zeroImagePayload.contents.every(content => !content.parts?.some(part => part?.inline_data)))
+
+const visionBatchPayloads = []
+let visionRequestNumber = 0
+const mockVisionClient = {
+    modelsConfig: [{ id: 'vision-provider' }],
+    getVisionRelayModels: () => [{ provider_id: 'vision-provider', model_id: 'vision-model' }],
+    async attemptRequest(_type, payload) {
+        visionBatchPayloads.push(payload)
+        visionRequestNumber++
+        return { success: true, data: '可见画面摘要 ' + visionRequestNumber }
+    },
+    _recordModelSuccess() {},
+    saveModelStatus() {}
+}
+const relayBatchResult = await relayImagesToVisionInBatches(
+    Array.from({ length: 6 }, () => ({ inline_data: { mime_type: 'image/png', data: smallImage.toString('base64') } })),
+    '分析这些图片',
+    mockVisionClient,
+    { batchSize: 2, startIndex: 2, concurrency: 1 }
+)
+const relayBatchPrompts = visionBatchPayloads.map(payload => payload.contents[0].parts[0].text)
+check('Vision Relay 分批摘要不漏图并保留原始图片序号', relayBatchResult.processedCount === 6 && relayBatchResult.failedImages.length === 0 && relayBatchResult.summaries.length === 3 && relayBatchPrompts[0].includes('原始序号 3-4') && relayBatchPrompts[2].includes('原始序号 7-8'))
+const partialRelayResult = await relayImagesToVisionInBatches(
+    [
+        { inline_data: { mime_type: 'image/png', data: smallImage.toString('base64') } },
+        { inline_data: { mime_type: 'image/png', data: 'not-an-image' } }
+    ],
+    '分析这两张图片',
+    mockVisionClient,
+    { batchSize: 2, concurrency: 1 }
+)
+check('Vision Relay 单批部分图片处理失败时不伪造完整摘要', partialRelayResult.processedCount === 0 && partialRelayResult.failedImages.length === 2 && partialRelayResult.summaries.length === 0)
 
 if (failures.length > 0) {
     console.error(`Image eval: ${passed} passed, ${failures.length} failed`)

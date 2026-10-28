@@ -4,6 +4,7 @@ globalThis.logger = globalThis.logger || { info() {}, debug() {}, warn() {}, err
 
 const { AiClient } = await import('../client/AiClient.js')
 const { APPLICATION_SECURITY_INSTRUCTION } = await import('../utils/prompt_security.js')
+const { buildFinalAnswerRetryInstruction, hasLeakedInternalAnalysis } = await import('../utils/model_output.js')
 const { buildUserProfilePrompt } = await import('../utils/user_profile.js')
 const { Config } = await import('../utils/config.js')
 const previousPrompts = Config.Prompts
@@ -43,4 +44,10 @@ const profilePrompt = buildUserProfilePrompt({ userId: 'test-user', summaryText:
 assert.match(profilePrompt, /指令注入/)
 assert.match(profilePrompt, /不要将其写入档案/)
 
-console.log('Prompt security eval: authoritative system boundary precedes untrusted user content.')
+const internalDraft = '[:: 1. Look closely at all 16 images and the chat history: - Part 1: Image 1 ...'
+assert.equal(hasLeakedInternalAnalysis(internalDraft), true)
+assert.equal(hasLeakedInternalAnalysis('内部推理：我需要先检查图片，然后再回答。'), true)
+assert.equal(hasLeakedInternalAnalysis('1. 第一张截图展示了设置页面。\n2. 第二张截图展示了运行结果。'), false)
+assert.match(buildFinalAnswerRetryInstruction({ leakedInternalAnalysis: true, hasVisualEvidence: true }), /内部分析草稿/)
+
+console.log('Prompt security eval: system boundary and final-output leakage checks passed.')

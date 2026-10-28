@@ -3,8 +3,29 @@ import sharp from 'sharp'
 import { isAbortError, throwIfAborted, urlToBuffer, getImageMimeType } from './common.js'
 import { Config } from './config.js'
 
+export function estimatePayloadSizeBytes(contents = []) {
+    return Buffer.byteLength(JSON.stringify({ contents }), 'utf8')
+}
+
 function payloadSizeMB(contents = []) {
-    return JSON.stringify({ contents }).length / (1024 * 1024)
+    return estimatePayloadSizeBytes(contents) / (1024 * 1024)
+}
+
+export function deduplicateImageUrls(imageUrls = []) {
+    const seen = new Set()
+    const images = []
+    let duplicatesRemoved = 0
+    for (const imageUrl of Array.isArray(imageUrls) ? imageUrls : []) {
+        const key = String(imageUrl || '').trim()
+        if (!key) continue
+        if (seen.has(key)) {
+            duplicatesRemoved++
+            continue
+        }
+        seen.add(key)
+        images.push(imageUrl)
+    }
+    return { images, duplicatesRemoved }
 }
 
 export function trimInlineImagesToPayloadLimit(contents = [], limitMB = 10, options = {}) {
@@ -21,10 +42,25 @@ export function trimInlineImagesToPayloadLimit(contents = [], limitMB = 10, opti
         })
     })
 
+    let latestUserTurnIndex = -1
+    for (let index = cloned.length - 1; index >= 0; index--) {
+        if (cloned[index]?.role === 'user' && Array.isArray(cloned[index]?.parts)) {
+            latestUserTurnIndex = index
+            break
+        }
+    }
+    imageRefs.sort((left, right) => {
+        const leftIsCurrent = left.contentIndex === latestUserTurnIndex
+        const rightIsCurrent = right.contentIndex === latestUserTurnIndex
+        if (leftIsCurrent !== rightIsCurrent) return leftIsCurrent ? 1 : -1
+        if (leftIsCurrent) return right.partIndex - left.partIndex
+        return left.contentIndex - right.contentIndex || left.partIndex - right.partIndex
+    })
+
     let removedImages = 0
     let currentSizeMB = payloadSizeMB(cloned)
     while (currentSizeMB > limitMB && imageRefs.length - removedImages > minimumImages) {
-        const target = imageRefs[imageRefs.length - 1 - removedImages]
+        const target = imageRefs[removedImages]
         cloned[target.contentIndex].parts[target.partIndex] = null
         removedImages++
         currentSizeMB = payloadSizeMB(cloned)
@@ -35,7 +71,12 @@ export function trimInlineImagesToPayloadLimit(contents = [], limitMB = 10, opti
         }
         currentSizeMB = payloadSizeMB(cloned)
     }
-    return { contents: cloned, removedImages, sizeMB: currentSizeMB }
+    return {
+        contents: cloned,
+        removedImages,
+        sizeBytes: estimatePayloadSizeBytes(cloned),
+        sizeMB: currentSizeMB
+    }
 }
 
 function normalizeForceFormat(value) {
@@ -169,10 +210,14 @@ export async function processImageForAI(imageUrl, options = {}) {
     }
 }
 
-function normalizeImageLimit(value, fallback) {
+export function normalizeImageLimit(value, fallback) {
     if (value === Infinity) return Infinity
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase()
+        if (['unlimited', 'infinite', 'infinity', 'inf', 'all', 'no_limit', 'nolimit', '无限', '不限', '不限制', '全部', '所有'].includes(normalized)) return Infinity
+    }
     const num = Number(value)
-    if (num === Infinity) return Infinity
+    if (num === Infinity || num === -Infinity || num < 0) return Infinity
     return Number.isFinite(num) && num >= 0 ? Math.floor(num) : fallback
 }
 

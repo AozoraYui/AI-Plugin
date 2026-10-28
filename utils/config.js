@@ -25,6 +25,10 @@ const defaultConfig = {
     // 超过此数量的图片将被忽略，防止请求体过大
     // 使用场景: apps/chat.js 中收集所有来源图片后限制处理数量；apps/image.js 中作图指令的图片数量限制
     MAX_IMAGES_PER_MESSAGE: 100,
+    // 普通对话直传图片上限；超出后先通过视觉模型分批摘要，控制最终请求体大小
+    CHAT_DIRECT_IMAGE_LIMIT: 4,
+    // 超出直传上限的图片按此批大小交给视觉模型摘要
+    CHAT_IMAGE_SUMMARY_BATCH_SIZE: 4,
     // 单张图片的最大大小（MB），超过此大小的图片将被压缩
     // 使用场景: apps/chat.js 中检查图片大小
     MAX_IMAGE_SIZE_MB: 4,
@@ -374,6 +378,10 @@ export const Config = {
     set MAX_HISTORY_LENGTH(val) { config.MAX_HISTORY_LENGTH = val },
     get MAX_IMAGES_PER_MESSAGE() { return config.MAX_IMAGES_PER_MESSAGE ?? defaultConfig.MAX_IMAGES_PER_MESSAGE },
     set MAX_IMAGES_PER_MESSAGE(val) { config.MAX_IMAGES_PER_MESSAGE = val },
+    get CHAT_DIRECT_IMAGE_LIMIT() { return parseImageLimit(config.CHAT_DIRECT_IMAGE_LIMIT, defaultConfig.CHAT_DIRECT_IMAGE_LIMIT) },
+    set CHAT_DIRECT_IMAGE_LIMIT(val) { config.CHAT_DIRECT_IMAGE_LIMIT = parseImageLimit(val, defaultConfig.CHAT_DIRECT_IMAGE_LIMIT) },
+    get CHAT_IMAGE_SUMMARY_BATCH_SIZE() { return parsePositiveInteger(config.CHAT_IMAGE_SUMMARY_BATCH_SIZE, defaultConfig.CHAT_IMAGE_SUMMARY_BATCH_SIZE) },
+    set CHAT_IMAGE_SUMMARY_BATCH_SIZE(val) { config.CHAT_IMAGE_SUMMARY_BATCH_SIZE = parsePositiveInteger(val, defaultConfig.CHAT_IMAGE_SUMMARY_BATCH_SIZE) },
     get MAX_IMAGE_SIZE_MB() { return config.MAX_IMAGE_SIZE_MB ?? defaultConfig.MAX_IMAGE_SIZE_MB },
     set MAX_IMAGE_SIZE_MB(val) { config.MAX_IMAGE_SIZE_MB = val },
     get MAX_IMAGE_RESIZE() { return config.MAX_IMAGE_RESIZE ?? defaultConfig.MAX_IMAGE_RESIZE },

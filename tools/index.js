@@ -6,7 +6,7 @@
 
 export { toolRegistry } from './registry.js'
 export { webSearchTool } from './search.js'
-export { visionRelayTool, relayImagesToVision } from './vision_relay.js'
+export { visionRelayTool, relayImagesToVision, relayImagesToVisionInBatches } from './vision_relay.js'
 export { systemInfoTool } from './system_info.js'
 export { fileSendTool } from './file_send.js'
 export { fileDownloadTool } from './file_download.js'

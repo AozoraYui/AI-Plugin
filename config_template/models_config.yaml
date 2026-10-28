@@ -285,6 +285,8 @@ web_fetch_allowed_private_origins: []
 # enable_group_send: false            # 代发群消息，主人专用；高风险跨群发言，默认关闭
 # enable_group_leave: false           # 遥控退群，主人专用；高风险操作，默认关闭，执行前需二次确认
 # enable_fast_chat: false              # 是否开启畅聊：全局捕获群消息（黑名单除外，含 # 命令消息），有权限时自然回复
+# CHAT_DIRECT_IMAGE_LIMIT: 4           # 普通 #c 图片直传上限；更多图片先分批摘要；unlimited 可取消数量限制（仍受请求体大小限制）
+# CHAT_IMAGE_SUMMARY_BATCH_SIZE: 4     # 普通 #c 超出直传上限的图片按每批 4 张生成摘要
 # FAST_CHAT_TRIGGER_ON_IMAGE: true       # 纯图片和图文混合消息静默识图入库，不会仅因发图自动回复
 # FAST_CHAT_DIRECT_IMAGE_LIMIT: 4        # 单条消息不超过此数量时直接交给最终多模态模型；超过后走分批图片摘要
 # FAST_CHAT_CONTEXT_LIMIT: 60          # 每次回复/记录查询读取最近 60 条畅聊流水；unlimited / -1 为不限制。普通 #c 自动上下文和畅聊最终回复会内部限量
