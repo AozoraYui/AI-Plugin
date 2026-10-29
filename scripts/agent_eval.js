@@ -22,6 +22,7 @@ const {
     hasExplicitGroupChatContextIntent,
     hasExplicitPortDiagnosticIntent,
     hasExplicitShellIntent,
+    hasExplicitShellCommandExecutionIntent,
     hasExplicitSystemOperationIntent,
     hasExplicitWebFetchIntent,
     hasExplicitUserProfileHistoryExtractionIntent,
@@ -594,6 +595,41 @@ check('全量源码请求会进入一次性工作区普查', (() => {
         && request.extensions.includes('js')
         && request.limit >= 1000
 })())
+const explicitGitCommandRequest = '#c在/root/Yunzai/plugins/AI-Plugin目录下执行git pull然后再执行一下git log -5 --oneline看看最近有哪些更新'
+check('带目录路径的明确Git执行不会误判为项目过目', parseWorkspaceSurveyRequest(explicitGitCommandRequest) === null)
+check('明确执行Git命令命中专用Shell意图', hasExplicitShellCommandExecutionIntent(explicitGitCommandRequest))
+check('明确Git执行只保留Shell候选', (() => {
+    const selected = selectToolCandidates([
+        'workspace_survey', 'workspace_list', 'workspace_search', 'workspace_read', 'shell_exec', 'shell_session'
+    ], explicitGitCommandRequest)
+    return selected.tools.includes('shell_exec')
+        && !selected.tools.includes('workspace_list')
+        && !selected.tools.includes('workspace_survey')
+        && !selected.tools.includes('shell_session')
+})())
+check('独立项目调查与Shell执行请求保留复合候选', (() => {
+    const request = '#c看看/root/Yunzai/plugins/AI-Plugin目录结构，然后执行git status'
+    const selected = selectToolCandidates(
+        ['workspace_list', 'workspace_survey', 'workspace_search', 'workspace_read', 'shell_exec', 'shell_session'],
+        request
+    )
+    return parseWorkspaceSurveyRequest(request)?.path === '/root/Yunzai/plugins/AI-Plugin'
+        && selected.tools.includes('workspace_list')
+        && selected.tools.includes('shell_exec')
+})())
+check('纯项目目录调查仍命中工作区工具', (() => {
+    const request = '#c看看/root/Yunzai/plugins/AI-Plugin目录结构'
+    const selected = selectToolCandidates(
+        ['workspace_list', 'workspace_survey', 'workspace_search', 'workspace_read', 'shell_exec'],
+        request
+    )
+    return parseWorkspaceSurveyRequest(request)?.path === '/root/Yunzai/plugins/AI-Plugin'
+        && selected.tools.includes('workspace_list')
+})())
+check('询问如何执行Git不会被识别为执行请求', !hasExplicitShellCommandExecutionIntent('怎么执行 git pull？'))
+check('解释Git命令含义不会被识别为执行请求', !hasExplicitShellCommandExecutionIntent('帮我解释一下 git pull 是什么意思？'))
+check('询问如何执行Git不会进入Shell候选', selectToolCandidates(['workspace_list', 'shell_exec'], '怎么执行 git pull？').tools.length === 0)
+check('礼貌询问Shell执行方法不会进入候选', selectToolCandidates(['workspace_list', 'shell_exec'], '请问怎么执行 git pull？').tools.length === 0)
 check('过目整个目录会解析为递归工作区调查', (() => {
     const request = parseWorkspaceSurveyRequest('#c测试时间到啦，诺亚你把/root/Yunzai目录下的文件先过目一遍吧')
     return request?.path === '/root/Yunzai'

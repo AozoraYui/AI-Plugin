@@ -816,10 +816,7 @@ export function hasExplicitShellIntent(text, toolName = '') {
         && !/(?:帮我|给我|请|麻烦)/i.test(value)) {
         return false
     }
-    if (isQuestionAboutTool(value, shellKeywords)
-        && !new RegExp(`(?:帮我|给我|请|麻烦|执行|运行|调用|用|拿|通过).{0,20}(?:${shellKeywords})`, 'i').test(value)) {
-        return false
-    }
+    if (isQuestionAboutTool(value, shellKeywords)) return false
     if (isPortDiagnosticHowToQuestion(value)) return false
     if (hasExplicitLocalFileMutationIntent(value)) return true
     if (hasExplicitLocalFileDiscoveryIntent(value)) return true
@@ -858,9 +855,24 @@ export function hasExplicitLocalFileReadIntent(text) {
         || new RegExp(`${fileName}.{0,36}(?:${readAction}|${fieldQuestion})`, 'i').test(value)
 }
 
+export function hasExplicitShellCommandExecutionIntent(text) {
+    const value = getPrimaryUserInstruction(text)
+    if (!value) return false
+
+    const command = '(?:git\\s+(?:pull|fetch|status|diff|log|show|branch|remote|rev-parse|checkout|switch|merge|rebase|stash|reset|add|commit|push)|(?:npm|pnpm|yarn|bun)\\s+(?:install|add|remove|run|test|build|update)|(?:python3?|node|bash|sh|zsh|docker|systemctl|pm2|sqlite3?|curl|wget|jq|rg|grep|find|ls|cat|tail|head)\\b|`[^`\\n]+`)'
+    const executeAction = '(?:执行|运行|调用|输入|敲|跑(?:一下)?|试(?:一下)?)'
+    if (/(?:怎么|如何|怎样|什么意思|是什么|什么含义|教程|方法|分析一下|解释一下|举例|比如|假如|如果)/i.test(value)) return false
+
+    return new RegExp(`${executeAction}[\\s:：，,]*(?:一下|下)?[\\s\\S]{0,48}${command}`, 'i').test(value)
+        || new RegExp(`${command}[\\s\\S]{0,48}(?:再|然后|接着|并)?[\\s:：，,]*(?:${executeAction}|查看|看看|看一下|获取|输出)`, 'i').test(value)
+        || /(?:执行|运行|调用)\\s*(?:一下|下)?\\s*(?:shell|命令|终端|脚本)\\s*[：:]/i.test(value)
+}
+
 export function parseWorkspaceSurveyRequest(text) {
     const value = getPrimaryUserInstruction(text)
     if (!value || isCapabilityOrUsageQuestion(value, '了解项目|熟悉项目|浏览目录|目录结构|项目结构')) return null
+    const explicitSurveyTarget = /(?:过目|熟悉|了解|浏览|通读|梳理|摸清|(?:目录|文件|项目|代码)结构|tree\s*结构|(?:所有|全部|全量).{0,12}(?:源码|代码|文件|脚本|js|javascript))/i.test(value)
+    if (hasExplicitShellCommandExecutionIntent(value) && !explicitSurveyTarget) return null
     const exhaustive = /(?:所有|全部|全量|每个|每一份).{0,24}(?:源码|代码|文件|脚本|js|javascript)|(?:源码|代码|文件|脚本|js|javascript).{0,24}(?:所有|全部|全量|每个|每一份)/i.test(value)
     const hasSurveyAction = /(?:过目(?:一遍|一下)?|熟悉(?:一下)?|了解(?:一下)?|浏览(?:一下)?|通读(?:一下)?|读(?:一遍|一下)?|读取(?:一遍|一下)?|看(?:一遍|一下)?|扫(?:一遍|一下)?|梳理(?:一下)?|摸清)/i.test(value)
     const hasWorkspaceScope = /(?:目录(?:下)?|项目|仓库|代码库|源码|代码|脚本|文件结构|目录结构|tree\s*结构|文件(?:先)?)/i.test(value)
@@ -1032,6 +1044,7 @@ export function detectToolIntentFamilies(text, options = {}) {
     add(hasExplicitGroupFileDownloadIntent(value), 'group_file_download')
     add(hasExplicitLocalFileMutationIntent(value), 'local_file_mutation')
     add(hasExplicitSystemOperationIntent(value), 'system_operation')
+    add(hasExplicitShellCommandExecutionIntent(value), 'shell_execution')
     add(urls.length === 0 && (hasExplicitShellIntent(value) || hasExplicitLocalFileReadIntent(value) || hasExplicitLocalFileDiscoveryIntent(value)
         || (localFileHint && /(?:瞅|读|看|找|列|检查|分析|打开)/i.test(value))), 'local_file')
     add(hasExplicitDrawIntent(value, { hasImages, hasRecentImages }), 'draw')
@@ -1063,9 +1076,12 @@ export function selectToolCandidates(enabledTools = [], text = '', options = {})
     if (families.has('web_search')) add(['web_search', 'web_fetch'])
     if (families.has('web_fetch')) add(['web_fetch'])
     if (families.has('system')) add(['system_info', 'shell_exec', 'shell_session'])
-    if (families.has('local_file')) add(['workspace_survey', 'workspace_list', 'workspace_search', 'workspace_read', 'shell_exec'])
+    if (families.has('local_file') && (!families.has('shell_execution') || parseWorkspaceSurveyRequest(text))) {
+        add(['workspace_survey', 'workspace_list', 'workspace_search', 'workspace_read', 'shell_exec'])
+    }
     if (families.has('local_file_mutation')) add(['workspace_read', 'workspace_patch', 'workspace_verify', 'config_manage', 'shell_exec'])
-    if (families.has('system_operation')) add(['shell_exec', 'shell_session'])
+    if (families.has('system_operation')) add(families.has('shell_execution') ? ['shell_exec'] : ['shell_exec', 'shell_session'])
+    if (families.has('shell_execution')) add(['shell_exec'])
     if (families.has('file_send')) add(['file_send', 'workspace_list', 'workspace_search', 'shell_exec'])
     if (families.has('file_download')) add(['file_download'])
     if (families.has('group_file_list')) add(['group_file_list'])
@@ -1113,7 +1129,7 @@ export function shouldSemanticallyValidateToolCandidates(toolNames = [], options
 const SEMANTIC_VALIDATION_FAMILIES = new Set([
     'draw', 'file_send', 'file_download', 'group_file_download',
     'profile_update', 'group_send', 'group_leave', 'group_admin',
-    'local_file_mutation', 'system_operation'
+    'local_file_mutation', 'system_operation', 'shell_execution'
 ])
 
 export function hasSemanticValidationFamily(families = []) {

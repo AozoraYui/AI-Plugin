@@ -24,6 +24,25 @@ function readUsageCount(value) {
     return Number.isFinite(count) && count >= 0 ? count : null
 }
 
+export function formatUsageDiagnostic(usage) {
+    if (!usage || typeof usage !== 'object') return ''
+    const prompt = readUsageCount(usage.prompt_tokens ?? usage.input_tokens)
+    const completion = readUsageCount(usage.completion_tokens ?? usage.output_tokens)
+    const reasoning = readUsageCount(
+        usage.completion_tokens_details?.reasoning_tokens
+        ?? usage.output_tokens_details?.reasoning_tokens
+        ?? usage.reasoning_tokens
+        ?? usage.thoughtsTokenCount
+    )
+    if (prompt === null && completion === null && reasoning === null) return ''
+    const fields = [
+        `usage_prompt_tokens=${prompt ?? '?'}`,
+        `usage_completion_tokens=${completion ?? '?'}`
+    ]
+    if (reasoning !== null) fields.push(`reasoning_tokens=${reasoning}`)
+    return fields.join(', ')
+}
+
 export function formatTokenUsageInfo(totalUsage, finalUsage) {
     const finalPrompt = readUsageCount(finalUsage?.prompt_tokens)
     const finalCompletion = readUsageCount(finalUsage?.completion_tokens)
@@ -1645,7 +1664,8 @@ export class AiClient {
                     this._recordProviderSuccess(provider.id)
                     this.scheduleModelStatusSave()
                     if (traceSuffix) {
-                        logger.info(`[AI-Plugin] 模型阶段请求成功${traceSuffix}: ${provider.name}/${modelId}, elapsed=${elapsedMs}ms, attempt=${attempt}`)
+                        const usageDiagnostic = formatUsageDiagnostic(result.usage)
+                        logger.info(`[AI-Plugin] 模型阶段请求成功${traceSuffix}: ${provider.name}/${modelId}, elapsed=${elapsedMs}ms, attempt=${attempt}${usageDiagnostic ? `, ${usageDiagnostic}` : ''}`)
                     }
                     logger.debug(`[AI-Plugin] 请求成功: ${provider.name} (${modelId})，耗时 ${elapsed}s, 得分:${score?.toFixed(2)}`)
                     return result

@@ -10,7 +10,7 @@ global.logger = {
 
 const { AiClient } = await import('../client/AiClient.js')
 const { Config } = await import('../utils/config.js')
-const { formatTokenUsageInfo } = await import('../client/AiClient.js')
+const { formatTokenUsageInfo, formatUsageDiagnostic } = await import('../client/AiClient.js')
 
 function createClient(pool) {
     const client = Object.create(AiClient.prototype)
@@ -59,6 +59,13 @@ async function testUsageTrackingIsolatedPerConcurrentRequest() {
     assert.equal(formatTokenUsageInfo({ prompt_tokens: 29856, completion_tokens: 997, total_tokens: 30853, promptReportedCalls: 2, completionReportedCalls: 2, calls: 2, missingUsageCalls: 0 }, { prompt_tokens: 12200, completion_tokens: 256 }), ' | 总输入Tokens: 29856(12200) | 总输出Tokens: 997(256)')
     assert.equal(formatTokenUsageInfo(null, { prompt_tokens: 12, completion_tokens: 3 }), ' | 输入Tokens: 12 | 输出Tokens: 3')
     assert.equal(formatTokenUsageInfo(null, { total_tokens: 15 }), ' | 消耗Token: 15')
+    assert.equal(formatUsageDiagnostic({
+        prompt_tokens: 100,
+        completion_tokens: 20,
+        output_tokens_details: { reasoning_tokens: 13 }
+    }), 'usage_prompt_tokens=100, usage_completion_tokens=20, reasoning_tokens=13')
+    assert.equal(formatUsageDiagnostic({ output_tokens: 8 }), 'usage_prompt_tokens=?, usage_completion_tokens=8')
+    assert.equal(formatUsageDiagnostic(null), '')
 
     const partial = await client.withUsageTracking(async () => {
         client._recordTrackedUsage({ total_tokens: 24 })
