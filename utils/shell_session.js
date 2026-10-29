@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import path from 'node:path'
 import { Config } from './config.js'
-import { validateShellDirectorySafety } from './shell_safety.js'
+import { resolveShellWorkingDirectory, validateShellDirectorySafety } from './shell_safety.js'
 
 const TMUX_TIMEOUT_MS = 5000
 
@@ -88,6 +88,10 @@ function normalizePollInterval(ms) {
     const value = Number(ms)
     if (!Number.isFinite(value)) return Config.SHELL_SESSION_AFTER_SEND_POLL_MS
     return Math.min(Math.max(Math.trunc(value), 250), 5000)
+}
+
+function shellQuote(value = '') {
+    return `'${String(value).replace(/'/g, `'\\''`)}'`
 }
 
 function getMeaningfulOutputDelta(beforeOutput = '', afterOutput = '', input = '') {
@@ -256,17 +260,33 @@ export async function sendToShellSession(options = {}) {
     const pathStatus = await getShellSessionCurrentPath({ sessionName, cwd: options.cwd, signal: options.signal })
     if (!pathStatus.ok) return pathStatus
 
-    const directorySafety = validateShellDirectorySafety({
+    const resolvedDirectory = resolveShellWorkingDirectory({
+        cwd: options.cwd,
+        currentDirectory: pathStatus.currentDirectory,
+        runtimeDirectory: process.cwd(),
         command: input,
+        userMessage: options.userMessage || ''
+    })
+    const inputToSend = resolvedDirectory.autoSelected
+        ? `cd ${shellQuote(resolvedDirectory.directory)} && ${input}`
+        : input
+    const directorySafety = validateShellDirectorySafety({
+        command: inputToSend,
         cwd: pathStatus.currentDirectory,
         userMessage: options.userMessage || '',
         toolName: 'shell_session'
     })
+    if (resolvedDirectory.autoSelected) {
+        directorySafety.autoSelected = true
+        directorySafety.autoSelectedDirectory = resolvedDirectory.directory
+        directorySafety.autoSelectionReason = resolvedDirectory.autoSelectionReason
+    }
     if (!directorySafety.ok) {
         return {
             ok: false,
             sessionName,
             input,
+            executedInput: inputToSend,
             enter: options.enter !== false,
             currentDirectory: pathStatus.currentDirectory,
             error: `${directorySafety.reason} 已停止输入，命令没有发送到 tmux。请先向主人确认下一步应该切换到哪个目录或如何处理。`,
@@ -306,7 +326,7 @@ export async function sendToShellSession(options = {}) {
                 lines: beforeSnapshot.lines
             }
         }
-        await execTmux(['send-keys', '-t', sessionName, '-l', '--', input], { signal: options.signal })
+        await execTmux(['send-keys', '-t', sessionName, '-l', '--', inputToSend], { signal: options.signal })
         if (options.enter !== false) {
             await execTmux(['send-keys', '-t', sessionName, 'C-m'], { signal: options.signal })
         }
@@ -317,7 +337,7 @@ export async function sendToShellSession(options = {}) {
             waitResult = await waitForShellSessionOutput({
                 sessionName,
                 cwd: options.cwd,
-                input,
+                input: inputToSend,
                 beforeOutput: beforeSnapshot?.ok ? beforeSnapshot.output : '',
                 initialDelayMs: options.afterSendDelayMs,
                 timeoutMs: options.afterSendTimeoutMs,
@@ -337,6 +357,7 @@ export async function sendToShellSession(options = {}) {
             operationOk: true,
             sessionName,
             input,
+            executedInput: inputToSend,
             enter: options.enter !== false,
             currentDirectory: snapshot?.currentDirectory || pathStatus.currentDirectory,
             directorySafety,

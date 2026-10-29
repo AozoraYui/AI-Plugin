@@ -5,10 +5,9 @@ import { pluginLogger as logger } from '../utils/plugin_logger.js'
  */
 
 import { exec } from 'node:child_process'
-import path from 'node:path'
 import { toolRegistry } from './registry.js'
 import { Config } from '../utils/config.js'
-import { validateShellDirectorySafety } from '../utils/shell_safety.js'
+import { resolveShellWorkingDirectory, validateShellDirectorySafety } from '../utils/shell_safety.js'
 import { classifyToolCallRisk } from '../utils/agent_policy.js'
 import { formatPendingActionHint, formatPendingTtl, savePendingAction } from '../utils/pending_actions.js'
 
@@ -67,13 +66,27 @@ export async function executeShellExecNow(args = {}, context = {}) {
     const command = String(args.command || '').trim()
     if (!command) return { ok: false, success: false, error: '未提供 command。' }
 
-    const cwd = args.cwd ? path.resolve(String(args.cwd)) : process.cwd()
+    const userMessage = context.userMessage || context.originalUserMessage || ''
+    const resolvedDirectory = resolveShellWorkingDirectory({
+        cwd: args.cwd,
+        currentDirectory: process.cwd(),
+        runtimeDirectory: process.cwd(),
+        command,
+        userMessage
+    })
+    const cwd = resolvedDirectory.directory
     const directorySafety = validateShellDirectorySafety({
         command,
         cwd,
-        userMessage: context.userMessage || context.originalUserMessage || '',
+        userMessage,
         toolName: 'shell_exec'
     })
+    if (resolvedDirectory.autoSelected) {
+        directorySafety.autoSelected = true
+        directorySafety.autoSelectedDirectory = resolvedDirectory.directory
+        directorySafety.autoSelectionReason = resolvedDirectory.autoSelectionReason
+        logger.info(`[AI-Plugin] shell_exec 根据用户目标自动选择工作目录: ${resolvedDirectory.directory}`)
+    }
     if (!directorySafety.ok) {
         logger.warn(`[AI-Plugin] shell_exec 目录安全拦截: ${directorySafety.reason} command=${command}, cwd=${cwd}, expected=${directorySafety.expectedDirectory}, effective=${directorySafety.effectiveDirectory}`)
         return {
@@ -171,15 +184,26 @@ export const shellExecTool = {
     async execute(args = {}, context = {}) {
         const command = String(args.command || '').trim()
         if (!command) return '【Shell执行失败】未提供 command。'
+        const userMessage = context.userMessage || context.originalUserMessage || ''
+        const resolvedDirectory = resolveShellWorkingDirectory({
+            cwd: args.cwd,
+            currentDirectory: process.cwd(),
+            runtimeDirectory: process.cwd(),
+            command,
+            userMessage
+        })
+        const pendingArgs = !args.cwd && resolvedDirectory.autoSelected
+            ? { ...args, cwd: resolvedDirectory.directory }
+            : args
         const risk = classifyToolCallRisk({ name: 'shell_exec', args })
         if (risk === 'high' && context.confirmedPendingAction !== true) {
             const saveResult = await savePendingAction(context.userId || context.event?.user_id, {
                 type: 'shell_exec',
                 agentTaskId: context.agentTaskId || '',
-                args: { ...args, command },
+                args: { ...pendingArgs, command },
                 command,
-                cwd: args.cwd ? path.resolve(String(args.cwd)) : process.cwd(),
-                userMessage: context.userMessage || context.originalUserMessage || '',
+                cwd: resolvedDirectory.directory,
+                userMessage,
                 risk
             })
             if (!saveResult.ok) return { ok: false, success: false, error: saveResult.error }
@@ -215,6 +239,9 @@ export const shellExecTool = {
             output += `\n生效目录: ${data.directorySafety.effectiveDirectory}`
             output += `\n期望目录: ${data.directorySafety.expectedDirectory}`
             output += `\n处理建议: 请反问主人下一步要切换到哪个目录或是否仍要继续。`
+        }
+        if (data.directorySafety?.autoSelected) {
+            output += `\n工作目录: 已根据用户目标自动选择 ${data.directorySafety.autoSelectedDirectory}`
         }
         output += `\n退出码: ${data.code}`
         if (data.signal) output += `\n信号: ${data.signal}`

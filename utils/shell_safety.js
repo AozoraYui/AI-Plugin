@@ -10,8 +10,8 @@ function normalizePath(value) {
     return path.resolve(String(value))
 }
 
-export function getRuntimeRootHints() {
-    const cwd = process.cwd()
+export function getRuntimeRootHints(baseDirectory = process.cwd()) {
+    const cwd = normalizePath(baseDirectory || process.cwd())
     const basename = path.basename(cwd)
     const parent = path.dirname(cwd)
     const parentName = path.basename(parent)
@@ -37,8 +37,8 @@ function includesAny(text, patterns = []) {
     return patterns.some(pattern => pattern.test(text))
 }
 
-export function inferExpectedDirectory({ userMessage = '' } = {}) {
-    const roots = getRuntimeRootHints()
+export function inferExpectedDirectory({ userMessage = '', baseDirectory = process.cwd() } = {}) {
+    const roots = getRuntimeRootHints(baseDirectory)
     const text = String(userMessage || '').toLowerCase()
 
     const explicitPluginIntent = includesAny(text, [
@@ -133,6 +133,42 @@ function matchesExpectedDirectory(actual, expected, allowInside = false) {
     if (!actualPath || !expectedPath) return false
     if (actualPath === expectedPath) return true
     return allowInside && sameOrInside(actualPath, expectedPath)
+}
+
+export function resolveShellWorkingDirectory({
+    cwd = '',
+    currentDirectory = process.cwd(),
+    runtimeDirectory = process.cwd(),
+    command = '',
+    userMessage = ''
+} = {}) {
+    const requestedDirectory = String(cwd || '').trim()
+    const current = normalizePath(currentDirectory || process.cwd())
+    const directory = requestedDirectory
+        ? resolveCommandDirectory(requestedDirectory, current)
+        : current
+    const expected = inferExpectedDirectory({ userMessage, baseDirectory: runtimeDirectory })
+    const effectiveDirectory = inferCommandEffectiveDirectory(command, directory)
+    const hasExplicitCommandDirectory = effectiveDirectory !== directory
+        || /\b(?:cd\s+|git\s+-C\s+)/i.test(String(command || ''))
+    const autoSelected = !requestedDirectory
+        && Boolean(expected.expectedDirectory)
+        && !hasExplicitCommandDirectory
+        && fs.existsSync(expected.expectedDirectory)
+        && !matchesExpectedDirectory(directory, expected.expectedDirectory, expected.allowInside)
+
+    return {
+        directory: autoSelected ? expected.expectedDirectory : directory,
+        currentDirectory: directory,
+        effectiveDirectory: autoSelected ? expected.expectedDirectory : effectiveDirectory,
+        expectedDirectory: expected.expectedDirectory,
+        expectedReason: expected.reason,
+        allowInside: expected.allowInside,
+        autoSelected,
+        autoSelectionReason: autoSelected
+            ? `已根据用户目标自动选择工作目录：${expected.expectedDirectory}`
+            : ''
+    }
 }
 
 export function validateShellDirectorySafety({ command = '', cwd = '', userMessage = '', toolName = 'shell_exec' } = {}) {

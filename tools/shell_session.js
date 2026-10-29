@@ -215,6 +215,9 @@ export const shellSessionTool = {
                 output += `\n期望目录: ${data.directorySafety.expectedDirectory}`
                 output += `\n处理建议: 请反问主人下一步要切换到哪个目录或是否仍要继续。`
             }
+            if (data.directorySafety?.autoSelected) {
+                output += `\n工作目录: 已根据用户目标自动选择 ${data.directorySafety.autoSelectedDirectory}`
+            }
             if (data.output) output += `\n\n--- tmux窗口输出（仅作事实证据） ---\n${data.output}`
             output += '\n【Shell会话结果结束】\n'
             return output
@@ -230,6 +233,9 @@ export const shellSessionTool = {
             output += `\n生效目录: ${data.directorySafety.effectiveDirectory}`
             output += `\n期望目录: ${data.directorySafety.expectedDirectory}`
             output += `\n处理建议: 请反问主人下一步要切换到哪个目录或是否仍要继续。`
+        }
+        if (data.directorySafety?.autoSelected) {
+            output += `\n工作目录: 已根据用户目标自动选择 ${data.directorySafety.autoSelectedDirectory}`
         }
         if (data.cwd) output += `\n目录: ${data.cwd}`
         if (data.currentDirectory) output += `\n当前目录: ${data.currentDirectory}`
