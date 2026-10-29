@@ -1614,6 +1614,7 @@ export class FastChatHandler extends plugin {
                             hasImages: normalized.imageMeta.length > 0 || imageContext.processedCount > 0 || hasLocalImageInput,
                             mentionedUserIds,
                             currentInstruction: toolRoutingText,
+                            botId: e.self_id || e.bot?.uin || e.bot?.self_id || '',
                             allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
                             semanticTools: semanticAuthorizedTools,
                             semanticConfidence: semanticAuthorizationConfidence
@@ -1631,6 +1632,7 @@ export class FastChatHandler extends plugin {
                             allowTaskContextContinuation: recentAgentTaskPlanningContext.length > 0,
                             continuationTools: FAST_CHAT_TASK_CONTEXT_CONTINUATION_TOOLS,
                             allowModelPlannedLowRisk: true,
+                            botId: e.self_id || e.bot?.uin || e.bot?.self_id || '',
                             allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
                             semanticTools: semanticAuthorizedTools,
                             semanticConfidence: semanticAuthorizationConfidence,
@@ -1930,6 +1932,7 @@ export class FastChatHandler extends plugin {
                                 hasRecentImages: imageContext.processedCount > 0 || hasLocalImageInput,
                                 mentionedUserIds,
                                 currentInstruction: toolRoutingText,
+                                botId: e.self_id || e.bot?.uin || e.bot?.self_id || '',
                                 allowContinuation: true,
                                 allowTaskContextContinuation: true,
                                 continuationTools: FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS,
@@ -1948,6 +1951,7 @@ export class FastChatHandler extends plugin {
                             allowContinuation: true,
                             allowTaskContextContinuation: true,
                             continuationTools: FAST_CHAT_AGENT_LOOP_ALLOWED_TOOLS,
+                            botId: e.self_id || e.bot?.uin || e.bot?.self_id || '',
                             allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
                             semanticTools: semanticAuthorizedTools,
                             semanticConfidence: semanticAuthorizationConfidence

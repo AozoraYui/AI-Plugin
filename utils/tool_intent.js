@@ -919,6 +919,44 @@ export function parseExplicitGroupRequestDecision(text = '') {
     return approve === reject ? null : approve
 }
 
+function isUnqualifiedGroupRequestDecision(text = '', botId = '') {
+    let value = getPrimaryUserInstruction(text)
+    const normalizedBotId = String(botId || '').trim()
+    if (/^\d+$/.test(normalizedBotId)) {
+        const botMention = new RegExp(
+            '\\[CQ:at,qq=' + normalizedBotId + '(?:,[^\\]]*)?\\]|\\[@\\s*' + normalizedBotId + '\\]',
+            'gi'
+        )
+        value = value.replace(botMention, ' ')
+    }
+    value = value.trim()
+    if (parseExplicitGroupRequestDecision(value) === null) return false
+
+    const remainder = value
+        .replace(/(?:麻烦|帮我|请|现在|直接|就|先|把|加群|入群|进群|进来|申请人|申请|这条|这个|那条|那个|当前|待审)/g, '')
+        .replace(/(?:通过|同意|批准|允许|拒绝|驳回)/g, '')
+        .replace(/(?:一下|下|吧|呀|啊|呢|哈|哦|噢|喵|啦|了)/g, '')
+        .replace(/[\s，。！？、,.!?;；:：“”‘’「」『』"']/g, '')
+    return remainder.length === 0
+}
+
+function normalizeGroupRequestDecisionCalls(toolCalls = [], text = '', options = {}) {
+    if (!Array.isArray(toolCalls) || toolCalls.length !== 1 || toolCalls[0]?.name !== 'group_request_list') {
+        return toolCalls
+    }
+
+    const decision = parseExplicitGroupRequestDecision(text)
+    const semanticTools = new Set(Array.isArray(options.semanticTools) ? options.semanticTools : [])
+    const semanticAuthorization = options.allowSemanticSideEffects === true
+        && Number(options.semanticConfidence || 0) >= 0.72
+    if (decision === null || !isUnqualifiedGroupRequestDecision(text, options.botId)
+        || !semanticAuthorization || !semanticTools.has('group_request_handle')) {
+        return toolCalls
+    }
+
+    return [{ name: 'group_request_handle', args: { approve: decision } }]
+}
+
 export function hasExplicitGroupAdminIntent(toolName, text) {
     if (toolName === 'group_request_handle') return parseExplicitGroupRequestDecision(text) !== null
     const value = getPrimaryUserInstruction(text)
@@ -1236,6 +1274,7 @@ export function filterToolCallsByIntent(toolCalls = [], text = '', options = {})
     const filtered = []
     const blocked = []
     const instruction = getPrimaryUserInstruction(text)
+    const normalizedToolCalls = normalizeGroupRequestDecisionCalls(toolCalls, instruction, options)
     const allowContinuation = options.allowContinuation === true
         && (isContinuationToolInstruction(instruction) || options.allowTaskContextContinuation === true)
     const continuationTools = new Set(Array.isArray(options.continuationTools) ? options.continuationTools : [])
@@ -1247,7 +1286,7 @@ export function filterToolCallsByIntent(toolCalls = [], text = '', options = {})
     const semanticTools = new Set(Array.isArray(options.semanticTools) ? options.semanticTools : [])
     const semanticAuthorization = options.allowSemanticSideEffects === true
         && Number(options.semanticConfidence || 0) >= 0.72
-    for (const call of toolCalls || []) {
+    for (const call of normalizedToolCalls || []) {
         if (!call?.name) continue
         const semanticallyAuthorized = semanticAuthorization
             && semanticTools.has(call.name)

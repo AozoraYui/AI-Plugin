@@ -2,7 +2,7 @@ global.logger = global.logger || { info() {}, warn() {}, error() {}, debug() {} 
 global.AIPluginClient = { enableGroupAdmin: true }
 const { groupRequestHandleTool, GROUP_REQUEST_TTL_SECONDS } = await import('../tools/group_admin.js')
 const { classifyToolCallRisk } = await import('../utils/agent_policy.js')
-const { hasExplicitGroupRequestListIntent, parseExplicitGroupRequestDecision } = await import('../utils/tool_intent.js')
+const { filterToolCallsByIntent, hasExplicitGroupRequestListIntent, parseExplicitGroupRequestDecision } = await import('../utils/tool_intent.js')
 
 const failures = []
 let passed = 0
@@ -26,6 +26,37 @@ check('含糊同意不能授权审核', parseExplicitGroupRequestDecision('#c �
 check('“有人加群了”可查询待审申请', hasExplicitGroupRequestListIntent('#c 有人加群了？') === true)
 check('否定句不能授权审核', parseExplicitGroupRequestDecision('#c 不要通过申请') === null)
 check('不同意申请不能被反向解析为通过', parseExplicitGroupRequestDecision('#c 不同意申请') === null)
+const semanticGroupRequestOptions = {
+    allowSemanticSideEffects: true,
+    semanticTools: ['group_request_list', 'group_request_handle'],
+    semanticConfidence: 0.88,
+    botId: '3559125985'
+}
+const normalizedApproval = filterToolCallsByIntent([{ name: 'group_request_list', args: {} }], '#c 同意申请', semanticGroupRequestOptions)
+check('明确同意且无对象时把误选的列表工具改为审核工具', normalizedApproval.tools.length === 1
+    && normalizedApproval.tools[0].name === 'group_request_handle'
+    && normalizedApproval.tools[0].args.approve === true
+    && normalizedApproval.blocked.length === 0)
+for (const mentionText of ['[@3559125985] 同意申请', '[CQ:at,qq=3559125985] 同意申请']) {
+    const mentionApproval = filterToolCallsByIntent([{ name: 'group_request_list', args: {} }], mentionText, semanticGroupRequestOptions)
+    check('含机器人 @ 标记的同意申请仍纠正为审核工具', mentionApproval.tools[0]?.name === 'group_request_handle'
+        && mentionApproval.tools[0]?.args?.approve === true)
+}
+const normalizedRejection = filterToolCallsByIntent([{ name: 'group_request_list', args: {} }], '#c 拒绝申请', semanticGroupRequestOptions)
+check('明确拒绝且无对象时保留拒绝方向', normalizedRejection.tools[0]?.name === 'group_request_handle'
+    && normalizedRejection.tools[0]?.args?.approve === false)
+const namedMention = filterToolCallsByIntent([{ name: 'group_request_list', args: {} }], '[@123456789] 同意申请', semanticGroupRequestOptions)
+check('其他成员的 @ 不会被当成机器人提及而丢弃', namedMention.tools.length === 0
+    && namedMention.blocked[0]?.name === 'group_request_list')
+const namedApplicant = filterToolCallsByIntent([{ name: 'group_request_list', args: {} }], '#c 同意小明的申请', semanticGroupRequestOptions)
+check('指定申请人时不把列表请求提升成审核动作', namedApplicant.tools.length === 0
+    && namedApplicant.blocked[0]?.name === 'group_request_list')
+const unauthorizedFallback = filterToolCallsByIntent([{ name: 'group_request_list', args: {} }], '#c 同意申请', {
+    ...semanticGroupRequestOptions,
+    allowSemanticSideEffects: false
+})
+check('没有语义授权时不提升到审核动作', unauthorizedFallback.tools.length === 0
+    && unauthorizedFallback.blocked[0]?.name === 'group_request_list')
 check('历史提问不能触发审核', parseExplicitGroupRequestDecision('#c 谁通过了刚才的入群申请？') === null)
 check('已处理记录问题不查询待审列表', hasExplicitGroupRequestListIntent('#c 有没有人通过了入群申请？') === false)
 
@@ -54,8 +85,8 @@ global.Bot = {
     }
 }
 
-const result = await groupRequestHandleTool.execute({ approve: true }, {
-    originalUserMessage: '#c 同意申请',
+const result = await groupRequestHandleTool.execute(normalizedApproval.tools[0].args, {
+    originalUserMessage: '[@3559125985] 同意申请',
     event: {
         group_id: '10001',
         user_id: '3559125985',

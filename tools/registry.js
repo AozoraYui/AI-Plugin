@@ -458,17 +458,17 @@ const TOOL_USAGE_GUIDES = {
     group_request_handle: {
         capabilities: [
             '通过或拒绝当前群某个待审核加群申请。',
-            '可用 user_id 精确定位，也可用 target 按昵称、QQ、留言关键词模糊定位；只有一条待审申请时可省略定位。'
+            '可用 user_id 精确定位，也可用 target 按昵称、QQ、留言关键词模糊定位。用户明确通过/拒绝但未指定申请人时可省略定位；工具仅在唯一待审申请时执行，多条时返回候选且不操作。'
         ],
         useWhen: [
-            '用户明确说“通过/同意/允许/拒绝某人的加群申请/让 xxx 进来”时使用。'
+            '用户明确说“通过/同意/允许/拒绝加群申请/让 xxx 进来”时直接使用；未指定对象时不要先调用列表工具，交由工具检查唯一性。'
         ],
         avoid: [
             'approve 方向不明确时不要调用；这是高影响操作。',
             '已入群成员不能用它踢出或管理。'
         ],
         rules: [
-            'approve=true 通过，false 拒绝；用户已经明确表达方向时不需要重复确认。多条申请时必须填写 target，如“幸福的”，否则先列出候选。'
+            'approve=true 通过，false 拒绝；用户已经明确表达方向时不需要重复确认。未指定对象时可以省略 user_id/target；工具仅在唯一待审申请时执行，多条申请会返回候选且不执行，不得猜测。'
         ]
     },
     draw_image: {
@@ -1165,6 +1165,7 @@ ${instruction}
                 allowSemanticSideEffects,
                 semanticTools,
                 semanticConfidence,
+                botId: options.botId,
                 allowAutonomousProfileSync
             })
             let validCalls = guarded.tools
@@ -1236,6 +1237,7 @@ ${JSON.stringify(mainPlan, null, 2)}
 - 群管理成员操作必须有明确对象；有 QQ 号或 @ 时可填 user_id，没有 QQ 但有昵称/群名片时可填 target，拿不准唯一目标时先编译 group_member_list 或 group_member_resolve。
 - 如果当前消息 @ 了唯一成员，且主模型计划的群管理操作目标是“这个人/被 @ 的人”，请直接把该 QQ 填入 user_id。
 - group_request_handle 处理的是入群申请；用户说“刚才那个/他/那个人”且主模型计划处理待审申请时，可以省略 user_id；用户用昵称、QQ、留言关键词或含糊原话指代申请人时，把关键词写入 target。
+- 用户明确要求“同意申请/通过申请/拒绝申请”但未指定申请人时，直接计划 group_request_handle 并明确填写 approve；不要先调用 group_request_list。省略 user_id/target 后，工具仅在当前群唯一一条待审申请时操作，多条时返回候选且不执行。
 - group_whole_mute 和 group_essence 的 enable、group_request_handle 的 approve 必须来自用户明确表达；不明确时不要编译这些高影响操作。`
 
         try {
@@ -1291,6 +1293,7 @@ ${JSON.stringify(mainPlan, null, 2)}
                 allowSemanticSideEffects,
                 semanticTools,
                 semanticConfidence,
+                botId: options.botId,
                 allowAutonomousProfileSync
             })
             if (guarded.blocked.length > 0) {
@@ -1412,7 +1415,7 @@ ${toolDescriptionText}
 - YAML/JSON 配置读写优先使用 config_manage；更新时明确提供 action=update、key_path、operation 和 value，不要生成 sed/Python/Shell 文本修改命令。
 - 搜索关键词要精确、简洁，不超过 128 字。
 - 带图片但没有明确工具需求时，不要脑补工具调用；图片理解交给后续多模态流程。
-- 高影响群管理操作必须有明确对象和明确动作方向；不明确时返回 tools: [] 或先用只读解析/列表工具确认。
+- 高影响群管理操作必须有明确动作方向；成员操作仍需明确对象。加群审核在用户明确通过/拒绝但未指定对象时，可调用 group_request_handle 省略目标，由工具仅在唯一待审申请时执行，多条时返回候选且不操作。
 
 请严格按以下JSON格式输出，不要输出其他任何内容：
 {"intent": "用户意图分析（一句话概括用户想做什么、隐含需求等）", "tools": [{"tool": "工具名", "params": {...}}]}
@@ -1541,6 +1544,7 @@ ${toolDescriptionText}
                 allowSemanticSideEffects,
                 semanticTools,
                 semanticConfidence,
+                botId: options.botId,
                 allowAutonomousProfileSync
             })
             if (guarded.blocked.length > 0) {
