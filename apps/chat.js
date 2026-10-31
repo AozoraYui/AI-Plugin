@@ -3101,6 +3101,11 @@ ${visualDescription}`
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为本地向量记忆的语义检索结果。请把它作为相关历史线索使用；如果命中不足或不确定，要明确说明“不确定/只检索到这些”。不要把个人档案隐私主动摊开，也不要把相似片段当成绝对事实。' + formattedResult
                             logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入`)
+                        } else if (call.name === 'qq_user_lookup') {
+                            suppressAutoFastChatContext = true
+                            const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
+                            userMessage = userMessage + '\n\n【重要指令】以上为 QQ 来源查询工具的实际结果。请严格区分“实时共同群”“本地群聊发言”“好友私聊/群临时会话”和“AI 对话历史”，只根据结果中明确存在的证据回答；查询无结果、接口失败或检查范围被截断时，必须明确说明覆盖范围和不确定性，不要把“未查到”说成“目标不在任何群”。' + formattedResult
+                            logger.info(`[AI-Plugin] ${call.name} 完成，结果已注入并隔离无关畅聊上下文`)
                         } else if (call.name === 'group_member_aliases') {
                             const formattedResult = toolRegistry.formatToolResult(call.name, result.data)
                             userMessage = userMessage + '\n\n【重要指令】以上为当前群公开聊天中提取的成员称呼/外号记录。请只把它当作群内称呼或调侃记录来转述，不要当作真实身份、事实断言或攻击性结论。' + formattedResult

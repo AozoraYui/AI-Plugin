@@ -64,10 +64,18 @@ async function callBotApi(bot, action, params = {}) {
     return data
 }
 
+function extractGroupList(data) {
+    if (Array.isArray(data)) return data
+    for (const key of ['groups', 'group_list', 'groupList']) {
+        if (Array.isArray(data?.[key])) return data[key]
+    }
+    return []
+}
+
 async function fetchLiveGroups(event) {
     try {
         const data = await callBotApi(event?.bot, 'get_group_list')
-        const groups = (Array.isArray(data) ? data : [])
+        const groups = extractGroupList(data)
             .map(normalizeGroup)
             .filter(Boolean)
         return { groups, error: '' }

@@ -1039,6 +1039,27 @@ check('QQ来源查询解析用户号和模式', (() => {
     const parsed = parseQQUserLookupRequest('#c查一下 QQ号为3837933930 的私聊记录')
     return parsed?.user_id === '3837933930' && parsed.mode === 'private_messages'
 })())
+check('QQ来源查询识别“哪个群来的”', (() => {
+    const text = '#c 3371466826这个qq号是哪个群来的？'
+    const parsed = parseQQUserLookupRequest(text)
+    const guarded = filterToolCallsByIntent([
+        { name: 'qq_user_lookup', args: { user_id: '3371466826', mode: 'common_groups' } }
+    ], text)
+    return hasExplicitQQUserLookupIntent(text)
+        && parsed?.user_id === '3371466826'
+        && parsed.mode === 'common_groups'
+        && guarded.tools.length === 1
+        && guarded.blocked.length === 0
+})())
+check('QQ来源查询覆盖常见群来源问法', [
+    'QQ号为3837933930的人来自哪个群？',
+    '查查3837933930在哪个群里',
+    '3837933930和机器人有哪些共同群',
+    '看看3837933930从哪些群来的'
+].every(text => {
+    const parsed = parseQQUserLookupRequest(text)
+    return parsed?.user_id === '3837933930' && parsed.mode === 'common_groups'
+}))
 check('没有QQ号的人物评价不触发来源意图', !hasExplicitQQUserLookupIntent('#c这个人怎么样'))
 check('生日自然告知命中自主档案同步', Boolean(inferAutonomousUserProfileUpdate('我把我的生日告诉你吧，是19991124哦')))
 check('偏好自然告知命中自主档案同步', Boolean(inferAutonomousUserProfileUpdate('我平时使用 Rust 和 Linux')))

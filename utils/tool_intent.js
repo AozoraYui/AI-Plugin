@@ -709,10 +709,10 @@ export function hasExplicitQQUserLookupIntent(text) {
     if (!value) return false
     const hasLabeledUserId = /(?:QQ(?:号|号码)?|用户(?:号|ID)|账号|帐号|user[_\s-]*id)\s*(?:为|是|叫|：|:|=)?\s*\d{5,15}/i.test(value)
     const hasBareUserId = /(?<!\d)\d{5,15}(?!\d)/.test(value)
-        && /(?:这个人|该用户|目标用户|共同群|在哪些群|所在群|私聊|好友消息|临时会话|群聊记录|群消息|对话记录|聊天记录|交互记录|发言记录)/i.test(value)
+        && /(?:这个人|该用户|目标用户|共同群|哪(?:个|些|一个)群|所在群|群来源|来自哪里|来自哪(?:个|些|一个)群|从哪(?:个|些|一个)群|私聊|好友消息|临时会话|群聊记录|群消息|对话记录|聊天记录|交互记录|发言记录)/i.test(value)
     const hasUserIdHint = hasLabeledUserId || hasBareUserId
     if (!hasUserIdHint) return false
-    return /(?:查|查询|检索|搜索|反查|找找|看看|确认|核实|排查|了解|哪来的|来自哪里|来源|共同群|在哪些群|在哪个群|和机器人.{0,8}(?:在哪|共同)|私聊|好友消息|临时会话|群聊记录|对话记录|聊天记录|交互记录|发言记录|有没有.{0,8}(?:记录|对话|交互)|这个人是谁)/i.test(value)
+    return /(?:查|查询|检索|搜索|反查|找找|看看|确认|核实|排查|了解|哪来的|来自哪里|来源|群来源|共同群|哪(?:个|些|一个)群(?:来的|里|中)?|来自哪(?:个|些|一个)群|从哪(?:个|些|一个)群(?:来的|来)?|在(?:哪|哪个|哪些|哪一个)群(?:里|中)?|和机器人.{0,8}(?:在哪|共同)|私聊|好友消息|临时会话|群聊记录|对话记录|聊天记录|交互记录|发言记录|有没有.{0,8}(?:记录|对话|交互)|这个人是谁)/i.test(value)
 }
 
 export function parseQQUserLookupRequest(text) {
@@ -724,7 +724,7 @@ export function parseQQUserLookupRequest(text) {
     if (!userId) return null
 
     let mode = 'all'
-    if (/(?:共同群|在哪些群|哪个群|和机器人.{0,8}(?:在哪|共同)|所在群)/i.test(value)) mode = 'common_groups'
+    if (/(?:共同群|哪(?:个|些|一个)群(?:来的|里|中)?|来自哪(?:个|些|一个)群|从哪(?:个|些|一个)群(?:来的|来)?|在(?:哪|哪个|哪些|哪一个)群(?:里|中)?|和机器人.{0,8}(?:在哪|共同)|所在群|群来源)/i.test(value)) mode = 'common_groups'
     else if (/(?:私聊|好友消息|临时会话|私信)/i.test(value)) mode = 'private_messages'
     else if (/(?:群聊记录|群消息|群发言|群里说过)/i.test(value) && !/(?:对话记录|聊天记录)/i.test(value)) mode = 'group_messages'
     return { user_id: userId, mode }
