@@ -23,6 +23,7 @@ const {
     hasExplicitPortDiagnosticIntent,
     hasExplicitShellIntent,
     hasExplicitShellCommandExecutionIntent,
+    isShellCommandDiscussion,
     hasExplicitSystemOperationIntent,
     hasExplicitWebFetchIntent,
     hasExplicitUserProfileHistoryExtractionIntent,
@@ -630,6 +631,51 @@ check('询问如何执行Git不会被识别为执行请求', !hasExplicitShellCo
 check('解释Git命令含义不会被识别为执行请求', !hasExplicitShellCommandExecutionIntent('帮我解释一下 git pull 是什么意思？'))
 check('询问如何执行Git不会进入Shell候选', selectToolCandidates(['workspace_list', 'shell_exec'], '怎么执行 git pull？').tools.length === 0)
 check('礼貌询问Shell执行方法不会进入候选', selectToolCandidates(['workspace_list', 'shell_exec'], '请问怎么执行 git pull？').tools.length === 0)
+
+const shellDiscussionInstruction = '#uc再补充一下，sudo rm -rf /这个命令有防护，但是sudo rm -rf /*没有，在执行危险操作之前一定要再三检查命令是否正确，路径是否有问题'
+check('危险Shell命令讨论会被识别为非执行语义', isShellCommandDiscussion(shellDiscussionInstruction))
+check('危险Shell命令讨论不会进入Shell候选', (() => {
+    const selected = selectToolCandidates(['workspace_read', 'shell_exec', 'shell_session'], shellDiscussionInstruction)
+    return !selected.tools.includes('shell_exec') && !selected.tools.includes('shell_session')
+})())
+check('危险Shell命令讨论不会被模型规划放行', (() => {
+    const guarded = filterToolCallsByIntent([{
+        name: 'shell_exec',
+        args: { command: 'sudo rm -rf /*' }
+    }], shellDiscussionInstruction, { allowModelPlannedLowRisk: true })
+    return guarded.tools.length === 0 && guarded.blocked.length === 1
+})())
+check('危险Shell命令讨论不会被Agent续轮授权绕过', (() => {
+    const guarded = filterToolCallsByIntent([{
+        name: 'shell_exec',
+        args: { command: 'sudo rm -rf /*' }
+    }], '继续处理', {
+        allowContinuation: true,
+        allowTaskContextContinuation: true,
+        continuationTools: ['shell_exec']
+    })
+    return guarded.tools.length === 0 && guarded.blocked.length === 1
+})())
+check('引用上下文中的命令不会触发Shell候选', (() => {
+    const request = '#c你怎么看？\n===引用\nsudo rm -rf /*'
+    const selected = selectToolCandidates(['shell_exec', 'shell_session'], request)
+    const guarded = filterToolCallsByIntent([{ name: 'shell_exec', args: { command: 'sudo rm -rf /*' } }], request, {
+        allowModelPlannedLowRisk: true,
+        allowTaskContextContinuation: true,
+        continuationTools: ['shell_exec']
+    })
+    return selected.tools.length === 0 && guarded.tools.length === 0 && guarded.blocked.length === 1
+})())
+check('明确执行危险Shell命令仍保留执行候选', (() => {
+    const request = '#c执行 sudo rm -rf /tmp/example'
+    const selected = selectToolCandidates(['workspace_read', 'shell_exec', 'shell_session'], request)
+    return !isShellCommandDiscussion(request) && selected.tools.includes('shell_exec')
+})())
+check('命令风险分析不会进入Shell候选', selectToolCandidates(['shell_exec', 'shell_session'], '#c解释一下 sudo rm -rf /* 的风险').tools.length === 0)
+check('日志中提到的命令不会被识别为执行请求', isShellCommandDiscussion('#c分析日志里这句：apt-get install nginx 有什么影响？')
+    && selectToolCandidates(['shell_exec', 'shell_session'], '#c分析日志里这句：apt-get install nginx 有什么影响？').tools.length === 0)
+check('询问命令执行后的效果不会被当作运行请求', isShellCommandDiscussion('#c这条命令 sudo rm -rf /* 执行后会怎样？')
+    && selectToolCandidates(['shell_exec', 'shell_session'], '#c这条命令 sudo rm -rf /* 执行后会怎样？').tools.length === 0)
 check('过目整个目录会解析为递归工作区调查', (() => {
     const request = parseWorkspaceSurveyRequest('#c测试时间到啦，诺亚你把/root/Yunzai目录下的文件先过目一遍吧')
     return request?.path === '/root/Yunzai'
