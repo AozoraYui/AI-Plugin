@@ -48,6 +48,13 @@ for (const name of masterTools) {
 
 check('公开工具不标记为主人专用', ['web_search', 'weather', 'draw_image', 'memory_search', 'group_chat_context'].every(name => toolRegistry.get(name)?.permission !== 'master'))
 
+const outOfScope = await toolRegistry.execute('weather', {}, true, {
+    userId: 'master-user',
+    enforceToolScope: true,
+    authorizedToolNames: ['workspace_read']
+})
+check('服务端执行层拒绝越出本轮授权范围的工具', outOfScope?.success === false && /授权范围/.test(String(outOfScope.error || '')), JSON.stringify(outOfScope))
+
 if (failures.length > 0) {
     console.error(`Tool permission eval: ${passed} passed, ${failures.length} failed`)
     process.exitCode = 1

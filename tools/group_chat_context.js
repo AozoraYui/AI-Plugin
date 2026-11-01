@@ -6,6 +6,7 @@ import { pluginLogger as logger } from '../utils/plugin_logger.js'
 
 import { toolRegistry } from './registry.js'
 import { formatDBTimestampToBeijing } from '../utils/common.js'
+import { scoreSymbolicGroupNameMatch } from '../utils/group_match.js'
 
 function normalizeLimit(limit) {
     const n = Number(limit)
@@ -94,7 +95,7 @@ async function resolveQueryAsGroupName(event, query) {
     const groups = liveResult.groups.filter(group => {
         const groupId = String(group.groupId || '')
         const groupName = String(group.groupName || '').toLowerCase()
-        return groupId === value || groupName.includes(lower)
+        return groupId === value || scoreSymbolicGroupNameMatch(group.groupName, value) > 0 || groupName.includes(lower)
     }).slice(0, 20)
 
     return { groups, error: liveResult.error || '' }
@@ -208,12 +209,16 @@ export const groupChatContextTool = {
         if (requestedGroupId) scope = requestedGroupId === currentGroupId ? 'current_group' : 'specific_group'
 
         if (
-            isMaster
+            (isMaster || ['my_recent_messages', 'other_group_messages'].includes(scope))
             && query
             && ['my_recent_messages', 'other_group_messages', 'all_groups', 'specific_group'].includes(scope)
             && shouldResolveQueryAsGroupName(query, context.userMessage || context.originalUserMessage || '')
         ) {
             const resolved = await resolveQueryAsGroupName(event, query)
+            if (resolved.groups.length > 1 && ['my_recent_messages', 'other_group_messages', 'specific_group'].includes(scope)) {
+                const candidates = resolved.groups.map(group => `${group.groupName || '群名未知'}(${group.groupId})`).join('、')
+                return { ok: false, error: `群名「${query}」匹配到多个群：${candidates}。请补充群号或更精确的群名。` }
+            }
             if (resolved.groups.length > 0) {
                 resolvedQueryGroupIds = resolved.groups.map(group => String(group.groupId))
                 const names = resolved.groups.map(group => group.groupName ? `「${group.groupName}」(${group.groupId})` : group.groupId).join('、')

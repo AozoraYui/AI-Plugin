@@ -6,6 +6,7 @@ import { pluginLogger as logger } from '../utils/plugin_logger.js'
 
 import { parseGroupSendRequest } from '../utils/tool_intent.js'
 import { formatPendingActionHint, formatPendingTtl, savePendingAction } from '../utils/pending_actions.js'
+import { scoreSymbolicGroupNameMatch } from '../utils/group_match.js'
 import { toolRegistry } from './registry.js'
 
 const DEFAULT_PREFIX = '【主人转达】'
@@ -189,6 +190,8 @@ export function rankGroupMatch(group, target) {
     if (!rawTarget) return 0
     if (id === rawTarget) return 100
     if (/^\d+$/.test(rawTarget) && id.includes(rawTarget)) return rawTarget.length >= 6 ? 90 : 20
+    const symbolicNameScore = scoreSymbolicGroupNameMatch(name, rawTarget)
+    if (symbolicNameScore > 0) return symbolicNameScore
     if (!nameNorm || !targetNorm) return 0
     if (nameNorm === targetNorm) return 85
     if (nameNorm.includes(targetNorm)) return targetNorm.length >= 2 ? 70 + Math.min(targetNorm.length, 10) : 0

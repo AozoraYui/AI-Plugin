@@ -673,22 +673,6 @@ function getRecentTaskToolCandidates(task, enabledTools = []) {
         add(step.toolName)
     }
 
-    const taskText = `${task?.objective || ''}\n${task?.summary || ''}\n${task?.lastObservation || ''}`
-    if (/(?:shell|命令|终端|git|commit|提交|变更|仓库|代码|文件|目录|日志|进程|服务)/i.test(taskText)) {
-        add('shell_exec')
-        add('shell_session')
-        add('system_info')
-    }
-    if (/(?:配置|yaml|yml|json|disable|enable|白名单|黑名单)/i.test(taskText)) add('config_manage')
-    if (/(?:群聊|群消息|聊天记录|消息流水|前情|大家|他们|她们)/i.test(taskText)) {
-        add('group_chat_context')
-        add('group_chat_digest')
-    }
-    if (/(?:历史|记忆|旧对话|语义检索|相关片段)/i.test(taskText)) add('memory_search')
-    if (/(?:链接|网页|网站|搜索|联网|上网)/i.test(taskText)) {
-        add('web_search')
-        add('web_fetch')
-    }
 
     return candidates
 }
@@ -2491,7 +2475,10 @@ ${visualDescription}`
                 let toolAnalysis
                 let semanticAuthorizedTools = []
                 let semanticAuthorizationConfidence = 0
+                let requestToolScope = new Set()
                 if (preRouted) {
+                    requestToolScope = new Set(preRouted.tools.map(call => call?.name).filter(Boolean))
+                    if (requestToolScope.has('web_search')) requestToolScope.add('web_fetch')
                     toolAnalysis = preRouted
                     logger.info(`[AI-Plugin] 工具预路由命中: ${preRouted.tools.map(t => t.name).join(', ')} - ${preRouted.intent}`)
                 } else {
@@ -2554,9 +2541,8 @@ ${visualDescription}`
                             planningCandidates.reason = `语义工具发现与裁决(${resolvedDiscovery.mode}, confidence=${resolvedDiscovery.confidence.toFixed(2)}): ${resolvedDiscovery.reason || resolvedDiscovery.resolvedIntent || resolvedDiscovery.tools.join(', ')}`
                             logger.info(`[AI-Plugin] 语义工具发现召回候选: ${planningCandidates.tools.join(', ')}, mode=${resolvedDiscovery.mode}, confidence=${resolvedDiscovery.confidence.toFixed(2)}${resolvedDiscovery.model ? `, 模型=${resolvedDiscovery.model}` : ''}`)
                         } else if (resolvedDiscovery.mode === 'task' && resolvedDiscovery.confidence >= 0.65 && !semanticCandidateCheck) {
-                            planningCandidates.tools = [...enabledTools]
-                            planningCandidates.reason = `语义工具发现确认是任务但未能缩小能力范围，交给主模型从完整工具目录判断：${resolvedDiscovery.reason}`
-                            logger.info(`[AI-Plugin] 语义工具发现确认任务，使用完整工具目录进入主模型规划: confidence=${resolvedDiscovery.confidence.toFixed(2)}`)
+                            planningCandidates.reason = `${planningCandidates.reason}; 语义工具发现确认存在任务，但未能确定具体能力；本轮不自动放大工具权限：${resolvedDiscovery.reason}`
+                            logger.info(`[AI-Plugin] 语义工具发现确认存在任务，但未放大工具候选范围: confidence=${resolvedDiscovery.confidence.toFixed(2)}`)
                         } else if (semanticCandidateCheck) {
                             // 语义模型未确认副作用任务时，宁可正常回答也不执行误操作。
                             planningCandidates.tools = planningCandidates.tools.filter(name => ![
@@ -2572,6 +2558,8 @@ ${visualDescription}`
                             planningCandidates.reason = `${planningCandidates.reason}; 语义发现=${resolvedDiscovery.mode}/${resolvedDiscovery.confidence.toFixed(2)} ${resolvedDiscovery.reason || ''}`.trim()
                         }
                     }
+                    requestToolScope = new Set(planningCandidates.tools)
+                    if (requestToolScope.has('web_search')) requestToolScope.add('web_fetch')
                     if (planningCandidates.tools.length === 0) {
                         logger.info(`[AI-Plugin] 工具预路由与语义发现均未命中，跳过主模型工具规划：${planningCandidates.reason}`)
                         toolAnalysis = {
@@ -2623,7 +2611,9 @@ ${visualDescription}`
                                 allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
                                 semanticTools: semanticAuthorizedTools,
                                 semanticConfidence: semanticAuthorizationConfidence,
-                                continuationTools: continuationToolsForGuard
+                                continuationTools: continuationToolsForGuard,
+                                enforceToolScope: true,
+                                authorizedToolNames: [...requestToolScope]
                             })
                             toolAnalysis.plan = mainToolPlan
                         } else if (mainToolPlan?.planning_failed && e.isMaster && planningCandidates.tools.includes('shell_exec')) {
@@ -2685,7 +2675,9 @@ ${visualDescription}`
                     allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
                     semanticTools: semanticAuthorizedTools,
                     semanticConfidence: semanticAuthorizationConfidence,
-                    allowAutonomousProfileSync: Boolean(inferAutonomousUserProfileUpdate(currentToolInstruction))
+                    allowAutonomousProfileSync: Boolean(inferAutonomousUserProfileUpdate(currentToolInstruction)),
+                    enforceToolScope: true,
+                    authorizedToolNames: [...requestToolScope]
                 })
                 if (guardedToolCalls.blocked.length > 0) {
                     logger.warn(`[AI-Plugin] [工具安全] 已拦截缺少明确当前指令的工具: ${guardedToolCalls.blocked.map(call => call.name).join(', ')}`)
@@ -2800,7 +2792,7 @@ ${visualDescription}`
                         isMaster: e.isMaster,
                         budget: agentBudget,
                         telemetry: agentTelemetry,
-                        context: { userId: e.user_id, groupId: e.group_id, event: e, client: this.client, signal: cancellationHandle?.signal, userMessage: originalUserMessage, originalUserMessage, agentTaskId: agentTask?.taskId || '' },
+                        context: { userId: e.user_id, groupId: e.group_id, event: e, client: this.client, signal: cancellationHandle?.signal, userMessage: originalUserMessage, originalUserMessage, agentTaskId: agentTask?.taskId || '', enforceToolScope: true, authorizedToolNames: [...requestToolScope] },
                         onExecution: async (execution) => {
                         throwIfExecutionCancelled()
                         const { call, index: roundCallIndex, key, result, protocol, formattedResult: runtimeFormattedResult, status: runtimeStatus, pending } = execution
@@ -2984,7 +2976,7 @@ ${visualDescription}`
                                         try {
                                             logger.info(`[AI-Plugin] 自动抓取搜索结果来源: ${topUrl}`)
                                             const fetchArgs = { url: topUrl, max_chars: 12000 }
-                                            const fetchResult = await toolRegistry.execute('web_fetch', fetchArgs, e.isMaster)
+                                            const fetchResult = await toolRegistry.execute('web_fetch', fetchArgs, e.isMaster, { userId: e.user_id, groupId: e.group_id, event: e, userMessage: originalUserMessage, originalUserMessage, enforceToolScope: true, authorizedToolNames: [...requestToolScope] })
                                             if (!fetchResult.success) {
                                                 logger.warn(`[AI-Plugin] 自动抓取失败: ${fetchResult.error || '未知错误'}`)
                                                 continue
@@ -3416,7 +3408,9 @@ ${visualDescription}`
                             allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
                             semanticTools: semanticAuthorizedTools,
                             semanticConfidence: semanticAuthorizationConfidence,
-                            continuationTools: AGENT_LOOP_ALLOWED_TOOLS
+                            continuationTools: AGENT_LOOP_ALLOWED_TOOLS,
+                            enforceToolScope: true,
+                            authorizedToolNames: [...requestToolScope]
                         }),
                         extractTools: analysis => Array.isArray(analysis?.tools) ? analysis.tools : [],
                         filterTools: calls => filterToolCallsByIntent(calls, currentToolInstruction, {
@@ -3431,7 +3425,9 @@ ${visualDescription}`
                             allowSemanticSideEffects: semanticAuthorizedTools.length > 0,
                             semanticTools: semanticAuthorizedTools,
                             semanticConfidence: semanticAuthorizationConfidence,
-                            allowModelPlannedLowRisk: true
+                            allowModelPlannedLowRisk: true,
+                            enforceToolScope: true,
+                            authorizedToolNames: [...requestToolScope]
                         }),
                         normalizeTools: calls => {
                             if (!hasLocalImageInput) return calls
@@ -3485,7 +3481,7 @@ ${visualDescription}`
                 }
 
                 if (e.isMaster && enabledTools.includes('shell_exec') && executedShellCommands.length > 0 && !shellFollowupConsideredByAgent) {
-                    const toolContext = { userId: e.user_id, groupId: e.group_id, event: e, userMessage: originalUserMessage, originalUserMessage, agentTaskId: agentTask?.taskId || '' }
+                    const toolContext = { userId: e.user_id, groupId: e.group_id, event: e, userMessage: originalUserMessage, originalUserMessage, agentTaskId: agentTask?.taskId || '', enforceToolScope: true, authorizedToolNames: [...requestToolScope] }
                     const seenCommands = new Set(executedShellCommands.filter(Boolean))
                     // 翻页续读使用 "命令@offset" 作为去重键，允许同命令不同分页继续
                     const seenPagedKeys = new Set()

@@ -1,3 +1,5 @@
+import { checkToolAuthorizationScope } from './tool_scope.js'
+
 const DELEGATE_WORDS = '(?:帮我|替我|代我|帮忙|麻烦你?|拜托你?|请你?|劳烦你?)'
 const SEND_VERBS = '(?:发送|群发|代发|转达|带(?:个|句)?话|捎(?:个|句)?话|传(?:个|句)?话|告诉(?:一下|一声)?|说(?:一下|一声|一句)?|发(?:一下|一条|一句|个消息|消息|(?=[：:，,\\s“”"\'「」『』])))'
 const TARGET_SUFFIX = '(?:(?:那个|这个|该|目标)群|群聊|群里|群内|群|那边|里面|里)?'
@@ -10,6 +12,9 @@ const MODEL_PLANNED_READ_ONLY_TOOLS = new Set([
     'group_member_aliases', 'group_member_list', 'group_member_resolve',
     'memory_search', 'config_manage'
 ])
+const SHELL_COMMAND_LITERAL_PATTERN = '(?:sudo\\s+)?(?:rm|cp|mv|mkdir|touch|ln|chmod|chown|dd|kill|pkill|reboot|shutdown|mount|umount|apt(?:-get)?|dpkg|pacman|dnf|yum|zypper|snap|flatpak|git|npm|pnpm|yarn|bun|node|python3?|pip3?|cargo|rustc|go|make|bash|sh|zsh|systemctl|service|journalctl|docker|podman|pm2|grep|rg|find|ls|cat|tail|head|less|more|nmap|ip|ss|netstat|ufw|iptables|tmux|sqlite3?|curl|wget|jq|sed|awk|tar|gzip|xz|zip|unzip|rsync|ssh|scp|df|du|ps|top|free|whoami|pwd|env|xargs|tee|sort|uniq|cut|tr|wc|file|stat)\\b'
+const SHELL_CODE_LITERAL_PATTERN = '`[^`\\n]+`'
+const SHELL_TOOL_NAMES = new Set(['shell_exec', 'shell_session'])
 
 export function getPrimaryUserInstruction(text) {
     const value = String(text || '').trim()
@@ -37,6 +42,28 @@ export function normalizeToolInstruction(text = '') {
         quotedContext: quoteIndex >= 0 ? rawText.slice(quoteIndex).trim() : '',
         urls: extractUrls(currentText)
     }
+}
+
+function hasShellCommandLiteral(text = '') {
+    const value = String(text || '')
+    return new RegExp(`(?:^|[\\s"'“‘「『【（(：:,，。；;!?！？])${SHELL_COMMAND_LITERAL_PATTERN}`, 'i').test(value)
+        || new RegExp(SHELL_CODE_LITERAL_PATTERN).test(value)
+}
+
+function hasDirectShellExecutionRequest(text = '') {
+    const value = String(text || '')
+    const command = SHELL_COMMAND_LITERAL_PATTERN
+    return new RegExp(`(?:^|[，,。；;：:\\s])(?:帮我|替我|代我|请|麻烦你?|现在|直接|继续|再|重新)?\\s*(?:执行|运行|调用|输入|敲|跑(?:一下)?|试(?:一下)?)(?:一下|下)?\\s*(?:命令|shell|终端|命令行|脚本)?\\s*(?:${SHELL_CODE_LITERAL_PATTERN}|${command})`, 'i').test(value)
+        || new RegExp(`(?:${command}|${SHELL_CODE_LITERAL_PATTERN})\\s{0,12}(?:执行|运行|调用|输入|敲|跑(?:一下)?|试(?:一下)?)`, 'i').test(value)
+}
+
+export function isShellCommandDiscussion(text = '') {
+    const value = getPrimaryUserInstruction(text)
+    if (!value || !hasShellCommandLiteral(value)) return false
+    if (hasDirectShellExecutionRequest(value)) return false
+
+    const discussionPattern = new RegExp(`(?:命令|指令|脚本|shell|终端).{0,36}(?:有防护|没有防护|没(?:有)?防护|风险|危险|含义|意思|解释|分析|示例|比如|假设|正确|错误|问题|注意|安全|会不会|能不能|是否|执行后|运行后|执行会|运行会)|(?:这个|这条|上述|上面|前面|该).{0,12}(?:命令|指令|脚本).{0,24}(?:是|有|没有|怎么|为什么|能不能|会不会)|(?:解释|分析|说明|讲讲|讨论|评价|怎么看|为什么|怎么回事|风险|安全性|是否安全|有没有问题|上下文|引用|提到|说过|补充说明|安全提醒|日志|聊天记录|代码示例|文档|截图|图片).{0,48}(?:命令|指令|脚本|shell|终端|${SHELL_COMMAND_LITERAL_PATTERN})|(?:日志|上下文|引用消息|历史消息|代码示例|示例|文档|聊天记录|截图|图片).{0,48}(?:${SHELL_COMMAND_LITERAL_PATTERN})|(?:${SHELL_COMMAND_LITERAL_PATTERN}).{0,48}(?:日志|上下文|引用消息|历史消息|代码示例|示例|文档|聊天记录|截图|图片)|(?:危险操作|命令是否正确|路径是否有问题|不要执行|别执行|不要运行|别运行|仅作示例|举例说明|补充说明|安全提醒)`, 'i')
+    return discussionPattern.test(value)
 }
 
 function isCapabilityOrUsageQuestion(text = '', actionPattern = '') {
@@ -492,10 +519,13 @@ export function parseNamedGroupChatContextRequest(text) {
     const asksForContext = /(?:最近|刚才|刚刚|之前|前面|这会儿|聊天|群聊|消息|记录|流水|前情|聊(?:了|过|啥|什么)|在聊|说(?:了|过|啥|什么)|在说|发言|发(?:了|过|啥|什么)|发生(?:了)?|总结|整理|回顾|概括|看看|看一下|查询|查一下)/i.test(value)
     if (!asksForContext || hasNonChatRecordDomain(value)) return null
 
+    const asksForOwnMessages = /(?:^|[，,。！？!?\s])(?:我|俺|咱)(?:刚才|刚刚|之前|最近)?(?:在|于).{0,20}(?:说|发|聊)/i.test(value)
+        || /(?:^|[，,。！？!?\s])(?:我|俺|咱).{0,12}(?:说了|发了|聊了|说过|发过|聊过)/i.test(value)
     const patterns = [
         /(?:名字叫|名为|叫)\s*[「“"『]([^」”"』\n]{1,60})[」”"』]\s*(?:的)?群/i,
         /[「“"『]([^」”"』\n]{1,60})[」”"』]\s*(?:这个|那个|名字的|的)?群/i,
-        /(?:名字叫|名为)\s*([^，,。；;！？!?\n]{1,50}?)\s*(?:的)?群/i
+        /(?:名字叫|名为)\s*([^，,。；;！？!?\n]{1,50}?)\s*(?:的)?群/i,
+        /((?:(?:空|方|中|圆|小|大)?括号))(?:那个|这个)?(?:的)?群/i
     ]
     let target = ''
     for (const pattern of patterns) {
@@ -514,7 +544,7 @@ export function parseNamedGroupChatContextRequest(text) {
         hours = /^\d+$/.test(rawHours) ? Number(rawHours) : chineseHours[rawHours]
     }
     return {
-        scope: 'specific_group',
+        scope: asksForOwnMessages ? 'my_recent_messages' : 'specific_group',
         query: target,
         limit: hours ? 120 : 40,
         ...(hours ? { hours: Math.min(Math.max(hours, 1), 168) } : {})
@@ -523,7 +553,7 @@ export function parseNamedGroupChatContextRequest(text) {
 
 export function parseRecentGroupChatFollowupRequest(text, previousArgs = {}, userId = '') {
     const value = getPrimaryUserInstruction(text).replace(/^#[A-Za-z0-9_]+\s*/i, '').trim()
-    if (!value || parseNamedGroupChatContextRequest(value)) return null
+    if (!value) return null
     const referencesPreviousGroup = /(?:括号|方括号)(?:那个|这个)?\s*(?:的)?群|(?:刚才查的|刚才看的|前面查的|前面看的|刚才那个|前面那个|上个|那个|这个|该)\s*(?:的)?群/i.test(value)
     const asksForMoreMessages = /(?:还|又|另外|其他|其它|别的|更多).{0,18}(?:说|发|聊|消息|发言)|(?:说|发|聊).{0,18}(?:啥|什么|哪些|内容)/i.test(value)
     if (!referencesPreviousGroup || !asksForMoreMessages) return null
@@ -802,7 +832,7 @@ export function hasExplicitPortDiagnosticIntent(text) {
 
 export function hasExplicitShellIntent(text, toolName = '') {
     const value = getPrimaryUserInstruction(text)
-    if (!value) return false
+    if (!value || isShellCommandDiscussion(value)) return false
     if (toolName === 'shell_exec' && parsePluginUpdateRequest(value)) return true
     const commandKeywords = 'ssh|scp|rsync|git|npm|pnpm|node|python3?|bash|sh|zsh|systemctl|docker|pm2|grep|rg|find|ls|cat|tail|head|nmap|ip|tmux|sqlite3|sqlite|curl|wget|jq|sed|awk'
     const shellKeywords = `${commandKeywords}|shell|命令|终端`
@@ -857,7 +887,7 @@ export function hasExplicitLocalFileReadIntent(text) {
 
 export function hasExplicitShellCommandExecutionIntent(text) {
     const value = getPrimaryUserInstruction(text)
-    if (!value) return false
+    if (!value || isShellCommandDiscussion(value)) return false
 
     const command = '(?:git\\s+(?:pull|fetch|status|diff|log|show|branch|remote|rev-parse|checkout|switch|merge|rebase|stash|reset|add|commit|push)|(?:npm|pnpm|yarn|bun)\\s+(?:install|add|remove|run|test|build|update)|(?:python3?|node|bash|sh|zsh|docker|systemctl|pm2|sqlite3?|curl|wget|jq|rg|grep|find|ls|cat|tail|head)\\b|`[^`\\n]+`)'
     const executeAction = '(?:执行|运行|调用|输入|敲|跑(?:一下)?|试(?:一下)?)'
@@ -1023,6 +1053,7 @@ export function detectToolIntentFamilies(text, options = {}) {
     if (!value) return families
 
     const qqUserLookupIntent = hasExplicitQQUserLookupIntent(value)
+    const shellCommandDiscussion = isShellCommandDiscussion(value)
     if (qqUserLookupIntent) {
         families.add('qq_user_lookup')
         return families
@@ -1044,8 +1075,8 @@ export function detectToolIntentFamilies(text, options = {}) {
     add(hasExplicitGroupFileDownloadIntent(value), 'group_file_download')
     add(hasExplicitLocalFileMutationIntent(value), 'local_file_mutation')
     add(hasExplicitSystemOperationIntent(value), 'system_operation')
-    add(hasExplicitShellCommandExecutionIntent(value), 'shell_execution')
-    add(urls.length === 0 && (hasExplicitShellIntent(value) || hasExplicitLocalFileReadIntent(value) || hasExplicitLocalFileDiscoveryIntent(value)
+    add(!shellCommandDiscussion && hasExplicitShellCommandExecutionIntent(value), 'shell_execution')
+    add(!shellCommandDiscussion && urls.length === 0 && (hasExplicitShellIntent(value) || hasExplicitLocalFileReadIntent(value) || hasExplicitLocalFileDiscoveryIntent(value)
         || (localFileHint && /(?:瞅|读|看|找|列|检查|分析|打开)/i.test(value))), 'local_file')
     add(hasExplicitDrawIntent(value, { hasImages, hasRecentImages }), 'draw')
     add(hasExplicitUserProfileUpdateIntent(value), 'profile_update')
@@ -1067,7 +1098,12 @@ export function selectToolCandidates(enabledTools = [], text = '', options = {})
     const enabled = new Set(Array.isArray(enabledTools) ? enabledTools : [])
     const families = detectToolIntentFamilies(text, options)
     const selected = new Set()
-    const add = names => names.forEach(name => enabled.has(name) && selected.add(name))
+    const shellCommandDiscussion = isShellCommandDiscussion(text)
+    const add = names => names.forEach(name => {
+        if (!enabled.has(name)) return
+        if (shellCommandDiscussion && SHELL_TOOL_NAMES.has(name)) return
+        selected.add(name)
+    })
 
     if (options.allowContinuation === true && isContinuationToolInstruction(text)) {
         add(Array.isArray(options.continuationTools) ? options.continuationTools : [])
@@ -1299,11 +1335,22 @@ export function filterToolCallsByIntent(toolCalls = [], text = '', options = {})
         'group_leave', 'group_mute', 'group_whole_mute', 'group_kick', 'group_set_card', 'group_set_title',
         'group_essence', 'group_request_handle', 'workspace_patch'
     ])
+    const shellCommandDiscussion = isShellCommandDiscussion(instruction)
+    const shellTools = SHELL_TOOL_NAMES
     const semanticTools = new Set(Array.isArray(options.semanticTools) ? options.semanticTools : [])
     const semanticAuthorization = options.allowSemanticSideEffects === true
         && Number(options.semanticConfidence || 0) >= 0.72
     for (const call of normalizedToolCalls || []) {
         if (!call?.name) continue
+        const scope = checkToolAuthorizationScope(call.name, options)
+        if (!scope.allowed) {
+            blocked.push(call)
+            continue
+        }
+        if (shellCommandDiscussion && shellTools.has(call.name)) {
+            blocked.push(call)
+            continue
+        }
         const semanticallyAuthorized = semanticAuthorization
             && semanticTools.has(call.name)
             && isSemanticValidationTool(call.name)
@@ -1312,7 +1359,7 @@ export function filterToolCallsByIntent(toolCalls = [], text = '', options = {})
             continue
         }
         if (!isExplicitToolIntent(call.name, instruction, { ...options, toolArgs: call.args || call.params || {} })) {
-            if (allowContinuation && continuationTools.has(call.name) && !sideEffectTools.has(call.name)) {
+            if (allowContinuation && continuationTools.has(call.name) && !sideEffectTools.has(call.name) && !shellTools.has(call.name)) {
                 filtered.push(call)
                 continue
             }
