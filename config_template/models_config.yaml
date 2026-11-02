@@ -109,8 +109,9 @@ vision_model:
 # ================================================
 # 联网搜索配置
 # enable_web_search: 是否启用联网搜索功能（默认 false，使用 #cn 临时启用）
-# intent_model: 搜索意图分析专用模型 id（支持多模型故障转移）
-#   如果不配置 intent_model，则使用 Flash 模型组做意图分析
+# intent_model: 意图识别/内容安全审核专用模型 id（支持多模型故障转移）
+#   如果不配置 intent_model，则使用 Flash 模型组做意图识别与内容安全审核
+#   含图片的请求需要至少配置一个 multimodal: true 的意图模型，否则审核失败时会拒绝提交
 #   配置独立模型可大幅加快分析速度，推荐使用轻量模型
 #   注意：intent_model 必须与 enable_web_search 平级（不要缩进！）
 #   例（model 填独立模型的 id 或 alias）:

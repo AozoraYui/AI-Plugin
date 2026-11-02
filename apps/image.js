@@ -7,6 +7,7 @@ import { checkAccess } from '../utils/access.js'
 import { sessionManager } from '../utils/session.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
+import { getContentSafetyBlockMessage, reviewContentForSubmission } from '../utils/content_safety.js'
 import { extractMessageSendError } from '../utils/message_delivery.js'
 import { isAgentExecutionCancelled, registerAgentExecution } from '../utils/agent_cancellation.js'
 import fs from 'node:fs'
@@ -130,12 +131,6 @@ export class ImageHandler extends plugin {
             const currentImages = (e.message || []).filter(m => m.type === "image").map(m => m.data?.url || m.url).filter(Boolean)
             if (currentImages.length > 0) allImages = allImages.concat(currentImages)
 
-            await setMsgEmojiLike(e, 282)
-            throwIfCancelled()
-            const modelDisplay = resolveModelDisplay(modelGroupKey)
-            await e.reply(`正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
-            throwIfCancelled()
-
             let parts = []
             let presetName = '自定义'
 
@@ -196,7 +191,30 @@ export class ImageHandler extends plugin {
                 presetName = preset.name
             }
 
+            if (processedImages.length !== imagesToProcess.length) {
+                await setMsgEmojiLike(e, 10)
+                throwIfCancelled()
+                return e.reply(getContentSafetyBlockMessage(), true)
+            }
             const payload = { "contents": [{ "parts": parts }] }
+            const safetyReview = await reviewContentForSubmission({
+                client: this.client,
+                text: parts.filter(part => part?.text).map(part => part.text).join('\n'),
+                imageParts: parts,
+                requestId: requestTraceId,
+                stage: 'image_input_safety',
+                signal
+            })
+            if (!safetyReview.allowed) {
+                await setMsgEmojiLike(e, 10)
+                throwIfCancelled()
+                return e.reply(getContentSafetyBlockMessage(), true)
+            }
+            await setMsgEmojiLike(e, 282)
+            throwIfCancelled()
+            const modelDisplay = resolveModelDisplay(modelGroupKey)
+            await e.reply(`正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
+            throwIfCancelled()
             const result = await this.client.makeRequest('image', payload, modelGroupKey, 8192, { signal, requestId: requestTraceId, stage: 'image_generation' })
             throwIfCancelled()
             if (result.cancelled) return true

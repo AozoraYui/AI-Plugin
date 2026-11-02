@@ -125,7 +125,8 @@ const drawMidflightCancellation = await (async () => {
     let markRequestStarted
     const requestStarted = new Promise(resolve => { markRequestStarted = resolve })
     global.AIPluginClient = {
-        async makeRequest(_type, _payload, _group, _tokens, options = {}) {
+        async makeRequest(type, _payload, _group, _tokens, options = {}) {
+            if (type === 'chat') return { success: true, data: '{"decision":"allow","confidence":0.99,"categories":[]}' }
             observedSignal = options.signal
             markRequestStarted()
             return await new Promise(resolve => {

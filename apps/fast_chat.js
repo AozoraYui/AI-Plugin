@@ -6,6 +6,7 @@ import { checkAccess, getAccessConfig } from '../utils/access.js'
 import { isBotMuted } from '../utils/bot_mute.js'
 import { formatDBTimestampToBeijing, getBeijingTimeStr, getTodayDateStr, takeSourceMsg } from '../utils/common.js'
 import { estimatePayloadSizeBytes, processImagesInBatches, trimInlineImagesToPayloadLimit } from '../utils/image.js'
+import { getContentSafetyBlockMessage, reviewContentForSubmission } from '../utils/content_safety.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject } from '../utils/message_context.js'
 import { buildEventSpeakerMeta, buildSpeakerMeta } from '../utils/speaker_context.js'
 import { describeQQFaceSegment } from '../utils/qq_face.js'
@@ -716,7 +717,7 @@ function replaceInlineImagesWithVisionDescription(contents, description) {
     return cloned
 }
 
-async function prepareFastChatImageContext(client, imageReadPlan, normalized) {
+async function prepareFastChatImageContext(client, imageReadPlan, normalized, preprocessedImageParts = null) {
     const imageUrls = imageReadPlan.imageUrls || []
     const batchSize = getFastChatImageBatchSize()
     const notes = []
@@ -726,7 +727,7 @@ async function prepareFastChatImageContext(client, imageReadPlan, normalized) {
     }
 
     if (resolveFastChatImageDelivery(imageUrls.length, Config.FAST_CHAT_DIRECT_IMAGE_LIMIT) === 'direct') {
-        const imageParts = await processImagesInBatches(imageUrls, { maxImages: imageUrls.length })
+        const imageParts = Array.isArray(preprocessedImageParts) ? preprocessedImageParts : await processImagesInBatches(imageUrls, { maxImages: imageUrls.length })
         if (imageParts.length < imageUrls.length) {
             notes.push(`本轮计划读取 ${imageUrls.length} 张图片，实际成功处理 ${imageParts.length} 张；请不要描述处理失败的图片。`)
         }
@@ -748,7 +749,7 @@ async function prepareFastChatImageContext(client, imageReadPlan, normalized) {
     for (let start = 0; start < imageUrls.length; start += batchSize) {
         const batchUrls = imageUrls.slice(start, start + batchSize)
         const batchIndex = Math.floor(start / batchSize) + 1
-        const imageParts = await processImagesInBatches(batchUrls, { maxImages: batchUrls.length })
+        const imageParts = Array.isArray(preprocessedImageParts) ? preprocessedImageParts.slice(start, start + batchUrls.length) : await processImagesInBatches(batchUrls, { maxImages: batchUrls.length })
         processedCount += imageParts.length
 
         if (imageParts.length === 0) {
@@ -837,7 +838,19 @@ async function persistCurrentMessageImageMemory(client, db, normalized, options 
     if (!client || !db?.updateGroupMessageImageSummary || normalized.currentImageCount <= 0) return false
     const imageReadPlan = buildImageReadPlan({ ...normalized, forceReadCurrentImages: true }, [])
     for (const line of imageReadPlan.logLines) logger.info(line)
-    const imageContext = await prepareFastChatImageContext(client, imageReadPlan, normalized)
+    const imagePartsForReview = imageReadPlan.imageUrls.length > 0
+        ? await processImagesInBatches(imageReadPlan.imageUrls, { maxImages: imageReadPlan.imageUrls.length })
+        : []
+    if (imagePartsForReview.length !== imageReadPlan.imageUrls.length) return false
+    const safetyReview = await reviewContentForSubmission({
+        client,
+        text: normalized.instructionText || normalized.currentText || '',
+        imageParts: imagePartsForReview,
+        requestId: String(normalized.messageId || ''),
+        stage: 'fast_chat_background_image_safety'
+    })
+    if (!safetyReview.allowed) return false
+    const imageContext = await prepareFastChatImageContext(client, imageReadPlan, normalized, imagePartsForReview.length === imageReadPlan.imageUrls.length ? imagePartsForReview : null)
     let imageSummary = truncateText(imageContext.summaryText || '', FAST_CHAT_IMAGE_MEMORY_MAX_CHARS)
     if (!imageSummary && imageContext.imageParts.length > 0) {
         imageSummary = await buildDirectImageMemoryFallback(client, imageContext.imageParts, normalized)
@@ -1406,10 +1419,32 @@ export class FastChatHandler extends plugin {
             logger.info('[AI-Plugin] [畅聊] 本地图片路径用于文件发送，本轮不附加为多模态图片输入')
         }
         const hasLocalImageInput = localImageInput.imageParts.length > 0
-        let avatarImageInput = { imageParts: [], noteText: '', targets: [], failures: [] }
+        const avatarImageInput = await buildAvatarImageInputContext(e, normalized.instructionText || normalized.currentText || normalized.normalizedText || '', {
+            maxImages: Config.MAX_IMAGES_PER_MESSAGE
+        })
         const imageReadPlan = buildImageReadPlan(normalized, logs)
         for (const line of imageReadPlan.logLines) logger.info(line)
-        const imageContext = await prepareFastChatImageContext(this.client, imageReadPlan, normalized)
+        const reviewedImageParts = imageReadPlan.imageUrls.length > 0
+            ? await processImagesInBatches(imageReadPlan.imageUrls, { maxImages: imageReadPlan.imageUrls.length })
+            : []
+        if (reviewedImageParts.length !== imageReadPlan.imageUrls.length) {
+            logger.warn('[AI-Plugin] [畅聊] 图片未能全部完成审核预处理，已阻止后续流程: request=' + replyRequestId)
+            await e.reply(getContentSafetyBlockMessage(), true)
+            return
+        }
+        const inputSafetyReview = await reviewContentForSubmission({
+            client: this.client,
+            text: normalized.instructionText || normalized.currentText || '',
+            imageParts: [...reviewedImageParts, ...localImageInput.imageParts, ...avatarImageInput.imageParts],
+            requestId: String(replyRequestId),
+            stage: 'fast_chat_input_safety'
+        })
+        if (!inputSafetyReview.allowed) {
+            logger.warn('[AI-Plugin] [畅聊] 输入未通过内容审核，已阻止后续流程: request=' + replyRequestId + ', categories=' + (inputSafetyReview.categories.join(',') || 'unknown'))
+            await e.reply(getContentSafetyBlockMessage(), true)
+            return
+        }
+        const imageContext = await prepareFastChatImageContext(this.client, imageReadPlan, normalized, reviewedImageParts.length === imageReadPlan.imageUrls.length ? reviewedImageParts : null)
         const imageParts = imageContext.imageParts
         const shouldCaptureCurrentImageMemory = normalized.currentImageCount > 0 && imageContext.processedCount > 0
         const imageReadNotes = [...imageReadPlan.notes, ...imageContext.notes]
@@ -2012,13 +2047,6 @@ export class FastChatHandler extends plugin {
                 `${toolContextText}\n\n【Agent证据账本】本轮存在成功工具结果；工具自身确定性验证=${hasVerifiedToolResult ? '是' : '否'}；任务验证状态=${fastAgentCompletionStatus || 'continue'}。只能陈述已有证据，任务状态不是 ready 时不得声称整体完成。`,
                 FAST_CHAT_TOOL_CONTEXT_MAX_CHARS
             )
-        }
-
-        avatarImageInput = await buildAvatarImageInputContext(e, normalized.instructionText || normalized.currentText || normalized.normalizedText || '', {
-            maxImages: Config.MAX_IMAGES_PER_MESSAGE
-        })
-        if (avatarImageInput.imageParts.length > 0) {
-            logger.info(`[AI-Plugin] [畅聊] 已附加头像图片输入: ${avatarImageInput.imageParts.length} 张`)
         }
 
         const triggerText = truncateMiddleText(normalized.normalizedText, FAST_CHAT_TRIGGER_CONTEXT_MAX_CHARS)

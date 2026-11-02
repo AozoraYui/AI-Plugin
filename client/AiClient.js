@@ -238,13 +238,17 @@ export class AiClient {
      * @returns {object|null} 成功返回 { success, data, platform }，失败返回 null
      */
     async quickIntentRequest(payload, requestOptions = {}) {
-        const intentModels = this.webSearchIntentModels
+        const configuredModels = this.webSearchIntentModels
+        const intentModels = requestOptions.requireMultimodal === true
+            ? configuredModels.filter(model => model?.multimodal !== false)
+            : configuredModels
         if (intentModels.length === 0) return null
         const traceSuffix = getRequestTraceSuffix(requestOptions)
 
         let attempts = 0
         for (const modelConfig of intentModels) {
-            if (attempts >= MAX_INTENT_ATTEMPTS) break
+            const maxAttempts = Math.max(1, Math.min(MAX_INTENT_ATTEMPTS, Number(requestOptions.maxAttempts) || MAX_INTENT_ATTEMPTS))
+            if (attempts >= maxAttempts) break
             const provider = this.modelsConfig.find(p => p.id === modelConfig.provider_id)
             if (!provider) {
                 logger.warn(`[AI-Plugin] 意图分析模型供应商不存在: ${modelConfig.provider_id}`)
@@ -252,7 +256,7 @@ export class AiClient {
             }
             attempts += 1
             const startTime = Date.now()
-            const result = await this.attemptRequest('chat', payload, provider, modelConfig.model_id, 1024, 30000, modelConfig, requestOptions)
+            const result = await this.attemptRequest('chat', payload, provider, modelConfig.model_id, Number(requestOptions.maxTokens) || 1024, 30000, modelConfig, requestOptions)
             const elapsedMs = Date.now() - startTime
             const elapsed = (elapsedMs / 1000).toFixed(2)
             const statusKey = `${provider.id}-${modelConfig.id || modelConfig.model_id}`
@@ -1644,7 +1648,10 @@ export class AiClient {
 
             lastError = ''
             const requestTimeout = this._resolveRequestTimeout(type, maxTokens, modelGroupKey)
-            const maxAttempts = Config.MODEL_MAX_ATTEMPTS
+            const requestedMaxAttempts = Number(requestOptions.maxAttempts)
+            const maxAttempts = Number.isInteger(requestedMaxAttempts) && requestedMaxAttempts > 0
+                ? Math.min(requestedMaxAttempts, Config.MODEL_MAX_ATTEMPTS)
+                : Config.MODEL_MAX_ATTEMPTS
             let attempt = 0
             while (poolToTry.length > 0 && attempt < maxAttempts) {
                 const { provider, modelId, modelKey, modelConfig, statusKey: poolStatusKey, score } = poolToTry.shift()

@@ -30,6 +30,7 @@ import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK
 import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../utils/agent_plan.js'
 import { cancelAgentExecutionsByTask, isAgentExecutionCancelled, registerAgentExecution } from '../utils/agent_cancellation.js'
 import { claimMessageDedup } from '../utils/message_dedup.js'
+import { getContentSafetyBlockMessage, reviewContentForSubmission } from '../utils/content_safety.js'
 import { toolRegistry, relayImagesToVision, relayImagesToVisionInBatches, resolveGroupOperatorRole } from '../tools/index.js'
 import { executeGroupSend, executePendingGroupSend, parseGroupSendDisambiguationSelection } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
@@ -2121,6 +2122,53 @@ export class ChatHandler extends plugin {
                 }
             }
 
+            let localImageInput = { imageParts: [], noteText: '', paths: [], failures: [] }
+            const safetyInstruction = originalUserMessage || getPrimaryUserInstruction(userMessage)
+            const skipLocalImageInput = e.isMaster && hasExplicitFileSendIntent(safetyInstruction)
+            if (e.isMaster && !skipLocalImageInput) {
+                localImageInput = await buildLocalImageInputContext(safetyInstruction || userMessage, {
+                    maxImages: Config.MAX_IMAGES_PER_MESSAGE
+                })
+                if (localImageInput.noteText) userMessage = `${userMessage}\n\n${localImageInput.noteText}`
+                if (localImageInput.imageParts.length > 0) {
+                    logger.info(`[AI-Plugin] 已附加本地图片输入: ${localImageInput.imageParts.length} 张`)
+                }
+            } else if (skipLocalImageInput) {
+                logger.info('[AI-Plugin] 本地图片路径用于文件发送，本轮不附加为多模态图片输入')
+            }
+            const hasLocalImageInput = localImageInput.imageParts.length > 0
+            const avatarImageInput = await buildAvatarImageInputContext(e, safetyInstruction || userMessage, {
+                maxImages: Config.MAX_IMAGES_PER_MESSAGE
+            })
+            if (avatarImageInput.noteText) userMessage = `${userMessage}\n\n${avatarImageInput.noteText}`
+            if (avatarImageInput.imageParts.length > 0) {
+                logger.info(`[AI-Plugin] 已附加头像图片输入: ${avatarImageInput.imageParts.length} 张`)
+            }
+
+            const reviewedMessageImages = allImages.length > 0
+                ? await processImagesInBatches(allImages, { maxImages: allImages.length, signal: cancellationHandle?.signal })
+                : []
+            throwIfExecutionCancelled()
+            if (reviewedMessageImages.length !== allImages.length) {
+                logger.warn('[AI-Plugin] 对话请求图片未能全部完成审核预处理，已阻止后续流程: request=' + requestTraceId)
+                await setMsgEmojiLike(e, 10)
+                return replyUnlessCancelled(getContentSafetyBlockMessage(), true)
+            }
+            const inputSafetyReview = await reviewContentForSubmission({
+                client: this.client,
+                text: userMessage,
+                imageParts: [...reviewedMessageImages, ...localImageInput.imageParts, ...avatarImageInput.imageParts],
+                requestId: requestTraceId,
+                stage: 'chat_input_safety',
+                signal: cancellationHandle?.signal
+            })
+            if (!inputSafetyReview.allowed) {
+                logger.warn('[AI-Plugin] 对话请求未通过内容审核，已阻止后续流程: request=' + requestTraceId + ', categories=' + (inputSafetyReview.categories.join(',') || 'unknown'))
+                await setMsgEmojiLike(e, 10)
+                return replyUnlessCancelled(getContentSafetyBlockMessage(), true)
+            }
+
+
             const isSingleMode = e._singleMode === true
             const userId = e.user_id
             const memorySubjectUserId = privateMemorySubject.userId || userId
@@ -2234,23 +2282,6 @@ export class ChatHandler extends plugin {
                 userMessage = `${userMessage}\n\n${buildAgentTaskContext(agentTask)}`
                 logger.info(`[AI-Plugin] Agent 续接任务: ${agentTask.taskId}, objective=${agentTask.objective.slice(0, 120)}`)
             }
-            let localImageInput = { imageParts: [], noteText: '', paths: [], failures: [] }
-            const skipLocalImageInput = e.isMaster && hasExplicitFileSendIntent(currentToolInstruction)
-            if (e.isMaster && !skipLocalImageInput) {
-                localImageInput = await buildLocalImageInputContext(currentToolInstruction || userMessage, {
-                    maxImages: Config.MAX_IMAGES_PER_MESSAGE
-                })
-                if (localImageInput.noteText) {
-                    userMessage = `${userMessage}\n\n${localImageInput.noteText}`
-                }
-                if (localImageInput.imageParts.length > 0) {
-                    logger.info(`[AI-Plugin] 已附加本地图片输入: ${localImageInput.imageParts.length} 张`)
-                }
-            } else if (skipLocalImageInput) {
-                logger.info('[AI-Plugin] 本地图片路径用于文件发送，本轮不附加为多模态图片输入')
-            }
-            const hasLocalImageInput = localImageInput.imageParts.length > 0
-            let avatarImageInput = { imageParts: [], noteText: '', targets: [], failures: [] }
             // drawImageAttempted：本轮是否调用过画图工具（无论成败，工具内已发过生成进度提示），
             // 用于跳过后续"思考中"占位，避免重复刷屏。
             let drawImageAttempted = false
@@ -3588,16 +3619,6 @@ ${visualDescription}`
                 }
             }
 
-            avatarImageInput = await buildAvatarImageInputContext(e, currentToolInstruction || originalUserMessage || userMessage, {
-                maxImages: Config.MAX_IMAGES_PER_MESSAGE
-            })
-            if (avatarImageInput.noteText) {
-                userMessage = `${userMessage}\n\n${avatarImageInput.noteText}`
-            }
-            if (avatarImageInput.imageParts.length > 0) {
-                logger.info(`[AI-Plugin] 已附加头像图片输入: ${avatarImageInput.imageParts.length} 张`)
-            }
-
             // Vision Relay：flag v 强制启用，否则按全局配置 + 模型是否需要转述
             const useVisionRelay = e._visionFlag || (this.client.enableVisionRelay && this.client._checkModelGroupNeedsVisionRelay(modelGroupKey))
             let summarizedMessageImages = false
@@ -3717,9 +3738,7 @@ ${visualDescription}`
                 }
             }
 
-            const messageImageParts = allImages.length > 0
-                ? await processImagesInBatches(allImages, { maxImages: allImages.length, signal: cancellationHandle?.signal })
-                : []
+            const messageImageParts = allImages.length > 0 ? reviewedMessageImages : []
             const inlineImageInputs = useVisionRelay
                 ? []
                 : [

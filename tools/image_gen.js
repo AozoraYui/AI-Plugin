@@ -12,6 +12,7 @@ import { toolRegistry } from './registry.js'
 import { Config } from '../utils/config.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, resolveModelDisplay } from '../utils/common.js'
 import { processImagesInBatches } from '../utils/image.js'
+import { getContentSafetyBlockMessage, reviewContentForSubmission } from '../utils/content_safety.js'
 import { isAgentCancellationError, throwIfAgentExecutionCancelled } from '../utils/agent_context.js'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -324,11 +325,6 @@ export const imageGenTool = {
 
         try {
             throwIfCancelled()
-            await setMsgEmojiLike(event, 282)
-            const modelDisplay = resolveModelDisplay(modelGroupKey)
-            await event.reply(`正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
-            throwIfCancelled()
-
             const parts = []
             // 角色图库参考图优先放最前，锁定目标角色形象
             if (characterImages.length > 0) parts.push(...characterImages)
@@ -386,7 +382,27 @@ export const imageGenTool = {
                 return '【画图失败】没有可提交的画图内容。'
             }
 
+            if (processedImages.length !== imagesToProcess.length) {
+                await setMsgEmojiLike(event, 10)
+                return getContentSafetyBlockMessage()
+            }
             const payload = { contents: [{ parts }] }
+            const safetyReview = await reviewContentForSubmission({
+                client,
+                text: parts.filter(part => part?.text).map(part => part.text).join('\n'),
+                imageParts: parts,
+                requestId: String(context.requestId || event.message_id || ''),
+                stage: 'draw_tool_input_safety',
+                signal
+            })
+            if (!safetyReview.allowed) {
+                await setMsgEmojiLike(event, 10)
+                return getContentSafetyBlockMessage()
+            }
+            await setMsgEmojiLike(event, 282)
+            const modelDisplay = resolveModelDisplay(modelGroupKey)
+            await event.reply(`正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
+            throwIfCancelled()
             const startTime = Date.now()
             const result = await client.makeRequest('image', payload, modelGroupKey, 8192, {
                 signal
