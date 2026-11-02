@@ -1440,8 +1440,8 @@ export class FastChatHandler extends plugin {
             stage: 'fast_chat_input_safety'
         })
         if (!inputSafetyReview.allowed) {
-            logger.warn('[AI-Plugin] [畅聊] 输入未通过内容审核，已阻止后续流程: request=' + replyRequestId + ', categories=' + (inputSafetyReview.categories.join(',') || 'unknown'))
-            await e.reply(getContentSafetyBlockMessage(), true)
+            logger.warn('[AI-Plugin] [畅聊] 输入审核未放行，已阻止后续流程: request=' + replyRequestId + ', status=' + inputSafetyReview.status + ', reason=' + inputSafetyReview.reasonCode + ', categories=' + (inputSafetyReview.categories.join(',') || 'none'))
+            await e.reply(getContentSafetyBlockMessage(inputSafetyReview), true)
             return
         }
         const imageContext = await prepareFastChatImageContext(this.client, imageReadPlan, normalized, reviewedImageParts.length === imageReadPlan.imageUrls.length ? reviewedImageParts : null)

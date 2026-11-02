@@ -2163,9 +2163,9 @@ export class ChatHandler extends plugin {
                 signal: cancellationHandle?.signal
             })
             if (!inputSafetyReview.allowed) {
-                logger.warn('[AI-Plugin] 对话请求未通过内容审核，已阻止后续流程: request=' + requestTraceId + ', categories=' + (inputSafetyReview.categories.join(',') || 'unknown'))
+                logger.warn('[AI-Plugin] 对话请求审核未放行，已阻止后续流程: request=' + requestTraceId + ', status=' + inputSafetyReview.status + ', reason=' + inputSafetyReview.reasonCode + ', categories=' + (inputSafetyReview.categories.join(',') || 'none'))
                 await setMsgEmojiLike(e, 10)
-                return replyUnlessCancelled(getContentSafetyBlockMessage(), true)
+                return replyUnlessCancelled(getContentSafetyBlockMessage(inputSafetyReview), true)
             }
 
 

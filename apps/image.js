@@ -208,7 +208,7 @@ export class ImageHandler extends plugin {
             if (!safetyReview.allowed) {
                 await setMsgEmojiLike(e, 10)
                 throwIfCancelled()
-                return e.reply(getContentSafetyBlockMessage(), true)
+                return e.reply(getContentSafetyBlockMessage(safetyReview), true)
             }
             await setMsgEmojiLike(e, 282)
             throwIfCancelled()

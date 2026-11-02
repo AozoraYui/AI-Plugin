@@ -43,17 +43,25 @@ check('文本审核使用配置的意图模型', allowedClient.calls.length === 
 check('配置意图模型审核最多只尝试一次', allowedClient.calls[0].requestOptions.maxAttempts === 1)
 check('审核提示与待审文本分开封装', allowedClient.calls[0].payload.contents[0].role === 'system'
     && allowedClient.calls[0].payload.contents[1].parts[0].text.includes(JSON.stringify('请画一只坐在窗台上的猫')))
+check('审核策略区分讨论既往拦截与当前违规请求', allowedClient.calls[0].payload.contents[0].parts[0].text.includes('讨论、引用、报告或复盘先前被拦截')
+    && allowedClient.calls[0].payload.contents[0].parts[0].text.includes('仍须根据当前实际请求判断'))
+check('审核策略要求独立判断附带媒体', allowedClient.calls[0].payload.contents[0].parts[0].text.includes('必须独立判断媒体本身'))
 
 const blockedClient = makeIntentClient({ success: true, data: '{"decision":"block","confidence":0.99,"categories":["sexual_explicit"],"reason_code":"explicit"}' })
 const blocked = await reviewContentForSubmission({ client: blockedClient, text: '被拦截内容' })
-check('模型明确判违规时拦截', !blocked.allowed && blocked.decision === 'block')
-check('拒绝提示不暴露审核模型原始输出', !getContentSafetyBlockMessage().includes('sexual_explicit'))
+check('模型明确判违规时标记为拦截', !blocked.allowed && blocked.decision === 'block' && blocked.status === 'blocked')
+check('明确拦截提示不暴露审核模型原始输出', getContentSafetyBlockMessage(blocked).includes('包含不适合')
+    && !getContentSafetyBlockMessage(blocked).includes('sexual_explicit'))
 
 const reviewClient = makeIntentClient({ success: true, data: '{"decision":"review","confidence":0.99,"categories":["other"]}' })
-check('模型要求人工复核时按失败关闭', !(await reviewContentForSubmission({ client: reviewClient, text: '边界内容' })).allowed)
+const uncertain = await reviewContentForSubmission({ client: reviewClient, text: '边界内容' })
+check('模型要求复核时按失败关闭并标记不确定', !uncertain.allowed && uncertain.status === 'uncertain')
+check('不确定提示不声称内容违规', getContentSafetyBlockMessage(uncertain).includes('无法确认')
+    && !getContentSafetyBlockMessage(uncertain).includes('包含不适合'))
 
 const lowConfidenceClient = makeIntentClient({ success: true, data: `{"decision":"allow","confidence":${CONTENT_SAFETY_CONFIDENCE_THRESHOLD - 0.01},"categories":[]}` })
-check('低于置信度门槛时不放行', !(await reviewContentForSubmission({ client: lowConfidenceClient, text: '不确定内容' })).allowed)
+const lowConfidence = await reviewContentForSubmission({ client: lowConfidenceClient, text: '不确定内容' })
+check('低于置信度门槛时不放行并标记不确定', !lowConfidence.allowed && lowConfidence.status === 'uncertain')
 
 const categorizedAllowClient = makeIntentClient({ success: true, data: '{"decision":"allow","confidence":0.99,"categories":["political_high_risk"]}' })
 check('allow 结果携带风险类别时仍拦截', !(await reviewContentForSubmission({ client: categorizedAllowClient, text: '风险分类冲突' })).allowed)
@@ -68,7 +76,15 @@ const missingCategoriesClient = makeIntentClient({ success: true, data: '{"decis
 check('缺少必需分类字段时拒绝', !(await reviewContentForSubmission({ client: missingCategoriesClient, text: '分类字段缺失' })).allowed)
 
 const unavailableClient = makeIntentClient({ success: false, error: 'offline' })
-check('审核模型不可用时拒绝', !(await reviewContentForSubmission({ client: unavailableClient, text: '普通文本' })).allowed)
+const unavailable = await reviewContentForSubmission({ client: unavailableClient, text: '普通文本' })
+check('审核模型不可用时失败关闭并标记服务不可用', !unavailable.allowed && unavailable.status === 'unavailable')
+check('审核服务不可用提示不声称内容违规', getContentSafetyBlockMessage(unavailable).includes('暂时未能完成')
+    && !getContentSafetyBlockMessage(unavailable).includes('包含不适合'))
+const emptyResponseClient = makeIntentClient({ success: true, data: '' })
+const emptyResponse = await reviewContentForSubmission({ client: emptyResponseClient, text: '讨论审核结果' })
+check('审核模型返回空消息时标记服务不可用且失败关闭', !emptyResponse.allowed && emptyResponse.status === 'unavailable')
+check('空审核响应不会向用户谎报内容违规', getContentSafetyBlockMessage(emptyResponse).includes('暂时未能完成')
+    && !getContentSafetyBlockMessage(emptyResponse).includes('包含不适合'))
 
 const noMultimodalClient = makeIntentClient({ success: true, data: '{"decision":"allow","confidence":0.99,"categories":[]}' }, { models: [{ multimodal: false }] })
 const noMultimodal = await reviewContentForSubmission({

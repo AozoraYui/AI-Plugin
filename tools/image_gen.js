@@ -397,7 +397,7 @@ export const imageGenTool = {
             })
             if (!safetyReview.allowed) {
                 await setMsgEmojiLike(event, 10)
-                return getContentSafetyBlockMessage()
+                return getContentSafetyBlockMessage(safetyReview)
             }
             await setMsgEmojiLike(event, 282)
             const modelDisplay = resolveModelDisplay(modelGroupKey)
