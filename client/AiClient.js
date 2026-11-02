@@ -11,6 +11,7 @@ import { normalizeModelConfigDocuments, resolveModelReference } from '../utils/m
 import { APPLICATION_SECURITY_INSTRUCTION } from '../utils/prompt_security.js'
 
 const MAX_INTENT_ATTEMPTS = 3
+const EMPTY_INTENT_RETRY_INSTRUCTION = '上次输出为空或不是有效 JSON。请重新判断并直接返回完整 JSON 对象；若无法确定是否安全，decision 必须为 review。'
 const RETRY_BACKOFF_BASE_MS = 150
 const RETRY_BACKOFF_MAX_MS = 1200
 const MODEL_STATUS_FORMAT_VERSION = 3
@@ -246,6 +247,7 @@ export class AiClient {
         const traceSuffix = getRequestTraceSuffix(requestOptions)
 
         let attempts = 0
+        let emptyResponseRetried = false
         for (const modelConfig of intentModels) {
             const maxAttempts = Math.max(1, Math.min(MAX_INTENT_ATTEMPTS, Number(requestOptions.maxAttempts) || MAX_INTENT_ATTEMPTS))
             if (attempts >= maxAttempts) break
@@ -256,7 +258,23 @@ export class AiClient {
             }
             attempts += 1
             const startTime = Date.now()
-            const result = await this.attemptRequest('chat', payload, provider, modelConfig.model_id, Number(requestOptions.maxTokens) || 1024, 30000, modelConfig, requestOptions)
+            let result = await this.attemptRequest('chat', payload, provider, modelConfig.model_id, Number(requestOptions.maxTokens) || 1024, 30000, modelConfig, requestOptions)
+            if (!result.success
+                && requestOptions.retryOnEmptyResponse === true
+                && !emptyResponseRetried
+                && /AI返回了空消息/.test(String(result.error || ''))) {
+                emptyResponseRetried = true
+                const retryPayload = {
+                    ...payload,
+                    contents: Array.isArray(payload.contents)
+                        ? payload.contents.map((content, index) => index === 0 && content.role === 'system'
+                            ? { ...content, parts: [...(content.parts || []), { text: EMPTY_INTENT_RETRY_INSTRUCTION }] }
+                            : content)
+                        : payload.contents
+                }
+                logger.warn(`[AI-Plugin] 意图分析返回空消息，使用同一模型进行一次格式重试${traceSuffix}: ${provider.name}/${modelConfig.model_id}`)
+                result = await this.attemptRequest('chat', retryPayload, provider, modelConfig.model_id, Number(requestOptions.maxTokens) || 1024, 30000, modelConfig, requestOptions)
+            }
             const elapsedMs = Date.now() - startTime
             const elapsed = (elapsedMs / 1000).toFixed(2)
             const statusKey = `${provider.id}-${modelConfig.id || modelConfig.model_id}`
@@ -1114,7 +1132,7 @@ export class AiClient {
         this.saveModelStatus()
     }
 
-    buildRequest(type, payload, providerConfig, modelId, maxTokens = 8192, modelConfig = null) {
+    buildRequest(type, payload, providerConfig, modelId, maxTokens = 8192, modelConfig = null, requestOptions = {}) {
         if (type === 'image' && this._isOpenAIImageModel(modelId)) {
             return this._buildDirectImageRequest(payload, providerConfig, modelId)
         }
@@ -1134,6 +1152,15 @@ export class AiClient {
                 ...convertedMessages.filter(message => message.role !== 'system')
             ]
             : convertedMessages
+        const requestBody = {
+            model: modelId,
+            messages,
+            max_tokens: maxTokens,
+            stream: false,
+        }
+        if (requestOptions.responseFormat && typeof requestOptions.responseFormat === 'object') {
+            requestBody.response_format = requestOptions.responseFormat
+        }
         const options = {
             method: "POST",
             headers: {
@@ -1142,12 +1169,7 @@ export class AiClient {
                 "HTTP-Referer": "https://yuzubot.com",
                 "X-Title": "Yuzu-Bot"
             },
-            body: JSON.stringify({
-                model: modelId,
-                messages,
-                max_tokens: maxTokens,
-                stream: false,
-            })
+            body: JSON.stringify(requestBody)
         }
         return { url, options }
     }
@@ -1275,7 +1297,7 @@ export class AiClient {
             const message = data.choices?.[0]?.message || {}
             const text = message.content
             const reasoning = message.reasoning_content || message.reasoning || ''
-            if (text) {
+            if (typeof text === 'string' ? text.trim().length > 0 : Boolean(text)) {
                 return { success: true, data: text, reasoning, usage: usage }
             }
             return { success: false, error: 'AI返回了空消息。这可能是由于内容安全策略或模型内部错误。' }
@@ -1373,7 +1395,7 @@ export class AiClient {
             if (requestOptions.signal?.aborted) {
                 return { success: false, cancelled: true, error: '请求已取消', code: 'AGENT_CANCELLED' }
             }
-            const { url, options } = this.buildRequest(type, payload, provider, modelId, maxTokens, modelConfig)
+            const { url, options } = this.buildRequest(type, payload, provider, modelId, maxTokens, modelConfig, requestOptions)
             if (timeout > 0) options.timeout = timeout
             if (requestOptions.signal) options.signal = requestOptions.signal
             

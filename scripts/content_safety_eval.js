@@ -41,6 +41,8 @@ const allowed = await reviewContentForSubmission({ client: allowedClient, text: 
 check('高置信度且无风险类别时放行', allowed.allowed && allowed.confidence === 0.97)
 check('文本审核使用配置的意图模型', allowedClient.calls.length === 1 && allowedClient.calls[0].requestOptions.requireMultimodal === false)
 check('配置单个意图模型时最多尝试一次', allowedClient.calls[0].requestOptions.maxAttempts === 1)
+check('审核空响应启用一次格式重试', allowedClient.calls[0].requestOptions.retryOnEmptyResponse === true)
+check('审核请求要求 JSON 对象输出', allowedClient.calls[0].requestOptions.responseFormat?.type === 'json_object')
 check('审核提示与待审文本分开封装', allowedClient.calls[0].payload.contents[0].role === 'system'
     && allowedClient.calls[0].payload.contents[1].parts[0].text.includes(JSON.stringify('请画一只坐在窗台上的猫')))
 check('审核策略区分讨论既往拦截与当前违规请求', allowedClient.calls[0].payload.contents[0].parts[0].text.includes('讨论、引用、报告或复盘先前被拦截')
@@ -128,6 +130,8 @@ const fallbackClient = makeIntentClient({ success: true, data: '{"decision":"all
 const fallback = await reviewContentForSubmission({ client: fallbackClient, text: '没有独立意图模型配置' })
 check('未配置意图模型时回退 Flash 模型组', fallback.allowed && fallbackClient.calls[0].args[0] === 'chat' && fallbackClient.calls[0].args[2] === 'flash')
 check('Flash 回退审核最多只尝试一次', fallbackClient.calls[0].args[4].maxAttempts === 1)
+check('Flash 回退审核启用一次格式重试', fallbackClient.calls[0].args[4].retryOnEmptyResponse === true)
+check('Flash 回退审核要求 JSON 对象输出', fallbackClient.calls[0].args[4].responseFormat?.type === 'json_object')
 
 const cancelled = new Error('cancelled')
 cancelled.code = 'AGENT_CANCELLED'

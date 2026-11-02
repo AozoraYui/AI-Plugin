@@ -37,6 +37,13 @@ assert.equal(requestBody.messages[1].content, 'Acknowledged')
 assert.equal(requestBody.messages[2].role, 'user')
 assert.equal(requestBody.messages[2].content, injectedText)
 assert.deepEqual(payload.contents[2].parts, [{ text: injectedText }])
+const structuredRequest = JSON.parse(client.buildRequest('chat', payload, {
+    base_url: 'https://api.example.test/v1',
+    api_key: 'test-key'
+}, 'test-model', 512, { multimodal: true }, {
+    responseFormat: { type: 'json_object' }
+}).options.body)
+assert.deepEqual(structuredRequest.response_format, { type: 'json_object' })
 const imageRequest = JSON.parse(client.buildRequest('image', payload, { base_url: 'https://api.example.test/v1', api_key: 'test-key' }, 'image-model', 512, { multimodal: true }).options.body)
 assert.equal(imageRequest.messages.length, 3)
 assert.equal(imageRequest.messages[0].content, 'Configured assistant persona')

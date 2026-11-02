@@ -34,6 +34,72 @@ function model(provider, modelId, index = 0) {
     }
 }
 
+async function testQuickIntentRequestForwardsStructuredOutputOptions() {
+    const client = Object.create(AiClient.prototype)
+    client.modelsConfig = [{ id: 'review-provider', name: 'Review Provider' }]
+    Object.defineProperty(client, 'webSearchIntentModels', {
+        value: [{ id: 'review-model', model_id: 'review-model', provider_id: 'review-provider', multimodal: true }]
+    })
+    client._recordModelSuccess = () => {}
+    client._recordProviderSuccess = () => {}
+    client.scheduleModelStatusSave = () => {}
+    let capturedRequestOptions = null
+    client.attemptRequest = async (...args) => {
+        capturedRequestOptions = args[7]
+        return { success: true, data: '{"decision":"allow"}' }
+    }
+
+    const responseFormat = { type: 'json_object' }
+    const result = await client.quickIntentRequest({ contents: [] }, {
+        requireMultimodal: true,
+        maxAttempts: 1,
+        responseFormat
+    })
+
+    assert.equal(result.success, true)
+    assert.equal(capturedRequestOptions.requireMultimodal, true)
+    assert.deepEqual(capturedRequestOptions.responseFormat, responseFormat)
+}
+
+async function testQuickIntentRequestRetriesOneEmptyResponse() {
+    const client = Object.create(AiClient.prototype)
+    client.modelsConfig = [{ id: 'review-provider', name: 'Review Provider' }]
+    Object.defineProperty(client, 'webSearchIntentModels', {
+        value: [{ id: 'review-model', model_id: 'review-model', provider_id: 'review-provider', multimodal: true }]
+    })
+    client._recordModelSuccess = () => {}
+    client._recordProviderSuccess = () => {}
+    client.scheduleModelStatusSave = () => {}
+    const calls = []
+    client.attemptRequest = async (...args) => {
+        calls.push(args)
+        return calls.length === 1
+            ? { success: false, error: 'API业务错误: AI返回了空消息' }
+            : { success: true, data: '{"decision":"review"}' }
+    }
+
+    const result = await client.quickIntentRequest({
+        contents: [{ role: 'system', parts: [{ text: '审核规则' }] }]
+    }, {
+        maxAttempts: 1,
+        retryOnEmptyResponse: true,
+        responseFormat: { type: 'json_object' }
+    })
+
+    assert.equal(result.success, true)
+    assert.equal(calls.length, 2)
+    assert.match(calls[1][1].contents[0].parts.at(-1).text, /重新判断并直接返回完整 JSON 对象/)
+}
+
+function testWhitespaceChatResponseIsRejected() {
+    const client = Object.create(AiClient.prototype)
+    const result = client.parseResponse({
+        choices: [{ message: { content: '   ' } }]
+    }, 'chat')
+    assert.equal(result.success, false)
+    assert.match(result.error, /AI返回了空消息/)
+}
+
 async function testUsageTrackingIsolatedPerConcurrentRequest() {
     const client = Object.create(AiClient.prototype)
     const [first, second] = await Promise.all([
@@ -531,6 +597,9 @@ async function testAttemptRequestPassesCancellationSignal() {
 }
 
 await testUsageTrackingIsolatedPerConcurrentRequest()
+await testQuickIntentRequestForwardsStructuredOutputOptions()
+await testQuickIntentRequestRetriesOneEmptyResponse()
+testWhitespaceChatResponseIsRejected()
 await testFailedRequestsAreExcludedFromUsageTracking()
 await testProviderFailoverBudget()
 await testConfiguredOrderBeatsHealthScore()
