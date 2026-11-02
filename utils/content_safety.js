@@ -82,7 +82,7 @@ export async function reviewContentForSubmission({ client, text = '', imageParts
                 stage,
                 signal,
                 requireMultimodal: images.length > 0,
-                maxAttempts: 1,
+                maxAttempts: configuredIntentModels.length,
                 maxTokens: 512
             })
         } else {

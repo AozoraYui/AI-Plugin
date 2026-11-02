@@ -40,7 +40,7 @@ const allowedClient = makeIntentClient({ success: true, data: '{"decision":"allo
 const allowed = await reviewContentForSubmission({ client: allowedClient, text: '请画一只坐在窗台上的猫', requestId: 'allow-1' })
 check('高置信度且无风险类别时放行', allowed.allowed && allowed.confidence === 0.97)
 check('文本审核使用配置的意图模型', allowedClient.calls.length === 1 && allowedClient.calls[0].requestOptions.requireMultimodal === false)
-check('配置意图模型审核最多只尝试一次', allowedClient.calls[0].requestOptions.maxAttempts === 1)
+check('配置单个意图模型时最多尝试一次', allowedClient.calls[0].requestOptions.maxAttempts === 1)
 check('审核提示与待审文本分开封装', allowedClient.calls[0].payload.contents[0].role === 'system'
     && allowedClient.calls[0].payload.contents[1].parts[0].text.includes(JSON.stringify('请画一只坐在窗台上的猫')))
 check('审核策略区分讨论既往拦截与当前违规请求', allowedClient.calls[0].payload.contents[0].parts[0].text.includes('讨论、引用、报告或复盘先前被拦截')
@@ -101,6 +101,17 @@ const imageAllowed = await reviewContentForSubmission({
     imageParts: [{ inline_data: { mime_type: 'image/png', data: 'aGVsbG8=' } }]
 })
 check('图片审核要求多模态意图模型', imageAllowed.allowed && imageClient.calls[0].requestOptions.requireMultimodal === true)
+
+const fallbackIntentClient = makeIntentClient({ success: true, data: '{"decision":"allow","confidence":0.95,"categories":[]}' }, {
+    models: [{ multimodal: true }, { multimodal: true }, { multimodal: false }]
+})
+await reviewContentForSubmission({
+    client: fallbackIntentClient,
+    text: '讨论图片审核是否正常',
+    imageParts: [{ inline_data: { mime_type: 'image/png', data: 'aGVsbG8=' } }]
+})
+check('审核故障转移次数覆盖配置的候选模型', fallbackIntentClient.calls[0].requestOptions.maxAttempts === 3)
+check('图片审核故障转移仍要求多模态能力', fallbackIntentClient.calls[0].requestOptions.requireMultimodal === true)
 
 const invalidImageListClient = makeIntentClient({ success: true, data: '{"decision":"allow","confidence":0.99,"categories":[]}' })
 check('图片参数格式错误时不发起审核请求', !(await reviewContentForSubmission({ client: invalidImageListClient, text: '格式错误', imageParts: 'not-an-array' })).allowed && invalidImageListClient.calls.length === 0)
