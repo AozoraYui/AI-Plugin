@@ -257,8 +257,6 @@ export class HelpHandler extends plugin {
   从 SQLite 增量补齐本地向量索引。
 > #ai向量重建
   清空本地向量 collection 后，从 SQLite 全量重建索引。
-> #ai思考开启/关闭
-  切换是否显示AI的思考过程。
 > #ai开启思考提示 / #ai关闭思考提示
   切换普通对话是否发送“AI思考中…”占位提示（默认关闭）。
 > #ai插件更新

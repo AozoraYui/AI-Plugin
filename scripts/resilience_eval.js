@@ -100,6 +100,21 @@ function testWhitespaceChatResponseIsRejected() {
     assert.match(result.error, /AI返回了空消息/)
 }
 
+function testChatReasoningIsNotExposedInParsedOutput() {
+    const client = Object.create(AiClient.prototype)
+    const parsed = client.parseResponse({
+        choices: [{ message: { content: '面向用户的答复', reasoning_content: '内部推理内容' } }]
+    }, 'chat')
+    assert.equal(parsed.data, '面向用户的答复')
+    assert.equal(Object.hasOwn(parsed, 'reasoning'), false)
+
+    const streamed = client.parseStreamResponse([
+        'data: {"choices":[{"delta":{"content":"答复","reasoning_content":"内部推理"}}]}',
+        'data: [DONE]'
+    ].join('\n'), 'chat')
+    assert.deepEqual(streamed.choices[0].message, { content: '答复' })
+}
+
 async function testUsageTrackingIsolatedPerConcurrentRequest() {
     const client = Object.create(AiClient.prototype)
     const [first, second] = await Promise.all([
@@ -600,6 +615,7 @@ await testUsageTrackingIsolatedPerConcurrentRequest()
 await testQuickIntentRequestForwardsStructuredOutputOptions()
 await testQuickIntentRequestRetriesOneEmptyResponse()
 testWhitespaceChatResponseIsRejected()
+testChatReasoningIsNotExposedInParsedOutput()
 await testFailedRequestsAreExcludedFromUsageTracking()
 await testProviderFailoverBudget()
 await testConfiguredOrderBeatsHealthScore()
@@ -618,4 +634,4 @@ await testAllModelProbeContinuesAfterUnexpectedFailure()
 await testMultimodalVisionRelayDependsOnConfiguration()
 await testVisionRelayAutoDiscoversUnlistedChatFallback()
 await testAttemptRequestPassesCancellationSignal()
-console.log('Resilience eval: 18 passed, 0 failed')
+console.log('Resilience eval: 19 passed, 0 failed')

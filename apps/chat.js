@@ -21,7 +21,7 @@ import { claimPendingAction, clearPendingAction, loadPendingAction, parseStandal
 import { executeConfirmedPendingToolCall, getToolActionLabel, validatePendingToolCallScene } from '../utils/tool_execution_policy.js'
 import { classifyAgentRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } from '../utils/agent_policy.js'
 import { getRecentTaskToolArgs, hasImplicitRecentTaskReference } from '../utils/agent_reference.js'
-import { buildFinalAnswerRetryInstruction, hasLeakedInternalAnalysis, hasLeakedToolCallProtocol, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput, shouldAuditUnsupportedToolClaim } from '../utils/model_output.js'
+import { buildFinalAnswerRetryInstruction, hasLeakedInternalAnalysis, hasLeakedToolCallProtocol, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizePlainTextOutput, sanitizeUserFacingOutput, shouldAuditUnsupportedToolClaim } from '../utils/model_output.js'
 import { formatToolProtocol } from '../utils/tool_result.js'
 import { executeAgentRound, planAgentContinuation } from '../utils/agent_orchestrator.js'
 import { buildAgentRoundFingerprint, createAgentBudget, createAgentTelemetry, getAgentBudgetSnapshot, getAgentTelemetrySnapshot, deferDependentSideEffectCalls, filterRepeatedAgentToolCalls, isUnfulfilledImageSearch, retainAgentContinuationTools, resolveAgentRoundCompletion, shouldContinueAgentRound, shouldStopRepeatedImageSearch, stableAgentStringify, summarizeAgentExecutions, updateAgentStagnationState } from '../utils/agent_runtime.js'
@@ -1820,7 +1820,6 @@ export class ChatHandler extends plugin {
                 { reg: new RegExp(`^#导出${Config.AI_NAME}记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'), fnc: 'exportMemoryByDate' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆$`, 'i'), fnc: 'exportAllMemory', permission: 'master' },
                 { reg: new RegExp(`^#导出${Config.AI_NAME}全部记忆\\s+(\\d{4}-\\d{2}-\\d{2})$`, 'i'), fnc: 'exportAllMemoryByDate', permission: 'master' },
-                { reg: /^#ai思考(开启|关闭)$/i, fnc: 'switchThinkingMode', permission: 'master' },
                 { reg: /^#?ai(开启|关闭)思考提示$/i, fnc: 'switchThinkingNotice', permission: 'master' },
                 { reg: /^#?ai(开启|关闭)画图审图$/i, fnc: 'switchDrawReview', permission: 'master' },
             ]
@@ -4010,7 +4009,7 @@ ${visualDescription}`
             if (result.success) {
                 throwIfExecutionCancelled()
                 let rawResponseText = String(result.data || '').trim()
-                let finalResponseText = sanitizeModelOutput(rawResponseText, { showThinking: Config.show_thinking })
+                let finalResponseText = sanitizeUserFacingOutput(rawResponseText)
                 let usedSafeFallbackReply = false
                 const insufficientResearchEvidence = webResearchUsed
                     && hasInsufficientWebEvidenceForRequirements(webEvidenceState, webResearchRequirements)
@@ -4023,7 +4022,6 @@ ${visualDescription}`
                     hasActualToolResults: successfulToolResultCount > 0
                 })
                 let unsupportedToolClaim = auditUnsupportedToolClaim && hasUnsupportedToolResultClaim(finalResponseText, {
-                    showThinking: Config.show_thinking,
                     hasActualToolResults: successfulToolResultCount > 0,
                     hasTaskCompletionEvidence,
                     hasVisualEvidence
@@ -4083,11 +4081,10 @@ ${visualDescription}`
                     if (retryResult.success && retryResult.data) {
                         result = retryResult
                         rawResponseText = String(retryResult.data).trim()
-                        finalResponseText = sanitizeModelOutput(rawResponseText, { showThinking: Config.show_thinking })
+                        finalResponseText = sanitizeUserFacingOutput(rawResponseText)
                         leakedToolCallProtocol = hasLeakedToolCallProtocol(finalResponseText)
                         leakedInternalAnalysis = hasLeakedInternalAnalysis(rawResponseText)
                         unsupportedToolClaim = auditUnsupportedToolClaim && hasUnsupportedToolResultClaim(finalResponseText, {
-                            showThinking: Config.show_thinking,
                             hasActualToolResults: successfulToolResultCount > 0,
                             hasTaskCompletionEvidence,
                             hasVisualEvidence
@@ -4137,7 +4134,7 @@ ${visualDescription}`
                     usedSafeFallbackReply = true
                 }
                 if (shellToolExecutionCount > 0) {
-                    finalResponseText = sanitizePlainTextOutput(finalResponseText, { showThinking: Config.show_thinking })
+                    finalResponseText = sanitizePlainTextOutput(finalResponseText)
                 }
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
 
@@ -4155,19 +4152,19 @@ ${visualDescription}`
                 const MAX_LENGTH = Config.CHECKPOINT_DISPLAY_MAX_LENGTH
                 const footerSuffix = isSingleMode ? ' (单次对话)' : ''
                 const footerInfo = `耗时: ${elapsed}s${tokenInfo} @${result.platform}${footerSuffix}`
-                const reasoningText = Config.show_thinking && result.reasoning ? String(result.reasoning).trim() : ''
                 const deliveryContext = {
                     requestId: e.message_id || e.seq || '',
                     targetId: e.group_id ? `group:${e.group_id}` : `private:${e.user_id || ''}`,
                     stepId: 'final_reply'
                 }
 
-                const sendFinalReply = async (responseText, responseReasoning = '') => {
+                const sendFinalReply = async responseText => {
                     throwIfExecutionCancelled()
-                    if (!shouldUseForwardReply({ responseText, responseReasoning, footerInfo, maxChars: MAX_LENGTH, maxBytes: 3500 })) {
+                    const safeResponseText = sanitizeUserFacingOutput(responseText)
+                    if (!shouldUseForwardReply({ responseText: safeResponseText, footerInfo, maxChars: MAX_LENGTH, maxBytes: 3500 })) {
                         throwIfExecutionCancelled()
                         const shortDelivery = await sendTextInChunks({
-                            text: `${responseText}\n\n${footerInfo}`,
+                            text: `${safeResponseText}\n\n${footerInfo}`,
                             sendReply: replyUnlessCancelled,
                             maxChars: MAX_LENGTH,
                             maxBytes: 3500,
@@ -4183,8 +4180,7 @@ ${visualDescription}`
                     }
 
                     const delivery = await sendReplyWithForwardFallback({
-                        responseText,
-                        responseReasoning,
+                        responseText: safeResponseText,
                         footerInfo,
                         aiName: Config.AI_NAME,
                         botUin: Bot.uin,
@@ -4204,7 +4200,7 @@ ${visualDescription}`
                     return delivery.error ? { status: 'failed', error: delivery.error } : delivery.result
                 }
                 throwIfExecutionCancelled()
-                let sendResult = await sendFinalReply(finalResponseText, reasoningText)
+                let sendResult = await sendFinalReply(finalResponseText)
                 throwIfExecutionCancelled()
                 let sendError = extractMessageSendError(sendResult)
                 if (sendError) {
@@ -4214,11 +4210,12 @@ ${visualDescription}`
                         const rewritten = await rewriteRejectedReply(this.client, finalResponseText, modelGroupKey, 4096, { signal: cancellationHandle?.signal, requestId: requestTraceId, stage: 'delivery_rewrite' })
                         throwIfExecutionCancelled()
                         if (rewritten) {
-                            const retryResult = await sendFinalReply(rewritten)
+                            const safeRewritten = sanitizeUserFacingOutput(rewritten)
+                            const retryResult = await sendFinalReply(safeRewritten)
                             throwIfExecutionCancelled()
                             const retryError = extractMessageSendError(retryResult)
                             if (!retryError) {
-                                finalResponseText = rewritten
+                                finalResponseText = safeRewritten
                                 sendError = ''
                                 logger.info(`[AI-Plugin] 最终回复经中性改写后发送成功: request=${requestTraceId}`)
                             } else {
@@ -4462,17 +4459,6 @@ ${visualDescription}`
                 logger.error(`[AI-Plugin] 记忆文件私聊发送失败:`, uploadErr)
                 await e.reply(`呜...文件发送失败了！\n但别担心，文件已经成功保存在服务器上了哦：\n${filePath}`, true)
             }
-        }
-    }
-
-    async switchThinkingMode(e) {
-        const isTurnOn = e.msg.includes("开启")
-        saveMainConfigSwitch('show_thinking', isTurnOn)
-
-        if (isTurnOn) {
-            await e.reply("✅ 设置成功：已开启思考过程显示 (Raw模式)。")
-        } else {
-            await e.reply("设置成功：已关闭思考过程显示 (自动清洗模式)。")
         }
     }
 

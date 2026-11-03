@@ -18,7 +18,7 @@ import { loadUserMemoryContext, stripMediaPartsFromHistory } from '../utils/memo
 import { detectToolIntentFamilies, extractUrlsFromText, filterToolCallsByIntent, hasExplicitDrawIntent, hasExplicitFileSendIntent, hasExplicitGroupChatDigestIntent, hasExplicitMemorySearchIntent, hasExplicitUserProfileUpdateIntent, inferAutonomousUserProfileUpdate, parseGroupChatDigestRequest, parseMemorySearchRequest, parseNamedGroupChatContextRequest, parseRecentGroupChatFollowupRequest, parseWebSearchRequest, parseWorkspaceSurveyRequest, selectToolCandidates, shouldSemanticallyValidateToolCandidates } from '../utils/tool_intent.js'
 import { resolveGroupOperatorRole, toolRegistry } from '../tools/index.js'
 import { relayImagesToVision } from '../tools/vision_relay.js'
-import { buildFinalAnswerRetryInstruction, hasLeakedInternalAnalysis, hasLeakedToolCallProtocol, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeModelOutput, shouldAuditUnsupportedToolClaim } from '../utils/model_output.js'
+import { buildFinalAnswerRetryInstruction, hasLeakedInternalAnalysis, hasLeakedToolCallProtocol, hasUnsupportedToolResultClaim, hasUnsupportedUserProfileClaim, isPlanOnlyResponse, sanitizeUserFacingOutput, shouldAuditUnsupportedToolClaim } from '../utils/model_output.js'
 import { formatToolProtocol } from '../utils/tool_result.js'
 import { buildAgentRoundFingerprint, createAgentBudget, createAgentTelemetry, getAgentBudgetSnapshot, getAgentTelemetrySnapshot, isUnfulfilledImageSearch, resolveAgentRoundCompletion, shouldContinueAgentRound, shouldStopRepeatedImageSearch, updateAgentStagnationState } from '../utils/agent_runtime.js'
 import { findPendingWorkspaceVerification, resolvePersistedAgentStatus } from '../utils/agent_completion.js'
@@ -811,7 +811,7 @@ async function prepareFastChatImageContext(client, imageReadPlan, normalized, pr
 }
 
 function cleanModelText(text) {
-    return sanitizeModelOutput(text, { showThinking: Config.show_thinking })
+    return sanitizeUserFacingOutput(text)
 }
 
 async function buildDirectImageMemoryFallback(client, imageParts, normalized) {
@@ -2279,8 +2279,9 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             usedSafeFallbackReply = true
         }
         const sendFastReply = async text => {
+            const safeText = sanitizeUserFacingOutput(text)
             const delivery = await sendTextInChunks({
-                text,
+                text: safeText,
                 sendReply: (...args) => e.reply(...args),
                 maxChars: Config.CHECKPOINT_DISPLAY_MAX_LENGTH,
                 maxBytes: 3500,
@@ -2303,10 +2304,11 @@ ${normalized.nickname}(${normalized.userId}): ${triggerText}${normalized.aliasCa
             if (isContentModerationSendError(sendError)) {
                 const rewritten = await rewriteRejectedReply(this.client, replyText, 'flash', 2048, { requestId: replyRequestId, stage: 'fast_delivery_rewrite' })
                 if (rewritten) {
-                    const retryResult = await sendFastReply(rewritten)
+                    const safeRewritten = sanitizeUserFacingOutput(rewritten)
+                    const retryResult = await sendFastReply(safeRewritten)
                     const retryError = extractMessageSendError(retryResult)
                     if (!retryError) {
-                        replyText = rewritten
+                        replyText = safeRewritten
                         sendError = ''
                         logger.info(`[AI-Plugin] [畅聊] 最终回复经中性改写后发送成功: request=${replyRequestId}`)
                     } else {

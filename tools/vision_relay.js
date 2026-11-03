@@ -82,7 +82,7 @@ async function relayImagesToVision(imageUrls, context, client, visionModelConfig
             client._recordProviderSuccess?.(modelConfig.provider_id)
             client.saveModelStatus()
             logger.info(`[AI-Plugin] Vision Relay: 转述成功 (${result.data.length} 字符)`)
-            return sanitizeModelOutput(result.data, { showThinking: false })
+            return sanitizeModelOutput(result.data)
         } else {
             const failure = client._classifyRequestError?.(result?.error) || { error: result?.error || 'Vision Relay 请求失败' }
             client._recordModelFail(statusKey)

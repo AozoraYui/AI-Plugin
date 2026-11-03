@@ -2,6 +2,7 @@ import { pluginLogger as logger } from './plugin_logger.js'
 import { Config } from './config.js'
 import { formatDBTimestampToBeijing } from './common.js'
 import { processImagesInBatches } from './image.js'
+import { sanitizeUserFacingOutput } from './model_output.js'
 
 const SUMMARY_MAX_CHARS = 12000
 const COMPACT_INPUT_MAX_CHARS = 30000
@@ -13,15 +14,7 @@ function truncateText(text, maxLength = 900) {
 }
 
 function cleanModelText(text) {
-    let result = String(text || '').trim()
-    if (Config.show_thinking) return result
-    result = result.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
-    const blocks = result.split('\n\n')
-    const firstContent = blocks.findIndex(block => {
-        const trimmed = block.trim()
-        return trimmed && !trimmed.startsWith('*Thinking') && !trimmed.startsWith('>')
-    })
-    return firstContent >= 0 ? blocks.slice(firstContent).join('\n\n').replace(/^>\s*/, '').trim() : result
+    return sanitizeUserFacingOutput(text)
 }
 
 function getConfiguredMaxImages() {

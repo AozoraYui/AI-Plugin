@@ -73,18 +73,20 @@ function stripInternalSections(text) {
     return output.join('\n').trim()
 }
 
-export function sanitizeModelOutput(text, options = {}) {
+export function sanitizeModelOutput(text) {
     let result = String(text || '').trim()
     if (!result) return ''
-    if (options.showThinking !== true) {
-        result = stripInternalTags(result)
-        result = stripInternalSections(result)
-    }
+    result = stripInternalTags(result)
+    result = stripInternalSections(result)
     return result.trim()
 }
 
-export function sanitizePlainTextOutput(text, options = {}) {
-    return sanitizeModelOutput(text, options)
+export function sanitizeUserFacingOutput(text) {
+    return sanitizeModelOutput(text, { userFacing: true })
+}
+
+export function sanitizePlainTextOutput(text) {
+    return sanitizeModelOutput(text)
         .replace(/```[^\n]*\n?/g, '')
         .replace(/^\s{0,3}#{1,6}\s*/gm, '')
         .replace(/^\s*>\s?/gm, '')

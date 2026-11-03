@@ -273,7 +273,7 @@ web_fetch_allowed_private_origins: []
 #   开启后会索引普通对话历史、全量/增量总结、个人档案和畅聊群流水，并提供 memory_search 工具。
 #   SQLite 是原始记忆库；可用 #ai向量迁移 增量补齐索引，或 #ai向量重建 清空本地 collection 后全量重建。
 #
-# show_thinking: 是否显示 AI 思考过程（Raw 模式；false 时自动清洗思考内容，默认 false）
+# show_thinking: 已弃用并忽略；模型内部推理不会发送给用户
 # show_thinking_notice: 是否在普通对话请求模型前发送“xx思考中”占位提示（默认 false）
 # draw_review_after_generate: 画图成功后是否把生成图再交给 AI 看一眼，并基于图片说一句短评（默认 false，会额外消耗一次多模态输入）
 # 注意：以上开关均与 enable_web_search 平级（不要缩进！）
@@ -302,7 +302,6 @@ web_fetch_allowed_private_origins: []
 # VECTOR_MODEL: shibing624/text2vec-base-chinese
 # VECTOR_SERVER_PORT: 9901
 # VECTOR_AUTO_CONTEXT_MAX_CHARS: 6000
-# show_thinking: false
 # show_thinking_notice: false
 # draw_review_after_generate: false
 # SHELL_EXEC_TIMEOUT_MS: 60000

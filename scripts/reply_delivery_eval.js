@@ -41,7 +41,7 @@ async function testForwardSelectionUsesWholeReplyBudget() {
     const bodyWithinLimit = 'a'.repeat(3490)
     assert.ok(Array.from(bodyWithinLimit).length <= 3500)
     assert.equal(shouldUseForwardReply({ responseText: bodyWithinLimit, footerInfo: '1234567890', maxChars: 3500, maxBytes: 3500 }), true)
-    assert.equal(shouldUseForwardReply({ responseText: '短回复', responseReasoning: '过程', footerInfo: '耗时: 1s', maxChars: 3500, maxBytes: 3500 }), true)
+    assert.equal(shouldUseForwardReply({ responseText: '短回复', footerInfo: '耗时: 1s', maxChars: 3500, maxBytes: 3500 }), false)
 }
 
 async function testForwardSuccess() {
@@ -49,6 +49,7 @@ async function testForwardSuccess() {
     let nodes
     const delivery = await sendReplyWithForwardFallback({
         responseText: '正文'.repeat(2200),
+        responseReasoning: '不得发送的内部推理文本',
         footerInfo: '耗时信息'.repeat(700),
         aiName: '诺亚',
         botUin: '123',
@@ -64,6 +65,7 @@ async function testForwardSuccess() {
     assert.equal(delivery.method, 'forward')
     assert.equal(sent.length, 1)
     assert.ok(nodes.length > 1)
+    assert.ok(nodes.every(node => !node.message.includes('不得发送的内部推理文本')))
     assertSafeChunks(nodes.map(node => node.message))
     assert.ok(nodes.some(node => node.message.includes('耗时信息')))
 }

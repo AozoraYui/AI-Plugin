@@ -287,12 +287,10 @@ function fitsSingleReply(text, {
 
 export function shouldUseForwardReply({
     responseText = '',
-    responseReasoning = '',
     footerInfo = '',
     maxChars = DEFAULT_MAX_CHARS,
     maxBytes = DEFAULT_MAX_BYTES
 } = {}) {
-    if (String(responseReasoning || '').trim()) return true
     return !fitsSingleReply([String(responseText ?? ''), '', String(footerInfo ?? '')].join('\n'), { maxChars, maxBytes })
 }
 
@@ -336,7 +334,6 @@ function splitTextToSafeChunks(text, {
 
 function buildForwardNodes({
     responseText,
-    responseReasoning = '',
     footerInfo = '',
     aiName = 'AI',
     botUin = '',
@@ -356,7 +353,6 @@ function buildForwardNodes({
         })
     }
 
-    if (responseReasoning) appendSection('思考过程', `思考过程\n\n${responseReasoning}`)
     appendSection('最终回复', `最终回复\n\n${responseText}`, footerInfo)
     return nodes
 }
@@ -412,7 +408,6 @@ export async function sendTextInChunks({
 
 export async function sendReplyWithForwardFallback({
     responseText,
-    responseReasoning = '',
     footerInfo = '',
     aiName = 'AI',
     botUin = '',
@@ -429,7 +424,6 @@ export async function sendReplyWithForwardFallback({
 } = {}) {
     const nodes = buildForwardNodes({
         responseText,
-        responseReasoning,
         footerInfo,
         aiName,
         botUin,

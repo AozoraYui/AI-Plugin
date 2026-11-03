@@ -776,7 +776,6 @@ export class AiClient {
                 value.FAST_CHAT_AUTO_READ_IMAGE_LIMIT !== undefined ||
                 value.FAST_CHAT_IMAGE_BATCH_SIZE !== undefined ||
                 value.FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS !== undefined ||
-                value.show_thinking !== undefined ||
                 value.show_thinking_notice !== undefined ||
                 value.draw_review_after_generate !== undefined ||
                 value.weather_api_key !== undefined ||
@@ -873,7 +872,6 @@ export class AiClient {
                 this.groupLeaveConfig = { enabled: rawConfig.enable_group_leave === true }
                 this.fastChatConfig = { enabled: rawConfig.enable_fast_chat === true }
                 this.vectorMemoryConfig = { enabled: rawConfig.enable_vector_memory === true }
-                Config.show_thinking = rawConfig.show_thinking === true
                 Config.show_thinking_notice = rawConfig.show_thinking_notice === true
                 Config.draw_review_after_generate = rawConfig.draw_review_after_generate === true
                 Config.enable_shell_session = rawConfig.enable_shell_session === true
@@ -1296,9 +1294,8 @@ export class AiClient {
         if (type === 'chat') {
             const message = data.choices?.[0]?.message || {}
             const text = message.content
-            const reasoning = message.reasoning_content || message.reasoning || ''
             if (typeof text === 'string' ? text.trim().length > 0 : Boolean(text)) {
-                return { success: true, data: text, reasoning, usage: usage }
+                return { success: true, data: text, usage: usage }
             }
             return { success: false, error: 'AI返回了空消息。这可能是由于内容安全策略或模型内部错误。' }
         }
@@ -1346,7 +1343,6 @@ export class AiClient {
         const lines = streamText.split('\n').filter(line => line.startsWith('data: ') && !line.includes('[DONE]'))
 
         let accumulatedContent = ""
-        let accumulatedReasoning = ""
         let imageUrlInStream = null
         let usage = null
 
@@ -1359,12 +1355,8 @@ export class AiClient {
 
                 const delta = chunk.choices?.[0]?.delta || {}
                 const deltaContent = delta.content
-                const deltaReasoning = delta.reasoning_content || delta.reasoning
                 if (deltaContent) {
                     accumulatedContent += deltaContent
-                }
-                if (deltaReasoning) {
-                    accumulatedReasoning += deltaReasoning
                 }
             } catch (e) {
                 // 忽略无法解析的行
@@ -1376,7 +1368,7 @@ export class AiClient {
             imageUrlInStream = imageMatch[1]
         }
 
-        let messageObject = { content: accumulatedContent, reasoning_content: accumulatedReasoning }
+        let messageObject = { content: accumulatedContent }
         if (type === 'image' && imageUrlInStream) {
             messageObject.images = [{ image_url: { url: imageUrlInStream } }]
         }
@@ -1460,7 +1452,6 @@ export class AiClient {
                 return {
                     success: true,
                     data: result.data,
-                    reasoning: result.reasoning,
                     platform: `${provider.name} (${modelId})`,
                     usage: result.usage
                 }

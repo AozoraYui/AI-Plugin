@@ -87,7 +87,6 @@ const defaultConfig = {
     // 使用场景: utils/common.js, utils/scheduler.js 中每日摘要降级处理
     FALLBACK_DAILY_SUMMARY_MAX_LENGTH: 500,
     DEFAULT_MODEL_GROUP: 'flash',
-    show_thinking: false,
     show_thinking_notice: false,
     draw_review_after_generate: false,
     enable_group_send: false,
@@ -431,8 +430,6 @@ export const Config = {
     set FALLBACK_CHUNK_MAX_LENGTH(val) { config.FALLBACK_CHUNK_MAX_LENGTH = val },
     get FALLBACK_DAILY_SUMMARY_MAX_LENGTH() { return config.FALLBACK_DAILY_SUMMARY_MAX_LENGTH ?? defaultConfig.FALLBACK_DAILY_SUMMARY_MAX_LENGTH },
     set FALLBACK_DAILY_SUMMARY_MAX_LENGTH(val) { config.FALLBACK_DAILY_SUMMARY_MAX_LENGTH = val },
-    get show_thinking() { return config.show_thinking ?? defaultConfig.show_thinking },
-    set show_thinking(val) { config.show_thinking = val === true },
     get show_thinking_notice() { return config.show_thinking_notice ?? defaultConfig.show_thinking_notice },
     set show_thinking_notice(val) { config.show_thinking_notice = val === true },
     get draw_review_after_generate() { return config.draw_review_after_generate ?? defaultConfig.draw_review_after_generate },

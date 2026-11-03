@@ -32,7 +32,6 @@ function saveRuntimeSwitch(key, value) {
                 value.FAST_CHAT_AUTO_READ_IMAGE_LIMIT !== undefined ||
                 value.FAST_CHAT_IMAGE_BATCH_SIZE !== undefined ||
                 value.FAST_CHAT_CONTEXT_IMAGE_MAX_AGE_SECONDS !== undefined ||
-                value.show_thinking !== undefined ||
                 value.draw_review_after_generate !== undefined
             )
         }) || docs[docs.length - 1]
@@ -378,12 +377,10 @@ export class ManagementHandler extends plugin {
     }
 
     async _buildModelListForwardMsg() {
-        const thinkingStatus = Config.show_thinking ? "✅ 开启 (显示思考过程)" : "关闭 (自动过滤思考)"
-        
         const forwardMsgNodes = [{ 
             user_id: Bot.uin, 
             nickname: Config.AI_NAME, 
-            message: `思考过程显示: ${thinkingStatus}`
+            message: '模型内部推理仅用于内部处理，不会发送给用户。'
         }]
         
         const providers = [...this.client.modelsConfig]
@@ -516,7 +513,6 @@ export class ManagementHandler extends plugin {
 
             const accessConfig = getAccessConfig()
             const accessMode = accessConfig.mode === 'whitelist' ? '白名单模式' : '黑名单模式'
-            const thinkingMode = Config.show_thinking ? '✅ 开启 (Raw模式)' : '关闭 (自动清洗)'
             const shellSessionMode = this.client.enableShellSession ? `✅ 开启 (${Config.SHELL_SESSION_NAME})` : '关闭'
             const groupAdminMode = this.client.enableGroupAdmin ? '✅ 开启' : '关闭'
             const groupSendMode = this.client.enableGroupSend ? '✅ 开启' : '关闭'
@@ -539,7 +535,7 @@ export class ManagementHandler extends plugin {
                 '',
                 '权限与模式',
                 `  - 权限控制: ${accessMode}`,
-                `  - AI思考过程: ${thinkingMode}`,
+                '  - AI思考过程: 仅内部处理，不对外显示',
                 `  - 持久Shell会话: ${shellSessionMode}`,
                 `  - 群管理工具: ${groupAdminMode}`,
                 `  - 群消息代发: ${groupSendMode}`,

@@ -43,7 +43,7 @@ const {
     shouldSemanticallyValidateToolCandidates
 } = await import('../utils/tool_intent.js')
 const { classifyAgentRisk, classifyToolCallRisk, decideAgentContinuation, normalizeAgentPlan, summarizeDeterministicAgentRound } = await import('../utils/agent_policy.js')
-const { buildFinalAnswerRetryInstruction, hasLeakedToolCallProtocol, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput, shouldAuditUnsupportedToolClaim } = await import('../utils/model_output.js')
+const { buildFinalAnswerRetryInstruction, hasLeakedToolCallProtocol, hasUnsupportedToolResultClaim, isPlanOnlyResponse, sanitizeModelOutput, sanitizePlainTextOutput, sanitizeUserFacingOutput, shouldAuditUnsupportedToolClaim } = await import('../utils/model_output.js')
 const { isExpiredGroupContextImageUrl, isGroupContextImageQuestion } = await import('../utils/group_context_images.js')
 const { buildParticipantIdentityHint, expandInlineContent, isThirdPartySubjectQuery, resolvePrivateMemorySubject, shouldLoadPrivateMemoryContext, shouldPrioritizeCurrentMultimodalTurn } = await import('../utils/message_context.js')
 const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq_face.js')
@@ -1534,6 +1534,9 @@ check('天气工具能从个人档案提取城市', cityHints.includes('中山')
 
 check('标准think标签会被清除', sanitizeModelOutput('<think>内部推理</think>最终答案') === '最终答案')
 check('未闭合think标签不会回退泄露', sanitizeModelOutput('<think>内部推理') === '')
+check('用户可见输出强制过滤思维内容', sanitizeUserFacingOutput('Analysis:\n内部分析\n\nFinal Answer:\n面向用户的答复') === '面向用户的答复')
+check('清洗器不支持绕过思维内容过滤', sanitizeModelOutput('Analysis:\n内部分析\n\nFinal Answer:\n面向用户的答复', { showThinking: true }) === '面向用户的答复')
+check('纯内部分析不会作为用户可见输出发送', sanitizeUserFacingOutput('Reasoning:\n内部分析步骤') === '')
 check('XML工具调用协议不会进入最终回复', hasLeakedToolCallProtocol('<function_calls>\n<invoke>\n<tool_name>shell_exec</tool_name>\n<parameters>{"command":"free -h"}</parameters>\n</invoke>\n</function_calls>'))
 check('JSON工具调用协议不会进入最终回复', hasLeakedToolCallProtocol('{"tool_calls":[{"function":{"name":"shell_exec","arguments":"{\\"command\\":\\"free -h\\"}"}}]}'))
 check('普通工具概念说明不会被协议泄漏规则误判', !hasLeakedToolCallProtocol('工具调用通常会经过 function_calls 协议，但这里仅是在解释概念。'))
