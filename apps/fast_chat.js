@@ -6,7 +6,7 @@ import { checkAccess, getAccessConfig } from '../utils/access.js'
 import { isBotMuted } from '../utils/bot_mute.js'
 import { formatDBTimestampToBeijing, getBeijingTimeStr, getTodayDateStr, takeSourceMsg } from '../utils/common.js'
 import { estimatePayloadSizeBytes, processImagesInBatches, trimInlineImagesToPayloadLimit } from '../utils/image.js'
-import { getContentSafetyBlockMessage, reviewContentForSubmission } from '../utils/content_safety.js'
+import { formatRecentGroupContentSafetyContext, getContentSafetyBlockMessage, reviewContentForSubmission } from '../utils/content_safety.js'
 import { buildEnvironmentHint, buildParticipantIdentityHint, expandForwardMsg, expandInlineContent, extractCardInfo, isThirdPartySubjectQuery, resolvePrivateMemorySubject } from '../utils/message_context.js'
 import { buildEventSpeakerMeta, buildSpeakerMeta } from '../utils/speaker_context.js'
 import { describeQQFaceSegment } from '../utils/qq_face.js'
@@ -1436,6 +1436,11 @@ export class FastChatHandler extends plugin {
             client: this.client,
             text: normalized.instructionText || normalized.currentText || '',
             imageParts: [...reviewedImageParts, ...localImageInput.imageParts, ...avatarImageInput.imageParts],
+            contextMessages: formatRecentGroupContentSafetyContext(logs, {
+                currentUserId: normalized.userId,
+                currentMessageId: normalized.messageId,
+                currentTimestamp: e.time
+            }),
             requestId: String(replyRequestId),
             stage: 'fast_chat_input_safety'
         })

@@ -30,7 +30,7 @@ import { AGENT_TASK_OBSERVATION_MAX_CHARS, AGENT_TASK_STEP_MAX_CHARS, AGENT_TASK
 import { buildAgentTaskPlan, updateAgentTaskPlanFromObservations } from '../utils/agent_plan.js'
 import { cancelAgentExecutionsByTask, isAgentExecutionCancelled, registerAgentExecution } from '../utils/agent_cancellation.js'
 import { claimMessageDedup } from '../utils/message_dedup.js'
-import { getContentSafetyBlockMessage, reviewContentForSubmission } from '../utils/content_safety.js'
+import { getContentSafetyBlockMessage, loadRecentGroupContentSafetyContext, reviewContentForSubmission } from '../utils/content_safety.js'
 import { toolRegistry, relayImagesToVision, relayImagesToVisionInBatches, resolveGroupOperatorRole } from '../tools/index.js'
 import { executeGroupSend, executePendingGroupSend, parseGroupSendDisambiguationSelection } from '../tools/group_send.js'
 import { executePendingGroupLeave } from '../tools/group_leave.js'
@@ -2153,10 +2153,18 @@ export class ChatHandler extends plugin {
                 await setMsgEmojiLike(e, 10)
                 return replyUnlessCancelled(getContentSafetyBlockMessage(), true)
             }
+            const safetyContextMessages = await loadRecentGroupContentSafetyContext(this.conversationManager?.db, {
+                groupId: e.group_id,
+                currentUserId: e.user_id,
+                currentMessageId: e.message_id,
+                currentTimestamp: e.time,
+                requestId: requestTraceId
+            })
             const inputSafetyReview = await reviewContentForSubmission({
                 client: this.client,
                 text: userMessage,
                 imageParts: [...reviewedMessageImages, ...localImageInput.imageParts, ...avatarImageInput.imageParts],
+                contextMessages: safetyContextMessages,
                 requestId: requestTraceId,
                 stage: 'chat_input_safety',
                 signal: cancellationHandle?.signal

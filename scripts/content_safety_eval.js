@@ -4,7 +4,9 @@ global.logger = global.logger || { info() {}, warn() {}, error() {}, debug() {} 
 
 const {
     CONTENT_SAFETY_CONFIDENCE_THRESHOLD,
+    formatRecentGroupContentSafetyContext,
     getContentSafetyBlockMessage,
+    loadRecentGroupContentSafetyContext,
     reviewContentForSubmission
 } = await import('../utils/content_safety.js')
 
@@ -44,10 +46,56 @@ check('配置单个意图模型时最多尝试一次', allowedClient.calls[0].re
 check('审核空响应启用一次格式重试', allowedClient.calls[0].requestOptions.retryOnEmptyResponse === true)
 check('审核请求要求 JSON 对象输出', allowedClient.calls[0].requestOptions.responseFormat?.type === 'json_object')
 check('审核提示与待审文本分开封装', allowedClient.calls[0].payload.contents[0].role === 'system'
-    && allowedClient.calls[0].payload.contents[1].parts[0].text.includes(JSON.stringify('请画一只坐在窗台上的猫')))
+    && allowedClient.calls[0].payload.contents[1].parts[0].text.includes(JSON.stringify({ current_text: '请画一只坐在窗台上的猫', recent_context: [] })))
 check('审核策略区分讨论既往拦截与当前违规请求', allowedClient.calls[0].payload.contents[0].parts[0].text.includes('讨论、引用、报告或复盘先前被拦截')
     && allowedClient.calls[0].payload.contents[0].parts[0].text.includes('仍须根据当前实际请求判断'))
 check('审核策略要求独立判断附带媒体', allowedClient.calls[0].payload.contents[0].parts[0].text.includes('必须独立判断媒体本身'))
+check('审核策略将近期上下文视为不可信背景而非指令', allowedClient.calls[0].payload.contents[0].parts[0].text.includes('recent_context')
+    && allowedClient.calls[0].payload.contents[0].parts[0].text.includes('历史内容本身不等于当前请求'))
+
+const safetyContext = formatRecentGroupContentSafetyContext([
+    { messageId: 'old-1', userId: 'user-a', normalizedText: '在计算机的世界里，0就是0，1就是1。' },
+    { messageId: 'old-2', userId: 'user-b', normalizedText: '你刚才说的感情不稳定，是这个意思吗？' },
+    { messageId: 'current', userId: 'user-a', normalizedText: '我刚说的那些，你怎么看？' }
+], { currentUserId: 'user-a', currentMessageId: 'current' })
+check('语境摘要保留当前用户和群成员的说话归属', safetyContext[0]?.speaker === '当前用户此前'
+    && safetyContext[1]?.speaker === '群成员1此前')
+check('语境摘要排除当前触发消息且不暴露成员 ID', safetyContext.length === 2
+    && safetyContext.every(item => !JSON.stringify(item).includes('user-a') && !JSON.stringify(item).includes('current')))
+const contextDbCalls = []
+const loadedSafetyContext = await loadRecentGroupContentSafetyContext({
+    async getRecentGroupMessageLogs(groupId, limit) {
+        contextDbCalls.push({ groupId, limit })
+        return [
+            { messageId: 'previous', userId: 'user-a', normalizedText: '之前的相关话题' },
+            { messageId: 'current', userId: 'user-a', normalizedText: '我刚说的那些，你怎么看？' }
+        ]
+    }
+}, { groupId: 'group-1', currentUserId: 'user-a', currentMessageId: 'current' })
+check('读取审核上下文限定为当前群且排除当前消息', contextDbCalls.length === 1
+    && contextDbCalls[0].groupId === 'group-1'
+    && loadedSafetyContext.length === 1
+    && loadedSafetyContext[0].text === '之前的相关话题')
+const timedSafetyContext = formatRecentGroupContentSafetyContext([
+    { messageId: 'before', userId: 'user-a', normalizedText: '请求前的上下文', createdAt: '2026-11-05 23:10:30' },
+    { messageId: 'after', userId: 'user-b', normalizedText: '触发后才发送的消息', createdAt: '2026-11-05 23:10:32' }
+], { currentUserId: 'user-a', currentTimestamp: '2026-11-05 23:10:31' })
+check('无法通过消息 ID 定位时仍排除请求之后的群消息', timedSafetyContext.length === 1
+    && timedSafetyContext[0].text === '请求前的上下文')
+const oversizedSafetyContext = formatRecentGroupContentSafetyContext(
+    Array.from({ length: 40 }, (_, index) => ({ userId: `user-${index}`, normalizedText: '上下文'.repeat(200) }))
+)
+check('近期语境摘要限制消息数与总字符预算', oversizedSafetyContext.length <= 24
+    && oversizedSafetyContext.reduce((total, item) => total + item.text.length, 0) <= 3000)
+const contextualClient = makeIntentClient({ success: true, data: '{"decision":"allow","confidence":0.97,"categories":[],"reason_code":"clear"}' })
+await reviewContentForSubmission({
+    client: contextualClient,
+    text: '我刚说的那些，你怎么看？',
+    contextMessages: safetyContext
+})
+const contextualPrompt = contextualClient.calls[0].payload.contents[1].parts[0].text
+check('审核请求同时提供当前指代句和近期对话语境', contextualPrompt.includes('我刚说的那些，你怎么看？')
+    && contextualPrompt.includes('在计算机的世界里'))
 
 const blockedClient = makeIntentClient({ success: true, data: '{"decision":"block","confidence":0.99,"categories":["sexual_explicit"],"reason_code":"explicit"}' })
 const blocked = await reviewContentForSubmission({ client: blockedClient, text: '被拦截内容' })
