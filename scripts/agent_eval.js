@@ -50,7 +50,7 @@ const { describeQQFaceSegment, formatQQFaceSegment } = await import('../utils/qq
 const { normalizeFuzzyFileName } = await import('../utils/file_access.js')
 const { toolRegistry } = await import('../tools/registry.js')
 await import('../tools/image_gen.js')
-const { buildBingImageSearchUrl, extractPageImageUrls, filterRelevantSearchResults, normalizeWebSearchQueries, parseSo360ImageResults, parseSogouSearchResults, parseYahooSearchResults, prepareSearchResults, scoreSearchResultRelevance, scoreSearchSourceAuthority, webSearchTool } = await import('../tools/search.js')
+const { buildBingImageSearchUrl, classifySearchOutcome, extractPageImageUrls, filterRelevantSearchResults, normalizeWebSearchQueries, parseSo360ImageResults, parseSogouSearchResults, parseYahooSearchResults, prepareSearchResults, scoreSearchResultRelevance, scoreSearchSourceAuthority, webSearchTool } = await import('../tools/search.js')
 const { createHeadersLike, getProxyCandidates } = await import('../utils/common.js')
 const { buildSearchAttemptKey, createSearchHealthManager, classifySearchFailure, parseRetryAfterMs } = await import('../utils/web_search_health.js')
 const { buildMessageDedupKey, claimMessageDedup, clearMessageDedupForTests } = await import('../utils/message_dedup.js')
@@ -331,6 +331,31 @@ check('搜索失败会进入不可用证据账本', (() => {
         && state.searchUnavailableCount === 1
         && state.searchFailureCount === 1
         && state.searchSuccessCount === 0
+})())
+
+check('搜索引擎可用但无足够正文证据时不标记成工具失败', (() => {
+    const outcome = classifySearchOutcome({ searchUnavailable: false, transportFailure: false })
+    const protocol = normalizeToolResult('web_search', {
+        ...outcome,
+        searchStatus: 'low_evidence',
+        searchUnavailable: false,
+        transportFailure: false,
+        usableEvidenceCount: 0,
+        results: [{ title: '候选结果', url: 'https://example.com/result' }]
+    })
+    return outcome.ok === true
+        && outcome.recoverable === false
+        && protocol.ok === true
+        && protocol.status === 'success_unverified'
+})())
+
+check('搜索源全部不可用时仍保留可重试失败状态', (() => {
+    const outcome = classifySearchOutcome({ searchUnavailable: true, transportFailure: true })
+    const protocol = normalizeToolResult('web_search', outcome)
+    return outcome.ok === false
+        && outcome.recoverable === true
+        && protocol.ok === false
+        && protocol.retryable === true
 })())
 
 check('低证据军事事实核查禁止断言事件不存在', hasOverconfidentLowEvidenceAnswer(

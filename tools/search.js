@@ -31,6 +31,11 @@ function throwIfAborted(signal) {
     if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { code: 'AGENT_CANCELLED' })
 }
 
+export function classifySearchOutcome({ searchUnavailable = false, transportFailure = false } = {}) {
+    const unavailable = searchUnavailable === true || transportFailure === true
+    return { ok: !unavailable, recoverable: unavailable }
+}
+
 async function runSearchEngine(name, searchFn, signal, options = {}) {
     const queryKey = String(options.queryKey || '').trim()
     const attemptKey = buildSearchAttemptKey(name, queryKey)
@@ -1168,8 +1173,7 @@ async function searchWeb(query, count = 5, signal) {
         successfulProviderCount,
         searchUnavailable,
         transportFailure,
-        ok: assessment.usableEvidenceCount > 0,
-        recoverable: assessment.usableEvidenceCount === 0,
+        ...classifySearchOutcome({ searchUnavailable, transportFailure }),
         summary,
         facts: {
             query,
@@ -1328,14 +1332,13 @@ export const webSearchTool = {
                 }
             }
         }))
-        const usableTargets = targets.filter(target => target.ok === true)
+        const evidenceTargets = targets.filter(target => (Number(target.usableEvidenceCount) || 0) > 0)
         const qualities = [...new Set(targets.map(target => target.evidenceQuality).filter(Boolean))]
         const allUnavailable = targets.every(target => target.searchUnavailable === true)
+        const availableTargetCount = targets.filter(target => target.searchUnavailable !== true).length
         const aggregateUsableEvidenceCount = targets.reduce((sum, target) => sum + (Number(target.usableEvidenceCount) || 0), 0)
         const aggregateIndependentSourceCount = targets.reduce((sum, target) => sum + (Number(target.independentSourceCount) || 0), 0)
-        const summary = usableTargets.length === targets.length
-            ? `已并行搜索 ${targets.length} 个目标，全部获得可用搜索结果。`
-            : `已并行搜索 ${targets.length} 个目标，其中 ${usableTargets.length} 个目标获得可用搜索结果；失败或无结果的目标不能视为不存在。`
+        const summary = `已并行搜索 ${targets.length} 个目标，搜索源可用 ${availableTargetCount} 个，获得直接正文证据的目标 ${evidenceTargets.length} 个；失败或无证据的目标不能视为不存在。`
         return {
             batch: true,
             queries,
@@ -1343,9 +1346,9 @@ export const webSearchTool = {
             results: targets.flatMap(target => Array.isArray(target.results) ? target.results : []),
             searchStatus: allUnavailable
                 ? 'unavailable'
-                : usableTargets.length === 0
+                : evidenceTargets.length === 0
                     ? 'low_evidence'
-                    : usableTargets.length < targets.length
+                    : evidenceTargets.length < targets.length
                         ? 'partial_success'
                         : 'success',
             evidenceQuality: qualities.length === 1 ? qualities[0] : 'mixed',
@@ -1362,14 +1365,14 @@ export const webSearchTool = {
             successfulProviderCount: targets.reduce((sum, target) => sum + (Number(target.successfulProviderCount) || 0), 0),
             searchUnavailable: allUnavailable,
             transportFailure: allUnavailable,
-            ok: usableTargets.length > 0,
-            recoverable: usableTargets.length < targets.length,
+            ...classifySearchOutcome({ searchUnavailable: allUnavailable, transportFailure: allUnavailable }),
             summary,
             facts: {
                 batch: true,
                 queries,
                 targetCount: targets.length,
-                successfulTargetCount: usableTargets.length,
+                successfulTargetCount: availableTargetCount,
+                evidenceSupportedTargetCount: evidenceTargets.length,
                 usableEvidenceCount: aggregateUsableEvidenceCount,
                 independentSourceCount: aggregateIndependentSourceCount,
                 evidenceQuality: qualities.length === 1 ? qualities[0] : 'mixed',
