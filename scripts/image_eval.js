@@ -3,7 +3,7 @@ import fs from 'node:fs'
 
 globalThis.logger = globalThis.logger || { info() {}, warn() {}, error() {}, debug() {} }
 const { Config } = await import('../utils/config.js')
-const { deduplicateImageUrls, estimatePayloadSizeBytes, isAnimatedImageRequested, normalizeImageLimit, processImageBufferForAI, processInlineImagesForAI, processImagesInBatches, selectGifReviewFrameIndexes, trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
+const { deduplicateImageUrls, estimatePayloadSizeBytes, getGifAnimationMetadata, isAnimatedImageRequested, normalizeImageLimit, processImageBufferForAI, processInlineImagesForAI, processImagesInBatches, selectGifReviewFrameIndexes, trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
 const { relayImagesToVisionInBatches } = await import('../tools/vision_relay.js')
 const { urlToBuffer } = await import('../utils/common.js')
 
@@ -53,11 +53,19 @@ const preservedGif = await processImageBufferForAI(animatedGif, { preserveAnimat
 const preservedGifMetadata = await sharp(Buffer.from(preservedGif?.inline_data?.data || '', 'base64')).metadata()
 const gifFallbackMetadata = await sharp(Buffer.from(preservedGif?.fallback_inline_data?.data || '', 'base64')).metadata()
 check('GIF 参考图保留动画并提供安全审核用关键帧拼图', preservedGif?.inline_data?.mime_type === 'image/gif' && preservedGifMetadata.pages === 2 && preservedGif?.fallback_inline_data?.mime_type === 'image/png' && gifFallbackMetadata.width === 512)
+check('GIF 元数据保留原始帧数与总时长', preservedGif?.gif_metadata?.frame_count === 2 && preservedGif.gif_metadata.total_duration_ms === 2000 && preservedGif.gif_metadata.has_frame_timing)
+const variableTimingMetadata = getGifAnimationMetadata({ pages: 4, delay: [50, 100, 100, 250] })
+check('变速 GIF 元数据能识别完整时序与变化帧长', variableTimingMetadata.frame_count === 4 && variableTimingMetadata.total_duration_ms === 500 && variableTimingMetadata.has_variable_frame_duration)
+const incompleteTimingMetadata = getGifAnimationMetadata({ pages: 3, delay: [100, 100] })
+const zeroDelayMetadata = getGifAnimationMetadata({ pages: 2, delay: [0, 100] })
+check('零延时 GIF 仍保留时序信息', zeroDelayMetadata.total_duration_ms === 100 && zeroDelayMetadata.has_frame_timing)
+check('不完整的 GIF 时序元数据不被误当成完整总时长', incompleteTimingMetadata.total_duration_ms === null && !incompleteTimingMetadata.has_frame_timing)
 const highFrameGif = Buffer.from(fs.readFileSync(new URL('./fixtures/animated-40.gif.b64', import.meta.url), 'utf8').trim(), 'base64')
 const preservedHighFrameGif = await processImageBufferForAI(highFrameGif, { preserveAnimation: true })
 const preservedHighFrameGifMetadata = await sharp(Buffer.from(preservedHighFrameGif?.inline_data?.data || '', 'base64')).metadata()
 const highFrameGifFallbackMetadata = await sharp(Buffer.from(preservedHighFrameGif?.fallback_inline_data?.data || '', 'base64')).metadata()
 check('高帧数 GIF 保留原动画并生成全帧审核拼图', preservedHighFrameGif?.inline_data?.mime_type === 'image/gif' && preservedHighFrameGifMetadata.pages === 40 && preservedHighFrameGif?.fallback_inline_data?.mime_type === 'image/png' && highFrameGifFallbackMetadata.width === 1792 && highFrameGifFallbackMetadata.height === 1536)
+check('高帧数 GIF 元数据保留完整总时长', preservedHighFrameGif?.gif_metadata?.frame_count === 40 && preservedHighFrameGif.gif_metadata.total_duration_ms === 4000)
 const allGifReviewFrames = selectGifReviewFrameIndexes(40)
 check('高帧数 GIF 审核包含全部帧', allGifReviewFrames.length === 40 && allGifReviewFrames[0] === 0 && allGifReviewFrames.at(-1) === 39 && allGifReviewFrames.every((frame, index) => frame === index))
 let excessiveGifFramesRejected = false

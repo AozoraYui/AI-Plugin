@@ -15,9 +15,10 @@ function asBoolean(value, fallback) {
     return fallback
 }
 
-function boundedInteger(value, fallback, min, max) {
+function optionalBoundedInteger(value, min, max) {
+    if (value === undefined || value === null || value === '') return undefined
     const number = Number(value)
-    if (!Number.isFinite(number)) return fallback
+    if (!Number.isFinite(number)) return undefined
     return Math.min(max, Math.max(min, Math.floor(number)))
 }
 
@@ -42,8 +43,8 @@ export function normalizeModelDefinition(raw = {}) {
         per_call: asBoolean(raw.per_call, false),
         supports_gif_output: asBoolean(raw.supports_gif_output, false),
         supports_gif_input: asBoolean(raw.supports_gif_input, false),
-        gif_frame_count: boundedInteger(raw.gif_frame_count, 8, 2, 16),
-        gif_frame_duration_ms: boundedInteger(raw.gif_frame_duration_ms, 200, 50, 2000)
+        gif_frame_count: optionalBoundedInteger(raw.gif_frame_count, 2, 16),
+        gif_frame_duration_ms: optionalBoundedInteger(raw.gif_frame_duration_ms, 50, 2000)
     }
 }
 

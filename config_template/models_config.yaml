@@ -21,11 +21,12 @@
 #   per_call    是否按次扣费，默认 false
 #   supports_gif_input   是否允许把 GIF 原始动画帧提交给该绘图模型，默认 false
 #   supports_gif_output  是否支持通过 gpt-image 直连接口的 output_format=gif 生成动态图，默认 false
-#   gif_frame_count      请求 GIF 时的帧数（2-16，默认 8）
-#   gif_frame_duration_ms 请求 GIF 时的单帧时长（50-2000，默认 200）
+#   gif_frame_count      可选手动覆盖 GIF 输出帧数（2-16）；省略时从参考 GIF 推导，超过 16 帧则省略该参数以避免插件主动降帧。
+#   gif_frame_duration_ms 可选手动覆盖统一单帧时长（50-2000）；省略时从参考 GIF 总时长推导。无参考 GIF 时默认 8 帧、200ms。
+#   原 GIF 各帧时长不一致时，接口若只接受统一时长则按总时长均分，无法完全保留原逐帧节奏。
 #   注意：只有模型和实际供应商接口都支持这些参数时才启用；模型名相同也不代表中转接口协议相同。
 #   当前 GIF 输出只对 gpt-image-* 模型的 /images/* 直连路径生效，普通 chat/completions 模型不会伪装成 GIF 输出模型。
-#   GIF 先逐帧生成审核拼图，超过 36 帧会拒绝处理；供应商不支持 GIF 输入时改发审核拼图。
+#   GIF 先逐帧生成审核拼图，超过 256 帧会拒绝处理；供应商不支持 GIF 输入时改发审核拼图。
 #
 # 顶层 model_groups 模型组分 flash / pro / ultra 三档：
 #               flash  轻量组    → #fchat / #fdraw（若 DEFAULT_MODEL_GROUP=flash，则 #chat / #draw 也走它）

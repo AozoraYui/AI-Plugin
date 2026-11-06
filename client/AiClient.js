@@ -17,6 +17,8 @@ const RETRY_BACKOFF_MAX_MS = 1200
 const MODEL_STATUS_FORMAT_VERSION = 3
 const LATENCY_SAMPLE_WEIGHT = 0.3         // 新延迟占 30% 加权（平滑指数）
 const ULTRA_CHAT_REQUEST_TIMEOUT_MS = 600000 // Ultra 长思考模型固定等待 10 分钟
+const DEFAULT_GIF_FRAME_COUNT = 8
+const DEFAULT_GIF_FRAME_DURATION_MS = 200
 const usageTrackingStorage = new AsyncLocalStorage()
 
 function readUsageCount(value) {
@@ -1190,19 +1192,92 @@ export class AiClient {
         return /^gpt-image(?:-|$)/i.test(modelId || '')
     }
 
+    _resolveGifOutputSettings(parts, modelConfig = null) {
+        const gifMetadata = parts.find(part => part?.gif_metadata)?.gif_metadata || null
+        const rawConfiguredFrameCount = modelConfig?.gif_frame_count
+        const rawConfiguredFrameDuration = modelConfig?.gif_frame_duration_ms
+        const configuredFrameCountValue = Number(rawConfiguredFrameCount)
+        const configuredFrameDurationValue = Number(rawConfiguredFrameDuration)
+        const hasConfiguredFrameCount = rawConfiguredFrameCount !== undefined
+            && rawConfiguredFrameCount !== null
+            && rawConfiguredFrameCount !== ''
+            && Number.isFinite(configuredFrameCountValue)
+        const hasConfiguredFrameDuration = rawConfiguredFrameDuration !== undefined
+            && rawConfiguredFrameDuration !== null
+            && rawConfiguredFrameDuration !== ''
+            && Number.isFinite(configuredFrameDurationValue)
+        const configuredFrameCount = hasConfiguredFrameCount
+            ? Math.min(16, Math.max(2, Math.floor(configuredFrameCountValue)))
+            : NaN
+        const configuredFrameDuration = hasConfiguredFrameDuration
+            ? Math.min(2000, Math.max(50, Math.floor(configuredFrameDurationValue)))
+            : NaN
+        const sourceFrameCount = Number(gifMetadata?.frame_count)
+        const sourceTotalDuration = Number(gifMetadata?.total_duration_ms)
+        const hasSourceGif = Number.isFinite(sourceFrameCount) && sourceFrameCount >= 2
+        let frameCount = null
+        if (Number.isFinite(configuredFrameCount)) {
+            frameCount = Math.max(2, Math.floor(configuredFrameCount))
+        } else if (hasSourceGif && sourceFrameCount <= 16) {
+            frameCount = Math.floor(sourceFrameCount)
+        } else if (!hasSourceGif) {
+            frameCount = DEFAULT_GIF_FRAME_COUNT
+        }
+        const targetFrameCount = frameCount
+        const inferredFrameDuration = Number.isFinite(sourceTotalDuration) && targetFrameCount > 0
+            ? Math.round(sourceTotalDuration / targetFrameCount)
+            : NaN
+        let frameDurationMs = null
+        if (Number.isFinite(configuredFrameDuration)) {
+            frameDurationMs = Math.max(50, Math.min(2000, Math.floor(configuredFrameDuration)))
+        } else if (hasSourceGif && frameCount !== null && Number.isFinite(inferredFrameDuration) && inferredFrameDuration >= 50 && inferredFrameDuration <= 2000) {
+            frameDurationMs = inferredFrameDuration
+        } else if (!hasSourceGif) {
+            frameDurationMs = DEFAULT_GIF_FRAME_DURATION_MS
+        }
+        const outputSettings = { output_format: 'gif' }
+        if (frameCount !== null) outputSettings.frame_count = frameCount
+        if (frameDurationMs !== null) outputSettings.frame_duration_ms = frameDurationMs
+
+        if (gifMetadata && (!hasConfiguredFrameCount || !hasConfiguredFrameDuration)) {
+            logger.info(`[AI-Plugin] GIF 输出参数自动推导: 输入帧数=${sourceFrameCount || '?'}, ${frameCount === null ? '未强制指定输出帧数' : `输出帧数=${frameCount}`}, ${frameDurationMs === null ? '未强制指定统一时长' : `单帧时长=${frameDurationMs}ms`}${gifMetadata.has_variable_frame_duration && frameDurationMs !== null ? '（原始帧时长不同，按总时长均分）' : ''}`)
+        }
+        if (gifMetadata && frameCount !== null && frameCount < sourceFrameCount) {
+            logger.warn(`[AI-Plugin] GIF 输出帧数被配置覆盖: 输入帧数=${sourceFrameCount}, 请求帧数=${frameCount}，可能降低动画时间分辨率`)
+        }
+        if (gifMetadata && !hasConfiguredFrameCount && sourceFrameCount > 16) {
+            logger.info(`[AI-Plugin] GIF 输入帧数=${sourceFrameCount} 超出当前接口安全请求范围，省略 frame_count，避免插件主动降帧`)
+        }
+
+        return outputSettings
+    }
+
+    _buildGifOutputPrompt(prompt, parts, outputSettings) {
+        const gifMetadata = parts.find(part => part?.gif_metadata)?.gif_metadata
+        if (!gifMetadata) return prompt
+        const sourceFrameCount = Number(gifMetadata.frame_count)
+        const sourceDuration = Number.isFinite(Number(gifMetadata.total_duration_ms)) && sourceFrameCount > 0
+            ? Number(gifMetadata.total_duration_ms) / sourceFrameCount
+            : NaN
+        const requestedDuration = Number(outputSettings.frame_duration_ms)
+        const timingHint = gifMetadata.has_variable_frame_duration
+            ? `原始逐帧时长不一致；当前接口只支持统一时长时，平均每帧约 ${Math.round(sourceDuration || requestedDuration || DEFAULT_GIF_FRAME_DURATION_MS)}ms，无法完全保留原始节奏。`
+            : gifMetadata.has_frame_timing
+                ? `原始单帧时长约为 ${Math.round(sourceDuration || requestedDuration || DEFAULT_GIF_FRAME_DURATION_MS)}ms。`
+                : '未能读取完整的原始帧时序，请依据参考画面保持自然播放节奏。'
+        return `${prompt}\n参考 GIF 原始动画包含 ${sourceFrameCount || outputSettings.frame_count || '未知'} 帧；请尽量保留完整动作变化，不要只生成首帧或静态图。${timingHint}`.trim()
+    }
+
     _buildDirectImageRequest(payload, providerConfig, modelId, modelConfig = null, requestOptions = {}) {
         const parts = payload.contents?.[0]?.parts || []
         let prompt = parts.map(p => p.text).filter(Boolean).join('\n') || ''
         const images = this._extractImageBuffers(parts, modelConfig)
         const outputFormat = requestOptions.imageOutputFormat === 'gif' && modelConfig?.supports_gif_output === true ? 'gif' : ''
+        const outputSettings = outputFormat ? this._resolveGifOutputSettings(parts, modelConfig) : {}
         if (outputFormat && !modelConfig?.supports_gif_input && parts.some(part => part.inline_data?.mime_type === 'image/gif')) {
             prompt = `${prompt}\n参考 GIF 已转换为按时间顺序排列的关键帧拼图，请将其理解为同一动画的不同时间点。`.trim()
         }
-        const outputSettings = outputFormat ? {
-            output_format: 'gif',
-            frame_count: modelConfig.gif_frame_count,
-            frame_duration_ms: modelConfig.gif_frame_duration_ms
-        } : {}
+        if (outputFormat) prompt = this._buildGifOutputPrompt(prompt, parts, outputSettings)
         const commonHeaders = {
             'Authorization': `Bearer ${providerConfig.api_key}`,
             'HTTP-Referer': 'https://yuzubot.com',
@@ -1583,11 +1658,12 @@ export class AiClient {
         let prompt = parts.map(p => p.text).filter(Boolean).join('\n') || ''
         const images = this._extractImageBuffers(parts, modelConfig)
         const outputSettings = requestOptions.imageOutputFormat === 'gif' && modelConfig?.supports_gif_output === true
-            ? { output_format: 'gif', frame_count: modelConfig.gif_frame_count, frame_duration_ms: modelConfig.gif_frame_duration_ms }
+            ? this._resolveGifOutputSettings(parts, modelConfig)
             : {}
         if (outputSettings.output_format === 'gif' && !modelConfig?.supports_gif_input && parts.some(part => part.inline_data?.mime_type === 'image/gif')) {
             prompt = `${prompt}\n参考 GIF 已转换为按时间顺序排列的关键帧拼图，请将其理解为同一动画的不同时间点。`.trim()
         }
+        if (outputSettings.output_format === 'gif') prompt = this._buildGifOutputPrompt(prompt, parts, outputSettings)
 
         if (images.length > 0) {
             // 有参考图 → /images/edits + multipart

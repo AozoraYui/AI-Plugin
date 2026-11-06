@@ -103,6 +103,31 @@ export const MAX_GIF_REVIEW_FRAMES = 256
 const MAX_GIF_CONTACT_SHEET_EDGE = 1920
 const MAX_GIF_REVIEW_FRAME_SIZE = 256
 
+function normalizeGifDelay(value) {
+    const delay = Number(value)
+    return Number.isFinite(delay) && delay >= 0 ? Math.floor(delay) : null
+}
+
+export function getGifAnimationMetadata(metadata = {}) {
+    const frameCount = Math.max(0, Math.floor(Number(metadata.pages) || 0))
+    const rawDelays = Array.isArray(metadata.delay)
+        ? metadata.delay
+        : frameCount > 0
+            ? Array.from({ length: frameCount }, () => metadata.delay)
+            : []
+    const frameDelaysMs = rawDelays.map(normalizeGifDelay)
+    const hasFrameTiming = frameCount > 0 && frameDelaysMs.length === frameCount && frameDelaysMs.every(delay => delay !== null)
+    const totalDurationMs = hasFrameTiming
+        ? frameDelaysMs.reduce((total, delay) => total + delay, 0)
+        : null
+    return {
+        frame_count: frameCount,
+        total_duration_ms: totalDurationMs,
+        has_frame_timing: hasFrameTiming,
+        has_variable_frame_duration: hasFrameTiming && new Set(frameDelaysMs).size > 1
+    }
+}
+
 export function selectGifReviewFrameIndexes(pageCount) {
     const totalFrames = Math.max(0, Math.floor(Number(pageCount) || 0))
     if (totalFrames > MAX_GIF_REVIEW_FRAMES) {
@@ -188,8 +213,11 @@ export async function processImageBufferForAI(imageBuffer, options = {}) {
                     withoutEnlargement: true
                 })
             }
+            const gifOutputOptions = {}
+            if (Array.isArray(metadata.delay) && metadata.delay.length > 0) gifOutputOptions.delay = metadata.delay
+            if (Number.isFinite(Number(metadata.loop))) gifOutputOptions.loop = Number(metadata.loop)
             const animatedBuffer = needsResize || needsSizeCompression
-                ? await animationPipeline.gif().toBuffer()
+                ? await animationPipeline.gif(gifOutputOptions).toBuffer()
                 : imageBuffer
             const fallbackBuffer = await buildGifContactSheet(imageBuffer, Number(metadata.pages), options)
             return {
@@ -200,7 +228,8 @@ export async function processImageBufferForAI(imageBuffer, options = {}) {
                 fallback_inline_data: {
                     mime_type: 'image/png',
                     data: fallbackBuffer.toString('base64')
-                }
+                },
+                gif_metadata: getGifAnimationMetadata(metadata)
             }
         }
 

@@ -632,6 +632,15 @@ async function testAnimatedImageEndpointOptionsAndMime() {
         { output_format: 'gif', frame_count: 10, frame_duration_ms: 150 }
     )
 
+    const autoGeneration = client.buildRequest('image', {
+        contents: [{ parts: [{ text: 'Create an animated GIF' }] }]
+    }, provider, 'gpt-image-2.6-flare', 8192, { multimodal: true, supports_gif_output: true }, { imageOutputFormat: 'gif' })
+    const autoGenerationBody = JSON.parse(autoGeneration.options.body)
+    assert.deepEqual(
+        { output_format: autoGenerationBody.output_format, frame_count: autoGenerationBody.frame_count, frame_duration_ms: autoGenerationBody.frame_duration_ms },
+        { output_format: 'gif', frame_count: 8, frame_duration_ms: 200 }
+    )
+
     const edit = client.buildRequest('image', {
         contents: [{ parts: [
             { text: 'Animate this reference' },
@@ -647,6 +656,78 @@ async function testAnimatedImageEndpointOptionsAndMime() {
     assert.match(editBody, /name="frame_count"\r\n\r\n10/)
     assert.match(editBody, /Content-Type: image\/png/)
     assert.match(editBody, /关键帧拼图/)
+
+    const nativeGifEdit = client.buildRequest('image', {
+        contents: [{ parts: [
+            { text: 'Animate this reference' },
+            {
+                inline_data: { mime_type: 'image/gif', data: Buffer.from('original-gif').toString('base64') },
+                fallback_inline_data: { mime_type: 'image/png', data: Buffer.from('contact-sheet').toString('base64') },
+                gif_metadata: { frame_count: 2, total_duration_ms: 2000, has_frame_timing: true, has_variable_frame_duration: false }
+            }
+        ] }]
+    }, provider, 'gpt-image-2.6-flare', 8192, { multimodal: true, supports_gif_input: true, supports_gif_output: true }, { imageOutputFormat: 'gif' })
+    const nativeGifEditBody = nativeGifEdit.options.body.toString('utf8')
+    assert.match(nativeGifEditBody, /Content-Type: image\/gif/)
+    assert.doesNotMatch(nativeGifEditBody, /关键帧拼图/)
+
+    const autoEdit = client.buildRequest('image', {
+        contents: [{ parts: [
+            { text: 'Animate this reference' },
+            {
+                inline_data: { mime_type: 'image/gif', data: Buffer.from('original-gif').toString('base64') },
+                fallback_inline_data: { mime_type: 'image/png', data: Buffer.from('contact-sheet').toString('base64') },
+                gif_metadata: { frame_count: 4, total_duration_ms: 800, has_frame_timing: true, has_variable_frame_duration: false }
+            }
+        ] }]
+    }, provider, 'gpt-image-2.6-flare', 8192, { multimodal: true, supports_gif_input: false, supports_gif_output: true }, { imageOutputFormat: 'gif' })
+    const autoEditBody = autoEdit.options.body.toString('utf8')
+    assert.match(autoEditBody, /name="frame_count"\r\n\r\n4/)
+    assert.match(autoEditBody, /name="frame_duration_ms"\r\n\r\n200/)
+
+    const highFrameAutoEdit = client.buildRequest('image', {
+        contents: [{ parts: [
+            { text: 'Animate this reference' },
+            {
+                inline_data: { mime_type: 'image/gif', data: Buffer.from('original-gif').toString('base64') },
+                fallback_inline_data: { mime_type: 'image/png', data: Buffer.from('contact-sheet').toString('base64') },
+                gif_metadata: { frame_count: 40, total_duration_ms: 4000, has_frame_timing: true, has_variable_frame_duration: false }
+            }
+        ] }]
+    }, provider, 'gpt-image-2.6-flare', 8192, { multimodal: true, supports_gif_input: false, supports_gif_output: true }, { imageOutputFormat: 'gif' })
+    const highFrameAutoEditBody = highFrameAutoEdit.options.body.toString('utf8')
+    assert.doesNotMatch(highFrameAutoEditBody, /name="frame_count"\r\n/)
+    assert.doesNotMatch(highFrameAutoEditBody, /name="frame_duration_ms"\r\n/)
+    assert.match(highFrameAutoEditBody, /原始动画包含 40 帧/)
+
+    const variableTimingEdit = client.buildRequest('image', {
+        contents: [{ parts: [
+            { text: 'Animate this reference' },
+            {
+                inline_data: { mime_type: 'image/gif', data: Buffer.from('original-gif').toString('base64') },
+                fallback_inline_data: { mime_type: 'image/png', data: Buffer.from('contact-sheet').toString('base64') },
+                gif_metadata: { frame_count: 4, total_duration_ms: 500, has_frame_timing: true, has_variable_frame_duration: true }
+            }
+        ] }]
+    }, provider, 'gpt-image-2.6-flare', 8192, { multimodal: true, supports_gif_input: false, supports_gif_output: true }, { imageOutputFormat: 'gif' })
+    const variableTimingEditBody = variableTimingEdit.options.body.toString('utf8')
+    assert.match(variableTimingEditBody, /name="frame_count"\r\n\r\n4/)
+    assert.match(variableTimingEditBody, /name="frame_duration_ms"\r\n\r\n125/)
+    assert.match(variableTimingEditBody, /平均每帧约 125ms/)
+
+    const cappedManualFrameCount = client.buildRequest('image', {
+        contents: [{ parts: [
+            { text: 'Animate this reference' },
+            {
+                inline_data: { mime_type: 'image/gif', data: Buffer.from('original-gif').toString('base64') },
+                fallback_inline_data: { mime_type: 'image/png', data: Buffer.from('contact-sheet').toString('base64') },
+                gif_metadata: { frame_count: 40, total_duration_ms: 4000, has_frame_timing: true, has_variable_frame_duration: false }
+            }
+        ] }]
+    }, provider, 'gpt-image-2.6-flare', 8192, { multimodal: true, supports_gif_output: true, gif_frame_count: 20 }, { imageOutputFormat: 'gif' })
+    const cappedManualFrameCountBody = cappedManualFrameCount.options.body.toString('utf8')
+    assert.match(cappedManualFrameCountBody, /name="frame_count"\r\n\r\n16/)
+    assert.match(cappedManualFrameCountBody, /name="frame_duration_ms"\r\n\r\n250/)
 
     const gifBytes = fs.readFileSync(new URL('./fixtures/animated.gif.b64', import.meta.url), 'utf8').trim()
     const parsed = client.parseResponse({ data: [{ b64_json: gifBytes, output_format: 'gif' }] }, 'image')

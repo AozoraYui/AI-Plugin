@@ -48,8 +48,8 @@ assert.equal(normalized.definitions.find(model => model.alias === 'qwen-vl').gif
 assert.equal(normalized.definitions.find(model => model.alias === 'qwen-vl').gif_frame_duration_ms, 50)
 assert.equal(normalized.definitions.find(model => model.alias === 'deepseek').supports_gif_input, false)
 assert.equal(normalized.definitions.find(model => model.alias === 'deepseek').supports_gif_output, false)
-assert.equal(normalized.definitions.find(model => model.alias === 'deepseek').gif_frame_count, 8)
-assert.equal(normalized.definitions.find(model => model.alias === 'deepseek').gif_frame_duration_ms, 200)
+assert.equal(normalized.definitions.find(model => model.alias === 'deepseek').gif_frame_count, undefined)
+assert.equal(normalized.definitions.find(model => model.alias === 'deepseek').gif_frame_duration_ms, undefined)
 
 const stringBoolean = normalizeModelConfigDocuments([{
     providers: [{ id: 'p4', name: 'Provider 4' }],
