@@ -1,8 +1,9 @@
 import sharp from 'sharp'
+import fs from 'node:fs'
 
 globalThis.logger = globalThis.logger || { info() {}, warn() {}, error() {}, debug() {} }
 const { Config } = await import('../utils/config.js')
-const { deduplicateImageUrls, estimatePayloadSizeBytes, normalizeImageLimit, processImageBufferForAI, processInlineImagesForAI, processImagesInBatches, trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
+const { deduplicateImageUrls, estimatePayloadSizeBytes, isAnimatedImageRequested, normalizeImageLimit, processImageBufferForAI, processInlineImagesForAI, processImagesInBatches, trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
 const { relayImagesToVisionInBatches } = await import('../tools/vision_relay.js')
 const { urlToBuffer } = await import('../utils/common.js')
 
@@ -46,6 +47,15 @@ const smallImage = await sharp({
 }).png().toBuffer()
 const smallProcessed = await processImageBufferForAI(smallImage)
 check('普通小图片保持可用 PNG', smallProcessed?.inline_data?.mime_type === 'image/png', smallProcessed?.inline_data?.mime_type)
+
+const animatedGif = Buffer.from(fs.readFileSync(new URL('./fixtures/animated.gif.b64', import.meta.url), 'utf8').trim(), 'base64')
+const preservedGif = await processImageBufferForAI(animatedGif, { preserveAnimation: true })
+const preservedGifMetadata = await sharp(Buffer.from(preservedGif?.inline_data?.data || '', 'base64')).metadata()
+const gifFallbackMetadata = await sharp(Buffer.from(preservedGif?.fallback_inline_data?.data || '', 'base64')).metadata()
+check('GIF 参考图保留动画并提供安全审核用关键帧拼图', preservedGif?.inline_data?.mime_type === 'image/gif' && preservedGifMetadata.pages === 2 && preservedGif?.fallback_inline_data?.mime_type === 'image/png' && gifFallbackMetadata.width === 512)
+check('自然语言动图意图识别支持中英文', isAnimatedImageRequested('把这张图做成 GIF 动图') && isAnimatedImageRequested('make it animated'))
+check('动图意图识别尊重具体否定并保留其他约束', !isAnimatedImageRequested('不要做成动图') && isAnimatedImageRequested('不要改变背景，做成动图'))
+check('普通动画题材不会误触发 GIF 输出', !isAnimatedImageRequested('画一个动画角色') && !isAnimatedImageRequested('create an animation character'))
 
 const forcedJpeg = await processInlineImagesForAI([{ inline_data: { mime_type: 'image/png', data: smallImage.toString('base64') } }], { forceFormat: 'jpeg' })
 check('Vision Relay inline 图片强制转 JPEG', forcedJpeg.length === 1 && forcedJpeg[0].inline_data.mime_type === 'image/jpeg')

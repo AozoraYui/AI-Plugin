@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import yaml from 'yaml'
 import { Config, MODELS_CONFIG_FILE, MODEL_STATUS_FILE, DISABLED_MODELS_FILE, TEMPLATE_DIR_EXPORT } from '../utils/config.js'
-import { fetchWithProxy, normalizeModelGroup } from '../utils/common.js'
+import { fetchWithProxy, getImageMimeType, normalizeModelGroup } from '../utils/common.js'
 import { ensureShellSession } from '../utils/shell_session.js'
 import { toolRegistry } from '../tools/index.js'
 import { normalizeModelConfigDocuments, resolveModelReference } from '../utils/model_config.js'
@@ -1130,13 +1130,18 @@ export class AiClient {
         this.saveModelStatus()
     }
 
+    supportsGifOutput(modelGroupKey = 'flash') {
+        return (this.activeModelPools[modelGroupKey]?.image || [])
+            .some(item => this._isOpenAIImageModel(item.modelId) && item.modelConfig?.supports_gif_output === true)
+    }
+
     buildRequest(type, payload, providerConfig, modelId, maxTokens = 8192, modelConfig = null, requestOptions = {}) {
         if (type === 'image' && this._isOpenAIImageModel(modelId)) {
-            return this._buildDirectImageRequest(payload, providerConfig, modelId)
+            return this._buildDirectImageRequest(payload, providerConfig, modelId, modelConfig, requestOptions)
         }
 
         const url = `${providerConfig.base_url}/chat/completions`
-        const convertedMessages = this.convertToOpenAIMessages(payload, modelConfig?.multimodal !== false)
+        const convertedMessages = this.convertToOpenAIMessages(payload, modelConfig?.multimodal !== false, modelConfig)
         const systemInstructions = convertedMessages
             .filter(message => message.role === 'system')
             .map(message => message.content)
@@ -1150,6 +1155,14 @@ export class AiClient {
                 ...convertedMessages.filter(message => message.role !== 'system')
             ]
             : convertedMessages
+        if (type === 'image' && requestOptions.imageOutputFormat === 'gif' && modelConfig?.supports_gif_output === true) {
+            const finalMessage = messages.at(-1)
+            const formatHint = '输出格式要求：生成 GIF 动图。若有参考动图且当前接口只收到按时间顺序排列的关键帧拼图，请依据关键帧制作连续、自然的动画。'
+            if (finalMessage) {
+                if (Array.isArray(finalMessage.content)) finalMessage.content.push({ type: 'text', text: formatHint })
+                else finalMessage.content = `${finalMessage.content || ''}\n${formatHint}`.trim()
+            }
+        }
         const requestBody = {
             model: modelId,
             messages,
@@ -1177,10 +1190,19 @@ export class AiClient {
         return /^gpt-image(?:-|$)/i.test(modelId || '')
     }
 
-    _buildDirectImageRequest(payload, providerConfig, modelId) {
+    _buildDirectImageRequest(payload, providerConfig, modelId, modelConfig = null, requestOptions = {}) {
         const parts = payload.contents?.[0]?.parts || []
-        const prompt = parts.map(p => p.text).filter(Boolean).join('\n') || ''
-        const images = this._extractImageBuffers(parts)
+        let prompt = parts.map(p => p.text).filter(Boolean).join('\n') || ''
+        const images = this._extractImageBuffers(parts, modelConfig)
+        const outputFormat = requestOptions.imageOutputFormat === 'gif' && modelConfig?.supports_gif_output === true ? 'gif' : ''
+        if (outputFormat && !modelConfig?.supports_gif_input && parts.some(part => part.inline_data?.mime_type === 'image/gif')) {
+            prompt = `${prompt}\n参考 GIF 已转换为按时间顺序排列的关键帧拼图，请将其理解为同一动画的不同时间点。`.trim()
+        }
+        const outputSettings = outputFormat ? {
+            output_format: 'gif',
+            frame_count: modelConfig.gif_frame_count,
+            frame_duration_ms: modelConfig.gif_frame_duration_ms
+        } : {}
         const commonHeaders = {
             'Authorization': `Bearer ${providerConfig.api_key}`,
             'HTTP-Referer': 'https://yuzubot.com',
@@ -1192,7 +1214,8 @@ export class AiClient {
             const fields = [
                 { name: 'model', value: modelId },
                 { name: 'prompt', value: prompt },
-                { name: 'n', value: '1' }
+                { name: 'n', value: '1' },
+                ...Object.entries(outputSettings).map(([name, value]) => ({ name, value: String(value) }))
             ]
             const files = images.map((img, i) => ({
                 name: 'image',
@@ -1212,12 +1235,12 @@ export class AiClient {
             options: {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', ...commonHeaders },
-                body: JSON.stringify({ model: modelId, prompt, n: 1 })
+                body: JSON.stringify({ model: modelId, prompt, n: 1, ...outputSettings })
             }
         }
     }
 
-    convertToOpenAIMessages(requestPayload, allowImages = true) {
+    convertToOpenAIMessages(requestPayload, allowImages = true, modelConfig = null) {
         const messages = []
         for (const content of requestPayload.contents) {
             const role = content.role === 'system' ? 'system' : content.role === 'model' ? 'assistant' : 'user'
@@ -1235,14 +1258,21 @@ export class AiClient {
                         droppedImages++
                         continue
                     }
-                    const mimeType = part.inline_data.mime_type
-                    const base64Data = part.inline_data.data
+                    const useGif = part.inline_data.mime_type === 'image/gif' && modelConfig?.supports_gif_input === true
+                    const imageData = useGif ? part.inline_data : (part.fallback_inline_data || part.inline_data)
+                    const mimeType = imageData.mime_type
+                    const base64Data = imageData.data
                     messageContent.push({
                         type: 'image_url',
                         image_url: {
                             url: `data:${mimeType};base64,${base64Data}`
                         }
                     })
+                    if (!useGif && part.inline_data.mime_type === 'image/gif' && part.fallback_inline_data) {
+                        const hint = '参考 GIF 已作为按时间顺序排列的关键帧拼图提供。'
+                        textParts.push(hint)
+                        messageContent.push({ type: 'text', text: hint })
+                    }
                 }
             }
 
@@ -1323,7 +1353,13 @@ export class AiClient {
 
             // 如果是 base64 格式 (data.data[0].b64_json)，转换为 data URL
             if (!generatedImageUrl && data?.data?.[0]?.b64_json) {
-                generatedImageUrl = `data:image/png;base64,${data.data[0].b64_json}`
+                const image = data.data[0]
+                const base64 = image.b64_json
+                const buffer = Buffer.from(base64, 'base64')
+                const declaredMime = String(image.mime_type || data.mime_type || '').toLowerCase()
+                const declaredFormat = String(image.output_format || image.format || data.output_format || '').toLowerCase()
+                const mimeType = getImageMimeType(buffer) || (declaredMime.startsWith('image/') ? declaredMime : '') || ({ gif: 'image/gif', jpeg: 'image/jpeg', jpg: 'image/jpeg', webp: 'image/webp', png: 'image/png' })[declaredFormat] || 'image/png'
+                generatedImageUrl = `data:${mimeType};base64,${base64}`
             }
 
             if (generatedImageUrl) {
@@ -1422,7 +1458,7 @@ export class AiClient {
                     if (/\/images\/generations|\/images\/edits/.test(errBody)) {
                         logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 需要 /images/generations，自动重试`)
                         try {
-                            return await this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout, requestOptions.signal)
+                            return await this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout, requestOptions.signal, modelConfig, requestOptions)
                         } catch (retryErr) {
                             throw new Error(`自动重试失败: ${retryErr.message}`)
                         }
@@ -1460,7 +1496,7 @@ export class AiClient {
                 if (type === 'image' && /\/images\/generations|\/images\/edits/.test(result.error || '')) {
                     logger.info(`[AI-Plugin] 模型 [${provider.name} - ${modelId}] 需要 /images/generations，自动重试`)
                     try {
-                        return await this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout, requestOptions.signal)
+                        return await this._retryWithImageEndpoint(payload, provider, modelId, maxTokens, timeout, requestOptions.signal, modelConfig, requestOptions)
                     } catch (retryErr) {
                         throw new Error(`自动重试失败: ${retryErr.message}`)
                     }
@@ -1528,22 +1564,30 @@ export class AiClient {
     }
 
     /** 从 inline_data 中提取图片 buffer 和 mime type */
-    _extractImageBuffers(parts) {
+    _extractImageBuffers(parts, modelConfig = null) {
         const images = []
         for (const part of parts) {
             if (!part.inline_data?.data) continue
-            const mimeType = part.inline_data.mime_type || 'image/png'
-            const buffer = Buffer.from(part.inline_data.data, 'base64')
+            const useGif = part.inline_data.mime_type === 'image/gif' && modelConfig?.supports_gif_input === true
+            const imageData = useGif ? part.inline_data : (part.fallback_inline_data || part.inline_data)
+            const mimeType = imageData.mime_type || 'image/png'
+            const buffer = Buffer.from(imageData.data, 'base64')
             images.push({ buffer, mimeType })
         }
         return images
     }
 
     /** 用 images/generations 或 images/edits 端点重试绘图请求 */
-    async _retryWithImageEndpoint(payload, provider, modelId, _maxTokens, timeout, signal) {
+    async _retryWithImageEndpoint(payload, provider, modelId, _maxTokens, timeout, signal, modelConfig = null, requestOptions = {}) {
         const parts = payload.contents?.[0]?.parts || []
-        const prompt = parts.map(p => p.text).filter(Boolean).join('\n') || ''
-        const images = this._extractImageBuffers(parts)
+        let prompt = parts.map(p => p.text).filter(Boolean).join('\n') || ''
+        const images = this._extractImageBuffers(parts, modelConfig)
+        const outputSettings = requestOptions.imageOutputFormat === 'gif' && modelConfig?.supports_gif_output === true
+            ? { output_format: 'gif', frame_count: modelConfig.gif_frame_count, frame_duration_ms: modelConfig.gif_frame_duration_ms }
+            : {}
+        if (outputSettings.output_format === 'gif' && !modelConfig?.supports_gif_input && parts.some(part => part.inline_data?.mime_type === 'image/gif')) {
+            prompt = `${prompt}\n参考 GIF 已转换为按时间顺序排列的关键帧拼图，请将其理解为同一动画的不同时间点。`.trim()
+        }
 
         if (images.length > 0) {
             // 有参考图 → /images/edits + multipart
@@ -1551,7 +1595,8 @@ export class AiClient {
             const fields = [
                 { name: 'model', value: modelId },
                 { name: 'prompt', value: prompt },
-                { name: 'n', value: '1' }
+                { name: 'n', value: '1' },
+                ...Object.entries(outputSettings).map(([name, value]) => ({ name, value: String(value) }))
             ]
             const files = images.map((img, i) => ({
                 name: 'image',
@@ -1603,7 +1648,7 @@ export class AiClient {
                 'HTTP-Referer': 'https://yuzubot.com',
                 'X-Title': 'Yuzu-Bot'
             },
-            body: JSON.stringify({ model: modelId, prompt, n: 1 })
+            body: JSON.stringify({ model: modelId, prompt, n: 1, ...outputSettings })
         }
         if (timeout > 0) options.timeout = timeout
         options.allowPrivateNetwork = true
@@ -1635,6 +1680,13 @@ export class AiClient {
         let modelPool = this.activeModelPools[modelGroupKey]?.[type]
         const taskTypeName = type === 'image' ? '绘图' : '对话'
         let lastError = `模型组 [${modelGroupKey}] 中没有可用的 [${taskTypeName}] 模型。`
+
+        if (type === 'image' && requestOptions.imageOutputFormat === 'gif') {
+            modelPool = (modelPool || []).filter(item => this._isOpenAIImageModel(item.modelId) && item.modelConfig?.supports_gif_output === true)
+            if (modelPool.length === 0) {
+                return { success: false, error: `模型组 [${modelGroupKey}] 没有声明支持 GIF 输出的直连 gpt-image 绘图模型。请在 models_config.yaml 对支持动画输出的 gpt-image 模型设置 supports_gif_output: true。` }
+            }
+        }
 
         // 有图片的对话请求只交给多模态模型，避免纯文本模型接收图片导致失败
         if (type === 'chat' && this._payloadHasImages(payload) && modelPool && modelPool.length > 0) {

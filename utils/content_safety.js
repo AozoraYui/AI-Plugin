@@ -43,7 +43,10 @@ function normalizeImageParts(imageParts = []) {
         .filter(part => part?.inline_data || part?.image_url || part?.type === 'image')
         .map(part => {
             if (!part?.inline_data?.data || !String(part.inline_data.mime_type || '').startsWith('image/')) return null
-            return { inline_data: { mime_type: part.inline_data.mime_type, data: part.inline_data.data } }
+            const imageData = part.inline_data.mime_type === 'image/gif' && part.fallback_inline_data?.data
+                ? part.fallback_inline_data
+                : part.inline_data
+            return { inline_data: { mime_type: imageData.mime_type, data: imageData.data } }
         })
 }
 

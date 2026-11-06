@@ -11,7 +11,7 @@ import { pluginLogger as logger } from '../utils/plugin_logger.js'
 import { toolRegistry } from './registry.js'
 import { Config } from '../utils/config.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, getImageMimeType, resolveModelDisplay } from '../utils/common.js'
-import { processImagesInBatches } from '../utils/image.js'
+import { isAnimatedImageRequested, processImageBufferForAI, processImagesInBatches } from '../utils/image.js'
 import { getContentSafetyBlockMessage, reviewContentForSubmission } from '../utils/content_safety.js'
 import { isAgentCancellationError, throwIfAgentExecutionCancelled } from '../utils/agent_context.js'
 import fs from 'node:fs'
@@ -23,15 +23,6 @@ const CHARACTER_ROOT_DIR = path.join(process.cwd(), 'plugins', 'AI-Plugin', 'dat
 const IMG_EXT = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
 // 每个角色最多取用的本地参考图数量（过多会让 /images/edits 上传超时）
 const CHARACTER_MAX_REF = 1
-
-function imageMime(ext) {
-    const e = ext.toLowerCase()
-    if (e === '.png') return 'image/png'
-    if (e === '.jpg' || e === '.jpeg') return 'image/jpeg'
-    if (e === '.webp') return 'image/webp'
-    if (e === '.gif') return 'image/gif'
-    return 'image/png'
-}
 
 function normalizeCharacterKey(value) {
     return String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '')
@@ -92,7 +83,7 @@ function resolveCharacterProfile(inputCharacter, isSelfPortrait = false) {
 }
 
 // 读取角色参考图，转为 AI 可用的 inline_data 数组（本地文件不走 fetch）
-function loadCharacterImages(characterProfile) {
+async function loadCharacterImages(characterProfile) {
     try {
         if (!characterProfile?.dir || !fs.existsSync(characterProfile.dir)) return []
         const files = fs.readdirSync(characterProfile.dir)
@@ -104,8 +95,11 @@ function loadCharacterImages(characterProfile) {
         for (const f of picked) {
             try {
                 const buf = fs.readFileSync(path.join(characterProfile.dir, f))
-                parts.push({ inline_data: { mime_type: imageMime(path.extname(f)), data: buf.toString('base64') } })
-                usedNames.push(f)
+                const image = await processImageBufferForAI(buf, { preserveAnimation: true })
+                if (image) {
+                    parts.push(image)
+                    usedNames.push(f)
+                }
             } catch (err) {
                 logger.warn(`[AI-Plugin] 画图工具：读取角色参考图 ${characterProfile.id}/${f} 失败: ${err.message}`)
             }
@@ -275,7 +269,7 @@ export const imageGenTool = {
             .filter(Boolean)
 
         // 角色参考图：每个角色从 data/characters/{角色ID} 各取一张，锁定多角色形象
-        const characterImageGroups = characterProfiles.map(profile => ({ profile, images: loadCharacterImages(profile) }))
+        const characterImageGroups = await Promise.all(characterProfiles.map(async profile => ({ profile, images: await loadCharacterImages(profile) })))
         const characterImages = characterImageGroups.flatMap(group => group.images)
         for (const group of characterImageGroups) {
             const usedNames = group.images.usedNames || []
@@ -328,7 +322,9 @@ export const imageGenTool = {
             const parts = []
             // 角色图库参考图优先放最前，锁定目标角色形象
             if (characterImages.length > 0) parts.push(...characterImages)
-            const processedImages = imagesToProcess.length > 0 ? await processImagesInBatches(imagesToProcess, { signal }) : []
+            const processedImages = imagesToProcess.length > 0
+                ? await processImagesInBatches(imagesToProcess, { signal, preserveAnimation: true })
+                : []
             throwIfCancelled()
             if (imagesToProcess.length > 0 && processedImages.length === 0) {
                 await setMsgEmojiLike(event, 10)
@@ -386,6 +382,16 @@ export const imageGenTool = {
                 await setMsgEmojiLike(event, 10)
                 return getContentSafetyBlockMessage()
             }
+            const explicitGifRequest = isAnimatedImageRequested(finalText)
+            const supportsGifOutput = typeof client.supportsGifOutput === 'function'
+                && client.supportsGifOutput(modelGroupKey)
+            if (explicitGifRequest && !supportsGifOutput) {
+                await setMsgEmojiLike(event, 10)
+                return '【画图失败】当前绘图模型组没有配置支持 GIF 动图输出的模型，请检查 models_config.yaml。'
+            }
+            const imageOutputFormat = explicitGifRequest || (supportsGifOutput && [...processedImages, ...characterImages].some(part => part?.inline_data?.mime_type === 'image/gif'))
+                ? 'gif'
+                : undefined
             const payload = { contents: [{ parts }] }
             const safetyReview = await reviewContentForSubmission({
                 client,
@@ -405,7 +411,8 @@ export const imageGenTool = {
             throwIfCancelled()
             const startTime = Date.now()
             const result = await client.makeRequest('image', payload, modelGroupKey, 8192, {
-                signal
+                signal,
+                imageOutputFormat
             })
             throwIfCancelled()
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)

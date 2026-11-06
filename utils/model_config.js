@@ -15,6 +15,12 @@ function asBoolean(value, fallback) {
     return fallback
 }
 
+function boundedInteger(value, fallback, min, max) {
+    const number = Number(value)
+    if (!Number.isFinite(number)) return fallback
+    return Math.min(max, Math.max(min, Math.floor(number)))
+}
+
 /** Normalize one independently configured model. */
 export function normalizeModelDefinition(raw = {}) {
     if (!isRecord(raw)) return null
@@ -33,7 +39,11 @@ export function normalizeModelDefinition(raw = {}) {
         model_id: id,
         provider_id: providerId,
         multimodal: asBoolean(raw.multimodal, true),
-        per_call: asBoolean(raw.per_call, false)
+        per_call: asBoolean(raw.per_call, false),
+        supports_gif_output: asBoolean(raw.supports_gif_output, false),
+        supports_gif_input: asBoolean(raw.supports_gif_input, false),
+        gif_frame_count: boundedInteger(raw.gif_frame_count, 8, 2, 16),
+        gif_frame_duration_ms: boundedInteger(raw.gif_frame_duration_ms, 200, 50, 2000)
     }
 }
 

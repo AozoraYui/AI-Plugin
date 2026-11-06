@@ -15,6 +15,10 @@ models:
     alias: qwen-vl
     provider: p1
     multimodal: true
+    supports_gif_input: true
+    supports_gif_output: true
+    gif_frame_count: 99
+    gif_frame_duration_ms: 10
   - id: vendor/text
     alias: deepseek
     provider: p1
@@ -38,6 +42,14 @@ assert.equal(resolveModelReference('vendor/text', normalized.definitions, 'p1').
 assert.equal(resolveModelReference('vendor/text', normalized.definitions, 'p2').alias, 'same')
 assert.equal(normalized.definitions.find(model => model.alias === 'deepseek').multimodal, false)
 assert.equal(normalized.definitions.find(model => model.alias === 'same').multimodal, true)
+assert.equal(normalized.definitions.find(model => model.alias === 'qwen-vl').supports_gif_input, true)
+assert.equal(normalized.definitions.find(model => model.alias === 'qwen-vl').supports_gif_output, true)
+assert.equal(normalized.definitions.find(model => model.alias === 'qwen-vl').gif_frame_count, 16)
+assert.equal(normalized.definitions.find(model => model.alias === 'qwen-vl').gif_frame_duration_ms, 50)
+assert.equal(normalized.definitions.find(model => model.alias === 'deepseek').supports_gif_input, false)
+assert.equal(normalized.definitions.find(model => model.alias === 'deepseek').supports_gif_output, false)
+assert.equal(normalized.definitions.find(model => model.alias === 'deepseek').gif_frame_count, 8)
+assert.equal(normalized.definitions.find(model => model.alias === 'deepseek').gif_frame_duration_ms, 200)
 
 const stringBoolean = normalizeModelConfigDocuments([{
     providers: [{ id: 'p4', name: 'Provider 4' }],

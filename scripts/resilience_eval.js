@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import http from 'node:http'
+import fs from 'node:fs'
 
 global.logger = {
     info() {},
@@ -611,6 +612,59 @@ async function testAttemptRequestPassesCancellationSignal() {
     }
 }
 
+async function testAnimatedImageEndpointOptionsAndMime() {
+    const client = Object.create(AiClient.prototype)
+    const provider = { base_url: 'https://api.example/v1', api_key: 'test-key', name: 'test' }
+    const modelConfig = {
+        multimodal: true,
+        supports_gif_input: false,
+        supports_gif_output: true,
+        gif_frame_count: 10,
+        gif_frame_duration_ms: 150
+    }
+    const generation = client.buildRequest('image', {
+        contents: [{ parts: [{ text: 'Create an animated GIF' }] }]
+    }, provider, 'gpt-image-2.6-flare', 8192, modelConfig, { imageOutputFormat: 'gif' })
+    const generationBody = JSON.parse(generation.options.body)
+    assert.equal(generation.url, 'https://api.example/v1/images/generations')
+    assert.deepEqual(
+        { output_format: generationBody.output_format, frame_count: generationBody.frame_count, frame_duration_ms: generationBody.frame_duration_ms },
+        { output_format: 'gif', frame_count: 10, frame_duration_ms: 150 }
+    )
+
+    const edit = client.buildRequest('image', {
+        contents: [{ parts: [
+            { text: 'Animate this reference' },
+            {
+                inline_data: { mime_type: 'image/gif', data: Buffer.from('original-gif').toString('base64') },
+                fallback_inline_data: { mime_type: 'image/png', data: Buffer.from('contact-sheet').toString('base64') }
+            }
+        ] }]
+    }, provider, 'gpt-image-2.6-flare', 8192, modelConfig, { imageOutputFormat: 'gif' })
+    const editBody = edit.options.body.toString('utf8')
+    assert.equal(edit.url, 'https://api.example/v1/images/edits')
+    assert.match(editBody, /name="output_format"\r\n\r\ngif/)
+    assert.match(editBody, /name="frame_count"\r\n\r\n10/)
+    assert.match(editBody, /Content-Type: image\/png/)
+    assert.match(editBody, /关键帧拼图/)
+
+    const gifBytes = fs.readFileSync(new URL('./fixtures/animated.gif.b64', import.meta.url), 'utf8').trim()
+    const parsed = client.parseResponse({ data: [{ b64_json: gifBytes, output_format: 'gif' }] }, 'image')
+    assert.equal(parsed.success, true)
+    assert.match(parsed.data, /^data:image\/gif;base64,/)
+
+    const unsupportedClient = Object.create(AiClient.prototype)
+    unsupportedClient.activeModelPools = { flash: { image: [{ modelId: 'qwen-image', modelConfig: { supports_gif_output: true } }] } }
+    assert.equal(unsupportedClient.supportsGifOutput('flash'), false)
+    const unsupported = await unsupportedClient.makeRequest('image', { contents: [] }, 'flash', 8192, { imageOutputFormat: 'gif' })
+    assert.equal(unsupported.success, false)
+    assert.match(unsupported.error, /没有声明支持 GIF 输出的直连 gpt-image 绘图模型/)
+
+    const supportedClient = Object.create(AiClient.prototype)
+    supportedClient.activeModelPools = { flash: { image: [{ modelId: 'gpt-image-2.6-flare', modelConfig: { supports_gif_output: true } }] } }
+    assert.equal(supportedClient.supportsGifOutput('flash'), true)
+}
+
 await testUsageTrackingIsolatedPerConcurrentRequest()
 await testQuickIntentRequestForwardsStructuredOutputOptions()
 await testQuickIntentRequestRetriesOneEmptyResponse()
@@ -634,4 +688,5 @@ await testAllModelProbeContinuesAfterUnexpectedFailure()
 await testMultimodalVisionRelayDependsOnConfiguration()
 await testVisionRelayAutoDiscoversUnlistedChatFallback()
 await testAttemptRequestPassesCancellationSignal()
-console.log('Resilience eval: 19 passed, 0 failed')
+await testAnimatedImageEndpointOptionsAndMime()
+console.log('Resilience eval: 20 passed, 0 failed')

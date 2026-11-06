@@ -6,7 +6,7 @@ import { ConversationManager } from '../model/conversation.js'
 import { checkAccess } from '../utils/access.js'
 import { sessionManager } from '../utils/session.js'
 import { setMsgEmojiLike, takeSourceMsg, getAvatarUrl, urlToBuffer, resolveModelGroup, resolveModelDisplay } from '../utils/common.js'
-import { processImagesInBatches } from '../utils/image.js'
+import { isAnimatedImageRequested, processImagesInBatches } from '../utils/image.js'
 import { getContentSafetyBlockMessage, reviewContentForSubmission } from '../utils/content_safety.js'
 import { extractMessageSendError } from '../utils/message_delivery.js'
 import { isAgentExecutionCancelled, registerAgentExecution } from '../utils/agent_cancellation.js'
@@ -159,7 +159,7 @@ export class ImageHandler extends plugin {
                 return e.reply("❌ 该功能需要附带图片才能使用哦！(可以回复图片或@某人)")
             }
 
-            const processedImages = await processImagesInBatches(imagesToProcess, { signal })
+            const processedImages = await processImagesInBatches(imagesToProcess, { signal, preserveAnimation: true })
             throwIfCancelled()
             logger.info(`[AI-Plugin] 作图输入图片已处理: request=${requestTraceId}, 引用图=${Array.isArray(replyImages) ? replyImages.length : 0}, 当前消息图=${currentImages.length}, 待处理=${imagesToProcess.length}, 可用=${processedImages.length}`)
 
@@ -196,6 +196,16 @@ export class ImageHandler extends plugin {
                 throwIfCancelled()
                 return e.reply(getContentSafetyBlockMessage(), true)
             }
+            const explicitGifRequest = isAnimatedImageRequested(parts.filter(part => part?.text).map(part => part.text).join('\n'))
+            const supportsGifOutput = typeof this.client.supportsGifOutput === 'function'
+                && this.client.supportsGifOutput(modelGroupKey)
+            if (explicitGifRequest && !supportsGifOutput) {
+                await setMsgEmojiLike(e, 10)
+                return e.reply('❌ 当前绘图模型组没有配置支持 GIF 动图输出的模型，请检查 models_config.yaml。')
+            }
+            const imageOutputFormat = explicitGifRequest || (supportsGifOutput && processedImages.some(part => part?.inline_data?.mime_type === 'image/gif'))
+                ? 'gif'
+                : undefined
             const payload = { "contents": [{ "parts": parts }] }
             const safetyReview = await reviewContentForSubmission({
                 client: this.client,
@@ -215,7 +225,7 @@ export class ImageHandler extends plugin {
             const modelDisplay = resolveModelDisplay(modelGroupKey)
             await e.reply(`正在生成 (使用 ${modelDisplay} 模型组)，请稍候…`)
             throwIfCancelled()
-            const result = await this.client.makeRequest('image', payload, modelGroupKey, 8192, { signal, requestId: requestTraceId, stage: 'image_generation' })
+            const result = await this.client.makeRequest('image', payload, modelGroupKey, 8192, { signal, requestId: requestTraceId, stage: 'image_generation', imageOutputFormat })
             throwIfCancelled()
             if (result.cancelled) return true
 

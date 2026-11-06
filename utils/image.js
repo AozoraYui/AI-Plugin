@@ -99,6 +99,38 @@ function getImageQuality() {
     return Number.isFinite(configured) ? Math.min(Math.max(Math.floor(configured), 1), 100) : 80
 }
 
+async function buildGifContactSheet(imageBuffer, pageCount, options = {}) {
+    const maximumReviewFrames = 36
+    if (pageCount > maximumReviewFrames) {
+        throw new Error(`GIF 动画超过安全审核帧数上限 (${maximumReviewFrames})`)
+    }
+    const indexes = Array.from({ length: pageCount }, (_, index) => index)
+    const frameSize = 256
+    const columns = Math.ceil(Math.sqrt(indexes.length))
+    const rows = Math.ceil(indexes.length / columns)
+    const frames = []
+    for (const page of indexes) {
+        throwIfAborted(options.signal)
+        frames.push(await sharp(imageBuffer, { page })
+            .rotate()
+            .resize(frameSize, frameSize, { fit: 'contain', background: '#ffffff' })
+            .png()
+            .toBuffer())
+    }
+    return sharp({
+        create: {
+            width: frameSize * columns,
+            height: frameSize * rows,
+            channels: 3,
+            background: '#ffffff'
+        }
+    }).composite(frames.map((input, index) => ({
+        input,
+        left: (index % columns) * frameSize,
+        top: Math.floor(index / columns) * frameSize
+    }))).png().toBuffer()
+}
+
 /**
  * 将图片压缩到视觉模型可接受的尺寸，并在需要时统一为标准图片格式。
  * 不只按文件大小判断：高分辨率 PNG 可能只有几 MB，但仍会超过上游 patch 限制。
@@ -127,12 +159,43 @@ export async function processImageBufferForAI(imageBuffer, options = {}) {
         const needsResize = width > maxEdge || height > maxEdge || pixels > maxPixels
         const needsSizeCompression = sizeMB > maxSizeMB
         const needsFormatNormalization = Boolean(forceFormat) || !supportedFormat
-        const shouldTransform = needsResize || needsSizeCompression || needsFormatNormalization || sourceFormat === 'gif'
+        const preserveAnimation = options.preserveAnimation === true && sourceFormat === 'gif' && Number(metadata.pages) > 1
         const pixelScale = pixels > maxPixels && pixels > 0
             ? Math.sqrt(maxPixels / pixels)
             : 1
         const resizeWidth = width > 0 ? Math.max(1, Math.floor(Math.min(width, maxEdge, width * pixelScale))) : maxEdge
         const resizeHeight = height > 0 ? Math.max(1, Math.floor(Math.min(height, maxEdge, height * pixelScale))) : maxEdge
+
+        if (preserveAnimation) {
+            if (Number(metadata.pages) > 36) {
+                throw new Error('GIF 动画超过安全审核帧数上限 (36)')
+            }
+            const animationPipeline = sharp(imageBuffer, { animated: true }).rotate()
+            if (needsResize || needsSizeCompression) {
+                animationPipeline.resize({
+                    width: resizeWidth,
+                    height: resizeHeight,
+                    fit: 'inside',
+                    withoutEnlargement: true
+                })
+            }
+            const animatedBuffer = needsResize || needsSizeCompression
+                ? await animationPipeline.gif().toBuffer()
+                : imageBuffer
+            const fallbackBuffer = await buildGifContactSheet(imageBuffer, Number(metadata.pages), options)
+            return {
+                inline_data: {
+                    mime_type: 'image/gif',
+                    data: animatedBuffer.toString('base64')
+                },
+                fallback_inline_data: {
+                    mime_type: 'image/png',
+                    data: fallbackBuffer.toString('base64')
+                }
+            }
+        }
+
+        const shouldTransform = needsResize || needsSizeCompression || needsFormatNormalization || sourceFormat === 'gif'
 
         let finalBuffer = imageBuffer
         let mimeType = getImageMimeType(imageBuffer)
@@ -189,6 +252,15 @@ export async function processImageBufferForAI(imageBuffer, options = {}) {
         logger.warn(`[AI-Plugin] 图片处理异常: ${err.message}`)
         return null
     }
+}
+
+export function isAnimatedImageRequested(text = '') {
+    const value = String(text || '')
+    if (!value) return false
+    if (/(?:不要|不需要|无需|别|不用|禁止|取消)\s*(?:做成|生成|做|输出|制作|转成|变成)?\s*(?:动图|动态图|gif|动画图|动画效果)|(?:don't|do not|no need to)\s*(?:make|create|generate|output|turn|convert)?\s*(?:it|this|the image|an? image)?\s*(?:a[n]?\s+)?(?:gif|animation|animated)/i.test(value)) return false
+    if (/(?:gif|动图|动态图|动画图|动画效果)/i.test(value)) return true
+    if (/(?:做成|生成|输出|制作|转成|变成|转换为)\s*(?:动态(?:图)?|动画(?:图|效果)?)|让.{0,12}动起来|(?:添加|加入|制作).{0,12}动画效果/i.test(value)) return true
+    return /(?:\b(?:make|create|generate|turn|convert)\b[\s\S]{0,24}\b(?:animated gif|gif|animation|animated)\b(?!\s+(?:character|style|scene|movie|series|film|art|illustration))|\banimate\s+(?:this|it|the image|the picture)\b|\b(?:make this|make it|turn this|convert this)\b[\s\S]{0,15}\b(?:animated|move|moving)\b)/i.test(value)
 }
 
 /**
