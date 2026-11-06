@@ -3,7 +3,7 @@ import fs from 'node:fs'
 
 globalThis.logger = globalThis.logger || { info() {}, warn() {}, error() {}, debug() {} }
 const { Config } = await import('../utils/config.js')
-const { deduplicateImageUrls, estimatePayloadSizeBytes, isAnimatedImageRequested, normalizeImageLimit, processImageBufferForAI, processInlineImagesForAI, processImagesInBatches, trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
+const { deduplicateImageUrls, estimatePayloadSizeBytes, isAnimatedImageRequested, normalizeImageLimit, processImageBufferForAI, processInlineImagesForAI, processImagesInBatches, selectGifReviewFrameIndexes, trimInlineImagesToPayloadLimit } = await import('../utils/image.js')
 const { relayImagesToVisionInBatches } = await import('../tools/vision_relay.js')
 const { urlToBuffer } = await import('../utils/common.js')
 
@@ -53,6 +53,16 @@ const preservedGif = await processImageBufferForAI(animatedGif, { preserveAnimat
 const preservedGifMetadata = await sharp(Buffer.from(preservedGif?.inline_data?.data || '', 'base64')).metadata()
 const gifFallbackMetadata = await sharp(Buffer.from(preservedGif?.fallback_inline_data?.data || '', 'base64')).metadata()
 check('GIF 参考图保留动画并提供安全审核用关键帧拼图', preservedGif?.inline_data?.mime_type === 'image/gif' && preservedGifMetadata.pages === 2 && preservedGif?.fallback_inline_data?.mime_type === 'image/png' && gifFallbackMetadata.width === 512)
+const highFrameGif = Buffer.from(fs.readFileSync(new URL('./fixtures/animated-40.gif.b64', import.meta.url), 'utf8').trim(), 'base64')
+const preservedHighFrameGif = await processImageBufferForAI(highFrameGif, { preserveAnimation: true })
+const preservedHighFrameGifMetadata = await sharp(Buffer.from(preservedHighFrameGif?.inline_data?.data || '', 'base64')).metadata()
+const highFrameGifFallbackMetadata = await sharp(Buffer.from(preservedHighFrameGif?.fallback_inline_data?.data || '', 'base64')).metadata()
+check('高帧数 GIF 保留原动画并生成全帧审核拼图', preservedHighFrameGif?.inline_data?.mime_type === 'image/gif' && preservedHighFrameGifMetadata.pages === 40 && preservedHighFrameGif?.fallback_inline_data?.mime_type === 'image/png' && highFrameGifFallbackMetadata.width === 1792 && highFrameGifFallbackMetadata.height === 1536)
+const allGifReviewFrames = selectGifReviewFrameIndexes(40)
+check('高帧数 GIF 审核包含全部帧', allGifReviewFrames.length === 40 && allGifReviewFrames[0] === 0 && allGifReviewFrames.at(-1) === 39 && allGifReviewFrames.every((frame, index) => frame === index))
+let excessiveGifFramesRejected = false
+try { selectGifReviewFrameIndexes(257) } catch { excessiveGifFramesRejected = true }
+check('超出资源保护上限的 GIF 仍 fail-closed', excessiveGifFramesRejected)
 check('自然语言动图意图识别支持中英文', isAnimatedImageRequested('把这张图做成 GIF 动图') && isAnimatedImageRequested('make it animated'))
 check('动图意图识别尊重具体否定并保留其他约束', !isAnimatedImageRequested('不要做成动图') && isAnimatedImageRequested('不要改变背景，做成动图'))
 check('普通动画题材不会误触发 GIF 输出', !isAnimatedImageRequested('画一个动画角色') && !isAnimatedImageRequested('create an animation character'))

@@ -99,15 +99,27 @@ function getImageQuality() {
     return Number.isFinite(configured) ? Math.min(Math.max(Math.floor(configured), 1), 100) : 80
 }
 
-async function buildGifContactSheet(imageBuffer, pageCount, options = {}) {
-    const maximumReviewFrames = 36
-    if (pageCount > maximumReviewFrames) {
-        throw new Error(`GIF 动画超过安全审核帧数上限 (${maximumReviewFrames})`)
+export const MAX_GIF_REVIEW_FRAMES = 256
+const MAX_GIF_CONTACT_SHEET_EDGE = 1920
+const MAX_GIF_REVIEW_FRAME_SIZE = 256
+
+export function selectGifReviewFrameIndexes(pageCount) {
+    const totalFrames = Math.max(0, Math.floor(Number(pageCount) || 0))
+    if (totalFrames > MAX_GIF_REVIEW_FRAMES) {
+        throw new Error(`GIF 动画超过安全审核帧数上限 (${MAX_GIF_REVIEW_FRAMES})`)
     }
-    const indexes = Array.from({ length: pageCount }, (_, index) => index)
-    const frameSize = 256
+    return Array.from({ length: totalFrames }, (_, index) => index)
+}
+
+async function buildGifContactSheet(imageBuffer, pageCount, options = {}) {
+    const indexes = selectGifReviewFrameIndexes(pageCount)
     const columns = Math.ceil(Math.sqrt(indexes.length))
     const rows = Math.ceil(indexes.length / columns)
+    const frameSize = Math.max(1, Math.min(
+        MAX_GIF_REVIEW_FRAME_SIZE,
+        Math.floor(MAX_GIF_CONTACT_SHEET_EDGE / columns),
+        Math.floor(MAX_GIF_CONTACT_SHEET_EDGE / rows)
+    ))
     const frames = []
     for (const page of indexes) {
         throwIfAborted(options.signal)
@@ -167,9 +179,6 @@ export async function processImageBufferForAI(imageBuffer, options = {}) {
         const resizeHeight = height > 0 ? Math.max(1, Math.floor(Math.min(height, maxEdge, height * pixelScale))) : maxEdge
 
         if (preserveAnimation) {
-            if (Number(metadata.pages) > 36) {
-                throw new Error('GIF 动画超过安全审核帧数上限 (36)')
-            }
             const animationPipeline = sharp(imageBuffer, { animated: true }).rotate()
             if (needsResize || needsSizeCompression) {
                 animationPipeline.resize({
